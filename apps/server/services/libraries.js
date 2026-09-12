@@ -1,3 +1,4 @@
+import { Abbreviation } from '../public/abbreviation.js';
 import { randomUUID } from 'node:crypto';
 import { mongoose, Library, Snippet, Operation, Conflict, Account, Change, Member, Group } from '../model/index.js';
 import { Support, Yaml } from './support.js';
@@ -95,7 +96,7 @@ export class Libraries {
 			seen.add(change.id);
 			const server = await Snippet.findOne({ library: library._id, id: change.id }).session(session).lean();
 			Support.assert(server?.state !== 'purged', 'Snippet was permanently purged; it cannot be restored', 410);
-			const local = change.value === null ? null : { trigger: change.value?.trigger, content: Libraries.content(change.value) };
+			const local = change.value === null ? null : { trigger: Abbreviation.normalize(change.value?.trigger), content: Libraries.content(change.value) };
 			if (local) await Libraries.validate([local]);
 			if (server?.state === 'active' && library.state === 'active' && Libraries.same(server, local)) continue;
 			if (server?.state === 'trashed' && local === null) continue;

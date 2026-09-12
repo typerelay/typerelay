@@ -27,7 +27,9 @@ if kind === 'library'
 		p#preview-result.mt-3
 if kind === 'snippet' || kind === 'conflict'
 	label.form-label(for="trigger") Abbreviation
-	input#trigger.form-control.form-control-sm.mb-3(name="trigger" value=snippet ? snippet.trigger : '' required pattern="[a-z0-9-]{1,63}")
+	.input-group.input-group-sm.mb-3
+		span.input-group-text(aria-hidden="true") ,
+		input#trigger.form-control.form-control-sm(name="trigger" value=snippet ? snippet.trigger : '' required pattern="[a-z0-9\\-]{1,63}" autocapitalize="off" spellcheck="false")
 	label.form-label(for="replace") Expansion
 	textarea#replace.form-control.form-control-sm.mb-3(name="replace" required)= snippet ? snippet.replace : ''
 	if kind === 'conflict'

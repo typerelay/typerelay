@@ -127,7 +127,7 @@ test('profile name updates incrementally, email requires confirmation and cannot
 	dom.window.Swal = { fire: async () => ({ isConfirmed: true }) };
 	dom.window.bootstrap = { Modal: { getOrCreateInstance: () => ({ show() {}, hide() {} }) } };
 	dom.window.fetch = (path, options = {}) => fetch(new URL(path, Fixture.origin), { ...options, headers: { ...options.headers, Cookie: browser.cookie } });
-	dom.window.eval((await readFile('./public/app.js', 'utf8')).replace('new TypeRelay();', 'window.client = new TypeRelay();').replace('export { client };', ''));
+	dom.window.eval((await readFile('./public/app.js', 'utf8')).replace("import { Abbreviation } from './abbreviation.js';", (await readFile('./public/abbreviation.js', 'utf8')).replace('export class', 'class')).replace('new TypeRelay();', 'window.client = new TypeRelay();').replace('export { client };', ''));
 	const settings = dom.window.document.querySelector('#settings');
 	const name = dom.window.document.querySelector('#profile-name');
 	name.value = 'Avatar Changed'; name.focus();

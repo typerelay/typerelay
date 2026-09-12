@@ -1,3 +1,4 @@
+import { Abbreviation } from './abbreviation.js';
 class TypeRelay {
 	account = document.querySelector('#workspace')?.dataset.account;
 	libraries = new Map();
@@ -15,6 +16,8 @@ class TypeRelay {
 	submit = null;
 	constructor() {
 		document.querySelectorAll('.library').forEach(node => this.libraries.set(node.dataset.id, JSON.parse(node.dataset.record)));
+		document.addEventListener('input', event => { if (event.target.id === 'trigger' && !event.isComposing) Abbreviation.field(event.target); });
+		document.addEventListener('compositionend', event => { if (event.target.id === 'trigger') Abbreviation.field(event.target); });
 		document.addEventListener('submit', event => this.onSubmit(event));
 		document.addEventListener('click', event => this.onClick(event).catch(error => this.toast(error.message, 'error')));
 		document.querySelector('#search')?.addEventListener('input', () => {
@@ -32,6 +35,7 @@ class TypeRelay {
 		if (shortcut && /Mac|iPhone|iPad/.test(navigator.platform)) shortcut.textContent = '⌘ K';
 		document.querySelector('#account-switch')?.addEventListener('change', event => { location.href = '/?account=' + event.target.value; });
 		document.addEventListener('change', async event => {
+			if (event.target.id === 'trigger') Abbreviation.field(event.target);
 			if (event.target.id === 'shared') document.querySelectorAll('#members-select,#groups-select').forEach(field => { field.disabled = !event.target.checked; });
 			if (event.target.id === 'yaml-file' && event.target.files[0]) document.querySelector('#yaml').value = await event.target.files[0].text();
 		});
@@ -183,6 +187,8 @@ class TypeRelay {
 		const form = event.target;
 		if (!['login', 'profile-form', 'account-form', 'invite-form', 'record-form'].includes(form.id)) return;
 		event.preventDefault();
+		const abbreviation = form.querySelector('#trigger');
+		if (abbreviation) Abbreviation.field(abbreviation);
 		const data = new FormData(form);
 		const button = event.submitter;
 		if (button) button.disabled = true;
