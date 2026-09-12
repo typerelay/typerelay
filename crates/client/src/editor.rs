@@ -116,7 +116,10 @@ impl EditorStore {
             Ok(candidate.into_bytes())
     }
 
-    pub fn save(&self, file: &OpenFile, index: Option<usize>, entry: Match) -> Result<OpenFile> {
+    pub fn save(&self, file: &OpenFile, index: Option<usize>, entry: Match) -> Result<OpenFile> { self.write_change(file, index, Some(entry)) }
+    pub fn delete(&self, file: &OpenFile, index: usize) -> Result<OpenFile> { self.write_change(file, Some(index), None) }
+    fn write_change(&self, file: &OpenFile, index: Option<usize>, entry: Option<Match>) -> Result<OpenFile> {
+        if let Some(index) = index { ensure!(index < file.entries.len(), "Snippet no longer exists"); }
         let _lock = self.lock()?;
         let path = self.path(&file.name)?;
         ensure!(!fs::metadata(&path)?.permissions().readonly(), "File is read-only; draft kept");
@@ -127,8 +130,11 @@ impl EditorStore {
         let yaml = yaml_edit::YamlFile::from_str(source)?;
         let document = yaml.documents().next().context("Expected one YAML document")?;
         let matches = document.as_mapping().context("Expected YAML mapping")?.get_sequence("matches").context("Expected matches sequence")?;
-        let candidate = if let Some(index) = index {
-            Self::rewrite_entries(source, &[(index, entry.clone())])?
+        let candidate = if entry.is_none() {
+            matches.remove(index.context("Deletion requires a snippet index")?);
+            yaml.to_string().into_bytes()
+        } else if let Some(index) = index {
+            Self::rewrite_entries(source, &[(index, entry.clone().unwrap())])?
         } else {
             let encoded = serde_json::to_string(&entry)?;
             let sequence = matches.as_node().context("Missing sequence source range")?;
@@ -161,7 +167,7 @@ impl EditorStore {
         FileStore::parse_files(&files)?;
         let parsed: Document = serde_saphyr::from_str(std::str::from_utf8(&candidate)?)?;
         let mut expected = file.entries.clone();
-        if let Some(index) = index { expected[index] = entry; } else { expected.push(entry); }
+        if let Some(entry) = entry { if let Some(index) = index { expected[index] = entry; } else { expected.push(entry); } } else { expected.remove(index.unwrap()); }
         ensure!(parsed.matches == expected, "Lossless editor could not preserve snippet values; original file unchanged");
         if FileStore::read_files(&self.directory, true)? != observed { bail!("Snippet files changed during save; draft kept"); }
         Paths::atomic_write(&path, &candidate, false)?;
@@ -172,6 +178,24 @@ impl EditorStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn deletion_preserves_other_entries_and_rejects_external_changes() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = EditorStore::new(temp.path().into()).unwrap();
+        let source = "# library\nmatches:\n- trigger: first\n  replace: remove\n# retained\n- trigger: second\n  replace: |+\n    Line one\n    Line two\n\n";
+        let path = temp.path().join("mine.yml");
+        fs::write(&path, source).unwrap();
+        let file = store.open("mine.yml").unwrap();
+        let saved = store.delete(&file, 0).unwrap();
+        assert_eq!(saved.entries, file.entries[1..]);
+        let output = fs::read_to_string(&path).unwrap();
+        assert!(output.contains("# library") && output.contains("# retained") && output.contains("replace: |+\n    Line one\n    Line two\n\n"));
+        assert!(store.delete(&file, 0).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), output);
+        assert!(store.delete(&saved, 2).is_err());
+        assert!(store.delete(&saved, 0).unwrap().entries.is_empty());
+        assert!(path.exists());
+    }
     #[test]
     fn append_to_indentless_sequence_after_quoted_multiline_value() {
         let temp = tempfile::tempdir().unwrap();

@@ -12,6 +12,7 @@ impl Default for Settings { fn default() -> Self { Self { sync_url: String::new(
 
 pub struct SettingsStore { path: PathBuf, original: Option<Vec<u8>>, pub settings: Settings }
 impl SettingsStore {
+    pub fn config_dir(&self) -> &std::path::Path { self.path.parent().unwrap_or(std::path::Path::new(".")) }
     pub fn open(path: PathBuf) -> Result<Self> {
         let original = match fs::read(&path) { Ok(bytes) => Some(bytes), Err(e) if e.kind() == std::io::ErrorKind::NotFound => None, Err(e) => return Err(e.into()) };
         let settings: Settings = if let Some(bytes) = &original { serde_saphyr::from_str(std::str::from_utf8(bytes)?)? } else { Settings::default() };

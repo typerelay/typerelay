@@ -18,6 +18,8 @@ full trigger has its current prefix removed automatically. See [configuration an
 |---|---|
 | F1 / Files | File picker |
 | F2 / Add | Add a snippet to the selected file |
+| F3 / Delete | Confirm deletion of the selected saved snippet |
+| Delete in the snippet list | Same as F3; in search/edit fields it edits text |
 | Up / Down | Select a file or snippet |
 | Enter | Open selected file or edit selected snippet |
 | `/` | Search trigger and expansion in the selected file |
@@ -27,13 +29,17 @@ full trigger has its current prefix removed automatically. See [configuration an
 | Ctrl+T in expansion | Insert a literal tab |
 | Esc / Cancel | Go back; ask about unsaved changes |
 | Ctrl+Q or Ctrl+C | Quit; ask about unsaved changes |
-| F5 / Sync | Explain that sync is not implemented; no network request |
+| F5 / Sync | Request an immediate sync after connecting |
 | F6 / Settings | Edit the sync URL |
 
 Mouse clicks operate toolbar buttons, lists, field focus and Save/Cancel. In the
 unsaved-change dialog, **S** saves, **D** discards, and **Esc** cancels. Textarea keyboard
 controls provide cursor movement, selection and undo. Search is case-insensitive.
-Multiline text, tabs and trailing blank lines are preserved. Delete/move are not included.
+Multiline text, tabs and trailing blank lines are preserved. Moving snippets between files is not included.
+
+Deletion asks which abbreviation to remove. Press **D** or click **Delete** to confirm;
+**Esc** or **Enter** cancels. The YAML file remains, even when its last snippet is deleted.
+Read-only shared libraries block deletion. Deletions in enrolled files sync automatically.
 
 ## Safe saves
 
@@ -54,8 +60,9 @@ The running engine picks up saves through its existing watcher; no restart is ne
 `~/.config/typerelay/settings.yml` stores `sync_url` and `trigger_prefix` outside the snippet directory.
 `XDG_CONFIG_HOME` is respected. Accepts absolute HTTP(S) URLs; empty clears the value.
 Tab switches between URL and prefix. Prefix changes reload in the engine automatically.
-Saving makes no network request. Sync remains visibly disabled even with a URL configured,
-until a future server protocol is implemented.
+Saving settings makes no network request. Connect with `typerelay connect --server URL`,
+then explicitly enroll chosen files with `typerelay enroll filename.yml`. F5 requests sync;
+the status line shows results and pending conflicts. See [sync setup](web/development.md).
 
 ## Editor suppression
 
@@ -75,7 +82,7 @@ ignored mouse-motion events do not cause redraws.
 ## Tests
 
 Unit tests cover file creation/search/editing, multiline fidelity, comments, duplicates,
-external edits, locked writes, settings, disabled Sync, unsaved-change decisions, rendering
+external edits, locked writes, settings, disconnected Sync, confirmed/filtered deletion, read-only deletion, unsaved-change decisions, rendering
 and mouse navigation. Installer tests cover both binaries and legacy manifests.
 
 `python scripts/tui-smoke.py` runs disposable desktop tests. It temporarily stops the

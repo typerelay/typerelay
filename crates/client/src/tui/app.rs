@@ -31,6 +31,7 @@ pub struct App {
     prefix: TextArea<'static>,
     original_prefix: String,
     pending: Option<Destination>,
+    pending_delete: Option<usize>,
     confirm_from: Screen,
     status: String,
     error: bool,
@@ -48,7 +49,7 @@ impl App {
         let files = store.files()?;
         let mut file_state = ListState::default();
         file_state.select(Some(0));
-        Ok(Self { store, settings, screen: Screen::Files, files, file_state, snippets_state: ListState::default(), file: None, search: TextArea::default(), search_focused: false, trigger: TextArea::default(), expansion: TextArea::default(), name: TextArea::default(), url: TextArea::default(), editor_focus: 0, editing: None, original_entry: None, original_url: String::new(), prefix: TextArea::default(), original_prefix: String::new(), pending: None, confirm_from: Screen::Files, status: "Choose a file, or create a new one".into(), error: false, quit: false, toolbar: Vec::new(), list_area: Rect::default(), field_areas: Vec::new(), save_area: Rect::default(), cancel_area: Rect::default(), confirm_buttons: Vec::new() })
+        Ok(Self { store, settings, screen: Screen::Files, files, file_state, snippets_state: ListState::default(), file: None, search: TextArea::default(), search_focused: false, trigger: TextArea::default(), expansion: TextArea::default(), name: TextArea::default(), url: TextArea::default(), editor_focus: 0, editing: None, original_entry: None, original_url: String::new(), prefix: TextArea::default(), original_prefix: String::new(), pending: None, pending_delete: None, confirm_from: Screen::Files, status: "Choose a file, or create a new one".into(), error: false, quit: false, toolbar: Vec::new(), list_area: Rect::default(), field_areas: Vec::new(), save_area: Rect::default(), cancel_area: Rect::default(), confirm_buttons: Vec::new() })
     }
     fn text(value: &str) -> TextArea<'static> { TextArea::new(value.split('\n').map(str::to_owned).collect()) }
     fn value(field: &TextArea<'_>) -> String { field.lines().join("\n") }
@@ -105,7 +106,7 @@ impl App {
     fn edit(&mut self, new: bool) -> Result<()> {
         self.settings.reload()?;
         let file = self.file.as_ref().context("Choose a file first")?;
-        typerelay_client::sync::Sync::editable(&typerelay_client::editor::Paths::config_dir()?, &self.store.directory, &file.name)?;
+        typerelay_client::sync::Sync::editable(self.settings.config_dir(), &self.store.directory, &file.name)?;
         self.editing = if new { None } else { Some(self.selected().context("Select a snippet")?) };
         let entry = self.editing.map(|index| file.entries[index].clone()).unwrap_or(Match { trigger: String::new(), replace: String::new() });
         self.trigger = Self::text(&entry.trigger);
@@ -122,7 +123,7 @@ impl App {
             Screen::Edit => {
                 let file = self.file.as_ref().context("No file selected")?;
                 let entry = self.draft();
-                let saved = { typerelay_client::sync::Sync::editable(&typerelay_client::editor::Paths::config_dir()?, &self.store.directory, &file.name)?; self.store.save(file, self.editing, entry.clone())? };
+                let saved = { typerelay_client::sync::Sync::editable(self.settings.config_dir(), &self.store.directory, &file.name)?; self.store.save(file, self.editing, entry.clone())? };
                 self.file = Some(saved);
                 self.original_entry = Some(entry);
                 self.screen = Screen::Browse;
@@ -149,7 +150,31 @@ impl App {
         }
         Ok(())
     }
+    fn request_delete(&mut self) -> Result<()> {
+        anyhow::ensure!(self.screen == Screen::Browse, "Choose a saved snippet from the list first");
+        let index = self.selected().context("Select a snippet to delete")?;
+        let file = self.file.as_ref().context("Choose a file first")?;
+        typerelay_client::sync::Sync::editable(self.settings.config_dir(), &self.store.directory, &file.name)?;
+        self.pending_delete = Some(index);
+        self.confirm_from = Screen::Browse;
+        self.screen = Screen::Confirm;
+        Ok(())
+    }
     fn confirm(&mut self, choice: usize) -> Result<()> {
+        if let Some(index) = self.pending_delete {
+            if choice == 0 {
+                let file = self.file.as_ref().context("Choose a file first")?;
+                typerelay_client::sync::Sync::editable(self.settings.config_dir(), &self.store.directory, &file.name)?;
+                let saved = self.store.delete(file, index)?;
+                self.file = Some(saved);
+                let count = self.filtered().len();
+                self.snippets_state.select(if count == 0 { None } else { Some(self.snippets_state.selected().unwrap_or(0).min(count - 1)) });
+                self.message("Snippet deleted. Enrolled files sync automatically.", false);
+            }
+            self.pending_delete = None;
+            self.screen = Screen::Browse;
+            return Ok(());
+        }
         let destination = self.pending.unwrap_or(Destination::Browse);
         self.screen = self.confirm_from;
         match choice {
@@ -163,8 +188,9 @@ impl App {
             0 => self.leave(Destination::Files),
             1 if self.screen == Screen::Browse => self.edit(true),
             1 => { self.message("Choose a snippet file first", false); Ok(()) },
-            2 => { typerelay_client::sync::Sync::trigger(&typerelay_client::editor::Paths::config_dir()?)?; self.message("Sync requested. Use typerelay sync for immediate CLI status.", false); Ok(()) },
+            2 => { typerelay_client::sync::Sync::trigger(self.settings.config_dir())?; self.message("Sync requested. Use typerelay sync for immediate CLI status.", false); Ok(()) },
             3 => self.leave(Destination::Settings),
+            4 => self.request_delete(),
             _ => Ok(()),
         }
     }
@@ -194,6 +220,7 @@ impl App {
         if let Event::Key(key) = event {
             if key.kind == KeyEventKind::Release { return Ok(()); }
             if self.screen == Screen::Confirm {
+                if self.pending_delete.is_some() { return match key.code { KeyCode::Char('d') => self.confirm(0), KeyCode::Esc | KeyCode::Enter | KeyCode::Char('c') => self.confirm(1), _ => Ok(()) }; }
                 return match key.code { KeyCode::Char('s') => self.confirm(0), KeyCode::Char('d') => self.confirm(1), KeyCode::Char('c') | KeyCode::Esc | KeyCode::Enter => self.confirm(2), _ => Ok(()) };
             }
             if key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -209,6 +236,7 @@ impl App {
                 KeyCode::F(2) => return self.toolbar_action(1),
                 KeyCode::F(5) => return self.toolbar_action(2),
                 KeyCode::F(6) => return self.toolbar_action(3),
+                KeyCode::F(3) => return self.toolbar_action(4),
                 _ => (),
             }
             match self.screen {
@@ -225,6 +253,7 @@ impl App {
                     KeyCode::Esc => self.leave(Destination::Files)?,
                     KeyCode::Enter if self.search_focused => self.search_focused = false,
                     KeyCode::Enter => self.edit(false)?,
+                    KeyCode::Delete if !self.search_focused => self.request_delete()?,
                     KeyCode::Char('/') if !self.search_focused => self.search_focused = true,
                     KeyCode::Tab => self.search_focused = !self.search_focused,
                     _ if self.search_focused => { Self::single_input(&mut self.search, Event::Key(key)); self.snippets_state.select(Some(0)); }
@@ -287,7 +316,7 @@ impl App {
         frame.render_widget(Paragraph::new(title.to_owned()).centered().block(Self::border("", false)).style(Style::default().fg(if enabled { Color::Cyan } else { Color::DarkGray })), area);
     }
     fn sync_status(&self) -> String {
-        typerelay_client::editor::Paths::config_dir().ok().and_then(|root| std::fs::read_to_string(root.join("sync/status")).ok()).unwrap_or_default()
+        std::fs::read_to_string(self.settings.config_dir().join("sync/status")).unwrap_or_default()
     }
     pub fn draw(&mut self, frame: &mut Frame) {
         self.toolbar.clear(); self.field_areas.clear(); self.list_area = Rect::default(); self.save_area = Rect::default(); self.cancel_area = Rect::default();
@@ -296,12 +325,12 @@ impl App {
         let rows = Layout::vertical([Constraint::Length(2), Constraint::Length(3), Constraint::Min(8), Constraint::Length(3)]).split(area);
         let title = self.file.as_ref().map(|file| format!("TypeRelay  /  {}", file.name)).unwrap_or("TypeRelay  /  Snippet editor".into());
         frame.render_widget(Paragraph::new(title).style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)), rows[0]);
-        self.toolbar = Layout::horizontal([Constraint::Length(14), Constraint::Length(14), Constraint::Length(16), Constraint::Length(18), Constraint::Min(0)]).split(rows[1])[..4].to_vec();
-        for (index, title) in ["F1 Files", "F2 Add", "F5 Sync", "F6 Settings"].iter().enumerate() { Self::button(frame, self.toolbar[index], title, index != 1 || self.screen == Screen::Browse); }
+        self.toolbar = Layout::horizontal([Constraint::Length(11), Constraint::Length(10), Constraint::Length(10), Constraint::Length(14), Constraint::Length(13), Constraint::Min(0)]).split(rows[1])[..5].to_vec();
+        for (index, title) in ["F1 Files", "F2 Add", "F5 Sync", "F6 Settings", "F3 Delete"].iter().enumerate() { Self::button(frame, self.toolbar[index], title, !matches!(index, 1 | 4) || (self.screen == Screen::Browse && (index != 4 || self.selected().is_some()))); }
         let body = rows[2];
         match self.effective_screen() {
             Screen::Files => {
-                let items = std::iter::once(ListItem::new("+ New file")).chain(self.files.iter().map(|name| ListItem::new(typerelay_client::sync::Sync::label(&typerelay_client::editor::Paths::config_dir().unwrap_or_default(), &self.store.directory, name)))).collect::<Vec<_>>();
+                let items = std::iter::once(ListItem::new("+ New file")).chain(self.files.iter().map(|name| ListItem::new(typerelay_client::sync::Sync::label(self.settings.config_dir(), &self.store.directory, name)))).collect::<Vec<_>>();
                 self.list_area = body;
                 frame.render_stateful_widget(List::new(items).block(Self::border("Choose a snippet file", true)).highlight_style(Style::default().bg(Color::DarkGray)).highlight_symbol("› "), body, &mut self.file_state);
             }
@@ -347,10 +376,13 @@ impl App {
         if self.screen == Screen::Confirm {
             let dialog = Rect::new(area.x + (area.width - 56) / 2, area.y + (area.height - 7) / 2, 56, 7);
             frame.render_widget(Clear, dialog);
-            frame.render_widget(Paragraph::new("Unsaved changes\nSave your draft before leaving?").block(Self::border("Confirm", true)), dialog);
+            let prompt = if let Some(index) = self.pending_delete { format!("Delete abbreviation '{}'?", self.file.as_ref().unwrap().entries[index].trigger) } else { "Unsaved changes\nSave your draft before leaving?".into() };
+            frame.render_widget(Paragraph::new(prompt).block(Self::border("Confirm", true)), dialog);
             let buttons = Rect::new(dialog.x + 2, dialog.y + 3, dialog.width - 4, 3);
             self.confirm_buttons = Layout::horizontal([Constraint::Ratio(1, 3), Constraint::Ratio(1, 3), Constraint::Ratio(1, 3)]).split(buttons).to_vec();
-            for (index, title) in ["S Save", "D Discard", "Esc Cancel"].iter().enumerate() { Self::button(frame, self.confirm_buttons[index], title, true); }
+            if self.pending_delete.is_some() { self.confirm_buttons = vec![self.confirm_buttons[2], self.confirm_buttons[0]]; }
+            let titles: &[&str] = if self.pending_delete.is_some() { &["D Delete", "Esc Cancel"] } else { &["S Save", "D Discard", "Esc Cancel"] };
+            for (index, title) in titles.iter().enumerate() { Self::button(frame, self.confirm_buttons[index], title, true); }
         }
     }
     fn form_buttons(&mut self, frame: &mut Frame, area: Rect) {
@@ -385,6 +417,72 @@ mod tests {
     impl Fixture {
         fn app(directory: &std::path::Path) -> App { App::new(EditorStore::new(directory.join("snippets")).unwrap(), SettingsStore::open(directory.join("settings.yml")).unwrap()).unwrap() }
         fn key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) { app.handle(Event::Key(KeyEvent::new(code, modifiers))); }
+    }
+    #[test]
+    fn delete_selected_filtered_snippet_requires_confirmation_and_keeps_file() {
+        let temp = tempfile::tempdir().unwrap(); let mut app = Fixture::app(temp.path());
+        let file = app.store.create("mine").unwrap();
+        let file = app.store.save(&file, None, Match { trigger: "first".into(), replace: "Keep\nthis".into() }).unwrap();
+        app.file = Some(app.store.save(&file, None, Match { trigger: "second".into(), replace: "Remove".into() }).unwrap());
+        app.screen = Screen::Browse;
+        app.search = App::text("second");
+        app.snippets_state.select(Some(0));
+        Fixture::key(&mut app, KeyCode::F(3), KeyModifiers::NONE);
+        assert_eq!(app.screen, Screen::Confirm);
+        Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(app.store.open("mine.yml").unwrap().entries.len(), 2);
+        Fixture::key(&mut app, KeyCode::F(3), KeyModifiers::NONE);
+        Fixture::key(&mut app, KeyCode::Char('d'), KeyModifiers::NONE);
+        assert_eq!(app.file.as_ref().unwrap().entries[0].trigger, "first");
+        assert!(app.filtered().is_empty());
+        app.search = App::text("");
+        app.snippets_state.select(Some(0));
+        Fixture::key(&mut app, KeyCode::Delete, KeyModifiers::NONE);
+        Fixture::key(&mut app, KeyCode::Char('d'), KeyModifiers::NONE);
+        assert!(app.store.open("mine.yml").unwrap().entries.is_empty());
+        assert_eq!(app.screen, Screen::Browse);
+    }
+    #[test]
+    fn delete_conflict_keeps_confirmation_and_search_delete_edits_query() {
+        let temp = tempfile::tempdir().unwrap(); let mut app = Fixture::app(temp.path());
+        let file = app.store.create("mine").unwrap();
+        app.file = Some(app.store.save(&file, None, Match { trigger: "first".into(), replace: "Keep".into() }).unwrap());
+        app.screen = Screen::Browse; app.search_focused = true;
+        Fixture::key(&mut app, KeyCode::Delete, KeyModifiers::NONE);
+        assert_eq!(app.screen, Screen::Browse);
+        Fixture::key(&mut app, KeyCode::F(3), KeyModifiers::NONE);
+        std::fs::write(app.store.directory.join("mine.yml"), "matches: []\n").unwrap();
+        Fixture::key(&mut app, KeyCode::Char('d'), KeyModifiers::NONE);
+        assert_eq!(app.screen, Screen::Confirm);
+        assert!(app.error);
+        assert_eq!(app.file.as_ref().unwrap().entries.len(), 1);
+        Fixture::key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(app.screen, Screen::Browse);
+    }
+    #[test]
+    fn mouse_delete_and_readonly_permissions() {
+        let temp = tempfile::tempdir().unwrap(); let mut app = Fixture::app(temp.path());
+        let file = app.store.create("mine").unwrap();
+        app.file = Some(app.store.save(&file, None, Match { trigger: "first".into(), replace: "Keep".into() }).unwrap());
+        app.screen = Screen::Browse;
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let button = app.toolbar[4];
+        app.handle(Event::Mouse(ratatui::crossterm::event::MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: button.x + 1, row: button.y + 1, modifiers: KeyModifiers::NONE }));
+        assert_eq!(app.screen, Screen::Confirm);
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let button = app.confirm_buttons[0];
+        app.handle(Event::Mouse(ratatui::crossterm::event::MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: button.x + 1, row: button.y + 1, modifiers: KeyModifiers::NONE }));
+        assert!(app.file.as_ref().unwrap().entries.is_empty());
+        app.file = Some(app.store.save(app.file.as_ref().unwrap(), None, Match { trigger: "shared".into(), replace: "Read only".into() }).unwrap());
+        let mut state = typerelay_client::sync::State::default();
+        state.files.insert("library".into(), typerelay_client::sync::Managed { filename: "mine.yml".into(), baseline: String::new(), library: serde_json::json!({"permissions":{"edit":false}}) });
+        std::fs::create_dir_all(temp.path().join("sync")).unwrap();
+        std::fs::write(temp.path().join("sync/state.json"), serde_json::to_vec(&state).unwrap()).unwrap();
+        Fixture::key(&mut app, KeyCode::F(3), KeyModifiers::NONE);
+        assert_eq!(app.screen, Screen::Browse);
+        assert!(app.status.contains("read-only"));
+        assert_eq!(app.store.open("mine.yml").unwrap().entries.len(), 1);
     }
     #[test]
     fn create_add_search_edit_and_dirty_confirmation() {
