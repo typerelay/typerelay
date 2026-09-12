@@ -24,7 +24,8 @@ struct LegacyMatch {
 
 pub struct FileStore {
     path: PathBuf,
-    last_bytes: Vec<u8>,
+    directory: bool,
+    last_files: Vec<(PathBuf, Vec<u8>)>,
     pub snapshot: Snapshot,
 }
 
@@ -38,21 +39,56 @@ impl FileStore {
     }
 
     fn parse(bytes: &[u8]) -> Result<Snapshot> {
-        let document: Document = serde_saphyr::from_str(std::str::from_utf8(bytes)?).context("Invalid snippet YAML")?;
-        Snapshot::new(document.matches.into_iter().map(|m| Snippet { trigger: m.trigger, replacement: m.replace }).collect()).map_err(anyhow::Error::msg)
+        Self::parse_files(&[(PathBuf::from("snippet file"), bytes.to_vec())])
+    }
+
+    fn parse_files(files: &[(PathBuf, Vec<u8>)]) -> Result<Snapshot> {
+        let mut snippets = Vec::new();
+        let mut origins = BTreeMap::new();
+        for (path, bytes) in files {
+            let document: Document = serde_saphyr::from_str(std::str::from_utf8(bytes)?).with_context(|| format!("Invalid YAML in {}", path.display()))?;
+            for entry in document.matches {
+                if let Some(previous) = origins.insert(entry.trigger.clone(), path) { bail!("Duplicate trigger '{}' in {} and {}", entry.trigger, previous.display(), path.display()); }
+                snippets.push(Snippet { trigger: entry.trigger, replacement: entry.replace });
+            }
+        }
+        Snapshot::new(snippets).map_err(anyhow::Error::msg)
+    }
+
+    fn read_files(path: &Path, directory: bool) -> Result<Vec<(PathBuf, Vec<u8>)>> {
+        let mut paths = Vec::new();
+        if directory {
+            for entry in fs::read_dir(path).with_context(|| format!("Cannot read snippet directory {}", path.display()))? {
+                let entry = entry?;
+                let path = entry.path();
+                if entry.file_type()?.is_file() && matches!(path.extension().and_then(|s| s.to_str()), Some("yml" | "yaml")) { paths.push(path); }
+            }
+            paths.sort();
+            if paths.len() > 256 { bail!("Snippet directory exceeds 256 files"); }
+        } else { paths.push(path.to_owned()); }
+        let mut files = Vec::new();
+        let mut total = 0;
+        for path in paths {
+            let bytes = Self::read(&path).with_context(|| format!("Cannot read {}", path.display()))?;
+            total += bytes.len();
+            if total > 8 * 1024 * 1024 { bail!("Combined snippet files exceed 8 MiB"); }
+            files.push((path, bytes));
+        }
+        Ok(files)
     }
 
     pub fn open(path: PathBuf) -> Result<Self> {
-        let last_bytes = Self::read(&path)?;
-        let snapshot = Self::parse(&last_bytes)?;
-        Ok(Self { path, last_bytes, snapshot })
+        let directory = path.is_dir();
+        let last_files = Self::read_files(&path, directory)?;
+        let snapshot = Self::parse_files(&last_files)?;
+        Ok(Self { path, directory, last_files, snapshot })
     }
 
     pub fn reload(&mut self) -> Result<Option<Snapshot>> {
-        let bytes = Self::read(&self.path)?;
-        if bytes == self.last_bytes { return Ok(None); }
-        self.last_bytes = bytes;
-        let snapshot = Self::parse(&self.last_bytes)?;
+        let files = Self::read_files(&self.path, self.directory)?;
+        if files == self.last_files { return Ok(None); }
+        self.last_files = files;
+        let snapshot = Self::parse_files(&self.last_files)?;
         self.snapshot = snapshot.clone();
         Ok(Some(snapshot))
     }
@@ -91,6 +127,32 @@ impl FileStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn directory_reload_add_edit_remove_and_duplicate_recovery() {
+        let directory = std::env::temp_dir().join(format!("typerelay-directory-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let personal = directory.join("mysnippets.yml");
+        let sales = directory.join("sales.yaml");
+        fs::write(&personal, "matches:\n- trigger: ',mine'\n  replace: personal\n").unwrap();
+        fs::write(directory.join("ignored.txt"), "not YAML").unwrap();
+        let mut store = FileStore::open(directory.clone()).unwrap();
+        assert_eq!(store.snapshot.len(), 1);
+        fs::write(&sales, "matches:\n- trigger: ',sale'\n  replace: sales\n").unwrap();
+        assert_eq!(store.reload().unwrap().unwrap().len(), 2);
+        fs::write(&sales, "matches:\n- trigger: ',mine'\n  replace: duplicate\n").unwrap();
+        let error = store.reload().unwrap_err().to_string();
+        assert!(error.contains("mysnippets.yml") && error.contains("sales.yaml") && error.contains(",mine"));
+        assert_eq!(store.snapshot.len(), 2);
+        fs::write(&sales, "matches:\n- trigger: ',sale'\n  replace: updated\n").unwrap();
+        let mut engine = typerelay_core::Engine::new(store.reload().unwrap().unwrap());
+        for c in ",sale".chars() { engine.feed(typerelay_core::Input::Character(c)); }
+        assert_eq!(engine.feed(typerelay_core::Input::Space).unwrap().text, "updated");
+        fs::remove_file(sales).unwrap();
+        assert_eq!(store.reload().unwrap().unwrap().len(), 1);
+        fs::remove_file(personal).unwrap();
+        assert!(store.reload().unwrap().unwrap().is_empty());
+        fs::remove_dir_all(directory).unwrap();
+    }
     #[test]
     fn rejects_dynamic_and_unknown_yaml() {
         assert!(FileStore::parse(b"matches:\n  - trigger: ',a'\n    replace: ok\n    vars: []\n").is_err());

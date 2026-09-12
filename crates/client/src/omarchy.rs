@@ -8,6 +8,15 @@ use typerelay_core::{Engine, Input, Expansion};
 
 pub struct Session;
 
+#[derive(Debug)]
+pub struct Interference;
+
+impl std::fmt::Display for Interference {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "Espanso is active. Stop it before starting TypeRelay; run `systemctl --user restart typerelay` afterward if installed as a service") }
+}
+
+impl std::error::Error for Interference {}
+
 struct PasteState {
     job: PasteJob,
     expansion: Expansion,
@@ -74,6 +83,18 @@ impl ContextWatch {
 }
 
 impl Session {
+    fn interference_present(devices: &serde_json::Value) -> bool {
+        devices["keyboards"].as_array().is_some_and(|keyboards| keyboards.iter().any(|keyboard| keyboard["name"].as_str() == Some("espanso-virtual-device")))
+    }
+
+    fn check_interference(devices: &serde_json::Value) -> Result<()> {
+        if Self::interference_present(devices) {
+            let _ = Command::new("notify-send").args(["--app-name=TypeRelay", "--urgency=critical", "TypeRelay paused: conflicting expander", "Espanso is running. Stop it, then restart TypeRelay."]).spawn().map(|mut child| { thread::spawn(move || { let _ = child.wait(); }); });
+            return Err(Interference.into());
+        }
+        Ok(())
+    }
+
     fn wait_for_release(mut active: impl FnMut() -> Result<bool>, deadline: Instant) -> Result<()> {
         let mut idle_since = None;
         loop {
@@ -193,7 +214,7 @@ impl Session {
         let devices = Self::hypr("devices")?;
         let keyboards = devices["keyboards"].as_array().context("No Hyprland keyboard information")?;
         if keyboards.iter().any(|k| k["layout"].as_str() != Some("us") || k["capsLock"].as_bool() == Some(true)) { bail!("POC requires US-only layouts and Caps Lock off"); }
-        if keyboards.iter().any(|k| k["name"].as_str() == Some("espanso-virtual-device")) { bail!("Pause Espanso with `espanso stop` before running TypeRelay"); }
+        Self::check_interference(&devices)?;
         let selected: Vec<_> = Self::devices()?.into_iter().filter(|(_, n)| n == device_name).collect();
         if selected.len() != 1 { bail!("Expected exactly one keyboard named {device_name}"); }
         let mut keyboard = Device::open(&selected[0].0).context("Keyboard unavailable; use the session access setup")?;
@@ -239,8 +260,13 @@ impl Session {
         let mut insertion = VecDeque::<Vec<InputEvent>>::new();
         let mut last_stroke = Instant::now();
         let mut paste: Option<PasteState> = None;
+        let mut last_conflict_check = Instant::now();
         eprintln!("TypeRelay running: {} snippets; comma + abbreviation + Space. Ctrl+C stops. No keystrokes are logged.", store.snapshot.len());
         while running.load(Ordering::SeqCst) {
+            if last_conflict_check.elapsed() >= Duration::from_secs(2) {
+                Self::check_interference(&Self::hypr("devices")?)?;
+                last_conflict_check = Instant::now();
+            }
             if context.changed()? || last_input.elapsed() > Duration::from_secs(10) {
                 engine.feed(Input::Cancel); target = None; insertion.clear();
                 if let Some(state) = &mut paste { state.cancelled = true; state.job.cancel(); }
@@ -249,7 +275,7 @@ impl Session {
                 match store.reload() {
                     Ok(Some(snapshot)) => { engine.replace_snapshot(snapshot); eprintln!("Snippet snapshot reloaded"); }
                     Ok(None) => (),
-                    Err(_) => eprintln!("Snippet reload rejected; keeping last valid snapshot"),
+                    Err(error) => eprintln!("Snippet reload rejected: {error:#}; keeping last valid snapshot"),
                 }
                 last_reload = Instant::now();
             }
@@ -350,6 +376,13 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn detects_competing_expander_without_flagging_required_input_tools() {
+        let normal = serde_json::json!({"keyboards": [{"name": "keyd-virtual-keyboard"}, {"name": "hl-virtual-keyboard-fcitx5"}, {"name": "typerelay-virtual-keyboard"}]});
+        assert!(!Session::interference_present(&normal));
+        let conflict = serde_json::json!({"keyboards": [{"name": "espanso-virtual-device"}]});
+        assert!(Session::interference_present(&conflict));
+    }
     #[test]
     fn startup_waits_for_launch_key_release_and_a_stable_idle_period() {
         let mut checks = 0;

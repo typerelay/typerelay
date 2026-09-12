@@ -6,6 +6,11 @@ license has been selected yet; choose one before making the repository public.
 
 ## Build and run
 
+For login startup, persistent permissions and multiple snippet files, use the
+[terminal installer](INSTALLATION.md): `typerelay install`. Preview with
+`typerelay install --dry-run`; remove the installation with `typerelay uninstall`.
+The manual commands below remain supported.
+
 Install Rust, keyd, Python and acl using your distribution's package manager.
 Build and run on the actual desktop host: this client needs that session's input devices
 and Wayland sockets. Unit tests do not require Docker or device access.
@@ -27,7 +32,7 @@ espanso stop
 
 Type `,brb` and Space in an ordinary text field. The Space is consumed and the result is
 `Be right back.`. Press Ctrl+C in the launching terminal to stop the client. Stopping or
-crashing releases its exclusive grab. No startup/autostart configuration is installed.
+crashing releases its exclusive grab. Manual execution does not install autostart configuration.
 Startup waits for the launching Enter key to be released and 50 ms of keyboard inactivity
 (up to five seconds). Events already delivered before startup are discarded, not replayed.
 
@@ -83,6 +88,8 @@ content. Static entries with Espanso's `force_mode: clipboard` are accepted; ins
 is chosen automatically. It refuses to overwrite an existing destination or accept duplicate normalized
 triggers. Personal files stay outside Git. Edit `poc.yml` to update snippets; the running
 client checks every 500 ms. Invalid changes keep the previous valid snapshot.
+For multiple files, use `--dir` or the default `~/.config/typerelay/snippets/` directory.
+See [directory loading and conflict handling](INSTALLATION.md#multiple-snippet-files).
 
 ## Architecture and remote sync
 

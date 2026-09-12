@@ -1,5 +1,25 @@
 # POC verification — 2026-09-11
 
+## Installer and snippet directories (0.3.0)
+
+- Rust regression coverage includes multiple files, additions/edits/deletions, duplicate
+  trigger diagnostics and recovery, empty-directory behavior, and competing-device detection.
+- Six Python installer tests cover dry run/cancellation without writes, install/upgrade/
+  uninstall preserving snippets, restoring Espanso on failure, preserving replaced binaries,
+  unit path quoting and restoring previous scoped ACLs.
+- `systemd-analyze --user verify` accepted the generated service. `udevadm verify` accepted
+  the generated persistent access rules on systemd/udev 261.
+- A read-only installer preview detected the existing manual client and Espanso autostart.
+- The actual installer was opened in a terminal and cancelled at its first prompt; no service
+  or configuration was created, and the existing client continued running.
+- No actual service switchover, uninstall or reboot test was performed in this implementation
+  session; those require the interactive installer. The user's running client was left alone.
+
+## Startup fix (0.2.1)
+
+- Startup waits for release of the launching key plus 50 ms of idle time (five-second bound).
+- Tests cover launch-key release, renewed activity resetting the idle period and timeout.
+
 ## Multiline update (0.2.0)
 
 - Twelve unit tests and strict Clippy passed, including CRLF normalization, YAML literal

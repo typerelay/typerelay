@@ -19,3 +19,5 @@ jobs:
       - run: rustup update stable --no-self-update
       - run: cargo test --locked ${{ matrix.scope }}
       - run: cargo clippy --locked ${{ matrix.scope }} --all-targets -- -D warnings
+      - if: runner.os == 'Linux'
+        run: python3 -m unittest discover -s scripts/tests -v
