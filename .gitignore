@@ -1,0 +1,8 @@
+/target/
+*.log
+.env*
+!/.env.example
+/matches.yml
+/config/
+__pycache__/
+*.pyc

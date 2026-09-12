@@ -1,0 +1,9 @@
+matches:
+  - trigger: ",brb"
+    replace: "Be right back."
+  - trigger: ",brbmore"
+    replace: "I will be back a little later."
+  - trigger: ",hello"
+    replace: "Hello from TypeRelay!"
+  - trigger: ",symbols"
+    replace: "Hello! (One + two) = 3; email@example.com / $5 #tag"

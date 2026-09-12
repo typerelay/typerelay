@@ -1,0 +1,21 @@
+name: Rust checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  core:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            scope: --workspace
+          - os: macos-latest
+            scope: -p typerelay-core
+          - os: windows-latest
+            scope: -p typerelay-core
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup update stable --no-self-update
+      - run: cargo test --locked ${{ matrix.scope }}
+      - run: cargo clippy --locked ${{ matrix.scope }} --all-targets -- -D warnings
