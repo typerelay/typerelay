@@ -119,11 +119,29 @@ impl EditorStore {
             for (start, end, replacement) in edits { candidate.replace_range(start..end, &replacement); }
             candidate.into_bytes()
         } else {
-            // Inline JSON is valid YAML and avoids block-scalar indentation changes on append.
             let encoded = serde_json::to_string(&entry)?;
-            let node = yaml_edit::Document::from_str(&encoded)?.as_mapping().context("Cannot encode snippet")?;
-            matches.push(node);
-            yaml.to_string().into_bytes()
+            let sequence = matches.as_node().context("Missing sequence source range")?;
+            if sequence.to_string().trim_start().starts_with('[') {
+                let node = yaml_edit::Document::from_str(&encoded)?.as_mapping().context("Cannot encode snippet")?;
+                matches.push(node);
+                yaml.to_string().into_bytes()
+            } else {
+                // Preserve the actual dash column, including valid indentless YAML lists.
+                let first = matches.get(0).context("Expected sequence item")?;
+                let first_start: usize = first.as_node().context("Missing item range")?.text_range().start().into();
+                let line_start = source[..first_start].rfind('\n').map_or(0, |at| at + 1);
+                let line = &source[line_start..];
+                let indentation = line.len() - line.trim_start_matches([' ', '\t']).len();
+                ensure!(line[indentation..].starts_with('-'), "Cannot determine sequence indentation; original file unchanged");
+                let mut end: usize = sequence.text_range().end().into();
+                if source[end..].starts_with("\r\n") { end += 2; } else if source[end..].starts_with('\n') { end += 1; }
+                let newline = if source.contains("\r\n") { "\r\n" } else { "\n" };
+                let separator = if source[..end].ends_with('\n') { "" } else { newline };
+                let addition = format!("{separator}{}- {encoded}{newline}", " ".repeat(indentation));
+                let mut candidate = source.to_owned();
+                candidate.insert_str(end, &addition);
+                candidate.into_bytes()
+            }
         };
         ensure!(candidate.len() <= 1_048_576, "Snippet file exceeds 1 MiB");
         let mut files = observed.clone();
@@ -143,6 +161,37 @@ impl EditorStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn append_to_indentless_sequence_after_quoted_multiline_value() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = EditorStore::new(temp.path().into()).unwrap();
+        let original = "matches:\n- trigger: ',hth'\n  replace: 'First line\n\n    Second line\n\n\n    '\n";
+        fs::write(temp.path().join("imported.yml"), original).unwrap();
+        let file = store.open("imported.yml").unwrap();
+        let saved = store.save(&file, None, Match { trigger: ",hth2".into(), replace: "This is new for everyone".into() }).unwrap();
+        assert_eq!(saved.entries.len(), 2);
+        assert_eq!(saved.entries[0], file.entries[0]);
+        assert!(fs::read_to_string(temp.path().join("imported.yml")).unwrap().starts_with(original));
+    }
+    #[test]
+    fn append_handles_indentation_flow_and_document_endings() {
+        for original in [
+            "matches:\n- trigger: ',old'\n  replace: old",
+            "matches:\n    - trigger: ',old'\n      replace: old\n",
+            "matches:\r\n- trigger: ',old'\r\n  replace: old\r\n",
+            "---\nmatches:\n- trigger: ',old'\n  replace: old\n...\n# footer\n",
+            "matches: [{trigger: ',old', replace: old}] # keep\n",
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let store = EditorStore::new(temp.path().into()).unwrap();
+            fs::write(temp.path().join("test.yml"), original).unwrap();
+            let file = store.open("test.yml").unwrap();
+            let saved = store.save(&file, None, Match { trigger: ",new".into(), replace: "New\nparagraph\n".into() }).unwrap();
+            assert_eq!(saved.entries.len(), 2);
+            assert_eq!(saved.entries[0], file.entries[0]);
+            if original.contains("# footer") { assert!(fs::read_to_string(temp.path().join("test.yml")).unwrap().ends_with("...\n# footer\n")); }
+        }
+    }
     #[test]
     fn lossless_save_search_and_external_conflict() {
         let temp = tempfile::tempdir().unwrap();

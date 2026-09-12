@@ -1,5 +1,16 @@
 # POC verification — 2026-09-11
 
+## Append fix (0.4.1, 2026-09-12)
+
+- Reproduced failed additions to an indentless YAML list ending with a multiline quoted
+  scalar: the editing library inserted the new dash at the wrong indentation.
+- Block-list append now uses the actual existing dash column and syntax-tree end range.
+  Flow lists retain their own append path; full validation still occurs before any write.
+- Regression tests cover quoted multiline endings, zero/four-space indentation, CRLF,
+  missing final newlines, flow lists and explicit YAML document endings.
+- Verified against a temporary copy of the user's complete file: the requested new snippet
+  saved while all 63 existing entries remained unchanged. The live file was untouched.
+
 ## TUI (0.4.0)
 
 - A failed early desktop test left a TUI on a closed PTY consuming a CPU core. That orphan

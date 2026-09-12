@@ -1543,7 +1543,7 @@ dependencies = [
 
 [[package]]
 name = "typerelay-client"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1566,7 +1566,7 @@ dependencies = [
 
 [[package]]
 name = "typerelay-core"
-version = "0.4.0"
+version = "0.4.1"
 
 [[package]]
 name = "unicode-ident"
