@@ -1,5 +1,35 @@
 # Install TypeRelay on Omarchy
 
+## Install directly from GitHub
+
+No checkout is needed. While the repository is private, sign in using `gh auth login`
+with an account that has repository access, then run this Fish-compatible command:
+
+```fish
+gh api --hostname github.com -H 'Accept: application/vnd.github.raw+json' 'repos/typerelay/typerelay/contents/scripts/install.sh?ref=main' | sh
+```
+
+The bootstrap resolves the requested ref to a commit, downloads that exact source archive,
+builds with the locked dependencies, then opens the existing interactive installer. It
+does not stop the current client until you confirm the installer prompts. Temporary source
+and build files are cleaned up afterward. Rust/Cargo, Python 3 and tar must be installed.
+This initial distribution builds from source; it does not download a prebuilt release.
+
+To preview without changing the installation, append `-s -- --dry-run` to `sh`. To select
+a tag, branch or commit, append `-s -- --ref <ref>`. For example:
+
+```fish
+gh api --hostname github.com -H 'Accept: application/vnd.github.raw+json' 'repos/typerelay/typerelay/contents/scripts/install.sh?ref=main' | sh -s -- --dry-run
+```
+
+After the repository becomes public, this unauthenticated command will also work:
+
+```fish
+curl -fsSL https://raw.githubusercontent.com/typerelay/typerelay/main/scripts/install.sh | sh
+```
+
+## Install or update an existing binary
+
 Run from a terminal as your desktop user:
 
 ```fish
