@@ -154,6 +154,9 @@ class TypeRelay {
 			} else if (event.key === 'Enter' && event.target.id === 'search' && results.length) { event.preventDefault(); results[0].click(); }
 			return;
 		}
+		if (event.target.matches?.('.snippet[data-snippet]') && ['Enter', ' '].includes(event.key)) {
+			event.preventDefault(); this.editSnippet(this.libraries.get(this.selected), event.target.dataset.snippet).catch(error => this.toast(error.message, 'error')); return;
+		}
 		if (event.target.matches?.('.library') && ['Enter', ' '].includes(event.key)) {
 			event.preventDefault(); this.open(event.target.dataset.id).catch(error => this.toast(error.message, 'error'));
 		}
@@ -229,6 +232,8 @@ class TypeRelay {
 		await this.poll();
 	}
 	async onClick(event) {
+		const row = event.target.closest('.snippet[data-snippet]');
+		if (row && !event.target.closest('button,a,input,textarea,select,[contenteditable="true"]') && !window.getSelection()?.toString()) return this.editSnippet(this.libraries.get(this.selected), row.dataset.snippet);
 		const card = event.target.closest('.library');
 		if (card && !window.getSelection()?.toString()) return this.open(card.dataset.id);
 		const button = event.target.closest('button');
