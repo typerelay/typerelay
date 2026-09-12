@@ -20,6 +20,8 @@ jobs:
       - run: cargo test --locked ${{ matrix.scope }}
       - run: cargo clippy --locked ${{ matrix.scope }} --all-targets -- -D warnings
       - if: runner.os == 'Linux'
+        run: cargo build --locked -p typerelay-client --examples
+      - if: runner.os == 'Linux'
         run: python3 -m unittest discover -s scripts/tests -v
       - if: runner.os == 'Linux'
         run: sh -n scripts/install.sh

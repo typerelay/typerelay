@@ -1,5 +1,28 @@
 # POC verification — 2026-09-11
 
+## TUI (0.4.0)
+
+- A failed early desktop test left a TUI on a closed PTY consuming a CPU core. That orphan
+  was stopped. The reader now uses Crossterm's alternate Unix backend, checks terminal
+  hangup, and redraws only on changes (maximum 30 fps). Isolated PTY regression tests cover
+  idle CPU, terminal closure, closure during an incomplete escape sequence and SIGTERM
+  restoring the original terminal mode. These run in Linux CI without desktop access.
+
+- Shared-library tests cover lossless edits, comments, multiline and trailing-newline fidelity,
+  file creation, duplicate rejection, external edits, locked/read-only writes, settings and
+  window-scoped editor registration with PID-start-time validation.
+- TUI state/render tests cover file selection/creation, search, add/edit, save/discard/cancel,
+  failed saves retaining drafts, Settings, disabled Sync and mouse navigation.
+- Installer tests verify matching engine/TUI bundles before mutations, installing/removing
+  both binaries, preserving edited files and reading legacy engine-only manifests.
+- The live TUI smoke test passed: add/save with literal trigger text, search/edit with exact
+  multiline output, Settings persistence, and expansion in another GTK window while the TUI
+  remained open. The TUI exited cleanly; the user's original service and focus were restored.
+- A live test caught startup registering the previous application window. Registration now
+  requires a focused Omarchy terminal belonging to the editor's process ancestry; the fixed
+  path passed the repeated desktop test.
+- No real remote synchronization exists. The URL setting is local and Sync is disabled.
+
 ## Installer and snippet directories (0.3.0)
 
 - Rust regression coverage includes multiple files, additions/edits/deletions, duplicate

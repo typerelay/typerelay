@@ -29,6 +29,7 @@ class InstallerTests(unittest.TestCase):
         self.addCleanup(self.environment.stop)
         binary = self.home / "source-binary"
         binary.write_bytes(b"test-binary")
+        binary.with_name("typerelay-tui").write_bytes(b"test-tui-binary")
         self.subject = self.installer.Installer(binary, "# helper", self.home)
         self.subject.preflight = Mock()
         self.subject.prompt = Mock(return_value=True)
@@ -42,6 +43,23 @@ class InstallerTests(unittest.TestCase):
         self.stdout = contextlib.redirect_stdout(io.StringIO())
         self.stdout.__enter__()
         self.addCleanup(self.stdout.__exit__, None, None, None)
+
+    def test_bundle_checks_both_binaries_before_mutations(self):
+        self.subject.command.side_effect = lambda path, *args, **kwargs: subprocess.CompletedProcess([], 0, ("typerelay" if pathlib.Path(path) == self.subject.binary else "typerelay-tui") + " 0.4.0\n", "")
+        self.subject.validate_bundle()
+        self.subject.binary.with_name("typerelay-tui").unlink()
+        with self.assertRaisesRegex(RuntimeError, "Missing typerelay-tui"):
+            self.subject.validate_bundle()
+        self.subject.privileged.assert_not_called()
+
+    def test_uninstall_reads_legacy_manifest_without_removing_unowned_tui(self):
+        self.subject.install(False)
+        state = json.loads(self.subject.manifest.read_text())
+        del state["binaries"]
+        self.subject.manifest.write_text(json.dumps(state))
+        self.subject.uninstall(False)
+        self.assertFalse(self.subject.destination.exists())
+        self.assertTrue(self.subject.destination.with_name("typerelay-tui").exists())
 
     def test_dry_run_and_cancel_do_not_mutate(self):
         self.subject.install(True)
@@ -71,6 +89,7 @@ class InstallerTests(unittest.TestCase):
         self.subject.uninstall(False)
         self.assertFalse(self.subject.unit.exists())
         self.assertFalse(self.subject.destination.exists())
+        self.assertFalse(self.subject.destination.with_name("typerelay-tui").exists())
         self.assertFalse(self.subject.manifest.exists())
         self.assertEqual((self.subject.config / "poc.yml").read_text(), original)
         self.assertTrue((self.subject.snippets / "sales.yml").exists())

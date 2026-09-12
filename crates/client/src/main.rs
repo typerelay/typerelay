@@ -1,4 +1,4 @@
-mod config;
+use typerelay_client::config;
 #[cfg(target_os = "linux")]
 mod omarchy;
 #[cfg(target_os = "linux")]
@@ -25,11 +25,7 @@ struct ConfigSource {
 impl ConfigSource {
     fn path(self) -> Result<PathBuf> {
         if let Some(path) = self.file.or(self.dir) { return Ok(path); }
-        let config = match std::env::var_os("XDG_CONFIG_HOME") {
-            Some(path) => PathBuf::from(path),
-            None => PathBuf::from(std::env::var_os("HOME").ok_or_else(|| anyhow::anyhow!("HOME is missing"))?).join(".config"),
-        };
-        Ok(config.join("typerelay/snippets"))
+        Ok(typerelay_client::editor::Paths::config_dir()?.join("snippets"))
     }
 }
 

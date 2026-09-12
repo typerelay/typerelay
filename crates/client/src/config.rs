@@ -3,13 +3,13 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fs, io::Write, path::{Path, PathBuf}};
 use typerelay_core::{Snapshot, Snippet};
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct Document { matches: Vec<Match> }
+pub struct Document { pub matches: Vec<Match> }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct Match { trigger: String, replace: String }
+pub struct Match { pub trigger: String, pub replace: String }
 
 #[derive(Deserialize)]
 struct LegacyDocument { matches: Vec<LegacyMatch> }
@@ -30,7 +30,7 @@ pub struct FileStore {
 }
 
 impl FileStore {
-    fn read(path: &Path) -> Result<Vec<u8>> {
+    pub(crate) fn read(path: &Path) -> Result<Vec<u8>> {
         use std::io::Read;
         let mut bytes = Vec::new();
         fs::File::open(path)?.take(1_048_577).read_to_end(&mut bytes)?;
@@ -38,11 +38,11 @@ impl FileStore {
         Ok(bytes)
     }
 
-    fn parse(bytes: &[u8]) -> Result<Snapshot> {
+    pub(crate) fn parse(bytes: &[u8]) -> Result<Snapshot> {
         Self::parse_files(&[(PathBuf::from("snippet file"), bytes.to_vec())])
     }
 
-    fn parse_files(files: &[(PathBuf, Vec<u8>)]) -> Result<Snapshot> {
+    pub(crate) fn parse_files(files: &[(PathBuf, Vec<u8>)]) -> Result<Snapshot> {
         let mut snippets = Vec::new();
         let mut origins = BTreeMap::new();
         for (path, bytes) in files {
@@ -55,7 +55,7 @@ impl FileStore {
         Snapshot::new(snippets).map_err(anyhow::Error::msg)
     }
 
-    fn read_files(path: &Path, directory: bool) -> Result<Vec<(PathBuf, Vec<u8>)>> {
+    pub(crate) fn read_files(path: &Path, directory: bool) -> Result<Vec<(PathBuf, Vec<u8>)>> {
         let mut paths = Vec::new();
         if directory {
             for entry in fs::read_dir(path).with_context(|| format!("Cannot read snippet directory {}", path.display()))? {

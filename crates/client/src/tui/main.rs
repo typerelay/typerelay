@@ -1,0 +1,47 @@
+mod app;
+mod terminal;
+use anyhow::{Result, ensure};
+use clap::Parser;
+use ratatui::crossterm::event::{self, Event, KeyEventKind, MouseEventKind};
+use std::{io::IsTerminal, path::PathBuf, sync::{Arc, atomic::{AtomicBool, Ordering}}, time::{Duration, Instant}};
+use typerelay_client::{editor::{EditorStore, Paths}, settings::SettingsStore};
+
+#[derive(Parser)]
+#[command(name = "typerelay-tui", version, about = "Edit TypeRelay snippet files")]
+struct Cli { #[arg(long)] dir: Option<PathBuf> }
+
+impl Cli {
+    fn run(self) -> Result<()> {
+        ensure!(std::io::stdin().is_terminal() && std::io::stdout().is_terminal(), "Run typerelay-tui in an interactive terminal");
+        let config = Paths::config_dir()?;
+        let store = EditorStore::new(self.dir.unwrap_or(config.join("snippets")))?;
+        let settings = SettingsStore::open(config.join("settings.yml"))?;
+        let mut app = app::App::new(store, settings)?;
+        #[cfg(target_os = "linux")]
+        let _registration = typerelay_client::desktop::Registration::current_window()?;
+        let running = Arc::new(AtomicBool::new(true));
+        let signal = running.clone();
+        ctrlc::set_handler(move || signal.store(false, Ordering::SeqCst))?;
+        let (_guard, mut terminal) = terminal::TerminalSession::enter()?;
+        let interval = Duration::from_millis(33);
+        let mut last_draw = Instant::now() - interval;
+        let mut dirty = true;
+        while !app.quit && running.load(Ordering::SeqCst) && terminal::TerminalSession::connected() {
+            if dirty && last_draw.elapsed() >= interval {
+                terminal.draw(|frame| app.draw(frame))?;
+                dirty = false;
+                last_draw = Instant::now();
+            }
+            let timeout = if dirty { interval.saturating_sub(last_draw.elapsed()) } else { Duration::from_millis(250) };
+            if event::poll(timeout)? {
+                let input = event::read()?;
+                if matches!(&input, Event::Mouse(mouse) if mouse.kind == MouseEventKind::Moved) || matches!(&input, Event::Key(key) if key.kind == KeyEventKind::Release) { continue; }
+                app.handle(input);
+                dirty = true;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn main() -> Result<()> { Cli::parse().run() }

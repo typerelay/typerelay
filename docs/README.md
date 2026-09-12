@@ -1,5 +1,8 @@
 # TypeRelay POC
 
+Use [typerelay-tui](TUI.md) to select files, search, add and edit snippets. It installs with
+the engine. Settings stores a future sync URL; Sync is currently disabled.
+
 Headless Rust text expansion for Omarchy/Hyprland with keyd and a US keyboard layout.
 This repository is private for now, intended for a later open-source release. No project
 license has been selected yet; choose one before making the repository public.

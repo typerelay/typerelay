@@ -59,7 +59,7 @@
     mkdir "$bootstrap_dir/source"
     tar -xzf "$bootstrap_dir/source.tar.gz" -C "$bootstrap_dir/source" --strip-components=1
     printf '%s\n' 'Building TypeRelay from the downloaded source. Existing installation remains active.'
-    cargo build --manifest-path "$bootstrap_dir/source/Cargo.toml" --release --locked --target-dir "$bootstrap_dir/target" </dev/null
+    cargo build --manifest-path "$bootstrap_dir/source/Cargo.toml" --workspace --bins --release --locked --target-dir "$bootstrap_dir/target" </dev/null
     if [ "$dry_run" = true ]; then
         "$bootstrap_dir/target/release/typerelay" install --dry-run </dev/null
     else

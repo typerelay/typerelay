@@ -36,7 +36,7 @@ Run from a terminal as your desktop user:
 typerelay install
 ```
 
-From a fresh checkout, first build with `cargo build --release --locked`, then run
+From a fresh checkout, first build with `cargo build --workspace --bins --release --locked`, then run
 `./target/release/typerelay install`. The installer is embedded in the executable;
 it does not need the checkout afterward. Python 3, systemd, keyd, acl, udev, modprobe,
 notify-send and sudo or pkexec must be available. Omarchy provides these dependencies.
@@ -55,7 +55,8 @@ in the service file. The installer imports the current session values when avail
 
 ## Files installed
 
-- `~/.local/bin/typerelay`: executable, replaced atomically during upgrades.
+- `~/.local/bin/typerelay`: engine executable, replaced atomically during upgrades.
+- `~/.local/bin/typerelay-tui`: [terminal snippet editor](TUI.md), installed with the engine.
 - `~/.config/systemd/user/typerelay.service`: graphical-session service.
 - `~/.config/typerelay/snippets/`: your active YAML files.
 - `~/.local/share/typerelay/`: installer state and the device-access helper.
@@ -129,8 +130,12 @@ typerelay uninstall
 
 Uninstall asks for confirmation, stops TypeRelay, removes its managed service and persistent
 device rules, and restores prior ACL entries. It offers to restore the previous Espanso
-startup/running state. The managed binary is removed only if it still matches the installed
-binary; a replacement made outside the installer is preserved.
+startup/running state. Each managed binary is removed only if it still matches its installed
+hash; replacements made outside the installer are preserved. Legacy engine-only manifests
+remain supported. Snippets and settings are preserved.
+
+Both source binaries must be present with matching versions before installation changes any
+service state. The GitHub bootstrap builds both. The TUI is never started as a service.
 
 **All snippet/configuration files are kept.** Installation never deletes the original POC
 file or Espanso files. If installation fails after permissions were configured, installer

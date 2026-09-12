@@ -30,6 +30,26 @@ class Installer:
         self.binary = pathlib.Path(binary).resolve()
         self.permission_source = permission_source
 
+    def artifacts(self):
+        return [("typerelay", self.binary, self.destination), ("typerelay-tui", self.binary.with_name("typerelay-tui"), self.destination.with_name("typerelay-tui"))]
+
+    def validate_bundle(self):
+        versions = []
+        for name, source, destination in self.artifacts():
+            if not source.is_file():
+                raise RuntimeError(f"Missing {name} in the installer bundle. Build/download both binaries before installing.")
+            result = self.command(str(source), "--version")
+            parts = result.stdout.strip().split()
+            if len(parts) != 2 or parts[0] != name:
+                raise RuntimeError(f"Invalid {name} binary in installer bundle")
+            versions.append(parts[1])
+            if destination.exists() and destination.resolve() != source:
+                installed = self.command(str(destination), "--version", check=False)
+                if not installed.stdout.startswith(name + " "):
+                    raise RuntimeError(f"Refusing to replace an unrelated executable named {name}")
+        if len(set(versions)) != 1:
+            raise RuntimeError("Engine and TUI versions differ; use a matching installer bundle")
+
     def command(self, *args, check=True):
         return subprocess.run(args, check=check, capture_output=True, text=True)
 
@@ -160,15 +180,12 @@ WantedBy=graphical-session.target
             raise RuntimeError("This Omarchy client requires keyd to be running")
         if self.unit.exists() and not self.unit.read_text().startswith(self.marker):
             raise RuntimeError("Existing typerelay.service is unmanaged; preserve/move it before installing")
-        if self.destination.exists() and self.destination.resolve() != self.binary:
-            result = self.command(str(self.destination), "--version", check=False)
-            if not result.stdout.startswith("typerelay "):
-                raise RuntimeError("Refusing to replace an unrelated executable named typerelay")
+        self.validate_bundle()
 
     def install(self, dry_run):
         self.preflight()
         conflicts = self.conflicts()
-        print(f"Binary: {self.destination}\nService: {self.unit}\nSnippets: {self.snippets}")
+        print(f"Binaries: {self.destination}, {self.destination.with_name('typerelay-tui')}\nService: {self.unit}\nSnippets: {self.snippets}")
         print("Starts with your graphical login, runs as your user, restarts after failures.")
         print("Administrator access installs scoped udev rules and loads uinput at boot.")
         if conflicts["manual"]:
@@ -196,7 +213,8 @@ WantedBy=graphical-session.target
         self.data.chmod(0o700)
         self.write_private(self.helper, self.permission_source)
         # Save recovery information before any privileged mutation.
-        previous["binary_sha256"] = hashlib.sha256(self.binary.read_bytes()).hexdigest()
+        previous["binaries"] = {name: hashlib.sha256(source.read_bytes()).hexdigest() for name, source, _ in self.artifacts()}
+        previous["binary_sha256"] = previous["binaries"]["typerelay"]
         self.write_private(self.manifest, json.dumps(previous, indent=2) + "\n")
         self.privileged("install")
         try:
@@ -209,10 +227,11 @@ WantedBy=graphical-session.target
             self.systemctl("stop", "typerelay.service", check=False)
             self.stop_manual(conflicts["manual"])
             self.destination.parent.mkdir(parents=True, exist_ok=True)
-            temporary = self.destination.with_name("typerelay.new")
-            shutil.copyfile(self.binary, temporary)
-            temporary.chmod(0o755)
-            os.replace(temporary, self.destination)
+            for name, source, destination in self.artifacts():
+                temporary = destination.with_name(name + ".new")
+                shutil.copyfile(source, temporary)
+                temporary.chmod(0o755)
+                os.replace(temporary, destination)
             self.write_private(self.unit, self.service_text())
             self.systemctl("daemon-reload")
             variables = [name for name in ["WAYLAND_DISPLAY", "HYPRLAND_INSTANCE_SIGNATURE", "XDG_RUNTIME_DIR"] if os.environ.get(name)]
@@ -263,11 +282,13 @@ WantedBy=graphical-session.target
         self.unit.unlink(missing_ok=True)
         self.systemctl("daemon-reload")
         self.systemctl("reset-failed", "typerelay.service", check=False)
-        if self.destination.exists():
-            if hashlib.sha256(self.destination.read_bytes()).hexdigest() == state.get("binary_sha256"):
-                self.destination.unlink()
-            else:
-                print("Preserved binary changed since installation: " + str(self.destination))
+        hashes = state.get("binaries", {"typerelay": state.get("binary_sha256")})
+        for name, _, destination in self.artifacts():
+            if destination.exists():
+                if hashlib.sha256(destination.read_bytes()).hexdigest() == hashes.get(name):
+                    destination.unlink()
+                else:
+                    print("Preserved binary changed since installation or not owned: " + str(destination))
         self.helper.unlink(missing_ok=True)
         self.manifest.unlink()
         if restore:

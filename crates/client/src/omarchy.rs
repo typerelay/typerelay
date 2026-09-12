@@ -1,9 +1,9 @@
-use crate::config::FileStore;
+use typerelay_client::{config::FileStore, desktop::{Hyprland, Registration}};
 use crate::clipboard::{PasteJob, Progress};
 use anyhow::{Context, Result, bail};
 use evdev::{Device, EventType, InputEvent, KeyCode, InputId, BusType, uinput::VirtualDevice};
 use fs2::FileExt;
-use std::{collections::{BTreeSet, VecDeque}, fs, io::{Read, Write}, os::unix::net::UnixStream, path::PathBuf, process::Command, sync::{Arc, atomic::{AtomicBool, Ordering}}, thread, time::{Duration, Instant}};
+use std::{collections::{BTreeSet, VecDeque}, fs, io::Read, os::unix::net::UnixStream, path::PathBuf, process::Command, sync::{Arc, atomic::{AtomicBool, Ordering}}, thread, time::{Duration, Instant}};
 use typerelay_core::{Engine, Input, Expansion};
 
 pub struct Session;
@@ -34,9 +34,7 @@ struct ContextWatch {
 
 impl ContextWatch {
     fn connect() -> Result<Self> {
-        let runtime = std::env::var("XDG_RUNTIME_DIR")?;
-        let signature = std::env::var("HYPRLAND_INSTANCE_SIGNATURE")?;
-        let stream = UnixStream::connect(format!("{runtime}/hypr/{signature}/.socket2.sock"))?;
+        let stream = UnixStream::connect(Hyprland::socket(".socket2.sock")?)?;
         stream.set_nonblocking(true)?;
         let mut pointers = Vec::new();
         for (path, _) in Session::devices()? {
@@ -121,27 +119,15 @@ impl Session {
         Ok(devices)
     }
 
-    fn hypr(command: &str) -> Result<serde_json::Value> {
-        let runtime = std::env::var("XDG_RUNTIME_DIR")?;
-        let signature = std::env::var("HYPRLAND_INSTANCE_SIGNATURE")?;
-        let mut stream = UnixStream::connect(format!("{runtime}/hypr/{signature}/.socket.sock"))?;
-        stream.set_read_timeout(Some(Duration::from_millis(500)))?;
-        stream.set_write_timeout(Some(Duration::from_millis(500)))?;
-        stream.write_all(format!("j/{command}").as_bytes())?;
-        let mut response = String::new();
-        stream.take(1_048_576).read_to_string(&mut response)?;
-        Ok(serde_json::from_str(&response)?)
-    }
-
     fn target() -> Result<Option<String>> {
-        if Self::hypr("locked")?["locked"].as_bool() != Some(false) { return Ok(None); }
-        let active = Self::hypr("activewindow")?;
-        Ok(active["address"].as_str().filter(|s| *s != "0x0").map(str::to_owned))
+        if Hyprland::query("locked")?["locked"].as_bool() != Some(false) { return Ok(None); }
+        let active = Hyprland::query("activewindow")?;
+        Ok(active["address"].as_str().filter(|s| *s != "0x0" && !Registration::inhibited(s)).map(str::to_owned))
     }
 
     pub fn doctor() -> Result<()> {
         println!("Wayland: {}", std::env::var("WAYLAND_DISPLAY").unwrap_or_default());
-        println!("Hyprland reachable: {}", Self::hypr("locked").is_ok());
+        println!("Hyprland reachable: {}", Hyprland::query("locked").is_ok());
         println!("uinput writable: {}", fs::OpenOptions::new().write(true).open("/dev/uinput").is_ok());
         for (path, name) in Self::devices()? {
             if name == "keyd virtual keyboard" {
@@ -211,7 +197,7 @@ impl Session {
         let runtime = std::env::var("XDG_RUNTIME_DIR")?;
         let lock = fs::OpenOptions::new().create(true).truncate(false).read(true).write(true).open(PathBuf::from(runtime).join("typerelay.lock"))?;
         lock.try_lock_exclusive().context("Another TypeRelay client is already running")?;
-        let devices = Self::hypr("devices")?;
+        let devices = Hyprland::query("devices")?;
         let keyboards = devices["keyboards"].as_array().context("No Hyprland keyboard information")?;
         if keyboards.iter().any(|k| k["layout"].as_str() != Some("us") || k["capsLock"].as_bool() == Some(true)) { bail!("POC requires US-only layouts and Caps Lock off"); }
         Self::check_interference(&devices)?;
@@ -264,7 +250,7 @@ impl Session {
         eprintln!("TypeRelay running: {} snippets; comma + abbreviation + Space. Ctrl+C stops. No keystrokes are logged.", store.snapshot.len());
         while running.load(Ordering::SeqCst) {
             if last_conflict_check.elapsed() >= Duration::from_secs(2) {
-                Self::check_interference(&Self::hypr("devices")?)?;
+                Self::check_interference(&Hyprland::query("devices")?)?;
                 last_conflict_check = Instant::now();
             }
             if context.changed()? || last_input.elapsed() > Duration::from_secs(10) {
@@ -289,8 +275,8 @@ impl Session {
             if let Some(state) = &mut paste {
                 match state.job.progress.try_recv() {
                     Ok(Ok(Progress::Ready)) if !state.cancelled && Self::target()? == state.target && !context.changed()? => {
-                        let active = Self::hypr("activewindow")?;
-                        let terminal = active["tags"].as_array().is_some_and(|tags| tags.iter().any(|tag| tag.as_str().is_some_and(|name| name.trim_end_matches('*') == "terminal")));
+                        let active = Hyprland::query("activewindow")?;
+                        let terminal = Hyprland::is_terminal(&active);
                         insertion = Self::inject(&state.expansion, Some(terminal))?;
                         state.started = true;
                     }
