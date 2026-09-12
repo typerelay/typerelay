@@ -74,6 +74,20 @@ impl ContextWatch {
 }
 
 impl Session {
+    fn wait_for_release(mut active: impl FnMut() -> Result<bool>, deadline: Instant) -> Result<()> {
+        let mut idle_since = None;
+        loop {
+            let now = Instant::now();
+            if now >= deadline { bail!("Keyboard stayed active for 5 seconds; release held keys and try again"); }
+            if active()? {
+                idle_since = None;
+            } else if now.duration_since(*idle_since.get_or_insert(now)) >= Duration::from_millis(50) {
+                return Ok(());
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     fn devices() -> Result<Vec<(PathBuf, String)>> {
         let mut devices = Vec::new();
         for entry in fs::read_dir("/sys/class/input")? {
@@ -184,12 +198,33 @@ impl Session {
         if selected.len() != 1 { bail!("Expected exactly one keyboard named {device_name}"); }
         let mut keyboard = Device::open(&selected[0].0).context("Keyboard unavailable; use the session access setup")?;
         keyboard.set_nonblocking(true)?;
-        if keyboard.get_key_state()?.iter().next().is_some() { bail!("Release all keys before starting"); }
         let mut context = ContextWatch::connect()?;
         // keyd reserves vendor 0x0fac for virtual devices and ignores them, preventing feedback.
         let mut output = VirtualDevice::builder()?.name("TypeRelay virtual keyboard").input_id(InputId::new(BusType::BUS_VIRTUAL, 0x0fac, 0x5452, 1)).with_keys(keyboard.supported_keys().context("Not a keyboard")?)?.build()?;
         thread::sleep(Duration::from_millis(300));
-        keyboard.grab()?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            Self::wait_for_release(|| {
+                // Startup keystrokes already reached the application; never replay them.
+                let mut activity = false;
+                loop {
+                    match keyboard.fetch_events() {
+                        Ok(events) => {
+                            let count = events.count();
+                            if count == 0 { break; }
+                            activity = true;
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                        Err(error) => return Err(error.into()),
+                    }
+                }
+                Ok(activity || keyboard.get_key_state()?.iter().next().is_some())
+            }, deadline)?;
+            keyboard.grab()?;
+            if keyboard.get_key_state()?.iter().next().is_none() { break; }
+            // A key arrived between the idle check and grab. Let it finish normally.
+            keyboard.ungrab()?;
+        }
         let running = Arc::new(AtomicBool::new(true));
         let signal = running.clone();
         ctrlc::set_handler(move || signal.store(false, Ordering::SeqCst))?;
@@ -315,6 +350,19 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn startup_waits_for_launch_key_release_and_a_stable_idle_period() {
+        let mut checks = 0;
+        Session::wait_for_release(|| {
+            checks += 1;
+            Ok(matches!(checks, 1 | 2 | 5))
+        }, Instant::now() + Duration::from_secs(1)).unwrap();
+        assert!(checks >= 11, "A second key must restart the idle interval");
+    }
+    #[test]
+    fn startup_times_out_instead_of_grabbing_a_held_keyboard() {
+        assert!(Session::wait_for_release(|| Ok(true), Instant::now() + Duration::from_millis(20)).is_err());
+    }
     #[test]
     fn every_printable_ascii_character_has_a_stroke() {
         for byte in 32u8..=126 { assert!(Session::replacement_key(byte as char).is_ok(), "Missing ASCII {byte}"); }

@@ -28,6 +28,8 @@ espanso stop
 Type `,brb` and Space in an ordinary text field. The Space is consumed and the result is
 `Be right back.`. Press Ctrl+C in the launching terminal to stop the client. Stopping or
 crashing releases its exclusive grab. No startup/autostart configuration is installed.
+Startup waits for the launching Enter key to be released and 50 ms of keyboard inactivity
+(up to five seconds). Events already delivered before startup are discarded, not replayed.
 
 To stop from another terminal: `pkill -INT -f '(^|/)typerelay run( |$)'`. This leaves any
 clipboard-restoration helper alive until the next copy. Ctrl+Alt+Backspace is not a
