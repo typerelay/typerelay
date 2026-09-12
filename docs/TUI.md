@@ -35,3 +35,13 @@ External database changes refresh lists; active drafts remain available and stal
 The TUI suppresses expansion only in its own registered live terminal window.
 No live keystroke tests should run without keyboard/mouse coordination.
 YAML is import/export only; use CLI commands or web import.
+
+## Selection and moves (v0.8)
+
+- Space toggles the current row; Ctrl+A selects visible filtered matches; Ctrl+D clears selection.
+- Shift+Up/Down extends the range from the selection anchor.
+- F8 opens the move destination picker. F3 trashes selected snippets, or the current row when none are selected.
+- M confirms a bulk move; D confirms bulk Trash; Enter/Esc cancel confirmation.
+- In the editor, Ctrl+M chooses a library; Ctrl+S saves content and destination together.
+- Only active editable destinations with the same sync status are offered. Local-only/synced moves are intentionally blocked.
+- Moves preserve IDs, ordering and offline queues. Rejected sync operations keep unsent content in recovery and restore server state without blocking other operations.

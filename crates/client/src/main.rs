@@ -47,6 +47,8 @@ enum Commands {
     DatabaseEdit { name: String, trigger: String, #[arg(long)] text: Option<String>, #[arg(long)] trash: bool },
     #[command(hide = true)]
     DatabaseReplay { operation: String },
+    #[command(hide = true)]
+    DatabaseBatch { source: String, #[arg(long)] destination: Option<String>, #[arg(long, num_args=1..)] triggers: Vec<String> },
     Trash { #[arg(long)] restore: Option<String>, #[arg(long)] empty: bool, #[arg(long)] yes: bool },
     #[cfg(target_os = "linux")]
     #[command(hide = true)]
@@ -68,6 +70,14 @@ impl Cli {
             Commands::Import { source, name } => { typerelay_client::database::Database::open(&root.join("snippets"))?.import(&name, &std::fs::read_to_string(source)?)?; },
             Commands::Export { name, destination } => typerelay_client::database::Database::open(&root.join("snippets"))?.export(&name, &destination)?,
             Commands::DatabaseEdit { name, trigger, text, trash } => { let db = typerelay_client::database::Database::open(&root.join("snippets"))?; let file = db.editor(&name)?; let index = file.entries.iter().position(|entry|entry.trigger == trigger); anyhow::ensure!(!trash || index.is_some(), "Snippet missing"); db.edit(&file, index, if trash { None } else { Some(config::Match { trigger, replace: text.ok_or_else(||anyhow::anyhow!("Text required"))? }) })?; },
+            Commands::DatabaseBatch { source, destination, triggers } => {
+                let db = typerelay_client::database::Database::open(&root.join("snippets"))?;
+                let file = db.editor(&source)?;
+                let ids: Vec<_> = file.entries.iter().enumerate().filter(|(_,entry)|triggers.contains(&entry.trigger)).map(|(index,_)|file.ids[index].clone()).collect();
+                anyhow::ensure!(ids.len() == triggers.len(), "Selected snippet missing");
+                let destination = destination.map(|name|db.editor(&name).map(|file|file.id)).transpose()?;
+                db.batch(&file.id, destination.as_deref(), &db.batch_items(&file, &ids)?)?;
+            },
             Commands::DatabaseReplay { operation } => { typerelay_client::database::Database::open(&root.join("snippets"))?.queue(&serde_json::from_str(&operation)?)?; },
             Commands::Inspect => { let db = typerelay_client::database::Database::open(&root.join("snippets"))?; let libraries: Vec<_> = db.libraries()?.into_iter().map(|mut library| { library["records"] = serde_json::json!(db.records(library["_id"].as_str().unwrap()).unwrap()); library }).collect(); println!("{}", serde_json::json!({"libraries":libraries,"pending":db.pending()?,"conflicts":db.meta("conflicts")?,"staged":db.meta("staged")?,"recovery":db.connection.query_row("SELECT count(*) FROM recovery", [], |row|row.get::<_, i64>(0))?})); },
             Commands::Trash { restore, empty, yes } => { let db = typerelay_client::database::Database::open(&root.join("snippets"))?; let rows = db.trash()?; if let Some(id) = restore { let target = rows.iter().find(|row| row["id"] == id).ok_or_else(||anyhow::anyhow!("Trash item not found"))?; db.trash_action(target, "restore")?; } else if empty { anyhow::ensure!(yes, "Pass --yes to permanently empty eligible Trash"); db.empty(&rows.into_iter().filter(|row| row["can_purge"] == true).collect::<Vec<_>>())?; } else { println!("{}", serde_json::to_string_pretty(&rows)?); } },

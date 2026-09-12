@@ -36,7 +36,7 @@ impl Sync {
     }
     fn request(&self, credentials: &mut Credentials, method: reqwest::Method, path: &str, body: Option<&Value>) -> Result<Value> {
         let send = |credentials: &Credentials| {
-            let request = self.client.request(method.clone(), format!("{}/api/v2/{path}", credentials.server)).bearer_auth(&credentials.access_token);
+            let request = self.client.request(method.clone(), format!("{}/api/v2/{path}", credentials.server)).bearer_auth(&credentials.access_token).header("X-TypeRelay-Sync-Protocol", "3");
             if let Some(body) = body { request.json(body).send() } else { request.send() }
         };
         let mut response = send(credentials)?;
@@ -125,31 +125,36 @@ impl Sync {
         db.cleanup()?;
         let mut credentials = self.credentials()?;
         self.legacy(&mut credentials, &db)?;
-        let cursor = db.meta("cursor")?.and_then(|value| value.as_u64()).unwrap_or(0);
+        let cursor = if db.pending()?.is_empty() && db.meta("sync_protocol")? == Some(json!(3)) { db.meta("cursor")?.and_then(|value| value.as_u64()).unwrap_or(0) } else { 0 };
         let response = self.request(&mut credentials, reqwest::Method::GET, &format!("sync?cursor={cursor}"), None)?;
-        ensure!(response["protocol"] == 2, "Server upgrade required: sync protocol 2");
+        ensure!(response["protocol"] == 3, "Server upgrade required: sync protocol 3");
         db.apply(&response, None)?;
+        db.set_meta("sync_protocol", &json!(3))?;
         while let Some((seq, operation)) = db.pending()?.into_iter().next() {
             let id = operation["library"].as_str().context("Missing library")?;
-            let path = match operation["kind"].as_str() { Some("create") => "libraries".to_owned(), Some("edit") => format!("libraries/{id}/snippets"), Some("trash") => "trash/action".into(), _ => anyhow::bail!("Unknown pending operation") };
+            let path = match operation["kind"].as_str() { Some("create") => "libraries".to_owned(), Some("edit") => format!("libraries/{id}/snippets"), Some("trash") => "trash/action".into(), Some("batch") => "snippets/batch".into(), _ => anyhow::bail!("Unknown pending operation") };
             let result = self.request(&mut credentials, reqwest::Method::POST, &path, Some(&operation["body"]));
             match result {
                 Ok(result) => db.apply(&result, Some((seq, &operation)))?,
                 Err(error) => {
                     let message = error.to_string();
-                    if message.contains("403") || message.contains("410") || message.contains("404") || (message.contains("409") && operation["kind"] == "trash") {
+                    if message.contains("403") || message.contains("410") || message.contains("404") || message.contains("409") || (operation["kind"] == "batch" && (message.contains("400") || message.contains("422"))) {
                         let transaction = db.connection.unchecked_transaction()?;
                         if !message.contains("410") { db.recover_operation(&operation)?; }
                         db.connection.execute("DELETE FROM outbox WHERE seq=?1", [seq])?;
+                        db.set_meta("last_failure", &json!(message))?;
                         transaction.commit()?;
+                        // Full refresh rolls back rejected optimistic moves on both sides.
+                        let fresh = self.request(&mut credentials, reqwest::Method::GET, "sync?cursor=0", None)?;
+                        db.apply(&fresh, None)?;
                     } else { return Err(error); }
                 }
             }
         }
-        let cursor = db.meta("cursor")?.and_then(|value| value.as_u64()).unwrap_or(0);
+        let cursor = if db.pending()?.is_empty() && db.meta("sync_protocol")? == Some(json!(3)) { db.meta("cursor")?.and_then(|value| value.as_u64()).unwrap_or(0) } else { 0 };
         db.apply(&self.request(&mut credentials, reqwest::Method::GET, &format!("sync?cursor={cursor}"), None)?, None)?;
         let conflicts = db.meta("conflicts")?.and_then(|value|value.as_array().map(Vec::len)).unwrap_or(0);
-        Paths::atomic_write(&self.path("status"), format!("Synced. {conflicts} conflicts. Resolve: {}/", credentials.server).as_bytes(), false)?;
+        Paths::atomic_write(&self.path("status"), format!("Synced. {conflicts} conflicts. {} Resolve: {}/", db.meta("last_failure")?.and_then(|value|value.as_str().map(str::to_owned)).unwrap_or_default(), credentials.server).as_bytes(), false)?;
         Ok(())
     }
     pub fn disconnect(&self) -> Result<()> {
@@ -159,6 +164,7 @@ impl Sync {
         let db = Database::open(&self.directory)?;
         let transaction = db.connection.unchecked_transaction()?;
         db.connection.execute("UPDATE libraries SET synced=0", [])?;
+        db.connection.execute_batch("DELETE FROM base_libraries; DELETE FROM base_snippets;")?;
         for (seq, operation) in db.pending()? { db.recover_operation(&operation)?; db.connection.execute("DELETE FROM outbox WHERE seq=?1", [seq])?; }
         db.set_meta("cursor", &json!(0))?;
         transaction.commit()?;

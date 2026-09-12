@@ -70,8 +70,9 @@ export class Server {
 			const ctx = await Support.context(req.session.user, String(account._id));
 			res.render('app', { accounts, account, ctx, libraries: await Libraries.list(ctx), team: await Team.list(ctx), profile: await User.findById(ctx.user).lean() });
 		});
-		app.use('/api/v1', (req, res) => res.status(426).json({ error: 'Upgrade TypeRelay: database storage requires sync protocol 2', protocol: 2 }));
+		app.use('/api/v1', (req, res) => res.status(426).json({ error: 'Upgrade TypeRelay: snippet moves require sync protocol 3', protocol: 3 }));
 		app.use('/api/v2', async (req, res, next) => {
+			Support.assert(!req.headers.authorization || req.headers['x-typerelay-sync-protocol'] === '3', 'Upgrade TypeRelay: snippet moves require sync protocol 3', 426);
 			req.ctx = req.headers.authorization ? await Auth.bearer(req.headers.authorization.replace(/^Bearer /, '')) : await Support.context(req.session.user, req.headers['x-account-id']);
 			next();
 		});
@@ -80,6 +81,7 @@ export class Server {
 			const receipt = await Operation.findOne({ account: req.ctx.account, user: req.ctx.user, operation: req.params.id }).lean();
 			res.json(receipt ? { found: true, ...await Libraries.receipt(req.ctx, receipt.result) } : { found: false });
 		});
+		app.post('/api/v2/snippets/batch', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.batch(ctx, req.body, session))));
 		app.get('/api/v2/trash', async (req, res) => {
 			const items = await Libraries.trash(req.ctx);
 			res.render('ajax/trash', { items }, (error, html) => { if (error) return res.status(500).json({ error: 'Could not render Trash' }); res.json({ items, html }); });
@@ -127,15 +129,19 @@ export class Server {
 		app.patch('/api/v2/account', async (req, res) => { Support.assert(Support.admin(req.ctx), 'Admin required', 403); await Account.updateOne({ _id: req.ctx.account }, { $set: { name: Support.text(req.body.name) } }); res.json({ name: req.body.name }); });
 		app.get('/api/v2/forms/:kind', async (req, res) => {
 			const kind = req.params.kind;
-			Support.assert(['library', 'snippet', 'group', 'conflict'].includes(kind), 'Unknown form');
+			Support.assert(['library', 'snippet', 'group', 'conflict', 'move'].includes(kind), 'Unknown form');
 			const library = req.query.library ? Libraries.view(req.ctx, await Libraries.get(req.ctx, req.query.library, null, true)) : null;
 			const group = req.query.group ? await Group.findOne({ _id: Support.id(req.query.group), account: req.ctx.account }).lean() : null;
 			const conflict = req.query.conflict ? await Conflict.findOne({ _id: Support.id(req.query.conflict), account: req.ctx.account, library: library?._id, resolved: false }).lean() : null;
 			if (kind === 'conflict') Support.assert(conflict && library.permissions.edit, 'Conflict not found', 404);
 			const current = library?.records.find(snippet => snippet.id === conflict?.snippet) || null;
-			res.render('ajax/form', { kind, library, group, conflict, current, snippet: kind === 'conflict' ? (conflict.local ? Libraries.entry(conflict.local) : current) : library?.snippets.find(snippet => snippet.id === req.query.snippet), team: await Team.list(req.ctx) });
+			res.render('ajax/form', { kind, destinations: library ? (await Libraries.list(req.ctx)).filter(item => item.permissions.edit && item._id !== library._id) : [], library, group, conflict, current, snippet: kind === 'conflict' ? (conflict.local ? Libraries.entry(conflict.local) : current) : library?.snippets.find(snippet => snippet.id === req.query.snippet), team: await Team.list(req.ctx) });
 		});
-		app.get('/api/v2/editor/:id', async (req, res) => res.render('ajax/editor', { library: Libraries.view(req.ctx, await Libraries.get(req.ctx, req.params.id)) }));
+		app.get('/api/v2/editor/:id', async (req, res) => {
+			const library = Libraries.view(req.ctx, await Libraries.get(req.ctx, req.params.id));
+			if (req.query.format === 'json') return res.json({ library, html: pug.renderFile('./views/ajax/editor.pug', { library }), card: pug.renderFile('./views/ajax/library.pug', { library }) });
+			res.render('ajax/editor', { library });
+		});
 		app.get('/api/v2/fragments/:type/:id', async (req, res) => {
 			if (req.params.type === 'invitation') {
 				Support.assert(Support.admin(req.ctx), 'Admin required', 403);
@@ -175,10 +181,12 @@ export class Server {
 		server.on('close', () => { clearInterval(cleanup); sessionStore.close(); });
 		return server;
 	}
+	static presentation(library) {
+		return { library, html: pug.renderFile('./views/ajax/library.pug', { library }), fragments: library.snippets.map(snippet => ({ id: snippet.id, revision: snippet.revision, html: pug.renderFile('./views/ajax/snippet.pug', { snippet, library }) })) };
+	}
 	static result(res, ctx, result) {
-		if (!result.library) return res.json(result);
-		res.render('ajax/library', { library: result.library }, (error, html) => { if (error) return res.status(500).json({ error: 'Rendering failed' }); const fragments = result.library.snippets.map(snippet => ({ id: snippet.id, revision: snippet.revision, html: pug.renderFile('./views/ajax/snippet.pug', { snippet, library: result.library }) }));
-				res.json({ ...result, html, fragments }); });
+		if (result.libraries) return res.json({ ...result, updates: result.libraries.map(Server.presentation) });
+		res.json(result.library ? { ...result, ...Server.presentation(result.library) } : result);
 	}
 }
 if (process.env.NODE_ENV !== 'test') await Server.start();

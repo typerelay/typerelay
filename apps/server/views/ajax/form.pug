@@ -25,6 +25,14 @@ if kind === 'library'
 		textarea#yaml.form-control.form-control-sm.mb-4(name="yaml") matches: []
 		button#preview.btn.btn-outline-secondary.btn-sm(type="button") Validate import
 		p#preview-result.mt-3
+if kind === 'move'
+	label.form-label.fw-bold(for="destination-library") Destination library
+	select#destination-library.form-select.form-select-sm.mb-4(name="destination_library" required disabled=!destinations.length)
+		each destination in destinations
+			option(value=destination._id)= destination.name + (destination.shared ? ' · Shared' : ' · Personal')
+	if !destinations.length
+		p.text-muted No other editable libraries are available.
+	p.text-muted Moved snippets inherit the destination library’s sharing and editing permissions.
 if kind === 'snippet' || kind === 'conflict'
 	label.form-label.fw-bold(for="trigger") Abbreviation
 	.input-group.input-group-sm.mb-4
@@ -32,6 +40,13 @@ if kind === 'snippet' || kind === 'conflict'
 		input#trigger.form-control.form-control-sm(name="trigger" value=snippet ? snippet.trigger : '' required pattern="[a-z0-9\\-]{1,63}" autocapitalize="off" spellcheck="false")
 	label.form-label.fw-bold(for="replace") Expansion
 	textarea#replace.form-control.form-control-sm.mb-4(name="replace" required)= snippet ? snippet.replace : ''
+	if kind === 'snippet' && snippet
+		label.form-label.fw-bold(for="destination-library") Library
+		select#destination-library.form-select.form-select-sm.mb-4(name="destination_library" disabled=!library.permissions.edit)
+			option(value=library._id selected)= library.name + (library.shared ? ' · Shared' : ' · Personal')
+			each destination in destinations
+				option(value=destination._id)= destination.name + (destination.shared ? ' · Shared' : ' · Personal')
+		p.text-muted Changing the library moves this snippet when you save. Destination sharing permissions apply.
 	if kind === 'conflict'
 		label.form-label.fw-bold(for="choice") Resolution
 		select#choice.form-select.form-select-sm(name="choice")

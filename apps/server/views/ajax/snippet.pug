@@ -1,6 +1,9 @@
 article.snippet(tabindex="0" role="group" aria-label="Snippet " + snippet.trigger + " — Enter to edit" data-snippet=snippet.id data-revision=snippet.revision)
 	.d-flex.align-items-center.justify-content-between.mb-3
-		h3.h6.mb-0.fw-bold= snippet.trigger
+		.snippet-selection.d-flex.align-items-center.gap-3
+			label.d-flex.align-items-center.mb-0
+				input.form-check-input.m-0(type="checkbox" data-select-snippet=snippet.id disabled=!library.permissions.edit aria-label="Select " + snippet.trigger)
+			h3.h6.mb-0.fw-bold= snippet.trigger
 		if library.permissions.edit
 			.d-flex
 				button.btn.btn-outline-secondary.btn-sm.ms-3(data-edit-snippet=snippet.id) Edit

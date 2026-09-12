@@ -64,3 +64,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 @media (max-width: 40rem) { .app-navbar { grid-template-columns: 8rem minmax(0, 1fr) 2.5rem; column-gap: .75rem; } }
 
 @media (max-width: 60rem) { #search-shortcut { display: none; } }
+
+.bulk-actions[hidden] { display: none !important; }
+.snippet-controls { min-height: 3.5rem; border-bottom: .0625rem solid #e7dfd2; flex-wrap: wrap; }
+.snippet-selection { min-width: 0; }

@@ -4,6 +4,14 @@ div(data-editor=library._id)
 		.editor-actions.d-flex.align-items-center.gap-3.ms-auto
 			button.btn.btn-outline-secondary.btn-sm(data-library-settings hidden=!library.permissions.manage) Sharing and settings
 			button.btn.btn-primary.btn-sm(data-add-snippet hidden=!library.permissions.edit) Add snippet
+	.snippet-controls.d-flex.align-items-center.justify-content-between.gap-3.pb-4.mb-3
+		label.d-flex.align-items-center.gap-2.mb-0
+			input.form-check-input.m-0(type="checkbox" data-select-all disabled=!library.permissions.edit aria-label="Select all snippets")
+			span(data-select-all-label) Select all
+		.bulk-actions.d-flex.align-items-center.gap-3(hidden)
+			span(data-selection-count)
+			button.btn.btn-outline-secondary.btn-sm(type="button" data-bulk-move) Move
+			button.btn.btn-outline-danger.btn-sm(type="button" data-bulk-trash) Trash
 	#snippets
 		each snippet in library.snippets
 			include snippet

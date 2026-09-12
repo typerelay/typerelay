@@ -221,3 +221,57 @@ test('legacy server migration is repeatable, preserves IDs and starts deleted-li
 	assert.ok(await MigrationBackup.exists({ key: 'records-v2:libraries:' + id }));
 	assert.equal((await Library.collection.findOne({ _id: id })).yaml, undefined);
 });
+
+test('batch moves preserve IDs/order, update both libraries and retry idempotently', async () => {
+	const ctx = await Fixture.user('owner', (await Account.create({ name: 'Move account' }))._id);
+	const source = (await Fixture.create(ctx)).library;
+	const destination = (await Fixture.create(ctx, 'matches: [{trigger: existing, replace: Existing}]')).library;
+	const items = [...source.snippets].reverse().map(entry => ({ id: entry.id, base_revision: entry.revision }));
+	const body = { action: 'move', source_library: source._id, destination_library: destination._id, items };
+	const operation = randomUUID();
+	const first = await Libraries.mutate(ctx, operation, body, (actor, session) => Libraries.batch(actor, body, session));
+	const second = await Libraries.mutate(ctx, operation, body, (actor, session) => Libraries.batch(actor, body, session));
+	assert.deepEqual(first.moved, second.moved);
+	assert.equal((await Libraries.get(ctx, source._id)).snippets.length, 0);
+	const moved = (await Libraries.get(ctx, destination._id)).snippets;
+	assert.deepEqual(moved.map(row => row.trigger), ['existing', 'hello', 'bye']);
+	assert.deepEqual(moved.slice(1).map(row => row.id), source.snippets.map(row => row.id));
+	assert.ok(first.libraries.every(row => row.revision === 2));
+	await assert.rejects(Fixture.upload(ctx, source, [Fixture.change(source.snippets[0], 'Stale edit')]), /moved/);
+	assert.equal(await Snippet.countDocuments({ account: ctx.account, id: source.snippets[0].id }), 1);
+});
+test('batch collision, stale revision and missing destination permission fail atomically', async () => {
+	const account = await Account.create({ name: 'Atomic moves' });
+	const ctx = await Fixture.user('owner', account._id);
+	const source = (await Fixture.create(ctx)).library;
+	const destination = (await Fixture.create(ctx, 'matches: [{trigger: bye, replace: Collision}]')).library;
+	const body = { action: 'move', source_library: source._id, destination_library: destination._id, items: source.snippets.map(row => ({ id: row.id, base_revision: row.revision })) };
+	await assert.rejects(Libraries.mutate(ctx, randomUUID(), body, (actor, session) => Libraries.batch(actor, body, session)), /duplicate/i);
+	assert.equal((await Libraries.get(ctx, source._id)).snippets.length, 2);
+	assert.equal((await Libraries.get(ctx, destination._id)).snippets.length, 1);
+	const stale = { action: 'trash', source_library: source._id, items: [{ id: source.snippets[0].id, base_revision: 1 }, { id: source.snippets[1].id, base_revision: 99 }] };
+	await assert.rejects(Libraries.mutate(ctx, randomUUID(), stale, (actor, session) => Libraries.batch(actor, stale, session)), /changed/);
+	assert.equal((await Libraries.trash(ctx)).length, 0);
+	const member = await Fixture.user('member', account._id);
+	await Fixture.settings(ctx, source, { members: [member.user], editable: true });
+	await Fixture.settings(ctx, destination, { members: [member.user], editable: false });
+	await assert.rejects(Libraries.mutate(member, randomUUID(), body, (actor, session) => Libraries.batch(actor, body, session)), /read-only/);
+	const foreign = (await Fixture.create(Fixture.outsider, 'matches: []')).library;
+	await assert.rejects(Libraries.mutate(ctx, randomUUID(), { ...body, destination_library: foreign._id }, (actor, session) => Libraries.batch(actor, { ...body, destination_library: foreign._id }, session)), /not found/);
+});
+test('single edit-and-move commits content and location together; bulk Trash restores normally', async () => {
+	const ctx = await Fixture.user('owner', (await Account.create({ name: 'Edit move' }))._id);
+	const source = (await Fixture.create(ctx)).library;
+	const destination = (await Fixture.create(ctx, 'matches: []')).library;
+	const body = { action: 'move', source_library: source._id, destination_library: destination._id, items: [{ id: source.snippets[0].id, base_revision: 1, value: { trigger: ',renamed', replace: 'Changed\nText' } }] };
+	await Libraries.mutate(ctx, randomUUID(), body, (actor, session) => Libraries.batch(actor, body, session));
+	const moved = (await Libraries.get(ctx, destination._id)).snippets[0];
+	assert.equal(moved.id, source.snippets[0].id);
+	assert.equal(moved.trigger, 'renamed');
+	assert.equal(moved.content.text, 'Changed\nText');
+	const trash = { action: 'trash', source_library: destination._id, items: [{ id: moved.id, base_revision: moved.revision }] };
+	await Libraries.mutate(ctx, randomUUID(), trash, (actor, session) => Libraries.batch(actor, trash, session));
+	const target = (await Libraries.trash(ctx))[0];
+	await Libraries.mutate(ctx, randomUUID(), { target }, (actor, session) => Libraries.trashAction(actor, target, 'restore', session));
+	assert.equal((await Libraries.get(ctx, destination._id)).snippets[0].id, moved.id);
+});

@@ -49,3 +49,10 @@ Offline devices apply changes on their next successful connection.
 Server tests use disposable typerelay_test, typerelay_e2e and typerelay_security databases and isolated desktop directories.
 Tests cover migration, offline replay, conflicts, Trash/restore/purge, expiry, access revocation, staged collisions and incremental UI updates.
 Do not run the retired file-based desktop smoke scripts against the database client.
+
+## Move protocol upgrade (v0.8)
+
+Install the matching v0.8 engine/TUI with the server. Desktop sync protocol is now 3; no account reconnection or content migration is required.
+New SQLite base_libraries/base_snippets tables retain canonical server data while pending moves project into the working tables. They are populated on the first full protocol-3 sync and are cleared alongside content on purge/revocation.
+The departures table keeps content-free former-location markers to prevent local resurrection when a move destination is inaccessible.
+Pending enrollment remaps both source and destination references atomically.

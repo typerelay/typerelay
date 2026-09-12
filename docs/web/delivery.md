@@ -1,3 +1,23 @@
+# v0.8.0 selection and moves delivery
+
+Implemented web checkboxes, select/deselect all, Shift+click ranges, conditional bulk Move/Trash actions and single-editor destination selection.
+TUI supports Space, Ctrl+A/Ctrl+D, Shift+Up/Down, F8 Move, F3 selected Trash and Ctrl+M in the editor.
+Moves preserve IDs and order, append at the destination and apply destination permissions. Batches are atomic and same-account; TUI moves require matching sync status.
+
+Desktop protocol 3 is negotiated by header; older desktop requests receive 426. Canonical SQLite bases keep partial acknowledgements and pending enrollment from losing optimistic moves.
+Content-free departures prevent stale edits recreating a moved snippet when its new library is inaccessible.
+Rejected operations restore server state and retain unsent content in recovery.
+
+Verified 85 checks: 43 Rust, 13 Python installer/terminal and 29 server/e2e.
+Cases include duplicate/stale/permission rollback, retry identity, source ordering, single edit-and-move, offline moves followed by edits, pending enrollment remapping, inaccessible destinations and incremental DOM selection.
+Clippy and Docker build passed. Browser verified selection/action bar, cancel retention and the editor library picker.
+
+Installed v0.8 engine/TUI and server. All 63 active local snippet IDs, locations and text match the pre-upgrade fingerprint; sync uses protocol 3 with zero pending operations and conflicts.
+Backup retained at ~/.local/share/typerelay/storage-upgrade-zod0h0w1.
+No desktop keystrokes were injected. No TypeRelay Managani target is configured.
+
+---
+
 # v0.7.0 database and Trash delivery
 
 Implemented per-snippet MongoDB storage, SQLite desktop storage, protocol v2 and 30-day Trash.

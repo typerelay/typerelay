@@ -6,7 +6,7 @@ use typerelay_core::Engine;
 use typerelay_client::{config::Match, editor::{EditorStore, OpenFile}, settings::SettingsStore};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Screen { Files, Browse, Edit, NewFile, Settings, Trash, Confirm }
+pub enum Screen { Files, Browse, Edit, NewFile, Settings, Trash, Move, Confirm }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Destination { Files, Browse, Settings, Trash, Quit }
 
@@ -32,6 +32,15 @@ pub struct App {
     original_prefix: String,
     pending: Option<Destination>,
     pending_delete: Option<usize>,
+    selected_ids: std::collections::BTreeSet<String>,
+    selection_anchor: Option<String>,
+    move_destination: Option<String>,
+    move_choices: Vec<serde_json::Value>,
+    move_state: ListState,
+    move_from: Screen,
+    move_items: Vec<serde_json::Value>,
+    pending_batch: Option<(String, Option<String>, Vec<serde_json::Value>)>,
+    bulk_buttons: Vec<Rect>,
     pending_trash: Option<(String, Vec<serde_json::Value>)>,
     trash_rows: Vec<serde_json::Value>,
     trash_state: ListState,
@@ -53,7 +62,7 @@ impl App {
         let files = store.files()?;
         let mut file_state = ListState::default();
         file_state.select(Some(0));
-        Ok(Self { store, settings, screen: Screen::Files, files, file_state, snippets_state: ListState::default(), file: None, search: TextArea::default(), search_focused: false, trigger: TextArea::default(), expansion: TextArea::default(), name: TextArea::default(), url: TextArea::default(), editor_focus: 0, editing: None, original_entry: None, original_url: String::new(), prefix: TextArea::default(), original_prefix: String::new(), pending: None, pending_delete: None, pending_trash: None, trash_rows: Vec::new(), trash_state: ListState::default(), trash_buttons: Vec::new(), confirm_from: Screen::Files, status: "Choose a file, or create a new one".into(), error: false, quit: false, toolbar: Vec::new(), list_area: Rect::default(), field_areas: Vec::new(), save_area: Rect::default(), cancel_area: Rect::default(), confirm_buttons: Vec::new() })
+        Ok(Self { store, settings, screen: Screen::Files, files, file_state, snippets_state: ListState::default(), file: None, search: TextArea::default(), search_focused: false, trigger: TextArea::default(), expansion: TextArea::default(), name: TextArea::default(), url: TextArea::default(), editor_focus: 0, editing: None, original_entry: None, original_url: String::new(), prefix: TextArea::default(), original_prefix: String::new(), pending: None, pending_delete: None, selected_ids: std::collections::BTreeSet::new(), selection_anchor: None, move_destination: None, move_choices: Vec::new(), move_state: ListState::default(), move_from: Screen::Browse, move_items: Vec::new(), pending_batch: None, bulk_buttons: Vec::new(), pending_trash: None, trash_rows: Vec::new(), trash_state: ListState::default(), trash_buttons: Vec::new(), confirm_from: Screen::Files, status: "Choose a file, or create a new one".into(), error: false, quit: false, toolbar: Vec::new(), list_area: Rect::default(), field_areas: Vec::new(), save_area: Rect::default(), cancel_area: Rect::default(), confirm_buttons: Vec::new() })
     }
     fn text(value: &str) -> TextArea<'static> { TextArea::new(value.split('\n').map(str::to_owned).collect()) }
     fn value(field: &TextArea<'_>) -> String { field.lines().join("\n") }
@@ -61,7 +70,7 @@ impl App {
     fn effective_screen(&self) -> Screen { if self.screen == Screen::Confirm { self.confirm_from } else { self.screen } }
     fn dirty(&self) -> bool {
         match self.effective_screen() {
-            Screen::Edit => self.original_entry.as_ref() != Some(&self.draft()),
+            Screen::Edit => self.original_entry.as_ref() != Some(&self.draft()) || self.move_destination.is_some(),
             Screen::Settings => Self::value(&self.url) != self.original_url || Self::value(&self.prefix) != self.original_prefix,
             _ => false,
         }
@@ -100,7 +109,9 @@ impl App {
         let index = self.file_state.selected().unwrap_or(0);
         if index == 0 { self.name = TextArea::default(); self.screen = Screen::NewFile; return Ok(()); }
         let name = self.files.get(index - 1).context("Select a file")?;
-        self.file = Some(self.store.open(name)?);
+        let next = self.store.open(name)?;
+        if self.file.as_ref().is_none_or(|file| file.id != next.id) { self.selected_ids.clear(); self.selection_anchor = None; }
+        self.file = Some(next);
         self.search = TextArea::default();
         self.search_focused = false;
         self.snippets_state.select(Some(0));
@@ -110,6 +121,7 @@ impl App {
     }
     fn edit(&mut self, new: bool) -> Result<()> {
         self.settings.reload()?;
+        self.move_destination = None;
         let file = self.file.as_ref().context("Choose a file first")?;
         typerelay_client::sync::Sync::editable(self.settings.config_dir(), &self.store.directory, &file.name)?;
         self.editing = if new { None } else { Some(self.selected().context("Select a snippet")?) };
@@ -128,9 +140,13 @@ impl App {
             Screen::Edit => {
                 let file = self.file.as_ref().context("No file selected")?;
                 let entry = self.draft();
-                let saved = { typerelay_client::sync::Sync::editable(self.settings.config_dir(), &self.store.directory, &file.name)?; self.store.save(file, self.editing, entry.clone())? };
+                let saved = if let Some(destination) = &self.move_destination {
+                    typerelay_client::database::Database::open(&self.store.directory)?.edit_move(file, self.editing.context("Save a new snippet before moving")?, entry.clone(), destination)?
+                } else { typerelay_client::sync::Sync::editable(self.settings.config_dir(), &self.store.directory, &file.name)?; self.store.save(file, self.editing, entry.clone())? };
                 self.file = Some(saved);
                 self.original_entry = Some(entry);
+                self.move_destination = None; self.selected_ids.retain(|id| self.file.as_ref().unwrap().ids.contains(id));
+                if self.selection_anchor.as_ref().is_some_and(|id| !self.file.as_ref().unwrap().ids.contains(id)) { self.selection_anchor = None; }
                 self.screen = Screen::Browse;
                 let count = self.filtered().len();
                 self.snippets_state.select(if count == 0 { None } else { Some(0) });
@@ -176,8 +192,65 @@ impl App {
         self.screen = Screen::Confirm;
         Ok(())
     }
+    fn selected_items(&self) -> Result<Vec<serde_json::Value>> {
+        let file = self.file.as_ref().context("Choose a library")?;
+        let ids: Vec<String> = if self.selected_ids.is_empty() { vec![file.ids[self.selected().context("Select a snippet")?].clone()] } else { self.selected_ids.iter().cloned().collect() };
+        typerelay_client::database::Database::open(&self.store.directory)?.batch_items(file, &ids)
+    }
+    fn select_row(&mut self, range: bool) -> Result<()> {
+        let file = self.file.as_ref().context("Choose a library")?;
+        typerelay_client::database::Database::open(&self.store.directory)?.editable(&file.id)?;
+        let index = self.selected().context("Select a snippet")?;
+        let id = file.ids[index].clone();
+        let visible: Vec<_> = self.filtered().iter().map(|index|file.ids[*index].clone()).collect();
+        if range {
+            let anchor = self.selection_anchor.as_ref().and_then(|id|visible.iter().position(|item|item == id)).unwrap_or(self.snippets_state.selected().unwrap_or(0));
+            let current = self.snippets_state.selected().unwrap_or(0);
+            self.selected_ids.extend(visible[anchor.min(current)..=anchor.max(current)].iter().cloned());
+            if self.selection_anchor.is_none() { self.selection_anchor = Some(id); }
+        } else {
+            if !self.selected_ids.remove(&id) { self.selected_ids.insert(id.clone()); }
+            self.selection_anchor = Some(id);
+        }
+        Ok(())
+    }
+    fn request_move(&mut self) -> Result<()> {
+        anyhow::ensure!(matches!(self.screen, Screen::Browse | Screen::Edit), "Choose a snippet first");
+        let file = self.file.as_ref().context("Choose a library")?;
+        let db = typerelay_client::database::Database::open(&self.store.directory)?;
+        db.editable(&file.id)?;
+        let mut choices = db.destinations(&file.id)?;
+        self.move_items = if self.screen == Screen::Edit {
+            anyhow::ensure!(self.editing.is_some(), "Save a new snippet before moving it");
+            choices.insert(0, db.library(&file.id)?);
+            Vec::new()
+        } else { self.selected_items()? };
+        anyhow::ensure!(!choices.is_empty(), "No other editable libraries with the same sync status");
+        self.move_choices = choices;
+        self.move_state.select(Some(0));
+        self.move_from = self.screen;
+        self.screen = Screen::Move;
+        Ok(())
+    }
+    fn choose_move(&mut self) -> Result<()> {
+        let destination = self.move_choices.get(self.move_state.selected().unwrap_or(0)).context("Choose a destination")?["_id"].as_str().context("Missing destination")?.to_owned();
+        let source = self.file.as_ref().context("Choose a source")?.id.clone();
+        if self.move_from == Screen::Edit {
+            self.move_destination = if destination == source { None } else { Some(destination) };
+            self.screen = Screen::Edit;
+        } else {
+            self.pending_batch = Some((source, Some(destination), self.move_items.clone()));
+            self.confirm_from = Screen::Move;
+            self.screen = Screen::Confirm;
+        }
+        Ok(())
+    }
     fn request_delete(&mut self) -> Result<()> {
         anyhow::ensure!(self.screen == Screen::Browse, "Choose a saved snippet from the list first");
+        if !self.selected_ids.is_empty() {
+            self.pending_batch = Some((self.file.as_ref().unwrap().id.clone(), None, self.selected_items()?));
+            self.confirm_from = Screen::Browse; self.screen = Screen::Confirm; return Ok(());
+        }
         let index = self.selected().context("Select a snippet to delete")?;
         let file = self.file.as_ref().context("Choose a file first")?;
         typerelay_client::sync::Sync::editable(self.settings.config_dir(), &self.store.directory, &file.name)?;
@@ -187,6 +260,18 @@ impl App {
         Ok(())
     }
     fn confirm(&mut self, choice: usize) -> Result<()> {
+        if let Some((source, destination, items)) = self.pending_batch.clone() {
+            if choice == 0 {
+                typerelay_client::database::Database::open(&self.store.directory)?.batch(&source, destination.as_deref(), &items)?;
+                let name = self.file.as_ref().unwrap().name.clone();
+                self.file = Some(self.store.open(&name)?);
+                self.selected_ids.clear(); self.selection_anchor = None; self.snippets_state.select(Some(0));
+                self.screen = Screen::Browse;
+                self.message(if destination.is_some() { "Selected snippets moved" } else { "Selected snippets moved to Trash" }, false);
+            } else { self.screen = self.confirm_from; }
+            self.pending_batch = None;
+            return Ok(());
+        }
         if let Some((action, targets)) = self.pending_trash.clone() {
             if choice == 0 {
                 let db = typerelay_client::database::Database::open(&self.store.directory)?;
@@ -258,7 +343,20 @@ impl App {
     fn handle_inner(&mut self, event: Event) -> Result<()> {
         if let Event::Key(key) = event {
             if key.kind == KeyEventKind::Release { return Ok(()); }
+            if self.screen == Screen::Move {
+                match key.code {
+                    KeyCode::Esc => self.screen = self.move_from,
+                    KeyCode::Enter => self.choose_move()?,
+                    KeyCode::Down => self.move_state.select(Some((self.move_state.selected().unwrap_or(0)+1).min(self.move_choices.len().saturating_sub(1)))),
+                    KeyCode::Up => self.move_state.select(Some(self.move_state.selected().unwrap_or(0).saturating_sub(1))),
+                    _ => (),
+                }
+                return Ok(());
+            }
             if self.screen == Screen::Confirm {
+                if let Some((_, destination, _)) = &self.pending_batch {
+                    return if key.code == KeyCode::Char(if destination.is_some() { 'm' } else { 'd' }) { self.confirm(0) } else if matches!(key.code, KeyCode::Esc | KeyCode::Enter) { self.confirm(1) } else { Ok(()) };
+                }
                 if let Some((action, _)) = &self.pending_trash {
                     let expected = if action == "restore" { 'r' } else if action == "purge" { 'e' } else { 'd' };
                     return if key.code == KeyCode::Char(expected) { self.confirm(0) } else if matches!(key.code, KeyCode::Esc | KeyCode::Enter | KeyCode::Char('c')) { self.confirm(1) } else { Ok(()) };
@@ -268,6 +366,13 @@ impl App {
             }
             if key.modifiers.contains(KeyModifiers::CONTROL) {
                 match key.code {
+                    KeyCode::Char('a') if self.screen == Screen::Browse && !self.search_focused => {
+                        let file = self.file.as_ref().context("Choose a library")?;
+                        typerelay_client::database::Database::open(&self.store.directory)?.editable(&file.id)?;
+                        self.selected_ids = self.filtered().iter().map(|index|file.ids[*index].clone()).collect(); self.selection_anchor = None; return Ok(());
+                    }
+                    KeyCode::Char('d') if self.screen == Screen::Browse && !self.search_focused => { self.selected_ids.clear(); self.selection_anchor = None; return Ok(()); }
+                    KeyCode::Char('m') if self.screen == Screen::Edit => return self.request_move(),
                     KeyCode::Char('q' | 'c') => return self.leave(Destination::Quit),
                     KeyCode::Char('s') => return self.save(),
                     KeyCode::Char('t') if self.screen == Screen::Edit && self.editor_focus == 1 => { self.expansion.insert_str("\t"); return Ok(()); }
@@ -279,6 +384,7 @@ impl App {
                 KeyCode::F(2) => return self.toolbar_action(1),
                 KeyCode::F(5) => return self.toolbar_action(2),
                 KeyCode::F(6) => return self.toolbar_action(3),
+                KeyCode::F(8) => return self.request_move(),
                 KeyCode::F(7) => return self.toolbar_action(5),
                 KeyCode::F(4) if self.screen == Screen::Browse => return self.trash_request("trash"),
                 KeyCode::F(3) => return self.toolbar_action(4),
@@ -301,6 +407,11 @@ impl App {
                     _ => (),
                 },
                 Screen::Browse => match key.code {
+                    KeyCode::Down | KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) && !self.search_focused => {
+                        if self.selection_anchor.is_none() { self.selection_anchor = self.selected().map(|index|self.file.as_ref().unwrap().ids[index].clone()); }
+                        self.move_selection(key.code == KeyCode::Down); self.select_row(true)?;
+                    }
+                    KeyCode::Char(' ') if !self.search_focused => self.select_row(false)?,
                     KeyCode::Down => self.move_selection(true), KeyCode::Up => self.move_selection(false),
                     KeyCode::Esc if self.search_focused => self.search_focused = false,
                     KeyCode::Esc => self.leave(Destination::Files)?,
@@ -321,7 +432,7 @@ impl App {
                 },
                 Screen::NewFile => match key.code { KeyCode::Enter => self.save()?, KeyCode::Esc => self.apply(Destination::Files)?, _ => Self::single_input(&mut self.name, Event::Key(key)) },
                 Screen::Settings => match key.code { KeyCode::Esc => self.leave(Destination::Browse)?, KeyCode::Tab | KeyCode::BackTab => self.editor_focus = 1 - self.editor_focus, _ if self.editor_focus == 0 => Self::single_input(&mut self.url, Event::Key(key)), _ => Self::single_input(&mut self.prefix, Event::Key(key)) },
-                Screen::Confirm => (),
+                Screen::Confirm | Screen::Move => (),
             }
         } else if let Event::Paste(text) = event {
             match self.screen {
@@ -340,6 +451,16 @@ impl App {
                     if let Some(index) = self.confirm_buttons.iter().position(|area| area.contains(position)) { self.confirm(index)?; }
                     return Ok(());
                 }
+                if self.screen == Screen::Move {
+                    if self.list_area.contains(position) {
+                        let index = usize::from(mouse.row.saturating_sub(self.list_area.y+1)) + self.move_state.offset();
+                        if index < self.move_choices.len() { self.move_state.select(Some(index)); self.choose_move()?; }
+                    }
+                    return Ok(());
+                }
+                if self.screen == Screen::Browse && let Some(index) = self.bulk_buttons.iter().position(|area|area.contains(position)) {
+                    return if index == 0 { self.request_move() } else { self.request_delete() };
+                }
                 if self.screen == Screen::Trash {
                     if let Some(index) = self.trash_buttons.iter().position(|area| area.contains(position)) { return self.trash_request(if index == 0 { "restore" } else { "purge" }); }
                     if self.list_area.contains(position) { let index = usize::from(mouse.row.saturating_sub(self.list_area.y + 1)) + self.trash_state.offset(); if index < self.trash_rows.len() { self.trash_state.select(Some(index)); } return Ok(()); }
@@ -357,7 +478,7 @@ impl App {
                         if index <= self.files.len() { self.file_state.select(Some(index)); self.open_selected_file()?; }
                     } else if self.screen == Screen::Browse {
                         let index = row + self.snippets_state.offset();
-                        if index < self.filtered().len() { self.snippets_state.select(Some(index)); self.search_focused = false; }
+                        if index < self.filtered().len() { self.snippets_state.select(Some(index)); self.search_focused = false; self.select_row(mouse.modifiers.contains(KeyModifiers::SHIFT))?; }
                     }
                 }
             } else if matches!(mouse.kind, MouseEventKind::ScrollDown | MouseEventKind::ScrollUp) {
@@ -377,7 +498,7 @@ impl App {
         else if self.screen == Screen::Files { if let Ok(files) = self.store.files() { self.files = files; } }
         else if self.screen == Screen::Browse && let Some(file) = &self.file {
             match self.store.open(&file.name) {
-                Ok(current) => { self.file = Some(current); }
+                Ok(current) => { if typerelay_client::database::Database::open(&self.store.directory).and_then(|db|db.editable(&current.id)).is_err() { self.selected_ids.clear(); self.selection_anchor = None; } self.selected_ids.retain(|id|current.ids.contains(id)); if self.selection_anchor.as_ref().is_some_and(|id|!current.ids.contains(id)) { self.selection_anchor = None; } self.file = Some(current); }
                 Err(_) => { self.file = None; let _ = self.apply(Destination::Files); }
             }
         }
@@ -386,7 +507,7 @@ impl App {
         std::fs::read_to_string(self.settings.config_dir().join("sync/status")).unwrap_or_default()
     }
     pub fn draw(&mut self, frame: &mut Frame) {
-        self.toolbar.clear(); self.trash_buttons.clear(); self.field_areas.clear(); self.list_area = Rect::default(); self.save_area = Rect::default(); self.cancel_area = Rect::default();
+        self.toolbar.clear(); self.trash_buttons.clear(); self.bulk_buttons.clear(); self.field_areas.clear(); self.list_area = Rect::default(); self.save_area = Rect::default(); self.cancel_area = Rect::default();
         let area = frame.area();
         if area.width < 60 || area.height < 20 { frame.render_widget(Paragraph::new("TypeRelay — resize terminal to at least 60 × 20. Ctrl+Q exits."), area); return; }
         let rows = Layout::vertical([Constraint::Length(2), Constraint::Length(3), Constraint::Min(8), Constraint::Length(3)]).split(area);
@@ -410,21 +531,35 @@ impl App {
                 self.list_area = body;
                 frame.render_stateful_widget(List::new(items).block(Self::border("Choose a library", true)).highlight_style(Style::default().bg(Color::DarkGray)).highlight_symbol("› "), body, &mut self.file_state);
             }
+            Screen::Move => {
+                self.list_area = body;
+                let items = self.move_choices.iter().map(|library| ListItem::new(format!("{} · {}", if library["shared"] == true { "Shared" } else { "Personal" }, library["name"].as_str().unwrap_or("Library")))).collect::<Vec<_>>();
+                frame.render_stateful_widget(List::new(items).block(Self::border("Destination · Enter selects · Esc cancels", true)).highlight_style(Style::default().bg(Color::DarkGray)).highlight_symbol("› "), body, &mut self.move_state);
+            }
             Screen::Browse => {
-                let parts = Layout::vertical([Constraint::Length(3), Constraint::Min(3)]).split(body);
+                let parts = Layout::vertical([Constraint::Length(3), Constraint::Length(3), Constraint::Min(3)]).split(body);
+                if self.selected_ids.is_empty() { frame.render_widget(Paragraph::new("Space selects · Ctrl+A all · Ctrl+D clear · F8 Move"), parts[1]); }
+                else {
+                    let actions = Layout::horizontal([Constraint::Min(12), Constraint::Length(14), Constraint::Length(14)]).split(parts[1]);
+                    frame.render_widget(Paragraph::new(format!("{} selected", self.selected_ids.len())), actions[0]);
+                    self.bulk_buttons = vec![actions[1], actions[2]];
+                    Self::button(frame, actions[1], "F8 Move", true); Self::button(frame, actions[2], "F3 Trash", true);
+                }
                 self.search.set_block(Self::border("Search trigger or expansion  /", self.search_focused));
                 frame.render_widget(&self.search, parts[0]); self.field_areas.push(parts[0]);
-                let columns = Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)]).split(parts[1]);
+                let columns = Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)]).split(parts[2]);
                 self.list_area = columns[0];
                 let filtered = self.filtered();
                 let entries = self.file.as_ref().map(|file| file.entries.as_slice()).unwrap_or(&[]);
-                let items = filtered.iter().map(|index| ListItem::new(entries[*index].trigger.clone())).collect::<Vec<_>>();
+                let items = filtered.iter().map(|index| ListItem::new(format!("[{}] {}", if self.selected_ids.contains(&self.file.as_ref().unwrap().ids[*index]) { "x" } else { " " }, entries[*index].trigger))).collect::<Vec<_>>();
                 frame.render_stateful_widget(List::new(items).block(Self::border(format!("{} snippets — Enter to edit", filtered.len()), !self.search_focused)).highlight_style(Style::default().bg(Color::DarkGray)).highlight_symbol("› "), columns[0], &mut self.snippets_state);
                 let preview = self.selected().map(|index| self.file.as_ref().unwrap().entries[index].replace.clone()).unwrap_or("No matching snippets. F2 adds a snippet.".into());
                 frame.render_widget(Paragraph::new(preview).wrap(Wrap { trim: false }).block(Self::border("Expansion preview", false)), columns[1]);
             }
             Screen::Edit => {
-                let parts = Layout::vertical([Constraint::Length(3), Constraint::Min(3), Constraint::Length(3)]).split(body);
+                let parts = Layout::vertical([Constraint::Length(3), Constraint::Min(3), Constraint::Length(2), Constraint::Length(3)]).split(body);
+                let destination = self.move_destination.as_ref().and_then(|id| self.move_choices.iter().find(|library|library["_id"] == *id)).and_then(|library|library["name"].as_str()).unwrap_or("Current library");
+                frame.render_widget(Paragraph::new(format!("Library: {destination} · Ctrl+M changes destination")), parts[2]);
                 let trigger_row = Layout::horizontal([Constraint::Length(5), Constraint::Length(1), Constraint::Min(1)]).split(parts[0]);
                 frame.render_widget(Paragraph::new(self.settings.settings.trigger_prefix.clone()).centered().block(Self::border("", false)).style(Style::default().fg(Color::Gray)), trigger_row[0]);
                 self.trigger.set_block(Self::border("Abbreviation", self.editor_focus == 0));
@@ -452,14 +587,19 @@ impl App {
         if self.screen == Screen::Confirm {
             let dialog = Rect::new(area.x + (area.width - 56) / 2, area.y + (area.height - 7) / 2, 56, 7);
             frame.render_widget(Clear, dialog);
-            let prompt = if let Some((action, targets)) = &self.pending_trash {
+            let prompt = if let Some((_, destination, items)) = &self.pending_batch {
+                if let Some(id) = destination {
+                    let name = self.move_choices.iter().find(|library|library["_id"] == *id).and_then(|library|library["name"].as_str()).unwrap_or("destination");
+                    format!("Move {} snippets to {name}?\nDestination sharing permissions apply.", items.len())
+                } else { format!("Move {} selected snippets to Trash?", items.len()) }
+            } else if let Some((action, targets)) = &self.pending_trash {
                 if action == "purge" { format!("Permanently remove {} eligible Trash items?\\nThis cannot be undone.", targets.len()) } else if action == "restore" { format!("Restore '{}'?", targets[0]["name"].as_str().unwrap_or("item")) } else { "Move this library and its active snippets to Trash?".into() }
             } else if let Some(index) = self.pending_delete { format!("Move abbreviation to Trash '{}'?", self.file.as_ref().unwrap().entries[index].trigger) } else { "Unsaved changes\nSave your draft before leaving?".into() };
-            frame.render_widget(Paragraph::new(prompt).block(Self::border("Confirm", true)), dialog);
+            frame.render_widget(Paragraph::new(prompt).wrap(Wrap { trim: false }).block(Self::border("Confirm", true)), dialog);
             let buttons = Rect::new(dialog.x + 2, dialog.y + 3, dialog.width - 4, 3);
             self.confirm_buttons = Layout::horizontal([Constraint::Ratio(1, 3), Constraint::Ratio(1, 3), Constraint::Ratio(1, 3)]).split(buttons).to_vec();
-            if self.pending_delete.is_some() || self.pending_trash.is_some() { self.confirm_buttons = vec![self.confirm_buttons[2], self.confirm_buttons[0]]; }
-            let titles: &[&str] = if let Some((action, _)) = &self.pending_trash { if action == "restore" { &["R Restore", "Esc Cancel"] } else if action == "purge" { &["E Empty", "Esc Cancel"] } else { &["D Trash", "Esc Cancel"] } } else if self.pending_delete.is_some() { &["D Trash", "Esc Cancel"] } else { &["S Save", "D Discard", "Esc Cancel"] };
+            if self.pending_delete.is_some() || self.pending_trash.is_some() || self.pending_batch.is_some() { self.confirm_buttons = vec![self.confirm_buttons[2], self.confirm_buttons[0]]; }
+            let titles: &[&str] = if let Some((_, destination, _)) = &self.pending_batch { if destination.is_some() { &["M Move", "Esc Cancel"] } else { &["D Trash", "Esc Cancel"] } } else if let Some((action, _)) = &self.pending_trash { if action == "restore" { &["R Restore", "Esc Cancel"] } else if action == "purge" { &["E Empty", "Esc Cancel"] } else { &["D Trash", "Esc Cancel"] } } else if self.pending_delete.is_some() { &["D Trash", "Esc Cancel"] } else { &["S Save", "D Discard", "Esc Cancel"] };
             for (index, title) in titles.iter().enumerate() { Self::button(frame, self.confirm_buttons[index], title, true); }
         }
     }
@@ -627,4 +767,65 @@ mod tests {
         app.handle(Event::Mouse(ratatui::crossterm::event::MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: app.list_area.x + 2, row: app.list_area.y + 1, modifiers: KeyModifiers::NONE }));
         assert_eq!(app.screen, Screen::NewFile);
     }
+    #[test]
+    fn selection_range_filtered_all_move_and_edit_destination() {
+        let temp = tempfile::tempdir().unwrap(); let mut app = Fixture::app(temp.path());
+        let db = typerelay_client::database::Database::open(&app.store.directory).unwrap();
+        let source = db.import("Source", "matches: [{trigger: a, replace: Alpha}, {trigger: b, replace: Beta}, {trigger: c, replace: Gamma}]").unwrap();
+        db.create("Destination").unwrap();
+        app.file = Some(source); app.screen = Screen::Browse; app.snippets_state.select(Some(0));
+        Fixture::key(&mut app, KeyCode::Char(' '), KeyModifiers::NONE);
+        Fixture::key(&mut app, KeyCode::Down, KeyModifiers::SHIFT);
+        assert_eq!(app.selected_ids.len(), 2);
+        Fixture::key(&mut app, KeyCode::Char('d'), KeyModifiers::CONTROL);
+        assert!(app.selected_ids.is_empty());
+        app.search = App::text("Beta"); app.snippets_state.select(Some(0));
+        Fixture::key(&mut app, KeyCode::Char('a'), KeyModifiers::CONTROL);
+        assert_eq!(app.selected_ids.len(), 1);
+        Fixture::key(&mut app, KeyCode::F(8), KeyModifiers::NONE);
+        assert_eq!(app.screen, Screen::Move);
+        Fixture::key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(app.screen, Screen::Browse);
+        assert_eq!(app.selected_ids.len(), 1);
+        Fixture::key(&mut app, KeyCode::F(8), KeyModifiers::NONE);
+        Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        Fixture::key(&mut app, KeyCode::Char('m'), KeyModifiers::NONE);
+        assert_eq!(db.editor("Destination").unwrap().entries[0].trigger, "b");
+        assert!(app.selected_ids.is_empty());
+        app.search = App::text(""); app.snippets_state.select(Some(0));
+        app.edit(false).unwrap();
+        app.expansion = App::text("Edited in form");
+        Fixture::key(&mut app, KeyCode::Char('m'), KeyModifiers::CONTROL);
+        assert_eq!(app.screen, Screen::Move);
+        Fixture::key(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert!(app.move_destination.is_some());
+        assert!(app.dirty());
+        Fixture::key(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL);
+        assert_eq!(app.screen, Screen::Browse);
+        assert!(db.editor("Destination").unwrap().entries.iter().any(|entry|entry.trigger == "a" && entry.replace == "Edited in form"));
+        assert_eq!(db.snapshot().unwrap().len(), 3);
+    }
+    #[test]
+    fn bulk_trash_uses_selection_and_readonly_cannot_select() {
+        let temp = tempfile::tempdir().unwrap(); let mut app = Fixture::app(temp.path());
+        let db = typerelay_client::database::Database::open(&app.store.directory).unwrap();
+        let source = db.import("Source", "matches: [{trigger: a, replace: A}, {trigger: b, replace: B}]").unwrap();
+        app.file = Some(source); app.screen = Screen::Browse; app.snippets_state.select(Some(0));
+        Fixture::key(&mut app, KeyCode::Char('a'), KeyModifiers::CONTROL);
+        Fixture::key(&mut app, KeyCode::F(3), KeyModifiers::NONE);
+        Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(app.selected_ids.len(), 2);
+        assert_eq!(db.snapshot().unwrap().len(), 2);
+        Fixture::key(&mut app, KeyCode::F(3), KeyModifiers::NONE);
+        Fixture::key(&mut app, KeyCode::Char('d'), KeyModifiers::NONE);
+        assert_eq!(db.trash().unwrap().len(), 2);
+        db.trash_action(&db.trash().unwrap()[0], "restore").unwrap();
+        db.connection.execute("UPDATE libraries SET data=json_set(data,'$.permissions.edit',json('false'))", []).unwrap();
+        app.refresh();
+        Fixture::key(&mut app, KeyCode::Char(' '), KeyModifiers::NONE);
+        assert!(app.selected_ids.is_empty());
+        assert!(app.status.contains("read-only"));
+    }
+
 }

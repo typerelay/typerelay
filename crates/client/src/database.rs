@@ -17,6 +17,9 @@ impl Database {
             CREATE TABLE IF NOT EXISTS libraries(id TEXT PRIMARY KEY,name TEXT NOT NULL UNIQUE,data TEXT NOT NULL,synced INTEGER NOT NULL DEFAULT 0,version INTEGER NOT NULL DEFAULT 1);
             CREATE TABLE IF NOT EXISTS snippets(id TEXT PRIMARY KEY,library TEXT NOT NULL,data TEXT NOT NULL);
             CREATE INDEX IF NOT EXISTS snippet_library ON snippets(library);
+            CREATE TABLE IF NOT EXISTS departures(library TEXT,id TEXT,PRIMARY KEY(library,id));
+            CREATE TABLE IF NOT EXISTS base_libraries(id TEXT PRIMARY KEY,data TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS base_snippets(id TEXT PRIMARY KEY,library TEXT NOT NULL,data TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS outbox(seq INTEGER PRIMARY KEY AUTOINCREMENT,operation TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS recovery(id TEXT PRIMARY KEY,library TEXT,snippet TEXT,data TEXT NOT NULL);")?;
@@ -113,10 +116,11 @@ impl Database {
         if let Some(index) = index { ensure!(index < file.ids.len(), "Snippet no longer exists"); }
         let mut library = self.library(&file.id)?;
         let id = index.map(|index| file.ids[index].clone()).unwrap_or_else(|| Uuid::new_v4().to_string());
-        let old = self.records(&file.id)?.into_iter().find(|record| record["id"] == id);
+        let records = self.records(&file.id)?;
+        let old = records.iter().find(|record| record["id"] == id).cloned();
         let base = old.as_ref().and_then(|record| record["revision"].as_i64());
         let value = entry.as_ref().map(|entry| json!({"trigger":entry.trigger,"content":{"version":1,"type":"plain_text","text":entry.replace}}));
-        let mut record = old.clone().unwrap_or(json!({"id":id,"position":file.entries.len()}));
+        let mut record = old.clone().unwrap_or(json!({"id":id,"position":records.iter().filter_map(|entry|entry["position"].as_i64()).max().unwrap_or(-1)+1}));
         record["revision"] = json!(base.unwrap_or(0) + 1);
         if let Some(value) = &value { record["trigger"] = value["trigger"].clone(); record["content"] = value["content"].clone(); record["state"] = json!("active"); }
         else { Self::mark_trash(&mut record, !self.synced(&file.id)?); }
@@ -129,6 +133,86 @@ impl Database {
         self.validate_transaction()?;
         transaction.commit()?;
         self.editor(&file.name)
+    }
+    pub fn destinations(&self, source: &str) -> Result<Vec<Value>> {
+        let synced = self.synced(source)?;
+        Ok(self.libraries()?.into_iter().filter(|library| library["_id"] != source && library["state"] == "active" && library["permissions"]["edit"] == true && self.synced(library["_id"].as_str().unwrap()).ok() == Some(synced)).collect())
+    }
+    pub fn batch_items(&self, file: &OpenFile, ids: &[String]) -> Result<Vec<Value>> {
+        ensure!(self.editor(&file.name)?.revision == file.revision, "Library changed; review your selection");
+        let records = self.records(&file.id)?;
+        ids.iter().map(|id| {
+            let record = records.iter().find(|record| record["id"] == *id && record["state"] == "active").context("Selection changed")?;
+            Ok(json!({"id":id,"base_revision":record["revision"]}))
+        }).collect()
+    }
+    pub fn batch(&self, source: &str, destination: Option<&str>, items: &[Value]) -> Result<()> {
+        let transaction = self.connection.unchecked_transaction()?;
+        self.batch_inner(source, destination, items, true)?;
+        self.validate_transaction()?;
+        transaction.commit()?;
+        Ok(())
+    }
+    pub fn edit_move(&self, file: &OpenFile, index: usize, entry: Match, destination: &str) -> Result<OpenFile> {
+        let transaction = self.connection.unchecked_transaction()?;
+        let id = file.ids.get(index).context("Snippet missing")?;
+        let mut items = self.batch_items(file, std::slice::from_ref(id))?;
+        items[0]["value"] = json!({"trigger":entry.trigger,"content":{"version":1,"type":"plain_text","text":entry.replace}});
+        self.batch_inner(&file.id, Some(destination), &items, true)?;
+        self.validate_transaction()?;
+        transaction.commit()?;
+        self.editor(&file.name)
+    }
+    fn batch_inner(&self, source: &str, destination: Option<&str>, items: &[Value], enqueue: bool) -> Result<()> {
+        ensure!(!items.is_empty() && items.len() <= 10000, "Select snippets first");
+        let mut source_library = self.library(source)?;
+        ensure!(source_library["state"] == "active", "Source library is unavailable");
+        self.editable(source)?;
+        let synced = self.synced(source)?;
+        let mut destination_library = if let Some(id) = destination {
+            ensure!(id != source, "Choose another library");
+            let library = self.library(id)?;
+            ensure!(library["state"] == "active", "Destination library is unavailable");
+            self.editable(id)?;
+            ensure!(self.synced(id)? == synced, "Move only between libraries with the same sync status");
+            Some(library)
+        } else { None };
+        let records = self.records(source)?;
+        let ids: std::collections::BTreeSet<_> = items.iter().filter_map(|item|item["id"].as_str()).collect();
+        ensure!(ids.len() == items.len(), "Invalid or repeated selection");
+        let selected: Vec<_> = records.iter().filter(|record|record["state"] == "active" && record["id"].as_str().is_some_and(|id|ids.contains(id))).cloned().collect();
+        ensure!(selected.len() == items.len(), "Selection changed; review it again");
+        for record in &selected {
+            let item = items.iter().find(|item|item["id"] == record["id"]).unwrap();
+            ensure!(item["base_revision"] == record["revision"], "Selected snippet changed; review it again");
+            ensure!(item.get("value").is_none() || (items.len() == 1 && destination.is_some()), "Edits require a single-snippet move");
+        }
+        let mut position = if let Some(id) = destination { self.records(id)?.iter().filter_map(|record|record["position"].as_i64()).max().unwrap_or(-1)+1 } else { 0 };
+        for record in &selected {
+            let mut next = record.clone();
+            next["revision"] = json!(record["revision"].as_i64().context("Missing revision")? + 1);
+            if let Some(id) = destination {
+                next["library"] = json!(id); next["position"] = json!(position); position += 1;
+                if let Some(value) = items.iter().find(|item|item["id"] == record["id"]).and_then(|item|item.get("value")) {
+                    next["trigger"] = value["trigger"].clone();
+                    next["content"] = value["content"].clone();
+                }
+                self.put_record(id, &next)?;
+            } else {
+                Self::mark_trash(&mut next, !synced);
+                self.put_record(source, &next)?;
+            }
+        }
+        source_library["revision"] = json!(source_library["revision"].as_i64().unwrap_or(0) + 1);
+        self.connection.execute("UPDATE libraries SET data=?2,version=version+1 WHERE id=?1", params![source,source_library.to_string()])?;
+        if let Some(library) = &mut destination_library {
+            library["revision"] = json!(library["revision"].as_i64().unwrap_or(0)+1);
+            self.connection.execute("UPDATE libraries SET data=?2,version=version+1 WHERE id=?1", params![destination,library.to_string()])?;
+        }
+        if enqueue && synced {
+            self.queue(&json!({"kind":"batch","library":source,"records":selected,"body":{"operation_id":Uuid::new_v4().to_string(),"action":if destination.is_some() {"move"} else {"trash"},"source_library":source,"destination_library":destination,"items":items}}))?;
+        }
+        Ok(())
     }
     fn mark_trash(record: &mut Value, local: bool) {
         record["state"] = json!("trashed");
@@ -160,6 +244,8 @@ impl Database {
             record = json!({"id":record["id"],"state":"purged","revision":record["revision"].as_i64().unwrap_or(0)+1});
             self.put_record(library, &record)?;
         }
+        self.connection.execute("DELETE FROM base_snippets WHERE library=?1 AND (?2 IS NULL OR id=?2)", params![library,snippet])?;
+        if snippet.is_none() { self.connection.execute("DELETE FROM base_libraries WHERE id=?1", [library])?; }
         self.connection.execute("DELETE FROM recovery WHERE library=?1 AND (?2 IS NULL OR snippet=?2)", params![library, snippet])?;
         let mut conflicts = self.meta("conflicts")?.unwrap_or(json!([]));
         if let Some(rows) = conflicts.as_array_mut() { rows.retain(|row| row["library"] != library || snippet.is_some_and(|id| row["snippet"] != id)); }
@@ -248,7 +334,12 @@ impl Database {
     }
     pub fn recover_operation(&self, operation: &Value) -> Result<()> {
         let library = operation["library"].as_str().unwrap_or("");
-        if let Some(changes) = operation["body"]["changes"].as_array() {
+        if operation["kind"] == "batch" {
+            if let Some(items) = operation["body"]["items"].as_array() { for item in items {
+                let purged: bool = self.connection.query_row("SELECT EXISTS(SELECT 1 FROM snippets WHERE id=?1 AND json_extract(data,'$.state')='purged')", [item["id"].as_str().unwrap_or("")], |row|row.get(0))?;
+                if !purged { self.recover(library, item["id"].as_str(), &json!({"action":operation["body"]["action"],"item":item,"record":operation["records"].as_array().and_then(|rows|rows.iter().find(|row|row["id"] == item["id"]))}))?; }
+            } }
+        } else if let Some(changes) = operation["body"]["changes"].as_array() {
             for change in changes { self.recover(library, change["id"].as_str(), change)?; }
         } else if let Some(records) = operation["body"]["snippets"].as_array() {
             for record in records { self.recover(library, record["id"].as_str(), record)?; }
@@ -259,12 +350,16 @@ impl Database {
         if old == new { return Ok(()); }
         self.connection.execute("UPDATE libraries SET id=?2 WHERE id=?1", params![old,new])?;
         self.connection.execute("UPDATE snippets SET library=?2 WHERE library=?1", params![old,new])?;
+        self.connection.execute("UPDATE base_libraries SET id=?2 WHERE id=?1", params![old,new])?;
+        self.connection.execute("UPDATE base_snippets SET library=?2 WHERE library=?1", params![old,new])?;
         for (seq, mut operation) in self.pending()? {
-            if operation["library"] == old {
-                operation["library"] = json!(new);
-                if operation["body"]["target"]["library"] == old { operation["body"]["target"]["library"] = json!(new); if operation["body"]["target"]["type"] == "library" { operation["body"]["target"]["id"] = json!(new); } }
-                self.connection.execute("UPDATE outbox SET operation=?2 WHERE seq=?1", params![seq,operation.to_string()])?;
+            let previous = operation.clone();
+            if operation["library"] == old { operation["library"] = json!(new); }
+            for field in ["source_library","destination_library"] {
+                if operation["body"][field] == old { operation["body"][field] = json!(new); }
             }
+            if operation["body"]["target"]["library"] == old { operation["body"]["target"]["library"] = json!(new); if operation["body"]["target"]["type"] == "library" { operation["body"]["target"]["id"] = json!(new); } }
+            if previous != operation { self.connection.execute("UPDATE outbox SET operation=?2 WHERE seq=?1", params![seq,operation.to_string()])?; }
         }
         Ok(())
     }
@@ -277,6 +372,11 @@ impl Database {
         if occupied { name = format!("{name} [{id}]"); }
         let mut library = remote.clone();
         for key in ["snippets","records","yaml","deleted"] { library.as_object_mut().context("Invalid library")?.remove(key); }
+        self.connection.execute("INSERT INTO base_libraries(id,data) VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET data=excluded.data", params![id,library.to_string()])?;
+        self.connection.execute("DELETE FROM base_snippets WHERE library=?1", [id])?;
+        for record in remote["records"].as_array().context("Missing structured records")? {
+            self.connection.execute("INSERT INTO base_snippets(id,library,data) VALUES(?1,?2,?3) ON CONFLICT(id) DO UPDATE SET library=excluded.library,data=excluded.data", params![record["id"].as_str().context("Missing snippet ID")?,id,record.to_string()])?;
+        }
         self.put_library(&library, &name, true)?;
         // Keep purged tombstones, replacing only content-bearing records.
         self.connection.execute("DELETE FROM snippets WHERE library=?1 AND json_extract(data,'$.state')<>'purged'", [id])?;
@@ -285,10 +385,37 @@ impl Database {
             if old.is_some_and(|text| serde_json::from_str::<Value>(&text).is_ok_and(|old| old["state"] == "purged")) { continue; }
             if record["state"] != "purged" { Self::entries(&[json!({"state":"active","trigger":record["trigger"],"content":record["content"]})])?; }
             self.put_record(id, record)?;
+            self.connection.execute("DELETE FROM departures WHERE library=?1 AND id=?2", params![id,record["id"].as_str()])?;
+            self.connection.execute("UPDATE recovery SET library=?1 WHERE snippet=?2", params![id, record["id"].as_str()])?;
         }
         Ok(())
     }
     fn overlay(&self) -> Result<()> {
+        // Rebuild pending projections from canonical records, so partial acknowledgements
+        // cannot erase a snippet optimistically moved into a newly enrolled library.
+        let mut affected = std::collections::BTreeSet::new();
+        for (_, operation) in self.pending()? {
+            if let Some(id) = operation["library"].as_str() { affected.insert(id.to_owned()); }
+            if let Some(id) = operation["body"]["destination_library"].as_str() { affected.insert(id.to_owned()); }
+        }
+        let mut bases = Vec::new();
+        for id in &affected {
+            let base: Option<String> = self.connection.query_row("SELECT data FROM base_libraries WHERE id=?1", [id], |row|row.get(0)).optional()?;
+            if let Some(base) = base {
+                let data: Value = serde_json::from_str(&base)?;
+                if data["state"] != "purged" {
+                    self.connection.execute("DELETE FROM snippets WHERE library=?1 AND json_extract(data,'$.state')<>'purged'", [id])?;
+                    bases.push((id.clone(), data));
+                }
+            }
+        }
+        for (id, data) in bases {
+            let name: String = self.connection.query_row("SELECT name FROM libraries WHERE id=?1", [&id], |row|row.get(0))?;
+            self.put_library(&data, &name, true)?;
+            let mut statement = self.connection.prepare("SELECT data FROM base_snippets WHERE library=?1")?;
+            let records = statement.query_map([&id], |row|row.get::<_, String>(0))?.collect::<std::result::Result<Vec<_>, _>>()?;
+            for record in records { self.put_record(&id, &serde_json::from_str(&record)?)?; }
+        }
         for (seq, operation) in self.pending()? {
             let id = operation["library"].as_str().context("Missing operation library")?;
             let Ok(mut library) = self.library(id) else { continue; };
@@ -296,9 +423,25 @@ impl Database {
                 self.connection.execute("DELETE FROM outbox WHERE seq=?1", [seq])?; continue;
             }
             let permission = if operation["kind"] == "trash" && (operation["body"]["action"] == "purge" || operation["body"]["target"]["type"] == "library") { "manage" } else { "edit" };
+            if operation["kind"] == "batch" && (library["state"] != "active" || library["permissions"][permission] != true) { continue; }
             if library["permissions"][permission] != true {
                 self.recover_operation(&operation)?;
                 self.connection.execute("DELETE FROM outbox WHERE seq=?1", [seq])?; continue;
+            }
+            if operation["kind"] == "create" {
+                library["revision"] = json!(1);
+                self.connection.execute("UPDATE libraries SET data=?2,version=version+1 WHERE id=?1", params![id,library.to_string()])?;
+                self.connection.execute("DELETE FROM snippets WHERE library=?1", [id])?;
+                if let Some(records) = operation["body"]["snippets"].as_array() { for record in records { self.put_record(id, record)?; } }
+                continue;
+            }
+            if operation["kind"] == "batch" {
+                self.connection.execute_batch("SAVEPOINT batch_overlay")?;
+                let destination = operation["body"]["destination_library"].as_str();
+                let outcome = self.batch_inner(id, destination, operation["body"]["items"].as_array().context("Missing batch selection")?, false).and_then(|_|self.validate_transaction());
+                if outcome.is_err() { self.connection.execute_batch("ROLLBACK TO batch_overlay")?; }
+                self.connection.execute_batch("RELEASE batch_overlay")?;
+                continue;
             }
             if operation["kind"] == "trash" {
                 let target = &operation["body"]["target"];
@@ -316,12 +459,16 @@ impl Database {
             }
             if operation["kind"] == "edit" {
                 for change in operation["body"]["changes"].as_array().context("Missing changes")? {
+                    let location: Option<String> = self.connection.query_row("SELECT library FROM snippets WHERE id=?1", [change["id"].as_str().unwrap_or("")], |row|row.get(0)).optional()?;
+                    if location.as_deref().is_some_and(|location|location != id) { continue; }
+                    let departed: bool = self.connection.query_row("SELECT EXISTS(SELECT 1 FROM departures WHERE library=?1 AND id=?2)", params![id,change["id"].as_str()], |row|row.get(0))?;
+                    if departed { continue; }
                     let old = self.records(id)?.into_iter().find(|record| record["id"] == change["id"]);
                     if old.as_ref().is_some_and(|record| record["state"] == "purged") { continue; }
                     if library["state"] != "active" || (old.as_ref().is_some_and(|record| record["state"] == "trashed") && !change["value"].is_null()) {
                         self.recover(id, change["id"].as_str(), &change["value"])?; continue;
                     }
-                    let mut record = old.unwrap_or(json!({"id":change["id"],"position":self.records(id)?.len()}));
+                    let mut record = old.unwrap_or(json!({"id":change["id"],"position":self.records(id)?.iter().filter_map(|entry|entry["position"].as_i64()).max().unwrap_or(-1)+1}));
                     record["revision"] = json!(change["base_revision"].as_i64().unwrap_or(0)+1);
                     if change["value"].is_null() { Self::mark_trash(&mut record, false); }
                     else { record["state"] = json!("active"); record["trigger"] = change["value"]["trigger"].clone(); record["content"] = change["value"]["content"].clone(); }
@@ -350,9 +497,11 @@ impl Database {
                 let pending_create = self.pending()?.iter().any(|(_, operation)| operation["kind"] == "create" && operation["library"] == id);
                 if self.synced(&id)? && !pending_create && !accessible.iter().any(|value| value == &id) {
                     for (seq, operation) in self.pending()? {
-                        if operation["library"] == id { self.recover_operation(&operation)?; self.connection.execute("DELETE FROM outbox WHERE seq=?1", [seq])?; }
+                        if operation["library"] == id || operation["body"]["destination_library"] == id { self.recover_operation(&operation)?; self.connection.execute("DELETE FROM outbox WHERE seq=?1", [seq])?; }
                     }
                     self.connection.execute("DELETE FROM snippets WHERE library=?1", [&id])?;
+                    self.connection.execute("DELETE FROM base_snippets WHERE library=?1", [&id])?;
+                    self.connection.execute("DELETE FROM base_libraries WHERE id=?1", [&id])?;
                     library["state"] = json!("revoked"); library["permissions"] = json!({"read":false,"edit":false,"manage":false});
                     self.connection.execute("UPDATE libraries SET data=?2,version=version+1 WHERE id=?1", params![id,library.to_string()])?;
                 }
@@ -373,6 +522,11 @@ impl Database {
                 self.scrub(library, Some(id))?;
                 self.put_record(library, &json!({"id":id,"revision":record["revision"],"state":"purged"}))?;
                 for (seq, operation) in self.pending()? {
+                    if operation["kind"] == "batch" && operation["body"]["items"].as_array().is_some_and(|items|items.iter().any(|item|item["id"] == id)) {
+                        self.recover_operation(&operation)?;
+                        self.connection.execute("DELETE FROM outbox WHERE seq=?1", [seq])?;
+                        self.set_meta("last_failure", &json!("A selected snippet was permanently removed; the bulk action was cancelled"))?;
+                    }
                     if operation["library"] == library && operation["body"]["changes"].as_array().is_some_and(|changes| changes.iter().any(|change| change["id"] == id)) {
                         let mut remaining = operation.clone();
                         remaining["body"]["changes"].as_array_mut().unwrap().retain(|change| change["id"] != id);
@@ -382,6 +536,9 @@ impl Database {
                 }
             }
         }
+        if let Some(departures) = response["departures"].as_array() { for item in departures {
+            self.connection.execute("INSERT OR IGNORE INTO departures(library,id) VALUES(?1,?2)", params![item["library"].as_str(),item["id"].as_str()])?;
+        } }
         self.overlay()?;
         self.validate_transaction()?;
         if let Some(conflicts) = response.get("conflicts") && conflicts.as_array().is_some_and(|rows| rows.is_empty() || rows[0].is_object()) { self.set_meta("conflicts", conflicts)?; }
@@ -645,4 +802,45 @@ mod tests {
         assert!(db.pending().unwrap().is_empty());
         assert_eq!(db.connection.query_row("SELECT count(*) FROM recovery", [], |row|row.get::<_,i64>(0)).unwrap(), 1);
     }
+    #[test]
+    fn bulk_move_and_edit_keep_identity_order_and_rollback_collisions() {
+        let fixture = Fixture::new(); let db = fixture.db();
+        let source = db.import("Source", "matches: [{trigger: one, replace: One}, {trigger: two, replace: Two}]").unwrap();
+        let destination = db.import("Destination", "matches: [{trigger: existing, replace: Existing}]").unwrap();
+        let items = db.batch_items(&source, &source.ids.iter().rev().cloned().collect::<Vec<_>>()).unwrap();
+        db.batch(&source.id, Some(&destination.id), &items).unwrap();
+        assert!(db.editor("Source").unwrap().entries.is_empty());
+        let moved = db.editor("Destination").unwrap();
+        assert_eq!(&moved.ids[1..], &source.ids);
+        assert_eq!(db.snapshot().unwrap().len(), 3);
+        assert!(db.batch(&source.id, Some(&destination.id), &items).is_err());
+        let destination2 = db.create("Other").unwrap();
+        db.edit_move(&moved, 1, Fixture::entry("changed", "Edited\nText"), &destination2.id).unwrap();
+        let edited = db.editor("Other").unwrap();
+        assert_eq!(edited.ids[0], source.ids[0]);
+        assert_eq!(edited.entries[0].replace, "Edited\nText");
+        db.enroll("Other").unwrap();
+        assert!(db.destinations(&destination.id).unwrap().iter().all(|row|row["_id"] != destination2.id));
+        assert!(db.batch(&destination.id, Some(&destination2.id), &db.batch_items(&db.editor("Destination").unwrap(), &[source.ids[1].clone()]).unwrap()).is_err());
+    }
+    #[test]
+    fn batch_outbox_and_pending_enrollment_references_are_atomic() {
+        let fixture = Fixture::new(); let db = fixture.db();
+        let source = db.import("Source", "matches: [{trigger: one, replace: One}]").unwrap();
+        let destination = db.create("Destination").unwrap();
+        db.enroll("Source").unwrap(); db.enroll("Destination").unwrap();
+        let items = db.batch_items(&source, &source.ids).unwrap();
+        db.batch(&source.id, Some(&destination.id), &items).unwrap();
+        assert_eq!(db.pending().unwrap().len(), 3);
+        let transaction = db.connection.unchecked_transaction().unwrap();
+        db.remap(&source.id, "111111111111111111111111").unwrap();
+        db.remap(&destination.id, "222222222222222222222222").unwrap();
+        transaction.commit().unwrap();
+        let operation = &db.pending().unwrap()[2].1;
+        assert_eq!(operation["library"], "111111111111111111111111");
+        assert_eq!(operation["body"]["source_library"], "111111111111111111111111");
+        assert_eq!(operation["body"]["destination_library"], "222222222222222222222222");
+        assert_eq!(db.records("222222222222222222222222").unwrap()[0]["id"], source.ids[0]);
+    }
+
 }

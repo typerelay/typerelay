@@ -6,6 +6,8 @@ class TypeRelay {
 	formOperation = null;
 	submitting = false;
 	selected = null;
+	selectedSnippets = new Set();
+	selectionAnchor = null;
 	cursor = 0;
 	polling = false;
 	trashItems = [];
@@ -73,10 +75,12 @@ class TypeRelay {
 	update(selector, container, html) {
 		const old = document.querySelector(selector);
 		const next = this.fragment(html);
+		const outerFocused = old === document.activeElement;
 		const focused = old?.contains(document.activeElement) ? [...old.querySelectorAll('button,input,select,textarea,a')].indexOf(document.activeElement) : -1;
 		const scroll = { x: window.scrollX, y: window.scrollY };
 		if (old) old.replaceWith(next); else document.querySelector(container).append(next);
-		if (focused >= 0) next.querySelectorAll('button,input,select,textarea,a')[focused]?.focus({ preventScroll: true });
+		if (outerFocused) next.focus({ preventScroll: true });
+		else if (focused >= 0) next.querySelectorAll('button,input,select,textarea,a')[focused]?.focus({ preventScroll: true });
 		if (window.scrollX !== scroll.x || window.scrollY !== scroll.y) window.scrollTo(scroll.x, scroll.y);
 	}
 	async apply(result) {
@@ -112,6 +116,7 @@ class TypeRelay {
 			}
 		}
 		document.querySelector('[data-id="' + library._id + '"]')?.classList.toggle('active-library', this.selected === library._id);
+		this.syncSelection();
 		this.updateScrollTop();
 		if (document.querySelector('#search-modal')?.classList.contains('show')) await this.filter();
 	}
@@ -176,10 +181,15 @@ class TypeRelay {
 	}
 	async open(id) {
 		const version = ++this.openVersion;
-		const html = await this.request('editor/' + id, 'GET', null, true);
+		const result = await this.request('editor/' + id + '?format=json');
+		const html = result.html;
 		if (version !== this.openVersion) return;
+		if (this.selected !== id) { this.selectedSnippets.clear(); this.selectionAnchor = null; }
 		this.selected = id;
+		this.libraries.set(id, result.library);
+		this.update('[data-id="' + id + '"]', '#libraries', result.card);
 		document.querySelector('#editor').replaceChildren(this.fragment(html));
+		this.syncSelection();
 		this.updateScrollTop();
 		document.querySelectorAll('.library').forEach(node => {
 			node.classList.toggle('active-library', node.dataset.id === id);
@@ -188,7 +198,14 @@ class TypeRelay {
 
 	}
 	async editSnippet(library, id) {
-		await this.form('snippet', { library: library._id, snippet: id || '' }, fields => this.snippet(id, { trigger: fields.get('trigger'), replace: fields.get('replace') }, library));
+		await this.form('snippet', { library: library._id, snippet: id || '' }, async fields => {
+			const value = { trigger: fields.get('trigger'), replace: fields.get('replace') };
+			const destination = fields.get('destination_library');
+			if (id && destination && destination !== library._id) {
+				const item = library.snippets.find(entry => entry.id === id);
+				await this.applyBatch(await this.request('snippets/batch', 'POST', { action: 'move', source_library: library._id, destination_library: destination, items: [{ id, base_revision: item.revision, value }] }), false);
+			} else await this.snippet(id, value, library);
+		});
 		if (!library.permissions.edit) {
 			document.querySelector('#form-title').textContent = 'Snippet · Read-only';
 			document.querySelectorAll('#form-fields input,#form-fields textarea').forEach(field => { field.readOnly = true; });
@@ -196,12 +213,13 @@ class TypeRelay {
 		}
 	}
 	async form(kind, params, submit) {
-		document.querySelector('#form-title').textContent = ({ library: 'Library', snippet: 'Snippet', group: 'Group', conflict: 'Resolve conflict' })[kind];
+		document.querySelector('#form-title').textContent = ({ library: 'Library', snippet: 'Snippet', group: 'Group', conflict: 'Resolve conflict', move: 'Move snippets' })[kind];
 		document.querySelector('#form-fields').replaceChildren();
 		const template = document.createElement('template');
 		template.innerHTML = await this.request('forms/' + kind + '?' + new URLSearchParams(params), 'GET', null, true);
 		document.querySelector('#form-fields').replaceChildren(template.content);
-		document.querySelector('#record-form button[type="submit"]').disabled = false;
+		document.querySelector('#record-form button[type="submit"]').disabled = kind === 'move' && !document.querySelector('#destination-library option');
+		document.querySelector('#record-form button[type="submit"]').textContent = kind === 'move' ? 'Move' : 'Save';
 		this.submit = submit;
 		this.formOperation = crypto.randomUUID();
 		const settings = document.querySelector('#settings');
@@ -245,13 +263,73 @@ class TypeRelay {
 		await this.apply(result);
 		await this.poll();
 	}
+	selectionItems() {
+		const library = this.libraries.get(this.selected);
+		return library?.snippets.filter(item => this.selectedSnippets.has(item.id)).map(item => ({ id: item.id, base_revision: item.revision })) || [];
+	}
+	syncSelection() {
+		const library = this.libraries.get(this.selected);
+		const allowed = new Set(library?.permissions.edit ? library.snippets.map(item => item.id) : []);
+		for (const id of this.selectedSnippets) if (!allowed.has(id)) this.selectedSnippets.delete(id);
+		if (!allowed.has(this.selectionAnchor)) this.selectionAnchor = null;
+		for (const input of document.querySelectorAll('[data-select-snippet]')) input.checked = this.selectedSnippets.has(input.dataset.selectSnippet);
+		const all = document.querySelector('[data-select-all]');
+		if (all) {
+			all.disabled = !allowed.size;
+			all.checked = allowed.size > 0 && this.selectedSnippets.size === allowed.size;
+			all.indeterminate = this.selectedSnippets.size > 0 && !all.checked;
+			document.querySelector('[data-select-all-label]').textContent = all.checked ? 'Deselect all' : 'Select all';
+			document.querySelector('.bulk-actions').hidden = !this.selectedSnippets.size;
+			document.querySelector('[data-selection-count]').textContent = this.selectedSnippets.size + ' selected';
+		}
+	}
+	selectSnippet(id, checked, range) {
+		const library = this.libraries.get(this.selected);
+		if (!library?.permissions.edit) return;
+		const ids = [...document.querySelectorAll('[data-select-snippet]')].map(input => input.dataset.selectSnippet);
+		const index = ids.indexOf(id);
+		if (index < 0) return;
+		const anchor = range ? ids.indexOf(this.selectionAnchor) : index;
+		for (const item of ids.slice(Math.min(anchor < 0 ? index : anchor, index), Math.max(anchor < 0 ? index : anchor, index) + 1)) {
+			if (checked) this.selectedSnippets.add(item); else this.selectedSnippets.delete(item);
+		}
+		if (!range || anchor < 0) this.selectionAnchor = id;
+		this.syncSelection();
+	}
+	async applyBatch(result, clear = true) {
+		if (clear) { this.selectedSnippets.clear(); this.selectionAnchor = null; }
+		for (const update of result.updates || []) await this.apply(update);
+		this.syncSelection();
+	}
+	async batchAction(action) {
+		const source = this.selected;
+		const items = this.selectionItems();
+		if (!items.length) return;
+		if (action === 'trash') {
+			if (await this.confirm('Move ' + items.length + ' selected snippets to Trash?')) await this.applyBatch(await this.request('snippets/batch', 'POST', { action, source_library: source, items }));
+		} else await this.form('move', { library: source }, async fields => this.applyBatch(await this.request('snippets/batch', 'POST', { action, source_library: source, destination_library: fields.get('destination_library'), items })));
+	}
 	async onClick(event) {
+		const input = event.target.closest('[data-select-snippet],[data-select-all]');
+		if (input) {
+			if (input.disabled) return;
+			if (input.hasAttribute('data-select-all')) {
+				this.selectedSnippets.clear();
+				if (input.checked) for (const item of this.libraries.get(this.selected)?.snippets || []) this.selectedSnippets.add(item.id);
+				this.selectionAnchor = null; this.syncSelection();
+			} else this.selectSnippet(input.dataset.selectSnippet, input.checked, event.shiftKey);
+			return;
+		}
+		if (event.target.closest('.snippet-selection label')) return;
 		const row = event.target.closest('.snippet[data-snippet]');
+		if (row && event.shiftKey && !event.target.closest('button,a,input')) { this.selectSnippet(row.dataset.snippet, !this.selectedSnippets.has(row.dataset.snippet), true); return; }
 		if (row && !event.target.closest('button,a,input,textarea,select,[contenteditable="true"]') && !window.getSelection()?.toString()) return this.editSnippet(this.libraries.get(this.selected), row.dataset.snippet);
 		const card = event.target.closest('.library');
 		if (card && !window.getSelection()?.toString()) return this.open(card.dataset.id);
 		const button = event.target.closest('button');
 		if (!button) return;
+		if (button.hasAttribute('data-bulk-move')) return this.batchAction('move');
+		if (button.hasAttribute('data-bulk-trash')) return this.batchAction('trash');
 		if (button.hasAttribute('data-restore-trash')) {
 			const target = JSON.parse(button.closest('[data-trash-id]').dataset.target);
 			const result = await this.request('trash/action', 'POST', { target, action: 'restore' });

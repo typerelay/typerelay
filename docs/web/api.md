@@ -103,3 +103,18 @@ Purge is creator/admin-only for shared libraries; private Trash remains creator-
 Restores validate active uniqueness/limits. Expired records cannot restore; cleanup runs hourly and on startup.
 
 Web abbreviation forms display a static comma prefix. Leading commas typed or pasted into the abbreviation are stripped by shared client/server normalization; stored abbreviations remain bare.
+
+## Bulk selection and moves
+
+POST /api/v2/snippets/batch accepts operation_id, action (move or trash), source_library, optional destination_library, and items [{id,base_revision,value?}].
+A value is allowed only for a single edit-and-move; it uses the existing abbreviation/content validation.
+Both libraries must be active, in the same account, and editable by the actor. Moved snippets inherit destination permissions.
+The transaction preserves IDs and relative order, appends to the destination, updates both library revisions/change events, and rejects the whole batch on stale selection or duplicates.
+Replies include libraries and item-level Pug updates; receipts retain IDs only.
+
+Desktop bearer requests now require X-TypeRelay-Sync-Protocol: 3. Older clients receive 426 before reads/writes; browser session routes remain v2.
+Sync responses use protocol:3 and include content-free source departure IDs, filtered to readable libraries. Stale source edits cannot recreate moved records.
+SQLite retains canonical server bases for pending projections; these bases are scrubbed on purge/revocation and cleared on disconnect.
+
+Web checkboxes support Select all/Deselect all and Shift+click ranges. The action bar appears for nonempty selection.
+Normal row clicks still edit. Single-snippet forms provide a Library destination; Save commits edits and the move together.
