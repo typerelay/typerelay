@@ -559,7 +559,7 @@ impl App {
             Screen::Edit => {
                 let parts = Layout::vertical([Constraint::Length(3), Constraint::Min(3), Constraint::Length(2), Constraint::Length(3)]).split(body);
                 let destination = self.move_destination.as_ref().and_then(|id| self.move_choices.iter().find(|library|library["_id"] == *id)).and_then(|library|library["name"].as_str()).unwrap_or("Current library");
-                frame.render_widget(Paragraph::new(format!("Library: {destination} · Ctrl+M changes destination")), parts[2]);
+                frame.render_widget(Paragraph::new(format!("Library: {destination} · Ctrl+M / F8 changes destination")), parts[2]);
                 let trigger_row = Layout::horizontal([Constraint::Length(5), Constraint::Length(1), Constraint::Min(1)]).split(parts[0]);
                 frame.render_widget(Paragraph::new(self.settings.settings.trigger_prefix.clone()).centered().block(Self::border("", false)).style(Style::default().fg(Color::Gray)), trigger_row[0]);
                 self.trigger.set_block(Self::border("Abbreviation", self.editor_focus == 0));

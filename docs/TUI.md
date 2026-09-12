@@ -45,3 +45,5 @@ YAML is import/export only; use CLI commands or web import.
 - In the editor, Ctrl+M chooses a library; Ctrl+S saves content and destination together.
 - Only active editable destinations with the same sync status are offered. Local-only/synced moves are intentionally blocked.
 - Moves preserve IDs, ordering and offline queues. Rejected sync operations keep unsent content in recovery and restore server state without blocking other operations.
+
+The TUI requests enhanced keyboard reporting so supported terminals distinguish Ctrl+M from Enter. F8 also opens the editor destination picker on terminals without that protocol; terminal keyboard mode is restored on exit.

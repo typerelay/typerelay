@@ -1,5 +1,5 @@
 use anyhow::Result;
-use ratatui::crossterm::{event::{EnableMouseCapture, DisableMouseCapture, EnableBracketedPaste, DisableBracketedPaste}, execute};
+use ratatui::crossterm::{event::{EnableMouseCapture, DisableMouseCapture, EnableBracketedPaste, DisableBracketedPaste, PushKeyboardEnhancementFlags, PopKeyboardEnhancementFlags, KeyboardEnhancementFlags}, execute};
 use std::io::IsTerminal;
 
 pub struct TerminalSession;
@@ -7,7 +7,7 @@ impl TerminalSession {
     pub fn enter() -> Result<(Self, ratatui::DefaultTerminal)> {
         let terminal = ratatui::try_init()?;
         let guard = Self;
-        execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste)?;
+        execute!(std::io::stdout(), PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES), EnableMouseCapture, EnableBracketedPaste)?;
         Ok((guard, terminal))
     }
     pub fn connected() -> bool {
@@ -22,7 +22,7 @@ impl TerminalSession {
 }
 impl Drop for TerminalSession {
     fn drop(&mut self) {
-        let _ = execute!(std::io::stdout(), DisableMouseCapture, DisableBracketedPaste);
+        let _ = execute!(std::io::stdout(), DisableMouseCapture, DisableBracketedPaste, PopKeyboardEnhancementFlags);
         ratatui::restore();
     }
 }
