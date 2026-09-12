@@ -29,7 +29,8 @@ Type `,brb` and Space in an ordinary text field. The Space is consumed and the r
 `Be right back.`. Press Ctrl+C in the launching terminal to stop the client. Stopping or
 crashing releases its exclusive grab. No startup/autostart configuration is installed.
 
-To stop from another terminal: `pkill -INT -x typerelay`. Ctrl+Alt+Backspace is not a
+To stop from another terminal: `pkill -INT -f '(^|/)typerelay run( |$)'`. This leaves any
+clipboard-restoration helper alive until the next copy. Ctrl+Alt+Backspace is not a
 TypeRelay shortcut. To undo the session access and return to Espanso:
 
 ```fish
@@ -47,9 +48,23 @@ as root, grant `cap_dac_override`, or add the desktop user to the broad input gr
 
 `matches` is a list of `trigger`/`replace` pairs, compatible with Espanso's static YAML
 format. No Espanso code or runtime is used. Triggers start with comma followed by 1–63
-lowercase ASCII letters, digits or hyphens. Replacements are single-line printable ASCII text,
-up to 4096 UTF-8 bytes. Newlines, tabs, control characters, dynamic markers and additional
-options are rejected. This deliberately prevents imported shell snippets from sending Enter.
+lowercase ASCII letters, digits or hyphens. Replacements support Unicode, paragraphs,
+newlines and tabs, up to 65536 UTF-8 bytes. CRLF line endings normalize to LF. Bare carriage
+returns, other control characters, dynamic markers and additional options are rejected.
+
+```yaml
+matches:
+  - trigger: ",naf"
+    replace: |-
+      Sincerely,
+      Nitai
+      Ceo & Founder
+  - trigger: ",reply"
+    replace: "First paragraph.\n\nSecond paragraph.\n"
+```
+
+Type `,naf` then Space. YAML `|-` removes the final newline, `|` keeps one, and `|+`
+preserves all trailing newlines. Blank lines inside the text are preserved.
 
 ```fish
 mkdir -p ~/.config/typerelay
@@ -62,7 +77,8 @@ chmod 600 ~/.config/typerelay/matches.yml
 
 The importer leaves the exact copy untouched, changes leading `;`/`:` to `,` (or prepends
 `,` to unprefixed triggers), and reports unsupported entry numbers without printing their
-content. It refuses to overwrite an existing destination or accept duplicate normalized
+content. Static entries with Espanso's `force_mode: clipboard` are accepted; insertion mode
+is chosen automatically. It refuses to overwrite an existing destination or accept duplicate normalized
 triggers. Personal files stay outside Git. Edit `poc.yml` to update snippets; the running
 client checks every 500 ms. Invalid changes keep the previous valid snapshot.
 
@@ -82,20 +98,37 @@ API, account schema, authentication or team model exists in the POC.
 
 The adapter exclusively reads keyd's effective keyboard and forwards through a dedicated
 uinput keyboard. It uses keyd's reserved virtual vendor ID to prevent feedback into keyd.
-The physical source is never read a second time. Replacement strokes use the same native output device as normal typing,
-without subprocesses, shell execution or clipboard modification. Space is
-suppressed only for a valid match, and subsequent physical input waits until insertion ends.
+The physical source is never read a second time. Short printable ASCII replacements use
+the same native output device as normal typing, without clipboard modification. Multiline,
+tabbed, Unicode and longer-than-512-byte replacements use a plain-text clipboard paste.
+Newline characters are never emitted as Enter keys. The adapter uses Ctrl+Shift+V for
+windows carrying Omarchy's `terminal` tag and Ctrl+V elsewhere. Terminal behavior relies
+on the target program's bracketed-paste support; terminals without it can interpret pasted
+newlines as commands, just as with a manual paste.
+
+Clipboard preparation/restoration runs off the keyboard loop. Existing clipboard formats
+and bytes are saved (maximum 64 formats / 16 MiB); if preservation fails, paste is declined.
+A unique MIME marker prevents restoration from overwriting a newer user copy. The offer
+stays available for 300 ms after the paste shortcut while following typing is buffered.
+A lightweight clipboard owner preserves restored contents even after the client exits and
+terminates when another application replaces them. The primary selection is not changed.
+Clipboard managers may record transient expansion text. Apps that delay or intercept paste
+can require additional integration; clipboard handoff is not an application-level receipt.
+
+Space is suppressed only for a valid match, and subsequent physical input waits until
+insertion ends. No snippet is executed as a shell command by TypeRelay.
 
 Backspace edits the candidate. Unsupported keys, modifiers, pointer activity, desktop focus
 events and ten seconds of inactivity cancel it. Expansion checks the lock state and target
 window immediately before insertion. New expansions cannot start in a locked session. Caps Lock and layouts
 other than US are outside this POC's supported configuration. IME/composition workflows,
-password-field detection, Unicode replacement, rich text, multiline insertion, variable forms and other OS adapters
+password-field detection, rich text, variable forms and other OS adapters
 are not implemented. Never treat a global expander as a password manager.
 
 There is no compositor-wide atomic transaction for deletion plus insertion: a focus change
 *during* insertion can still interrupt it. Application-specific behavior and all application
-versions are not guaranteed. If insertion fails, the client exits; text may be partially edited.
+versions are not guaranteed. If clipboard paste fails, there is no automatic retry; text may
+be partially edited. Fatal input-device errors stop the client.
 External input injectors and all input-device disconnect scenarios need further
 hardening before release. The POC is not ready for unattended installation across a team.
 
@@ -107,7 +140,9 @@ during this explicitly invoked test. Build the driver with `cargo build --exampl
 The `send_keys` driver requires test text and the disposable window's exact class; it aborts
 if that window loses focus. Never point it at a shell prompt. Tests cover GTK text input,
 a browser field and a terminal text reader. Check exact output, overlapping triggers,
-Backspace, unknown triggers, trailing typing, punctuation, clipboard preservation and restart.
+Backspace, unknown triggers, trailing typing, punctuation, multiline text, blank lines,
+tabs, Unicode and clipboard preservation. The terminal fixture enables bracketed paste and
+asserts that line breaks arrive within its paste delimiters rather than as Enter keys.
 
 Native UI testing requires a live desktop and temporary input access; ordinary CI validates
 core logic on Linux, macOS and Windows and the client/configuration on Linux. It does not

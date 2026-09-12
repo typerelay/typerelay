@@ -1,6 +1,8 @@
 mod config;
 #[cfg(target_os = "linux")]
 mod omarchy;
+#[cfg(target_os = "linux")]
+mod clipboard;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -15,6 +17,9 @@ enum Commands {
     Validate { #[arg(long)] file: PathBuf },
     ImportEspanso { source: PathBuf, destination: PathBuf },
     Doctor,
+    #[cfg(target_os = "linux")]
+    #[command(hide = true)]
+    ClipboardServe,
     Run { #[arg(long)] file: PathBuf, #[arg(long, default_value = "keyd virtual keyboard")] device_name: String },
 }
 
@@ -26,6 +31,8 @@ impl Cli {
                 println!("Valid: {} snippets", store.snapshot.len());
             }
             Commands::ImportEspanso { source, destination } => config::FileStore::import(&source, &destination)?,
+            #[cfg(target_os = "linux")]
+            Commands::ClipboardServe => clipboard::PasteJob::serve_restored()?,
             #[cfg(target_os = "linux")]
             Commands::Doctor => omarchy::Session::doctor()?,
             #[cfg(target_os = "linux")]

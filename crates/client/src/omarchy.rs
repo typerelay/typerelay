@@ -1,4 +1,5 @@
 use crate::config::FileStore;
+use crate::clipboard::{PasteJob, Progress};
 use anyhow::{Context, Result, bail};
 use evdev::{Device, EventType, InputEvent, KeyCode, InputId, BusType, uinput::VirtualDevice};
 use fs2::FileExt;
@@ -6,6 +7,15 @@ use std::{collections::{BTreeSet, VecDeque}, fs, io::{Read, Write}, os::unix::ne
 use typerelay_core::{Engine, Input, Expansion};
 
 pub struct Session;
+
+struct PasteState {
+    job: PasteJob,
+    expansion: Expansion,
+    target: Option<String>,
+    started: bool,
+    sent: bool,
+    cancelled: bool,
+}
 
 struct ContextWatch {
     stream: UnixStream,
@@ -144,9 +154,16 @@ impl Session {
         bail!("Unsupported replacement character")
     }
 
-    fn inject(expansion: &Expansion) -> Result<VecDeque<Vec<InputEvent>>> {
+    fn inject(expansion: &Expansion, terminal_paste: Option<bool>) -> Result<VecDeque<Vec<InputEvent>>> {
         let mut strokes = VecDeque::new();
         for _ in 0..expansion.erase { strokes.push_back(Self::stroke(KeyCode::KEY_BACKSPACE, false)); }
+        if let Some(terminal) = terminal_paste {
+            let mut shortcut = vec![InputEvent::new(EventType::KEY.0, KeyCode::KEY_LEFTCTRL.0, 1)];
+            shortcut.extend(Self::stroke(KeyCode::KEY_V, terminal));
+            shortcut.push(InputEvent::new(EventType::KEY.0, KeyCode::KEY_LEFTCTRL.0, 0));
+            strokes.push_back(shortcut);
+            return Ok(strokes);
+        }
         for c in expansion.text.chars() {
             let (key, shift) = Self::replacement_key(c)?;
             strokes.push_back(Self::stroke(key, shift));
@@ -186,9 +203,13 @@ impl Session {
         let mut buffered = VecDeque::new();
         let mut insertion = VecDeque::<Vec<InputEvent>>::new();
         let mut last_stroke = Instant::now();
+        let mut paste: Option<PasteState> = None;
         eprintln!("TypeRelay running: {} snippets; comma + abbreviation + Space. Ctrl+C stops. No keystrokes are logged.", store.snapshot.len());
         while running.load(Ordering::SeqCst) {
-            if context.changed()? || last_input.elapsed() > Duration::from_secs(10) { engine.feed(Input::Cancel); target = None; insertion.clear(); }
+            if context.changed()? || last_input.elapsed() > Duration::from_secs(10) {
+                engine.feed(Input::Cancel); target = None; insertion.clear();
+                if let Some(state) = &mut paste { state.cancelled = true; state.job.cancel(); }
+            }
             if last_reload.elapsed() > Duration::from_millis(500) {
                 match store.reload() {
                     Ok(Some(snapshot)) => { engine.replace_snapshot(snapshot); eprintln!("Snippet snapshot reloaded"); }
@@ -204,6 +225,37 @@ impl Session {
             };
             buffered.extend(events);
             if buffered.len() > 8192 { bail!("Input backlog exceeded safety limit; stopping"); }
+            if let Some(state) = &mut paste {
+                match state.job.progress.try_recv() {
+                    Ok(Ok(Progress::Ready)) if !state.cancelled && Self::target()? == state.target && !context.changed()? => {
+                        let active = Self::hypr("activewindow")?;
+                        let terminal = active["tags"].as_array().is_some_and(|tags| tags.iter().any(|tag| tag.as_str().is_some_and(|name| name.trim_end_matches('*') == "terminal")));
+                        insertion = Self::inject(&state.expansion, Some(terminal))?;
+                        state.started = true;
+                    }
+                    Ok(Ok(Progress::Ready)) => { state.cancelled = true; state.job.cancel(); }
+                    Ok(Ok(Progress::Finished)) => { paste = None; continue; }
+                    Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        eprintln!("Clipboard paste failed; no automatic retry");
+                        if !state.started && !state.cancelled && Self::target()? == state.target { for event in Self::stroke(KeyCode::KEY_SPACE, false) { output.emit(&[event])?; } }
+                        paste = None;
+                        continue;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => (),
+                }
+                if state.job.timed_out() {
+                    eprintln!("Clipboard paste timed out; releasing buffered typing");
+                    state.job.cancel();
+                    insertion.clear();
+                    paste = None;
+                    continue;
+                }
+                if insertion.is_empty() {
+                    if state.started && !state.sent { state.job.pasted(); state.sent = true; }
+                    thread::sleep(Duration::from_millis(1));
+                    continue;
+                }
+            }
             if !insertion.is_empty() {
                 if last_stroke.elapsed() >= Duration::from_millis(2) {
                     if let Some(stroke) = insertion.pop_front() {
@@ -236,7 +288,11 @@ impl Session {
                         if expansion.is_some() && std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some() { eprintln!("Match found; held-key count {}", pressed.len()); }
                         if let Some(expansion) = expansion
                             && Self::target()? == target && !context.changed()? && pressed.len() == 1 {
-                                insertion = Self::inject(&expansion)?;
+                                if expansion.requires_paste() {
+                                    paste = Some(PasteState { job: PasteJob::start(expansion.text.clone()), expansion, target: target.clone(), started: false, sent: false, cancelled: false });
+                                } else {
+                                    insertion = Self::inject(&expansion, None)?;
+                                }
                                 pressed.remove(&code.0);
                                 suppressed_space = true;
                                 target = None;
@@ -248,6 +304,7 @@ impl Session {
             }
             thread::sleep(Duration::from_millis(1));
         }
+        drop(paste);
         for code in pressed { output.emit(&[InputEvent::new(EventType::KEY.0, code, 0)])?; }
         keyboard.ungrab()?;
         eprintln!("TypeRelay stopped");
@@ -269,5 +326,16 @@ mod tests {
         assert_eq!(Session::replacement_key('?').unwrap(), (KeyCode::KEY_SLASH, true));
         assert_eq!(Session::replacement_key('@').unwrap(), (KeyCode::KEY_2, true));
         assert_eq!(Session::replacement_key(' ').unwrap(), (KeyCode::KEY_SPACE, false));
+    }
+    #[test]
+    fn multiline_paste_does_not_emit_enter_keys() {
+        let expansion = Expansion { erase: 4, text: "Sincerely,\nNitai\nCeo & Founder\n".into() };
+        for terminal in [false, true] {
+            let strokes = Session::inject(&expansion, Some(terminal)).unwrap();
+            assert_eq!(strokes.len(), 5);
+            assert!(strokes.iter().flatten().all(|event| event.code() != KeyCode::KEY_ENTER.0));
+            assert!(strokes.back().unwrap().iter().any(|event| event.code() == KeyCode::KEY_LEFTCTRL.0 && event.value() == 1));
+            assert_eq!(strokes.back().unwrap().iter().any(|event| event.code() == KeyCode::KEY_LEFTSHIFT.0 && event.value() == 1), terminal);
+        }
     }
 }

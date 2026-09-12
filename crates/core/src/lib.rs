@@ -15,13 +15,14 @@ pub struct Snapshot {
 impl Snapshot {
     pub fn new(snippets: Vec<Snippet>) -> Result<Self, String> {
         let mut indexed = BTreeMap::new();
-        for snippet in snippets {
+        for mut snippet in snippets {
             let suffix = snippet.trigger.strip_prefix(',').ok_or("Triggers must start with a comma")?;
             if suffix.is_empty() || suffix.len() > 63 || !suffix.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-') {
                 return Err("Triggers must be comma plus 1–63 lowercase ASCII letters, digits or hyphens".into());
             }
-            if snippet.replacement.is_empty() || snippet.replacement.len() > 4096 || !snippet.replacement.bytes().all(|c| (32..=126).contains(&c)) || snippet.replacement.contains("{{") || snippet.replacement.contains("$|$") {
-                return Err("POC replacements must be 1–4096 bytes of printable ASCII static text without dynamic markers".into());
+            snippet.replacement = snippet.replacement.replace("\r\n", "\n");
+            if snippet.replacement.is_empty() || snippet.replacement.len() > 65536 || snippet.replacement.chars().any(|c| c.is_control() && c != '\n' && c != '\t') || snippet.replacement.contains("{{") || snippet.replacement.contains("$|$") {
+                return Err("Replacements must be 1–65536 UTF-8 bytes of static text; only newline and tab controls are supported".into());
             }
             if indexed.insert(snippet.trigger.clone(), snippet).is_some() {
                 return Err("Duplicate trigger".into());
@@ -41,6 +42,10 @@ pub enum Input { Character(char), Backspace, Space, Cancel }
 pub struct Expansion {
     pub erase: usize,
     pub text: String,
+}
+
+impl Expansion {
+    pub fn requires_paste(&self) -> bool { self.text.len() > 512 || !self.text.is_ascii() || self.text.contains(['\n', '\t']) }
 }
 
 pub struct Engine {
@@ -122,10 +127,30 @@ mod tests {
     }
     #[test]
     fn rejects_unsafe_or_ambiguous_configuration() {
-        for (trigger, replacement) in [("brb", "text"), (",BRB", "text"), (",a b", "text"), (",brb", "command\n"), (",brb", "{{shell}}"), (",brb", "") ] {
+        for (trigger, replacement) in [("brb", "text"), (",BRB", "text"), (",a b", "text"), (",brb", "command\r"), (",brb", "command\u{1b}"), (",brb", "{{shell}}"), (",brb", "") ] {
             assert!(Snapshot::new(vec![Snippet { trigger: trigger.into(), replacement: replacement.into() }]).is_err());
         }
         let duplicate = Snippet { trigger: ",brb".into(), replacement: "text".into() };
         assert!(Snapshot::new(vec![duplicate.clone(), duplicate]).is_err());
+    }
+
+    #[test]
+    fn multiline_preserves_paragraphs_tabs_and_trailing_newlines() {
+        let text = "Sincerely,\r\nNitai\r\nCeo & Founder\r\n\r\n\tCafé\n";
+        let snapshot = Snapshot::new(vec![Snippet { trigger: ",naf".into(), replacement: text.into() }]).unwrap();
+        let mut engine = Engine::new(snapshot);
+        Fixture::type_text(&mut engine, ",naf");
+        let expansion = engine.feed(Input::Space).unwrap();
+        assert_eq!(expansion.text, "Sincerely,\nNitai\nCeo & Founder\n\n\tCafé\n");
+        assert!(expansion.requires_paste());
+        assert_eq!(expansion.erase, 4);
+    }
+
+    #[test]
+    fn long_paragraphs_use_paste_and_short_text_stays_native() {
+        assert!(Expansion { erase: 4, text: "a".repeat(600) }.requires_paste());
+        assert!(!Expansion { erase: 4, text: "Be right back.".into() }.requires_paste());
+        assert!(Snapshot::new(vec![Snippet { trigger: ",long".into(), replacement: "a".repeat(65536) }]).is_ok());
+        assert!(Snapshot::new(vec![Snippet { trigger: ",long".into(), replacement: "a".repeat(65537) }]).is_err());
     }
 }

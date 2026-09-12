@@ -7,3 +7,11 @@ matches:
     replace: "Hello from TypeRelay!"
   - trigger: ",symbols"
     replace: "Hello! (One + two) = 3; email@example.com / $5 #tag"
+  - trigger: ",naf"
+    replace: |+
+      Sincerely,
+      Nitai
+      Ceo & Founder
+
+  - trigger: ",paragraphs"
+    replace: "First paragraph.\n\nSecond paragraph with a tab:\tCafé ☕\n"

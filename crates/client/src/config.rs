@@ -66,7 +66,8 @@ impl FileStore {
             let Some(replace) = entry.replace else { eprintln!("Skipped entry {}: missing static replacement", index + 1); skipped += 1; continue; };
             let normalized = format!(",{}", trigger.trim_start_matches([';', ':', ',']));
             let invalid = Snapshot::new(vec![Snippet { trigger: normalized.clone(), replacement: replace.clone() }]).is_err();
-            if invalid || !entry.extra.is_empty() {
+            let supported_options = entry.extra.iter().all(|(key, value)| key == "force_mode" && value.as_str() == Some("clipboard"));
+            if invalid || !supported_options {
                 eprintln!("Skipped entry {}: unsupported content or options", index + 1);
                 skipped += 1;
                 continue;
@@ -94,6 +95,13 @@ mod tests {
     fn rejects_dynamic_and_unknown_yaml() {
         assert!(FileStore::parse(b"matches:\n  - trigger: ',a'\n    replace: ok\n    vars: []\n").is_err());
         assert!(FileStore::parse(b"matches:\n  - trigger: ',a'\n    replace: ok\n").is_ok());
+    }
+    #[test]
+    fn yaml_block_scalar_keeps_linebreaks() {
+        let snapshot = FileStore::parse(b"matches:\n  - trigger: ',naf'\n    replace: |\n      Sincerely,\n      Nitai\n\n      Ceo & Founder\n").unwrap();
+        let mut engine = typerelay_core::Engine::new(snapshot);
+        for c in ",naf".chars() { engine.feed(typerelay_core::Input::Character(c)); }
+        assert_eq!(engine.feed(typerelay_core::Input::Space).unwrap().text, "Sincerely,\nNitai\n\nCeo & Founder\n");
     }
     #[test]
     fn invalid_reload_preserves_previous_snapshot_and_recovers() {
