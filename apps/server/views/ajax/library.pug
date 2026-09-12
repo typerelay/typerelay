@@ -2,6 +2,6 @@ article.card.mb-3.library(role="button" tabindex="0" aria-label="Open library " 
 	.card-body
 		.d-flex.align-items-center.justify-content-between.mb-3
 			div.library-name
-				h2.h5.mb-0= library.name
+				h2.h5.mb-0.fw-bold= library.name
 			span.badge.text-bg-light= library.shared ? (library.editable ? 'Shared · Editable' : 'Shared · Admin editable') : 'Personal'
 		span.text-muted= library.snippets.length + ' snippets'

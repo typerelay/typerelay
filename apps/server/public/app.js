@@ -58,7 +58,7 @@ class TypeRelay {
 		const button = document.querySelector('#scroll-top');
 		if (!button) return;
 		const distance = document.documentElement.scrollHeight - window.innerHeight;
-		const visible = distance > 0 && window.scrollY / distance > .8;
+		const visible = distance > 0 && window.scrollY / distance > .5;
 		button.classList.toggle('is-visible', visible);
 		button.setAttribute('aria-hidden', String(!visible));
 		button.tabIndex = visible ? 0 : -1;

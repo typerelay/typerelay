@@ -13,14 +13,14 @@ block content
 						include ajax/library
 			section.col-md-8
 				#editor.card.p-4
-					h2 Select a library
+					h2.fw-bold Select a library
 					p.text-muted Import YAML or create your first library.
 				#conflicts.mt-3
 		#settings.modal.fade(tabindex="-1" aria-label="Settings" data-bs-backdrop="static" data-bs-keyboard="false")
 			.modal-dialog.modal-xl.modal-dialog-scrollable.settings-dialog
 				.modal-content
 					.modal-header
-						h2.modal-title.h5 Settings
+						h2.modal-title.h5.fw-bold Settings
 						button.btn-close(data-bs-dismiss="modal" aria-label="Close")
 					.modal-body.settings-body.p-0
 						nav.settings-nav.list-group.list-group-flush(role="tablist" aria-label="Settings sections" aria-orientation="vertical")
@@ -28,7 +28,7 @@ block content
 								button.list-group-item.list-group-item-action(type="button" role="tab" id='settings-tab-' + key data-settings-tab=key aria-controls='settings-pane-' + key aria-selected=(key === 'profile').toString() tabindex=key === 'profile' ? '0' : '-1' class=key === 'profile' ? 'active' : '')= label
 						.settings-content
 							section.settings-pane(id="settings-pane-profile" role="tabpanel" aria-labelledby="settings-tab-profile" hidden=false)
-								h3.h6 Profile
+								h3.h6.fw-bold Profile
 								form#profile-form.mb-5
 									label.form-label(for="profile-name") Name
 									input#profile-name.form-control.form-control-sm.mb-3(name="name" value=profile.name required)
@@ -40,7 +40,7 @@ block content
 							section.settings-pane(id="settings-pane-security" role="tabpanel" aria-labelledby="settings-tab-security" hidden=true)
 								include ajax/security
 							section.settings-pane(id="settings-pane-team" role="tabpanel" aria-labelledby="settings-tab-team" hidden=true)
-								h3.h6 Account and team
+								h3.h6.fw-bold Account and team
 								if ['owner', 'admin'].includes(ctx.role)
 									form#account-form.mb-3
 										label.form-label(for="account-name") Account name
@@ -58,20 +58,20 @@ block content
 								ul#members.list-group.mb-3
 									each member in team.members
 										include ajax/member
-								h3.h6 Groups
+								h3.h6.fw-bold Groups
 								ul#groups.list-group.mb-3
 									each group in team.groups
 										include ajax/group
 								if ['owner', 'admin'].includes(ctx.role)
 									button#new-group.btn.btn-outline-secondary.btn-sm.mb-5 New group
 							section.settings-pane(id="settings-pane-devices" role="tabpanel" aria-labelledby="settings-tab-devices" hidden=true)
-								h3.h6 Connected devices
+								h3.h6.fw-bold Connected devices
 								ul#devices.list-group.mb-3
 		#form-modal.modal.fade(tabindex="-1" aria-label="Edit")
 			.modal-dialog.modal-lg
 				.modal-content
 					.modal-header
-						h2#form-title.modal-title.h5
+						h2#form-title.modal-title.h5.fw-bold
 						button.btn-close(data-bs-dismiss="modal" aria-label="Close")
 					.modal-body
 						form#record-form
@@ -84,23 +84,23 @@ block content
 			.modal-dialog
 				.modal-content
 					.modal-header
-						h2.modal-title.h5 TypeRelay help
+						h2.modal-title.h5.fw-bold TypeRelay help
 						button.btn-close(data-bs-dismiss="modal" aria-label="Close")
 					.modal-body
-						h3.h6 Libraries
+						h3.h6.fw-bold Libraries
 						p Create a library or import a YAML file, then add abbreviations and expansions. The trigger prefix stays in your desktop settings.
-						h3.h6 Connect your desktop
+						h3.h6.fw-bold Connect your desktop
 						pre= 'typerelay connect --server ' + serverOrigin
 						pre typerelay enroll mysnippets.yml
 						p Only files you enroll are uploaded. Shared libraries available to you download automatically.
-						h3.h6 Sync and conflicts
+						h3.h6.fw-bold Sync and conflicts
 						p Press F5 in the TUI to sync now. Conflicts appear here for review; local drafts are kept in your TypeRelay sync/recovery directory.
 						a(href="https://github.com/typerelay/typerelay/tree/main/docs" target="_blank" rel="noopener") Documentation
 
 		#search-modal.modal(tabindex="-1" aria-labelledby="search-title")
 			.modal-dialog.modal-lg.modal-dialog-scrollable
 				.modal-content
-					h2#search-title.visually-hidden Search
+					h2#search-title.visually-hidden.fw-bold Search
 					.modal-header.search-input-row
 						svg.me-2(width="1.25rem" height="1.25rem" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true")
 							circle(cx="10.5" cy="10.5" r="7.5")
@@ -120,7 +120,7 @@ block content
 			.modal-dialog.modal-lg.modal-dialog-scrollable
 				.modal-content
 					.modal-header
-						h2.modal-title.h5 Trash
+						h2.modal-title.h5.fw-bold Trash
 						button.btn-close(type="button" data-bs-dismiss="modal" aria-label="Close")
 					.modal-body
 						p.text-muted Trashed items can be restored for 30 days.

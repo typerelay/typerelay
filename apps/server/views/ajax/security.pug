@@ -1,6 +1,6 @@
-h3.h6 Security
-.card.p-3.mb-3
-	h6 Password
+h3.h6.fw-bold Security
+.card.p-4.mb-4
+	h6.fw-bold Password
 	p.text-muted Generate a new random password, then copy it before closing.
 	.d-flex.justify-content-end
 		button#reset-password.btn.btn-outline-secondary.btn-sm(type="button") Reset password
@@ -11,8 +11,8 @@ h3.h6 Security
 			button#copy-password.btn.btn-outline-secondary.btn-sm(type="button") Copy
 		.d-flex.justify-content-end
 			button#password-copied.btn.btn-primary.btn-sm(type="button") I copied the password
-.card.p-3.mb-3
-	h6 Two-factor authentication
+.card.p-4.mb-4
+	h6.fw-bold Two-factor authentication
 	p#totp-status.text-muted= profile.totp_enabled ? '2FA is enabled' : '2FA is not enabled'
 	.d-flex.justify-content-end
 		button#setup-totp.btn.btn-outline-secondary.btn-sm(type="button" hidden=profile.totp_enabled) Enable 2FA
@@ -30,8 +30,8 @@ h3.h6 Security
 			.d-flex.justify-content-between
 				button#cancel-totp.btn.btn-outline-secondary.btn-sm(type="button") Cancel
 				button.btn.btn-primary.btn-sm Verify
-.card.p-3.mb-5
-	h6 Passkeys
+.card.p-4.mb-5
+	h6.fw-bold Passkeys
 	ul#passkeys.list-group.mb-3
 	form#passkey-add-form
 		label.form-label(for="passkey-name") Passkey name

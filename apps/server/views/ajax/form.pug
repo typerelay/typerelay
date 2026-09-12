@@ -1,52 +1,52 @@
 if kind === 'library'
-	label.form-label(for="name") Library name
-	input#name.form-control.form-control-sm.mb-3(name="name" value=library ? library.name : '' required maxlength="100")
+	label.form-label.fw-bold(for="name") Library name
+	input#name.form-control.form-control-sm.mb-4(name="name" value=library ? library.name : '' required maxlength="100")
 	if library
-		.form-check.mb-3
-			input#shared.form-check-input.h-20px.w-30px(type="checkbox" name="shared" checked=library.shared)
+		.form-check.d-flex.align-items-center.ps-0.mb-4
+			input#shared.form-check-input.m-0(type="checkbox" name="shared" checked=library.shared)
 			label.form-check-label.ms-3(for="shared") Shared with team
-		label.form-label(for="editable") Editing
-		select#editable.form-select.form-select-sm.mb-3(name="editable")
+		label.form-label.fw-bold(for="editable") Editing
+		select#editable.form-select.form-select-sm.mb-4(name="editable")
 			option(value="false" selected=!library.editable) Creator and account admins only
 			option(value="true" selected=library.editable) Assigned members may edit
-		label.form-label(for="members-select") Members
-		select#members-select.form-select.form-select-sm.mb-3(name="members" multiple disabled=!library.shared)
+		label.form-label.fw-bold(for="members-select") Members
+		select#members-select.form-select.form-select-sm.mb-4(name="members" multiple disabled=!library.shared)
 			each member in team.members
 				option(value=member.user selected=library.members.map(String).includes(String(member.user)))= member.profile.email
-		label.form-label(for="groups-select") Groups
-		select#groups-select.form-select.form-select-sm.mb-3(name="groups" multiple disabled=!library.shared)
+		label.form-label.fw-bold(for="groups-select") Groups
+		select#groups-select.form-select.form-select-sm.mb-4(name="groups" multiple disabled=!library.shared)
 			each group in team.groups
 				option(value=group._id selected=library.groups.map(String).includes(String(group._id)))= group.name
 		button.btn.btn-outline-danger.btn-sm(type="button" data-delete-library=library._id) Move library to Trash
 	else
-		label.form-label(for="yaml-file") Import YAML (optional)
-		input#yaml-file.form-control.form-control-sm.mb-3(type="file" accept=".yml,.yaml")
-		label.form-label(for="yaml") YAML
-		textarea#yaml.form-control.form-control-sm.mb-3(name="yaml") matches: []
+		label.form-label.fw-bold(for="yaml-file") Import YAML (optional)
+		input#yaml-file.form-control.form-control-sm.mb-4(type="file" accept=".yml,.yaml")
+		label.form-label.fw-bold(for="yaml") YAML
+		textarea#yaml.form-control.form-control-sm.mb-4(name="yaml") matches: []
 		button#preview.btn.btn-outline-secondary.btn-sm(type="button") Validate import
 		p#preview-result.mt-3
 if kind === 'snippet' || kind === 'conflict'
-	label.form-label(for="trigger") Abbreviation
-	.input-group.input-group-sm.mb-3
+	label.form-label.fw-bold(for="trigger") Abbreviation
+	.input-group.input-group-sm.mb-4
 		span.input-group-text(aria-hidden="true") ,
 		input#trigger.form-control.form-control-sm(name="trigger" value=snippet ? snippet.trigger : '' required pattern="[a-z0-9\\-]{1,63}" autocapitalize="off" spellcheck="false")
-	label.form-label(for="replace") Expansion
-	textarea#replace.form-control.form-control-sm.mb-3(name="replace" required)= snippet ? snippet.replace : ''
+	label.form-label.fw-bold(for="replace") Expansion
+	textarea#replace.form-control.form-control-sm.mb-4(name="replace" required)= snippet ? snippet.replace : ''
 	if kind === 'conflict'
-		label.form-label(for="choice") Resolution
+		label.form-label.fw-bold(for="choice") Resolution
 		select#choice.form-select.form-select-sm(name="choice")
 			option(value="merged") Use fields above
 			option(value="local") Use local version (including deletion)
 			option(value="server") Keep current server version
-		h3.h6.mt-3 Local version
+		h3.h6.mt-3.fw-bold Local version
 		pre= JSON.stringify(conflict.local, null, 2)
-		h3.h6 Current server version
+		h3.h6.fw-bold Current server version
 		pre= JSON.stringify(current, null, 2)
 if kind === 'group'
-	label.form-label(for="name") Group name
-	input#name.form-control.form-control-sm.mb-3(name="name" value=group ? group.name : '' required)
-	label.form-label(for="users") Members
-	select#users.form-select.form-select-sm.mb-3(name="users" multiple)
+	label.form-label.fw-bold(for="name") Group name
+	input#name.form-control.form-control-sm.mb-4(name="name" value=group ? group.name : '' required)
+	label.form-label.fw-bold(for="users") Members
+	select#users.form-select.form-select-sm.mb-4(name="users" multiple)
 		each member in team.members
 			option(value=member.user selected=group && group.users.map(String).includes(String(member.user)))= member.profile.email
 	if group

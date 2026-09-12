@@ -235,10 +235,10 @@ test('web AJAX updates only affected snippets; preserves panel, filter and multi
 	const topButton = dom.window.document.querySelector('#scroll-top');
 	Object.defineProperty(dom.window.document.documentElement, 'scrollHeight', { configurable: true, value: 2000 });
 	Object.defineProperty(dom.window, 'innerHeight', { configurable: true, value: 1000 });
-	Object.defineProperty(dom.window, 'scrollY', { configurable: true, writable: true, value: 800 });
+	Object.defineProperty(dom.window, 'scrollY', { configurable: true, writable: true, value: 500 });
 	client.updateScrollTop();
 	assert.ok(!topButton.classList.contains('is-visible'));
-	dom.window.scrollY = 801;
+	dom.window.scrollY = 501;
 	client.updateScrollTop();
 	assert.ok(topButton.classList.contains('is-visible'));
 	assert.equal(topButton.tabIndex, 0);

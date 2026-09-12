@@ -2,7 +2,7 @@ div.trash-items
 	each item in items
 		article.list-group-item.d-flex.align-items-center.justify-content-between(data-trash-id=item.type + '-' + item.id data-target=JSON.stringify(item))
 			div
-				h6.mb-1= item.name
+				h6.mb-1.fw-bold= item.name
 				span.small.text-muted= (item.library_name || 'Library') + ' · Expires ' + new Date(item.expires_at).toLocaleDateString()
 			if item.can_restore
 				button.btn.btn-outline-primary.btn-sm.ms-3(type="button" data-restore-trash) Restore
