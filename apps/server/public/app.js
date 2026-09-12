@@ -100,8 +100,9 @@ class TypeRelay {
 		bootstrap.Modal.getOrCreateInstance(document.querySelector('#form-modal')).show();
 	}
 	async onSubmit(event) {
-		event.preventDefault();
 		const form = event.target;
+		if (!['login', 'profile-form', 'account-form', 'invite-form', 'record-form'].includes(form.id)) return;
+		event.preventDefault();
 		const data = new FormData(form);
 		const button = event.submitter;
 		if (button) button.disabled = true;

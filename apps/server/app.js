@@ -46,7 +46,8 @@ export class Server {
 		app.post('/oauth/token', authLimit, async (req, res) => res.json(await Auth.exchange(req.body)));
 		app.get('/oauth/authorize', async (req, res) => {
 			if (!req.session.user) { req.session.return_to = req.originalUrl; return res.render('login', { returnTo: req.originalUrl }); }
-			Auth.redirect(req.query.redirect_uri);
+			const redirectOrigin = new URL(Auth.redirect(req.query.redirect_uri)).origin;
+			res.setHeader('Content-Security-Policy', String(res.getHeader('Content-Security-Policy')).replace("form-action 'self'", "form-action 'self' " + redirectOrigin));
 			const memberships = await Member.find({ user: req.session.user }).lean();
 			const accounts = await Account.find({ _id: { $in: memberships.map(member => member.account) } }).lean();
 			res.render('authorize', { accounts, request: req.query });
