@@ -170,12 +170,21 @@ class TypeRelay {
 		});
 
 	}
+	async editSnippet(library, id) {
+		await this.form('snippet', { library: library._id, snippet: id || '' }, fields => this.snippet(id, { trigger: fields.get('trigger'), replace: fields.get('replace') }, library));
+		if (!library.permissions.edit) {
+			document.querySelector('#form-title').textContent = 'Snippet · Read-only';
+			document.querySelectorAll('#form-fields input,#form-fields textarea').forEach(field => { field.readOnly = true; });
+			document.querySelector('#record-form button[type="submit"]').disabled = true;
+		}
+	}
 	async form(kind, params, submit) {
 		document.querySelector('#form-title').textContent = ({ library: 'Library', snippet: 'Snippet', group: 'Group', conflict: 'Resolve conflict' })[kind];
 		document.querySelector('#form-fields').replaceChildren();
 		const template = document.createElement('template');
 		template.innerHTML = await this.request('forms/' + kind + '?' + new URLSearchParams(params), 'GET', null, true);
 		document.querySelector('#form-fields').replaceChildren(template.content);
+		document.querySelector('#record-form button[type="submit"]').disabled = false;
 		this.submit = submit;
 		this.formOperation = crypto.randomUUID();
 		const settings = document.querySelector('#settings');
@@ -242,17 +251,27 @@ class TypeRelay {
 		if (button.id === 'search-trigger') return this.openSearch();
 		if (button.dataset.settingsTab) return this.settingsTab(button.dataset.settingsTab);
 		if (button.dataset.searchLibrary) {
-			await this.open(button.dataset.searchLibrary);
-			this.searchFocus = [...document.querySelectorAll('[data-snippet]')].find(node => node.dataset.snippet === button.dataset.searchSnippet) || document.querySelector('[data-id="' + button.dataset.searchLibrary + '"]');
-			if (this.searchFocus?.matches('[data-snippet]')) this.searchFocus.tabIndex = -1;
-			bootstrap.Modal.getInstance(document.querySelector('#search-modal'))?.hide();
+			const id = button.dataset.searchLibrary;
+			const snippet = button.dataset.searchSnippet;
+			let library;
+			if (snippet) {
+				const detail = await this.request('library-view/' + id);
+				library = detail.library;
+				if (library.state !== 'active' || !library.snippets.some(entry => entry.id === snippet)) throw new Error('This snippet is no longer available. Search again.');
+				await this.apply(detail);
+			}
+			await this.open(id);
+			this.searchFocus = snippet ? null : document.querySelector('[data-id="' + id + '"]');
+			const modal = document.querySelector('#search-modal');
+			if (modal.classList.contains('show')) await new Promise(resolve => { modal.addEventListener('hidden.bs.modal', resolve, { once: true }); bootstrap.Modal.getInstance(modal).hide(); });
+			if (snippet) await this.editSnippet(library, snippet);
 			return;
 		}
 		const data = button.dataset;
 		const library = this.libraries.get(this.selected);
 		if (button.id === 'new-library') return this.form('library', {}, async fields => this.apply(await this.request('libraries', 'POST', { name: fields.get('name'), yaml: fields.get('yaml') })));
 		if ('librarySettings' in data) return this.form('library', { library: library._id }, async fields => this.apply(await this.request('libraries/' + library._id, 'PATCH', { base_revision: library.revision, name: fields.get('name'), shared: fields.has('shared'), editable: fields.get('editable') === 'true', members: fields.getAll('members'), groups: fields.getAll('groups') })));
-		if ('addSnippet' in data || data.editSnippet) return this.form('snippet', { library: library._id, snippet: data.editSnippet || '' }, fields => this.snippet(data.editSnippet, { trigger: fields.get('trigger'), replace: fields.get('replace') }, library));
+		if ('addSnippet' in data || data.editSnippet) return this.editSnippet(library, data.editSnippet);
 		if (data.deleteSnippet && await this.confirm('Move this snippet to Trash?')) return this.snippet(data.deleteSnippet, null);
 		if (data.deleteLibrary && await this.confirm('Move this library and its active snippets to Trash?')) {
 			await this.apply(await this.request('libraries/' + data.deleteLibrary, 'PATCH', { base_revision: library.revision, deleted: true }));

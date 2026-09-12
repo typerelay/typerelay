@@ -250,7 +250,7 @@ test('web AJAX updates only affected snippets; preserves panel, filter and multi
 	assert.equal(client.selected, library._id);
 	assert.equal(card.getAttribute('role'), 'button');
 	const modal = dom.window.document.querySelector('#search-modal');
-	dom.window.bootstrap.Modal.getOrCreateInstance = element => ({ show() { element.classList.add('show'); }, hide() { element.classList.remove('show'); } });
+	dom.window.bootstrap.Modal.getOrCreateInstance = element => ({ show() { element.classList.add('show'); }, hide() { element.classList.remove('show'); element.dispatchEvent(new dom.window.Event('hidden.bs.modal')); } });
 	dom.window.bootstrap.Modal.getInstance = dom.window.bootstrap.Modal.getOrCreateInstance;
 	for (const options of [{ key: '/' }, { key: 'k', ctrlKey: true }, { key: 'k', metaKey: true }]) {
 		modal.classList.remove('show');
@@ -272,6 +272,13 @@ test('web AJAX updates only affected snippets; preserves panel, filter and multi
 	await client.onClick({ target: result });
 	assert.equal(client.selected, library._id);
 	assert.ok(!modal.classList.contains('show'));
+	assert.ok(dom.window.document.querySelector('#form-modal').classList.contains('show'));
+	assert.equal(dom.window.document.querySelector('#trigger').value, 'web');
+	assert.equal(dom.window.document.querySelector('#replace').value, 'First\nSecond\n\n');
+	dom.window.document.querySelector('#replace').value = 'Edited from search';
+	await client.submit(new dom.window.FormData(dom.window.document.querySelector('#record-form')));
+	assert.equal(client.libraries.get(library._id).snippets.find(entry => entry.id === library.snippets[0].id).replace, 'Edited from search');
+	dom.window.document.querySelector('#form-modal').classList.remove('show');
 	// Late search responses never replace a newer query.
 	const request = client.request.bind(client);
 	let finishOld;
@@ -285,7 +292,11 @@ test('web AJAX updates only affected snippets; preserves panel, filter and multi
 	await old;
 	assert.equal(dom.window.document.querySelector('#search-results').firstElementChild, currentResults);
 	client.request = request;
+	await client.editSnippet({ ...client.libraries.get(library._id), permissions: { edit: false } }, library.snippets[0].id);
+	assert.equal(dom.window.document.querySelector('#trigger').readOnly, true);
+	assert.equal(dom.window.document.querySelector('#record-form button[type="submit"]').disabled, true);
 	await client.form('snippet', { library: library._id }, () => {});
+	assert.equal(dom.window.document.querySelector('#record-form button[type="submit"]').disabled, false);
 	const trigger = dom.window.document.querySelector('#trigger');
 	assert.equal(trigger.parentElement.querySelector('.input-group-text').textContent, ',');
 	trigger.value = ',,my-test';

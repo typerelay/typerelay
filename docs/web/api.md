@@ -85,7 +85,7 @@ Settings follows Streamient/Mailtwine's left navigation and right content layout
 
 The navbar search trigger opens a modal with `/`, Ctrl+K or Cmd+K. Slash is ignored in editable fields; shortcuts do not interrupt another open modal. Arrow keys navigate results, Enter opens them and Escape closes search. Results match library names, abbreviations and expansion text.
 
-`GET /api/v2/search?q=...` returns permission-filtered Pug search results (up to 60). Stale responses cannot replace a newer query. Search selection opens the library and focuses the matching snippet. Library cards also open from any card area or Enter/Space, not only the title.
+`GET /api/v2/search?q=...` returns permission-filtered Pug search results (up to 60). Stale responses cannot replace a newer query. Selecting a snippet search result opens its edit modal directly; read-only snippets open locked. Library-name results open the library. Library cards also open from any card area or Enter/Space, not only the title.
 
 ## Trash and protocol transition
 
@@ -101,3 +101,5 @@ Web presentation replace fields alias content.text; only the content envelope is
 Ordinary deletion means Move to Trash. Restoring a library preserves independent child Trash state.
 Purge is creator/admin-only for shared libraries; private Trash remains creator-only.
 Restores validate active uniqueness/limits. Expired records cannot restore; cleanup runs hourly and on startup.
+
+Web abbreviation forms display a static comma prefix. Leading commas typed or pasted into the abbreviation are stripped by shared client/server normalization; stored abbreviations remain bare.
