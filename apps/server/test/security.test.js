@@ -85,7 +85,7 @@ after(async () => {
 test('signup, generated password, password login, OAuth continuation and recovery', async () => {
 	const { browser, email, user } = await Fixture.account();
 	assert.equal(user.name, 'Original Name');
-	const password = (await browser.json('/api/v1/security/password')).password;
+	const password = (await browser.json('/api/v2/security/password')).password;
 	assert.ok(password.length >= 20);
 	assert.equal((await User.findById(user._id).lean()).password, undefined);
 	const login = new Browser();
@@ -103,14 +103,14 @@ test('signup, generated password, password login, OAuth continuation and recover
 	const fresh = (await login.json('/auth/reset-password', 'POST', { token: reset.searchParams.get('token') })).password;
 	assert.notEqual(fresh, password);
 	await login.json('/auth/reset-password', 'POST', { token: reset.searchParams.get('token') }, 400);
-	assert.equal((await browser.call('/api/v1/libraries')).status, 403, 'Password reset invalidates other browser sessions');
+	assert.equal((await browser.call('/api/v2/libraries')).status, 403, 'Password reset invalidates other browser sessions');
 	await login.json('/auth/password', 'POST', { email, password }, 401);
 	await login.json('/auth/password', 'POST', { email, password: fresh });
 });
 test('profile name updates incrementally, email requires confirmation and cannot steal an existing address', async () => {
 	const { browser, email, user } = await Fixture.account();
 	const replacement = randomUUID() + '@example.test';
-	const result = await browser.json('/api/v1/profile', 'PATCH', { name: 'Updated Name', email: replacement });
+	const result = await browser.json('/api/v2/profile', 'PATCH', { name: 'Updated Name', email: replacement });
 	assert.equal(result.pending_email, replacement);
 	assert.equal((await User.findById(user._id).lean()).email, email);
 	assert.match(result.avatar, /UN/);
@@ -121,7 +121,7 @@ test('profile name updates incrementally, email requires confirmation and cannot
 	assert.equal((await User.findById(user._id).lean()).email, replacement);
 	await browser.json('/auth/email', 'POST', { token: confirm.searchParams.get('token') }, 400);
 	const other = await Fixture.account();
-	await browser.json('/api/v1/profile', 'PATCH', { name: 'Updated Name', email: other.email }, 409);
+	await browser.json('/api/v2/profile', 'PATCH', { name: 'Updated Name', email: other.email }, 409);
 	const html = await (await browser.call('/')).text();
 	const dom = new JSDOM(html, { url: Fixture.origin, runScripts: 'outside-only' });
 	dom.window.Swal = { fire: async () => ({ isConfirmed: true }) };
@@ -141,24 +141,24 @@ test('profile name updates incrementally, email requires confirmation and cannot
 });
 test('TOTP setup, password and magic-link challenges, invalid codes, replay prevention and disable', async () => {
 	const { browser, email, user } = await Fixture.account();
-	const password = (await browser.json('/api/v1/security/password')).password;
-	const setup = await browser.json('/api/v1/security/totp/setup');
+	const password = (await browser.json('/api/v2/security/password')).password;
+	const setup = await browser.json('/api/v2/security/totp/setup');
 	assert.ok(setup.qr.startsWith('data:image/png;base64,'));
 	const code = generateSync({ secret: setup.secret });
-	await browser.json('/api/v1/security/totp/confirm', 'POST', { code });
+	await browser.json('/api/v2/security/totp/confirm', 'POST', { code });
 	assert.equal((await User.findById(user._id).lean()).totp_secret, undefined);
-	await browser.json('/api/v1/security/totp/setup', 'POST', {}, 400);
+	await browser.json('/api/v2/security/totp/setup', 'POST', {}, 400);
 	const login = new Browser(); await login.page();
 	const pending = await login.json('/auth/password', 'POST', { email, password });
 	assert.equal(pending.requires2FA, true);
-	assert.equal((await login.call('/api/v1/libraries')).status, 400);
+	assert.equal((await login.call('/api/v2/libraries')).status, 400);
 	await login.json('/auth/two-factor', 'POST', { code: 'abcdef' }, 400);
 	await login.json('/auth/two-factor', 'POST', { code });
 	await login.page();
-	await login.json('/api/v1/security/totp/disable', 'POST', { code }, 401);
+	await login.json('/api/v2/security/totp/disable', 'POST', { code }, 401);
 	// Simulate a new time window without delaying the suite.
 	await User.updateOne({ _id: user._id }, { $unset: { totp_step: 1 } });
-	await login.json('/api/v1/security/totp/disable', 'POST', { code: generateSync({ secret: setup.secret }) });
+	await login.json('/api/v2/security/totp/disable', 'POST', { code: generateSync({ secret: setup.secret }) });
 	assert.equal((await User.findById(user._id).lean()).totp_enabled, false);
 	// Magic-link sign-in also honors enabled 2FA.
 	await User.updateOne({ _id: user._id }, { $set: { totp_secret: setup.secret, totp_enabled: true } });
@@ -170,11 +170,11 @@ test('TOTP setup, password and magic-link challenges, invalid codes, replay prev
 });
 test('real signed passkey registration/login, challenge replay and ownership', async () => {
 	const { browser, user } = await Fixture.account();
-	const options = await browser.json('/api/v1/security/passkeys/options');
+	const options = await browser.json('/api/v2/security/passkeys/options');
 	const credential = Fixture.credential(options.challenge);
-	const result = await browser.json('/api/v1/security/passkeys/verify', 'POST', { name: 'Test passkey', response: credential.response });
+	const result = await browser.json('/api/v2/security/passkeys/verify', 'POST', { name: 'Test passkey', response: credential.response });
 	assert.ok(result.key._id);
-	await browser.json('/api/v1/security/passkeys/verify', 'POST', { name: 'Replay', response: credential.response }, 400);
+	await browser.json('/api/v2/security/passkeys/verify', 'POST', { name: 'Replay', response: credential.response }, 400);
 	assert.equal((await Passkey.findById(result.key._id).lean()).public_key, undefined);
 	const login = new Browser(); await login.page();
 	const invalidOptions = await login.json('/auth/passkey/options');
@@ -187,10 +187,10 @@ test('real signed passkey registration/login, challenge replay and ownership', a
 	await login.page();
 	assert.ok(login.account);
 	const outsider = await Fixture.account();
-	assert.equal((await outsider.browser.call('/api/v1/security/passkeys/' + result.key._id)).status, 404);
-	await outsider.browser.json('/api/v1/security/passkeys/' + result.key._id, 'DELETE');
+	assert.equal((await outsider.browser.call('/api/v2/security/passkeys/' + result.key._id)).status, 404);
+	await outsider.browser.json('/api/v2/security/passkeys/' + result.key._id, 'DELETE');
 	assert.ok(await Passkey.exists({ _id: result.key._id }));
-	await browser.json('/api/v1/security/passkeys/' + result.key._id, 'DELETE');
+	await browser.json('/api/v2/security/passkeys/' + result.key._id, 'DELETE');
 	assert.equal(await Passkey.exists({ _id: result.key._id }), null);
 });
 test('login exposes all requested methods and native OAuth form remains unaffected', async () => {

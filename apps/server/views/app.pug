@@ -116,3 +116,16 @@ block content
 					.modal-footer.justify-content-between
 						span.small.text-muted ↑ ↓ Navigate · Enter Open
 						span.small.text-muted Esc Close
+
+		#trash.modal.fade(tabindex="-1" aria-label="Trash")
+			.modal-dialog.modal-lg.modal-dialog-scrollable
+				.modal-content
+					.modal-header
+						h2.modal-title.h5 Trash
+						button.btn-close(type="button" data-bs-dismiss="modal" aria-label="Close")
+					.modal-body
+						p.text-muted Trashed items can be restored for 30 days.
+						#trash-items.list-group
+						p#trash-empty.text-muted Trash is empty.
+					.modal-footer
+						button#empty-trash.btn.btn-outline-danger.btn-sm(type="button" disabled) Empty Trash

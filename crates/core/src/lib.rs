@@ -7,7 +7,7 @@ pub struct Snippet {
     pub replacement: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Snapshot {
     snippets: BTreeMap<String, Snippet>,
 }

@@ -5,17 +5,20 @@ import MongoStore from 'connect-mongo';
 import helmet from 'helmet';
 import { rateLimit } from 'express-rate-limit';
 import { readFileSync, writeFileSync } from 'node:fs';
-import { mongoose, User, Account, Member, Device, Conflict, Group, Ticket } from './model/index.js';
+import { mongoose, User, Account, Member, Device, Conflict, Group, Ticket, Operation } from './model/index.js';
 import { Auth } from './services/auth.js';
 import { Support, Yaml } from './services/support.js';
 import { Libraries } from './services/libraries.js';
 import { Team } from './services/team.js';
+import { StorageMigration } from './services/storage_migration.js';
 import { Security } from './services/security.js';
 
 export class Server {
 	static async start() {
 		await mongoose.connect(process.env.MONGODB_URI);
 		await Promise.all(Object.values(mongoose.models).map(model => model.init()));
+		await StorageMigration.run();
+		await Libraries.cleanup();
 		const secretPath = process.env.SESSION_SECRET_FILE || '/data/session-secret';
 		try { writeFileSync(secretPath, Support.token(), { flag: 'wx', mode: 0o600 }); } catch (error) { if (error.code !== 'EEXIST') throw error; }
 		const app = express();
@@ -67,13 +70,29 @@ export class Server {
 			const ctx = await Support.context(req.session.user, String(account._id));
 			res.render('app', { accounts, account, ctx, libraries: await Libraries.list(ctx), team: await Team.list(ctx), profile: await User.findById(ctx.user).lean() });
 		});
-		app.use('/api/v1', async (req, res, next) => {
+		app.use('/api/v1', (req, res) => res.status(426).json({ error: 'Upgrade TypeRelay: database storage requires sync protocol 2', protocol: 2 }));
+		app.use('/api/v2', async (req, res, next) => {
 			req.ctx = req.headers.authorization ? await Auth.bearer(req.headers.authorization.replace(/^Bearer /, '')) : await Support.context(req.session.user, req.headers['x-account-id']);
 			next();
 		});
 		Security.mountPrivate(app, rateLimit({ windowMs: 900000, limit: 60, message: { error: 'Too many security requests; try again later.' } }));
-		app.get('/api/v1/library-view/:id', async (req, res) => Server.result(res, req.ctx, { library: Libraries.view(req.ctx, await Libraries.get(req.ctx, req.params.id)) }));
-		app.get('/api/v1/search', async (req, res) => {
+		app.get('/api/v2/operations/:id', async (req, res) => {
+			const receipt = await Operation.findOne({ account: req.ctx.account, user: req.ctx.user, operation: req.params.id }).lean();
+			res.json(receipt ? { found: true, ...await Libraries.receipt(req.ctx, receipt.result) } : { found: false });
+		});
+		app.get('/api/v2/trash', async (req, res) => {
+			const items = await Libraries.trash(req.ctx);
+			res.render('ajax/trash', { items }, (error, html) => { if (error) return res.status(500).json({ error: 'Could not render Trash' }); res.json({ items, html }); });
+		});
+		app.post('/api/v2/trash/action', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.trashAction(ctx, req.body.target, req.body.action, session))));
+		app.post('/api/v2/trash/empty', async (req, res) => res.json(await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.empty(ctx, req.body.targets, session))));
+		app.get('/api/v2/libraries/:id/export', async (req, res) => {
+			const library = await Libraries.get(req.ctx, req.params.id);
+			const output = await Yaml.export(library.snippets.map(entry => ({ trigger: entry.trigger, replace: entry.content.text })));
+			res.type('text/yaml').attachment('library-' + library._id + '.yml').send(output.yaml);
+		});
+		app.get('/api/v2/library-view/:id', async (req, res) => Server.result(res, req.ctx, { library: Libraries.view(req.ctx, await Libraries.get(req.ctx, req.params.id, null, true)) }));
+		app.get('/api/v2/search', async (req, res) => {
 			const query = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 200).toLowerCase() : '';
 			const results = [];
 			if (query) for (const library of await Libraries.list(req.ctx)) {
@@ -83,41 +102,41 @@ export class Server {
 			}
 			res.render('ajax/search', { query, results: results.slice(0, 60), truncated: results.length > 60 });
 		});
-		app.get('/api/v1/libraries', async (req, res) => res.json(await Libraries.list(req.ctx)));
-		app.post('/api/v1/import/preview', async (req, res) => res.json(await Yaml.run(req.body.yaml)));
-		app.post('/api/v1/libraries', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, async (ctx, session) => ({ library: await Libraries.create(ctx, req.body, session) }))));
-		app.patch('/api/v1/libraries/:id', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.settings(ctx, req.params.id, req.body, session))));
-		app.post('/api/v1/libraries/:id/snippets', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.upload(ctx, req.params.id, req.body, session))));
-		app.get('/api/v1/sync', async (req, res) => res.json(await Libraries.download(req.ctx, Number(req.query.cursor || 0))));
-		app.post('/api/v1/conflicts/:id', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.resolve(ctx, req.params.id, req.body, session))));
-		app.get('/api/v1/team', async (req, res) => res.json(await Team.list(req.ctx)));
-		app.post('/api/v1/team/invitations', async (req, res) => res.json(await Team.invite(req.ctx, req.body.email)));
-		app.delete('/api/v1/team/invitations/:id', async (req, res) => { Support.assert(Support.admin(req.ctx), 'Admin required', 403); await Ticket.deleteOne({ _id: Support.id(req.params.id), account: req.ctx.account, kind: 'invite' }); res.json({ deleted: req.params.id }); });
-		app.post('/api/v1/team/accept', async (req, res) => res.json(await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Team.accept(ctx, req.body.token, session))));
-		app.patch('/api/v1/team/members/:id', async (req, res) => res.json(await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Team.member(ctx, req.params.id, req.body, session))));
-		app.post('/api/v1/team/groups', async (req, res) => res.json(await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Team.group(ctx, null, req.body, session))));
-		app.patch('/api/v1/team/groups/:id', async (req, res) => res.json(await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Team.group(ctx, req.params.id, req.body, session))));
-		app.delete('/api/v1/connection', async (req, res) => { Support.assert(req.ctx.device, 'Device authentication required', 401); await Device.updateOne({ _id: req.ctx.device, user: req.ctx.user, account: req.ctx.account }, { $set: { revoked: true } }); res.json({ disconnected: true }); });
-		app.get('/api/v1/devices', async (req, res) => res.json(await Device.find({ account: req.ctx.account, user: req.ctx.user, revoked: false }).select('_id name createdAt').lean()));
-		app.delete('/api/v1/devices/:id', async (req, res) => { await Device.updateOne({ _id: Support.id(req.params.id), account: req.ctx.account, user: req.ctx.user }, { $set: { revoked: true } }); res.json({ deleted: req.params.id }); });
-		app.patch('/api/v1/profile', async (req, res) => {
+		app.get('/api/v2/libraries', async (req, res) => res.json(await Libraries.list(req.ctx)));
+		app.post('/api/v2/import/preview', async (req, res) => res.json(await Yaml.run(req.body.yaml)));
+		app.post('/api/v2/libraries', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, async (ctx, session) => ({ library: await Libraries.create(ctx, req.body, session) }))));
+		app.patch('/api/v2/libraries/:id', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.settings(ctx, req.params.id, req.body, session))));
+		app.post('/api/v2/libraries/:id/snippets', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.upload(ctx, req.params.id, req.body, session))));
+		app.get('/api/v2/sync', async (req, res) => res.json(await Libraries.download(req.ctx, Number(req.query.cursor || 0))));
+		app.post('/api/v2/conflicts/:id', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.resolve(ctx, req.params.id, req.body, session))));
+		app.get('/api/v2/team', async (req, res) => res.json(await Team.list(req.ctx)));
+		app.post('/api/v2/team/invitations', async (req, res) => res.json(await Team.invite(req.ctx, req.body.email)));
+		app.delete('/api/v2/team/invitations/:id', async (req, res) => { Support.assert(Support.admin(req.ctx), 'Admin required', 403); await Ticket.deleteOne({ _id: Support.id(req.params.id), account: req.ctx.account, kind: 'invite' }); res.json({ deleted: req.params.id }); });
+		app.post('/api/v2/team/accept', async (req, res) => res.json(await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Team.accept(ctx, req.body.token, session))));
+		app.patch('/api/v2/team/members/:id', async (req, res) => res.json(await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Team.member(ctx, req.params.id, req.body, session))));
+		app.post('/api/v2/team/groups', async (req, res) => res.json(await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Team.group(ctx, null, req.body, session))));
+		app.patch('/api/v2/team/groups/:id', async (req, res) => res.json(await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Team.group(ctx, req.params.id, req.body, session))));
+		app.delete('/api/v2/connection', async (req, res) => { Support.assert(req.ctx.device, 'Device authentication required', 401); await Device.updateOne({ _id: req.ctx.device, user: req.ctx.user, account: req.ctx.account }, { $set: { revoked: true } }); res.json({ disconnected: true }); });
+		app.get('/api/v2/devices', async (req, res) => res.json(await Device.find({ account: req.ctx.account, user: req.ctx.user, revoked: false }).select('_id name createdAt').lean()));
+		app.delete('/api/v2/devices/:id', async (req, res) => { await Device.updateOne({ _id: Support.id(req.params.id), account: req.ctx.account, user: req.ctx.user }, { $set: { revoked: true } }); res.json({ deleted: req.params.id }); });
+		app.patch('/api/v2/profile', async (req, res) => {
 			const result = await Security.profile(req);
 			const member = await Member.findOne({ account: req.ctx.account, user: req.ctx.user }).lean();
 			res.json({ ...result, avatar: pug.renderFile('./views/ajax/avatar.pug', { profile: result }), member: { id: String(member._id), html: pug.renderFile('./views/ajax/member.pug', { member: { ...member, profile: result }, ctx: req.ctx }) } });
 		});
-		app.patch('/api/v1/account', async (req, res) => { Support.assert(Support.admin(req.ctx), 'Admin required', 403); await Account.updateOne({ _id: req.ctx.account }, { $set: { name: Support.text(req.body.name) } }); res.json({ name: req.body.name }); });
-		app.get('/api/v1/forms/:kind', async (req, res) => {
+		app.patch('/api/v2/account', async (req, res) => { Support.assert(Support.admin(req.ctx), 'Admin required', 403); await Account.updateOne({ _id: req.ctx.account }, { $set: { name: Support.text(req.body.name) } }); res.json({ name: req.body.name }); });
+		app.get('/api/v2/forms/:kind', async (req, res) => {
 			const kind = req.params.kind;
 			Support.assert(['library', 'snippet', 'group', 'conflict'].includes(kind), 'Unknown form');
-			const library = req.query.library ? Libraries.view(req.ctx, await Libraries.get(req.ctx, req.query.library)) : null;
+			const library = req.query.library ? Libraries.view(req.ctx, await Libraries.get(req.ctx, req.query.library, null, true)) : null;
 			const group = req.query.group ? await Group.findOne({ _id: Support.id(req.query.group), account: req.ctx.account }).lean() : null;
 			const conflict = req.query.conflict ? await Conflict.findOne({ _id: Support.id(req.query.conflict), account: req.ctx.account, library: library?._id, resolved: false }).lean() : null;
 			if (kind === 'conflict') Support.assert(conflict && library.permissions.edit, 'Conflict not found', 404);
-			const current = library?.snippets.find(snippet => snippet.id === conflict?.snippet) || null;
-			res.render('ajax/form', { kind, library, group, conflict, current, snippet: kind === 'conflict' ? (conflict.local || current) : library?.snippets.find(snippet => snippet.id === req.query.snippet), team: await Team.list(req.ctx) });
+			const current = library?.records.find(snippet => snippet.id === conflict?.snippet) || null;
+			res.render('ajax/form', { kind, library, group, conflict, current, snippet: kind === 'conflict' ? (conflict.local ? Libraries.entry(conflict.local) : current) : library?.snippets.find(snippet => snippet.id === req.query.snippet), team: await Team.list(req.ctx) });
 		});
-		app.get('/api/v1/editor/:id', async (req, res) => res.render('ajax/editor', { library: Libraries.view(req.ctx, await Libraries.get(req.ctx, req.params.id)) }));
-		app.get('/api/v1/fragments/:type/:id', async (req, res) => {
+		app.get('/api/v2/editor/:id', async (req, res) => res.render('ajax/editor', { library: Libraries.view(req.ctx, await Libraries.get(req.ctx, req.params.id)) }));
+		app.get('/api/v2/fragments/:type/:id', async (req, res) => {
 			if (req.params.type === 'invitation') {
 				Support.assert(Support.admin(req.ctx), 'Admin required', 403);
 				const invitation = await Ticket.findOne({ _id: Support.id(req.params.id), account: req.ctx.account, kind: 'invite', expires: { $gt: new Date() } }).select('_id email').lean();
@@ -132,7 +151,7 @@ export class Server {
 			if (req.params.type === 'conflict') {
 				const conflict = await Conflict.findOne({ _id: Support.id(req.params.id), account: req.ctx.account, resolved: false }).lean();
 				Support.assert(conflict, 'Conflict missing', 404);
-				const library = await Libraries.get(req.ctx, String(conflict.library));
+				const library = await Libraries.get(req.ctx, String(conflict.library), null, true);
 				Support.assert(Support.access(req.ctx, library).edit, 'Conflict not found', 404);
 				return res.render('ajax/conflict', { conflict });
 			}
@@ -145,12 +164,15 @@ export class Server {
 		});
 		app.use((error, req, res, next) => {
 			if (res.headersSent) return next(error);
-			const status = error.status || (error.name === 'ValidationError' || error.name === 'CastError' ? 400 : 500);
+			const status = error.status || (error.code === 11000 ? 409 : 0) || (error.name === 'ValidationError' || error.name === 'CastError' ? 400 : 500);
 			if (status === 500) console.error(error);
-			res.status(status).json({ error: status === 500 ? 'Request failed; please retry' : error.message });
+			res.status(status).json({ error: status === 500 ? 'Request failed; please retry' : (error.code === 11000 ? 'Abbreviation or name already exists' : error.message) });
 		});
 		const server = app.listen(Number(process.env.PORT || 3040), '0.0.0.0');
-		server.on('close', () => sessionStore.close());
+		let cleaning = false;
+		const cleanup = setInterval(async () => { if (cleaning) return; cleaning = true; try { await Libraries.cleanup(); } catch (error) { console.error('Trash cleanup failed:', error.message); } finally { cleaning = false; } }, 3600000);
+		cleanup.unref();
+		server.on('close', () => { clearInterval(cleanup); sessionStore.close(); });
 		return server;
 	}
 	static result(res, ctx, result) {

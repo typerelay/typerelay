@@ -1,4 +1,4 @@
-use crate::{config::{Document, FileStore}, editor::Paths};
+use crate::{database::Database, editor::Paths};
 use anyhow::{Context, Result, ensure};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use fs2::FileExt;
@@ -7,13 +7,8 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, fs, io::{Read, Write}, net::TcpListener, path::{Path, PathBuf}, time::{Duration, Instant}};
 use uuid::Uuid;
-
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Credentials { pub server: String, pub access_token: String, pub refresh_token: String }
-#[derive(Clone, Default, Serialize, Deserialize)]
-pub struct State { #[serde(default)] pub directory: Option<PathBuf>, pub cursor: u64, pub files: BTreeMap<String, Managed>, pub pending: Option<Value>, pub conflicts: Vec<Value> }
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Managed { pub filename: String, pub library: Value, pub baseline: String }
 pub struct Sync { root: PathBuf, directory: PathBuf, client: reqwest::blocking::Client }
 impl Sync {
     pub fn new(root: PathBuf, directory: PathBuf) -> Result<Self> {
@@ -27,8 +22,6 @@ impl Sync {
         file.try_lock_exclusive().context("Sync already running")?;
         Ok(file)
     }
-    pub fn state(&self) -> Result<State> { match fs::read(self.path("state.json")) { Ok(bytes) => { let state: State = serde_json::from_slice(&bytes)?; ensure!(state.directory.as_ref().is_none_or(|directory| self.directory.canonicalize().is_ok_and(|current| &current == directory)), "This connection belongs to another snippets directory"); Ok(state) }, Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(State::default()), Err(error) => Err(error.into()) } }
-    fn save(&self, state: &State) -> Result<()> { let mut state = state.clone(); state.directory = Some(self.directory.canonicalize()?); Paths::atomic_write(&self.path("state.json"), &serde_json::to_vec_pretty(&state)?, false) }
     fn credentials(&self) -> Result<Credentials> { Ok(serde_json::from_slice(&fs::read(self.path("credentials.json")).context("Connect first: typerelay connect --server URL")?)?) }
     fn secret(&self, credentials: &Credentials) -> Result<()> {
         Paths::atomic_write(&self.path("credentials.json"), &serde_json::to_vec(credentials)?, false)?;
@@ -43,7 +36,7 @@ impl Sync {
     }
     fn request(&self, credentials: &mut Credentials, method: reqwest::Method, path: &str, body: Option<&Value>) -> Result<Value> {
         let send = |credentials: &Credentials| {
-            let request = self.client.request(method.clone(), format!("{}/api/v1/{path}", credentials.server)).bearer_auth(&credentials.access_token);
+            let request = self.client.request(method.clone(), format!("{}/api/v2/{path}", credentials.server)).bearer_auth(&credentials.access_token);
             if let Some(body) = body { request.json(body).send() } else { request.send() }
         };
         let mut response = send(credentials)?;
@@ -103,165 +96,77 @@ impl Sync {
     }
     pub fn enroll(&self, name: &str) -> Result<()> {
         let _lock = self.lock()?;
-        ensure!(Path::new(name).file_name().and_then(|name| name.to_str()) == Some(name) && matches!(Path::new(name).extension().and_then(|name| name.to_str()), Some("yaml" | "yml")), "Choose a YAML filename in the snippets directory");
-        let mut state = self.state()?;
-        ensure!(state.pending.is_none(), "Run sync to finish the pending operation first");
-        ensure!(!state.files.values().any(|file| file.filename == name), "File already enrolled");
-        let yaml = String::from_utf8(FileStore::read(&self.directory.join(name))?)?;
-        FileStore::parse(yaml.as_bytes())?;
-        state.pending = Some(json!({"path":"libraries","body":{"operation_id":Uuid::new_v4().to_string(),"name":name,"yaml":yaml},"filename":name,"source":yaml,"enroll":true}));
-        self.save(&state)?;
-        self.finish_pending(&mut self.credentials()?, &mut state)?;
-        println!("Enrolled {name}");
+        self.credentials()?;
+        Database::open(&self.directory)?.enroll(name)?;
+        println!("Library enrolled; changes queued for sync.");
         Ok(())
     }
-    fn finish_pending(&self, credentials: &mut Credentials, state: &mut State) -> Result<()> {
-        let Some(pending) = state.pending.clone() else { return Ok(()); };
-        let result = self.request(credentials, reqwest::Method::POST, pending["path"].as_str().context("Missing path")?, Some(&pending["body"]))?;
-        let library = result["library"].clone();
-        let id = library["_id"].as_str().context("Missing library ID")?.to_owned();
-        let filename = pending["filename"].as_str().context("Missing filename")?.to_owned();
-        let source = pending["source"].as_str().context("Missing pending source")?;
-        if pending["enroll"] == true {
-            state.files.insert(id, Managed { filename, library, baseline: source.into() });
-        } else {
-            let current = fs::read_to_string(self.directory.join(&filename)).unwrap_or_default();
-            if current != source {
-                // A second local edit arrived during upload. Preserve it before rebasing.
-                self.recover(&filename, &current)?;
+    fn legacy(&self, credentials: &mut Credentials, db: &Database) -> Result<()> {
+        let Some(pending) = db.meta("legacy_pending")?.filter(|value| !value.is_null()) else { return Ok(()); };
+        let operation_id = pending["body"]["operation_id"].as_str().context("Invalid legacy pending operation")?;
+        let receipt = self.request(credentials, reqwest::Method::GET, &format!("operations/{operation_id}"), None)?;
+        let name = pending["filename"].as_str().context("Missing legacy filename")?;
+        let file = db.editor(name)?;
+        if receipt["found"] == true {
+            if let Some(library) = receipt.get("library") { db.reconcile_legacy(name, library, pending["source"].as_str().context("Missing legacy submission")?, &receipt["versions"])?; }
+            else if let Some(remote_id) = receipt["library_id"].as_str() {
+                let transaction = db.connection.unchecked_transaction()?;
+                db.remap(&file.id, remote_id)?;
+                transaction.commit()?;
+                db.apply(&receipt, None)?;
             }
-            self.activate(&id, &library, state, true)?;
-        }
-        state.pending = None;
-        self.save(state)?;
-        Ok(())
-    }
-    pub fn changes(managed: &Managed, yaml: &str) -> Result<Vec<Value>> {
-        FileStore::parse(yaml.as_bytes())?;
-        let document: Document = serde_saphyr::from_str(yaml)?;
-        let previous = managed.library["snippets"].as_array().context("Missing snippets")?;
-        let mut changes = Vec::new();
-        for snippet in previous {
-            let next = document.matches.iter().find(|entry| Some(entry.trigger.as_str()) == snippet["trigger"].as_str());
-            let value = next.map(|entry| json!(entry)).unwrap_or(Value::Null);
-            if next.is_none_or(|entry| Some(entry.replace.as_str()) != snippet["replace"].as_str()) {
-                changes.push(json!({"id":snippet["id"],"base_revision":snippet["revision"],"base":snippet,"value":value}));
-            }
-        }
-        for entry in document.matches {
-            if !previous.iter().any(|snippet| snippet["trigger"] == entry.trigger) { changes.push(json!({"id":Uuid::new_v4().to_string(),"base_revision":null,"value":entry})); }
-        }
-        Ok(changes)
-    }
-    fn recover(&self, filename: &str, content: &str) -> Result<()> { Paths::atomic_write(&self.path("recovery").join(format!("{}-{filename}", Uuid::new_v4())), content.as_bytes(), true) }
-    fn activate(&self, id: &str, library: &Value, state: &mut State, preserve: bool) -> Result<()> {
-        ensure!(id.len() == 24 && id.bytes().all(|byte| byte.is_ascii_hexdigit()), "Invalid library ID");
-        let filename = state.files.get(id).map(|file| file.filename.clone()).unwrap_or(format!("library-{id}.yml"));
-        let path = self.directory.join(&filename);
-        ensure!(!path.is_symlink(), "Managed file is a symlink");
-        if !state.files.contains_key(id) { ensure!(!path.exists(), "Unrelated local file occupies {filename}"); }
-        let yaml = library["yaml"].as_str().context("Missing YAML")?;
-        // Stage first: invalid remote data never replaces the working engine files.
-        Paths::atomic_write(&self.path("staged").join(format!("{id}.json")), &serde_json::to_vec(library)?, false)?;
-        let lock = fs::OpenOptions::new().create(true).truncate(false).read(true).write(true).open(self.directory.join(".typerelay-edit.lock"))?;
-        lock.lock_exclusive()?;
-        let mut files = FileStore::read_files(&self.directory, true)?;
-        files.retain(|(file, _)| file != &path);
-        files.push((path.clone(), yaml.as_bytes().to_vec()));
-        ensure!(files.len() <= 256 && files.iter().map(|(_, bytes)| bytes.len()).sum::<usize>() <= 8 * 1048576 && yaml.len() <= 1048576, "Engine file limits exceeded; incoming library staged");
-        FileStore::parse_files(&files)?;
-        if let Ok(current) = fs::read_to_string(&path) {
-            let baseline = state.files.get(id).map(|file| file.baseline.as_str()).unwrap_or("");
-            if current != baseline && current != yaml {
-                ensure!(preserve, "Local edits arrived during sync; retry");
-                self.recover(&filename, &current)?;
-            }
-        }
-        Paths::atomic_write(&path, yaml.as_bytes(), !path.exists())?;
-        state.files.insert(id.into(), Managed { filename, library: library.clone(), baseline: yaml.into() });
-        self.save(state)?;
+        } else if pending["enroll"] == true && !db.synced(&file.id)? { db.enroll(name)?; }
+        db.set_meta("legacy_pending", &Value::Null)?;
         Ok(())
     }
     pub fn cycle(&self) -> Result<()> {
         let _lock = self.lock()?;
+        let db = Database::open(&self.directory)?;
+        db.cleanup()?;
         let mut credentials = self.credentials()?;
-        let mut state = self.state()?;
-        // Obtain current grants before uploading any locally modified content.
-        let remote = self.request(&mut credentials, reqwest::Method::GET, &format!("sync?cursor={}", state.cursor), None)?;
-        let accessible = remote["accessible"].as_array().context("Missing access manifest")?;
-        for (id, managed) in state.files.clone() {
-            if !accessible.iter().any(|value| value.as_str() == Some(&id)) {
-                let path = self.directory.join(&managed.filename);
-                let edit_lock = fs::OpenOptions::new().create(true).truncate(false).read(true).write(true).open(self.directory.join(".typerelay-edit.lock"))?;
-                edit_lock.lock_exclusive()?;
-                ensure!(!path.is_symlink(), "Managed file is a symlink");
-                if path.exists() {
-                    let current = fs::read_to_string(&path)?;
-                    if current != managed.baseline { self.recover(&managed.filename, &current)?; }
-                    fs::remove_file(path)?;
+        self.legacy(&mut credentials, &db)?;
+        let cursor = db.meta("cursor")?.and_then(|value| value.as_u64()).unwrap_or(0);
+        let response = self.request(&mut credentials, reqwest::Method::GET, &format!("sync?cursor={cursor}"), None)?;
+        ensure!(response["protocol"] == 2, "Server upgrade required: sync protocol 2");
+        db.apply(&response, None)?;
+        while let Some((seq, operation)) = db.pending()?.into_iter().next() {
+            let id = operation["library"].as_str().context("Missing library")?;
+            let path = match operation["kind"].as_str() { Some("create") => "libraries".to_owned(), Some("edit") => format!("libraries/{id}/snippets"), Some("trash") => "trash/action".into(), _ => anyhow::bail!("Unknown pending operation") };
+            let result = self.request(&mut credentials, reqwest::Method::POST, &path, Some(&operation["body"]));
+            match result {
+                Ok(result) => db.apply(&result, Some((seq, &operation)))?,
+                Err(error) => {
+                    let message = error.to_string();
+                    if message.contains("403") || message.contains("410") || message.contains("404") || (message.contains("409") && operation["kind"] == "trash") {
+                        let transaction = db.connection.unchecked_transaction()?;
+                        if !message.contains("410") { db.recover_operation(&operation)?; }
+                        db.connection.execute("DELETE FROM outbox WHERE seq=?1", [seq])?;
+                        transaction.commit()?;
+                    } else { return Err(error); }
                 }
-                state.files.remove(&id);
-                self.save(&state)?;
             }
         }
-        let incoming = remote["libraries"].as_array().context("Missing libraries")?;
-        if let Some(pending) = state.pending.clone() {
-            let target = pending["path"].as_str().unwrap_or("").split('/').nth(1).unwrap_or("");
-            let permitted = pending["enroll"] == true || (accessible.iter().any(|id| id.as_str() == Some(target)) && incoming.iter().find(|library| library["_id"] == target).or_else(|| state.files.get(target).map(|file| &file.library)).is_some_and(|library| library["permissions"]["edit"] == true));
-            if !permitted {
-                self.recover(pending["filename"].as_str().unwrap_or("draft.yml"), pending["source"].as_str().unwrap_or(""))?;
-                state.pending = None;
-                self.save(&state)?;
-            } else { self.finish_pending(&mut credentials, &mut state)?; }
-        }
-
-        for (id, managed) in state.files.clone() {
-            let latest = incoming.iter().find(|library| library["_id"] == id && library["revision"].as_u64() >= managed.library["revision"].as_u64()).unwrap_or(&managed.library);
-            if latest["permissions"]["edit"] != true {
-                self.activate(&id, latest, &mut state, true)?;
-                continue;
-            }
-            let path = self.directory.join(&managed.filename);
-            if !path.exists() { self.activate(&id, latest, &mut state, false)?; continue; }
-            let yaml = String::from_utf8(FileStore::read(&path)?)?;
-            if yaml == managed.baseline { continue; }
-            let changes = Self::changes(&managed, &yaml)?;
-            state.pending = Some(json!({"path":format!("libraries/{id}/snippets"),"filename":managed.filename,"source":yaml,"body":{"operation_id":Uuid::new_v4().to_string(),"base_revision":managed.library["revision"],"changes":changes,"yaml":yaml}}));
-            self.save(&state)?;
-            self.finish_pending(&mut credentials, &mut state)?;
-        }
-        // Fetch again: upload may have advanced revisions and conflict records.
-        let remote = self.request(&mut credentials, reqwest::Method::GET, &format!("sync?cursor={}", state.cursor), None)?;
-        for library in remote["libraries"].as_array().context("Missing libraries")? {
-            let id = library["_id"].as_str().context("Missing ID")?;
-            self.activate(id, library, &mut state, true)?;
-        }
-        state.cursor = remote["cursor"].as_u64().context("Missing cursor")?;
-        state.conflicts = remote["conflicts"].as_array().cloned().unwrap_or_default();
-        self.save(&state)?;
-        Paths::atomic_write(&self.path("status"), format!("Synced. {} conflicts. Resolve: {}/", state.conflicts.len(), credentials.server).as_bytes(), false)?;
+        let cursor = db.meta("cursor")?.and_then(|value| value.as_u64()).unwrap_or(0);
+        db.apply(&self.request(&mut credentials, reqwest::Method::GET, &format!("sync?cursor={cursor}"), None)?, None)?;
+        let conflicts = db.meta("conflicts")?.and_then(|value|value.as_array().map(Vec::len)).unwrap_or(0);
+        Paths::atomic_write(&self.path("status"), format!("Synced. {conflicts} conflicts. Resolve: {}/", credentials.server).as_bytes(), false)?;
         Ok(())
     }
     pub fn disconnect(&self) -> Result<()> {
         let _lock = self.lock()?;
         let mut credentials = self.credentials()?;
-        let devices = self.request(&mut credentials, reqwest::Method::GET, "devices", None)?;
-        // Revoke only the current device by matching the active token on the server.
-        let _ = devices;
         self.request(&mut credentials, reqwest::Method::DELETE, "connection", None)?;
-        self.recover("state.json", &fs::read_to_string(self.path("state.json")).unwrap_or_default())?;
-        if self.path("state.json").exists() { fs::remove_file(self.path("state.json"))?; }
+        let db = Database::open(&self.directory)?;
+        let transaction = db.connection.unchecked_transaction()?;
+        db.connection.execute("UPDATE libraries SET synced=0", [])?;
+        for (seq, operation) in db.pending()? { db.recover_operation(&operation)?; db.connection.execute("DELETE FROM outbox WHERE seq=?1", [seq])?; }
+        db.set_meta("cursor", &json!(0))?;
+        transaction.commit()?;
         fs::remove_file(self.path("credentials.json"))?;
         Ok(())
     }
-    pub fn editable(root: &Path, directory: &Path, name: &str) -> Result<()> {
-        let sync = Self::new(root.into(), directory.into())?;
-        if let Some(file) = sync.state()?.files.values().find(|file| file.filename == name) { ensure!(file.library["permissions"]["edit"] == true, "Shared library is read-only"); }
-        Ok(())
-    }
-    pub fn label(root: &Path, directory: &Path, name: &str) -> String {
-        Self::new(root.into(), directory.into()).and_then(|sync| sync.state()).ok().and_then(|state| state.files.values().find(|file| file.filename == name).and_then(|file| file.library["name"].as_str()).map(|friendly| format!("{friendly} ({name})"))).unwrap_or_else(|| name.into())
-    }
+    pub fn editable(_root: &Path, directory: &Path, name: &str) -> Result<()> { let db = Database::open(directory)?; db.editable(&db.editor(name)?.id) }
+    pub fn label(_root: &Path, _directory: &Path, name: &str) -> String { name.into() }
     pub fn trigger(root: &Path) -> Result<()> {
         ensure!(root.join("sync/credentials.json").exists(), "Connect first: typerelay connect --server URL");
         Paths::atomic_write(&root.join("sync/request"), Uuid::new_v4().to_string().as_bytes(), false)
@@ -272,93 +177,21 @@ impl Sync {
             let Ok(leader) = fs::OpenOptions::new().create(true).truncate(false).read(true).write(true).open(sync.path("leader.lock")) else { return; };
             while leader.try_lock_exclusive().is_err() { std::thread::sleep(Duration::from_millis(500)); }
             let mut last = Instant::now() - Duration::from_secs(31);
+            let mut cleanup = Instant::now() - Duration::from_secs(3601);
             let mut request = Vec::new();
-            let mut observed = Vec::new();
-            let mut changed = Instant::now();
             loop {
                 std::thread::sleep(Duration::from_millis(500));
+                let Ok(db) = Database::open(&sync.directory) else { continue; };
+                if cleanup.elapsed() > Duration::from_secs(3600) { let _ = db.cleanup(); cleanup = Instant::now(); }
                 if !sync.path("credentials.json").exists() { continue; }
-                let files = FileStore::read_files(&sync.directory, true).unwrap_or_default();
-                let local_changed = files != observed;
-                if local_changed { observed = files; changed = Instant::now(); }
                 let next = fs::read(sync.path("request")).unwrap_or_default();
-                if last.elapsed() >= Duration::from_secs(30) || next != request || (!local_changed && changed.elapsed() >= Duration::from_secs(2) && changed > last) {
+                let pending = db.pending().is_ok_and(|rows| !rows.is_empty());
+                if last.elapsed() >= Duration::from_secs(30) || next != request || (pending && last.elapsed() >= Duration::from_secs(2)) {
                     request = next;
-                    if let Err(error) = sync.cycle() { if error.to_string().contains("Sync already running") { last = Instant::now(); continue; } let _ = Paths::atomic_write(&sync.path("status"), format!("Sync: {error:#}").as_bytes(), false); }
+                    if let Err(error) = sync.cycle() && !error.to_string().contains("Sync already running") { let _ = Paths::atomic_write(&sync.path("status"), format!("Sync: {error:#}").as_bytes(), false); }
                     last = Instant::now();
                 }
             }
         });
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    struct Fixture { _temp: tempfile::TempDir, sync: Sync }
-    impl Fixture {
-        fn new() -> Self {
-            let temp = tempfile::tempdir().unwrap();
-            let root = temp.path().join("config");
-            let directory = root.join("snippets");
-            fs::create_dir_all(&directory).unwrap();
-            let sync = Sync::new(root, directory).unwrap();
-            Self { _temp: temp, sync }
-        }
-        fn library(trigger: &str, replacement: &str, edit: bool) -> Value {
-            json!({"_id":"0123456789abcdef01234567","name":"Friendly","revision":1,"yaml":format!("matches: [{{trigger: {trigger}, replace: {replacement}}}]
-"),"permissions":{"edit":edit},"snippets":[{"id":"snippet-0000000001","trigger":trigger,"replace":replacement,"revision":1}]})
-        }
-    }
-    #[test]
-    fn rename_is_delete_create_and_invalid_offline_drafts_stay_on_disk() {
-        let fixture = Fixture::new();
-        let library = Fixture::library("old", "Before", true);
-        let managed = Managed { filename: "mine.yml".into(), baseline: library["yaml"].as_str().unwrap().into(), library };
-        let changes = Sync::changes(&managed, "matches: [{trigger: new, replace: After}]").unwrap();
-        assert_eq!(changes.len(), 2);
-        assert!(changes[0]["value"].is_null());
-        assert_eq!(changes[1]["value"]["trigger"], "new");
-        assert!(Sync::changes(&managed, "matches: [").is_err());
-        fs::write(fixture.sync.directory.join("mine.yml"), "matches: [").unwrap();
-        assert!(fixture.sync.cycle().is_err());
-        assert_eq!(fs::read_to_string(fixture.sync.directory.join("mine.yml")).unwrap(), "matches: [");
-    }
-    #[test]
-    fn collision_stages_without_activation_and_readonly_draft_recovers() {
-        let fixture = Fixture::new();
-        let mut state = State::default();
-        let library = Fixture::library("same", "Server", false);
-        let id = library["_id"].as_str().unwrap();
-        fs::write(fixture.sync.directory.join("local.yml"), "matches: [{trigger: same, replace: Local}]").unwrap();
-        assert!(fixture.sync.activate(id, &library, &mut state, true).is_err());
-        assert!(state.files.is_empty());
-        assert!(fixture.sync.path("staged").join(format!("{id}.json")).exists());
-        fs::remove_file(fixture.sync.directory.join("local.yml")).unwrap();
-        fixture.sync.activate(id, &library, &mut state, false).unwrap();
-        let path = fixture.sync.directory.join(&state.files[id].filename);
-        fs::write(&path, "matches: [{trigger: same, replace: Draft}]").unwrap();
-        fixture.sync.activate(id, &library, &mut state, true).unwrap();
-        assert!(fs::read_to_string(&path).unwrap().contains("Server"));
-        assert_eq!(fs::read_dir(fixture.sync.path("recovery")).unwrap().count(), 1);
-        assert!(Sync::editable(&fixture.sync.root, &fixture.sync.directory, &state.files[id].filename).is_err());
-    }
-    #[test]
-    fn unrelated_filename_and_failed_activation_keep_working_state() {
-        let fixture = Fixture::new();
-        let mut state = State::default();
-        let library = Fixture::library("first", "Server", true);
-        let id = library["_id"].as_str().unwrap();
-        let path = fixture.sync.directory.join(format!("library-{id}.yml"));
-        fs::write(&path, "matches: []").unwrap();
-        assert!(fixture.sync.activate(id, &library, &mut state, false).is_err());
-        assert_eq!(fs::read_to_string(&path).unwrap(), "matches: []");
-        fs::remove_file(&path).unwrap();
-        fixture.sync.activate(id, &library, &mut state, false).unwrap();
-        let mut invalid = library.clone();
-        invalid["yaml"] = json!("invalid: [");
-        assert!(fixture.sync.activate(id, &invalid, &mut state, true).is_err());
-        assert!(fs::read_to_string(&path).unwrap().contains("Server"));
-        assert_eq!(state.files[id].library, library);
     }
 }

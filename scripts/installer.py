@@ -168,6 +168,9 @@ WantedBy=graphical-session.target
         os.replace(temporary, path)
 
     def migrate_snippets(self, check=False):
+        if (self.snippets / "typerelay.sqlite").is_file():
+            self.command(str(self.binary), "validate", "--dir", str(self.snippets))
+            return None
         legacy = self.config / "poc.yml"
         if check:
             files = list(self.snippets.glob("*.yml")) + list(self.snippets.glob("*.yaml")) if self.snippets.exists() else []
@@ -196,6 +199,8 @@ WantedBy=graphical-session.target
         return report.get("backup")
 
     def preflight(self):
+        if self.command("pgrep", "-u", str(os.getuid()), "-x", "typerelay-tui", check=False).returncode == 0:
+            raise RuntimeError("Save and close typerelay-tui before installing so its database can be backed up safely.")
         if os.getuid() == 0:
             raise RuntimeError("Run as your desktop user; the installer requests administrator access only for device rules")
         required = ["systemctl", "udevadm", "setfacl", "getfacl", "modprobe", "notify-send"]
@@ -255,6 +260,7 @@ WantedBy=graphical-session.target
             else:
                 old_binaries.append((destination, None))
         migration_backup = None
+        storage_backup = None
         old_service_active = self.systemctl("is-active", "typerelay.service", check=False).returncode == 0
         try:
             if conflicts["espanso_enabled"]:
@@ -265,6 +271,11 @@ WantedBy=graphical-session.target
                 self.command("espanso", "stop", check=False)
             self.systemctl("stop", "typerelay.service", check=False)
             self.stop_manual(conflicts["manual"])
+            # The storage migration happens when the new engine first opens its database.
+            # Back up the stopped client including SQLite/WAL and legacy files for rollback.
+            storage_backup = pathlib.Path(tempfile.mkdtemp(prefix="storage-upgrade-", dir=self.data))
+            if self.config.exists():
+                shutil.copytree(self.config, storage_backup / "config", symlinks=True)
             self.destination.parent.mkdir(parents=True, exist_ok=True)
             for name, source, destination in self.artifacts():
                 temporary = destination.with_name(name + ".new")
@@ -285,10 +296,16 @@ WantedBy=graphical-session.target
                 if self.systemctl("is-active", "typerelay.service", check=False).returncode:
                     raise RuntimeError("Service failed to start; inspect journalctl --user -u typerelay -n 30")
             print("Installed. Manage with systemctl --user start|stop|restart typerelay.")
-            print("Add .yml/.yaml files to " + str(self.snippets) + "; changes reload automatically.")
+            print("Manage libraries in typerelay-tui. YAML files are import/export only.")
+            if storage_backup:
+                print("Upgrade backup: " + str(storage_backup))
         except Exception:
             self.systemctl("stop", "typerelay.service", check=False)
             self.systemctl("disable", "typerelay.service", check=False)
+            if storage_backup and (storage_backup / "config").exists():
+                for name in ("typerelay.sqlite", "typerelay.sqlite-wal", "typerelay.sqlite-shm"):
+                    (self.snippets / name).unlink(missing_ok=True)
+                shutil.copytree(storage_backup / "config", self.config, dirs_exist_ok=True, symlinks=True)
             if migration_backup:
                 for item in json.loads((pathlib.Path(migration_backup) / "manifest.json").read_text()):
                     destination = pathlib.Path(item["path"])

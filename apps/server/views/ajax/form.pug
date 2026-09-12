@@ -17,7 +17,7 @@ if kind === 'library'
 		select#groups-select.form-select.form-select-sm.mb-3(name="groups" multiple disabled=!library.shared)
 			each group in team.groups
 				option(value=group._id selected=library.groups.map(String).includes(String(group._id)))= group.name
-		button.btn.btn-outline-danger.btn-sm(type="button" data-delete-library=library._id) Delete library
+		button.btn.btn-outline-danger.btn-sm(type="button" data-delete-library=library._id) Move library to Trash
 	else
 		label.form-label(for="yaml-file") Import YAML (optional)
 		input#yaml-file.form-control.form-control-sm.mb-3(type="file" accept=".yml,.yaml")

@@ -35,6 +35,8 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 uuid = { version = "1", features = ["v4"] }
 sha2 = "0.10"
 base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+rusqlite = { version = "0.38", features = ["bundled", "backup"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Avoid the Mio reader's EOF/EIO spin on a closed terminal.

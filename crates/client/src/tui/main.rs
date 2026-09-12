@@ -17,6 +17,8 @@ impl Cli {
         let store = EditorStore::new(self.dir.unwrap_or(config.join("snippets")))?;
         let settings = SettingsStore::open(config.join("settings.yml"))?;
         typerelay_client::sync::Sync::worker(config, store.directory.clone());
+        let database = typerelay_client::database::Database::open(&store.directory)?;
+        let mut generation = database.generation()?;
         let mut app = app::App::new(store, settings)?;
         #[cfg(target_os = "linux")]
         let _registration = typerelay_client::desktop::Registration::current_window()?;
@@ -29,6 +31,7 @@ impl Cli {
         let mut dirty = true;
         let mut sync_status = Vec::new();
         while !app.quit && running.load(Ordering::SeqCst) && terminal::TerminalSession::connected() {
+            if let Ok(next) = database.generation() && next != generation { generation = next; app.refresh(); dirty = true; }
             let next_status = Paths::config_dir().ok().and_then(|root| std::fs::read(root.join("sync/status")).ok()).unwrap_or_default();
             if next_status != sync_status { sync_status = next_status; dirty = true; }
             if dirty && last_draw.elapsed() >= interval {

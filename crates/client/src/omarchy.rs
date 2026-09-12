@@ -1,4 +1,4 @@
-use typerelay_client::{config::FileStore, desktop::{Hyprland, Registration}};
+use typerelay_client::{database::DatabaseSnapshot, desktop::{Hyprland, Registration}};
 use crate::clipboard::{PasteJob, Progress};
 use anyhow::{Context, Result, bail};
 use evdev::{Device, EventType, InputEvent, KeyCode, InputId, BusType, uinput::VirtualDevice};
@@ -202,7 +202,7 @@ impl Session {
         Ok(strokes)
     }
 
-    pub fn run(mut store: FileStore, device_name: &str) -> Result<()> {
+    pub fn run(mut store: DatabaseSnapshot, device_name: &str) -> Result<()> {
         if unsafe { libc::geteuid() } == 0 { bail!("Run the client as your desktop user, not root"); }
         let runtime = std::env::var("XDG_RUNTIME_DIR")?;
         let lock = fs::OpenOptions::new().create(true).truncate(false).read(true).write(true).open(PathBuf::from(runtime).join("typerelay.lock"))?;

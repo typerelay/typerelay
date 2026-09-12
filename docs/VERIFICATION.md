@@ -1,3 +1,5 @@
+> Historical file-based POC verification. Current database/sync checks are documented in [development](web/development.md).
+
 # POC verification — 2026-09-11
 
 ## Local prefix / bare abbreviation migration (0.5.0, 2026-09-12)

@@ -1,69 +1,90 @@
 import { randomUUID } from 'node:crypto';
-import { mongoose, Library, Operation, Conflict, Account, Change, Member, Group } from '../model/index.js';
+import { mongoose, Library, Snippet, Operation, Conflict, Account, Change, Member, Group } from '../model/index.js';
 import { Support, Yaml } from './support.js';
 
 export class Libraries {
-	static view(ctx, library) { return { ...library, _id: String(library._id), permissions: Support.access(ctx, library) }; }
-	static async get(ctx, id, session) {
-		const library = await Library.findOne({ _id: Support.id(id), account: ctx.account }).session(session || null).lean();
-		Support.assert(library && Support.access(ctx, library).read, 'Library not found', 404);
-		return library;
+	static retention = 30 * 86400000;
+	static content(value) {
+		const content = value?.content || { version: 1, type: 'plain_text', text: value?.replace };
+		Support.assert(content.version === 1 && content.type === 'plain_text' && typeof content.text === 'string', 'Unsupported snippet content');
+		return { version: 1, type: 'plain_text', text: content.text };
 	}
-	static async list(ctx) {
-		const libraries = await Library.find({ account: ctx.account, deleted: false }).lean();
-		return libraries.filter(library => Support.access(ctx, library).read).map(library => Libraries.view(ctx, library));
+	static entry(snippet) { return { ...snippet, replace: snippet.content?.text }; }
+	static view(ctx, library) { return { ...library, _id: String(library._id), deleted: library.state !== 'active', permissions: Support.access(ctx, library) }; }
+	static async hydrate(library, session) {
+		const entries = await Snippet.find({ library: library._id, state: { $ne: 'purged' } }).sort({ position: 1, id: 1 }).session(session || null).lean();
+		return { ...library, snippets: entries.filter(entry => entry.state === 'active').map(Libraries.entry), records: entries.map(Libraries.entry) };
+	}
+	static async get(ctx, id, session, includeTrash = false) {
+		const library = await Library.findOne({ _id: Support.id(id), account: ctx.account }).session(session || null).lean();
+		Support.assert(library && Support.access(ctx, library).read && (includeTrash || library.state === 'active'), 'Library not found', 404);
+		return Libraries.hydrate(library, session);
+	}
+	static async list(ctx, session) {
+		const libraries = await Library.find({ account: ctx.account, state: 'active' }).session(session || null).lean();
+		return Promise.all(libraries.filter(library => Support.access(ctx, library).read).map(async library => Libraries.view(ctx, await Libraries.hydrate(library, session))));
+	}
+	static async validate(entries) {
+		return Yaml.validate(entries.map(entry => ({ trigger: entry.trigger, replace: Libraries.content(entry).text })));
 	}
 	static async create(ctx, body, session) {
-		const parsed = await Yaml.run(body.yaml ?? 'matches: []\n');
-		const [library] = await Library.create([{ account: ctx.account, creator: ctx.user, name: Support.text(body.name), shared: false, editable: false, members: [], groups: [], yaml: parsed.yaml, snippets: parsed.matches.map(entry => ({ id: randomUUID(), ...entry, revision: 1 })), revision: 1 }], { session });
+		const entries = body.yaml !== undefined ? (await Yaml.run(body.yaml)).matches : (body.snippets || []);
+		await Libraries.validate(entries);
+		const [library] = await Library.create([{ account: ctx.account, creator: ctx.user, name: Support.text(body.name), shared: false, editable: false, members: [], groups: [], revision: 1, state: 'active' }], { session });
+		for (const entry of entries) if (entry.id !== undefined) Support.assert(typeof entry.id === 'string' && /^[a-zA-Z0-9_-]{16,128}$/.test(entry.id), 'Invalid snippet ID');
+		for (const [position, entry] of entries.entries()) await Snippet.create([{ account: ctx.account, library: library._id, id: entry.id || randomUUID(), trigger: entry.trigger, content: Libraries.content(entry), position, revision: 1, state: 'active' }], { session });
 		await Support.change(ctx.account, library._id, 'library', session);
-		return Libraries.view(ctx, library.toObject());
+		return Libraries.view(ctx, await Libraries.hydrate(library.toObject(), session));
+	}
+	static async receipt(ctx, stored, session) {
+		const result = { ...stored };
+		if (stored.library_id) {
+			const raw = await Library.findOne({ _id: stored.library_id, account: ctx.account }).session(session).lean();
+			if (raw?.state === 'purged') result.purged = [stored.library_id];
+			else result.library = Libraries.view(ctx, await Libraries.get(ctx, stored.library_id, session, true));
+		}
+		return result;
 	}
 	static async mutate(ctx, operation, body, action) {
 		Support.assert(typeof operation === 'string' && /^[a-zA-Z0-9_-]{16,128}$/.test(operation), 'Stable operation ID required');
 		const fingerprint = Support.hash(JSON.stringify(body));
 		let result;
 		await mongoose.connection.transaction(async session => {
-			// Serialize account mutations and permission changes, including retries.
-			await Account.updateOne({ _id: ctx.account }, { $inc: { sequence: 0 } }, { session });
+			await Account.updateOne({ _id: ctx.account }, { $inc: { sequence: 1 } }, { session });
 			ctx = await Support.context(ctx.user, ctx.account, session);
 			const prior = await Operation.findOne({ account: ctx.account, user: ctx.user, operation }).session(session).lean();
 			if (prior) {
 				Support.assert(prior.fingerprint === fingerprint, 'Operation ID already used with different content', 409);
-				result = prior.result;
-				if (result.library?.deleted) Support.assert(Support.equal(ctx.user, result.library.creator) || (result.library.shared && Support.admin(ctx)), "Library not found", 404);
-				else if (result.library) await Libraries.get(ctx, result.library._id, session);
+				result = await Libraries.receipt(ctx, prior.result, session);
 				return;
 			}
 			result = await action(ctx, session);
-			await Operation.create([{ account: ctx.account, user: ctx.user, operation, fingerprint, result }], { session });
+			const stored = { ...result };
+			if (result.library) { stored.library_id = result.library._id; delete stored.library; }
+			delete stored.html;
+			if (stored.affected) stored.affected = stored.affected.map(({ id, type, library, revision }) => ({ id, type, library, revision }));
+			await Operation.create([{ account: ctx.account, user: ctx.user, operation, fingerprint, result: stored }], { session });
 		});
 		return result;
 	}
 	static async settings(ctx, id, body, session) {
 		const library = await Libraries.get(ctx, id, session);
 		Support.assert(Support.access(ctx, library).manage, 'Only creator and account admins manage this library', 403);
-		Support.assert(library.revision === body.base_revision, 'Library changed; refresh before saving settings', 409);
-		if (body.deleted === true) library.deleted = true;
-		else {
-			library.name = Support.text(body.name);
-			Support.assert(typeof body.shared === 'boolean' && typeof body.editable === 'boolean', 'Sharing and editing must be booleans');
-			library.shared = body.shared;
-			library.editable = body.editable;
-			Support.assert(Array.isArray(body.members) && Array.isArray(body.groups) && body.members.length <= 1000 && body.groups.length <= 1000, 'Invalid grants');
-			library.members = [...new Set(body.members.map(Support.id))];
-			library.groups = [...new Set(body.groups.map(Support.id))];
-			Support.assert(await Member.countDocuments({ account: ctx.account, user: { $in: library.members } }).session(session) === library.members.length, 'Member belongs to another account');
-			Support.assert(await Group.countDocuments({ account: ctx.account, _id: { $in: library.groups } }).session(session) === library.groups.length, 'Group belongs to another account');
-		}
-		library.revision++;
-		await Library.replaceOne({ _id: library._id, account: ctx.account }, library, { session });
-		await Support.change(ctx.account, library._id, library.deleted ? 'delete' : 'permissions', session);
-		return { library: Libraries.view(ctx, library) };
+		Support.assert(library.revision === body.base_revision, 'Library changed; refresh before saving', 409);
+		if (body.deleted === true) return Libraries.trashAction(ctx, { type: 'library', id, library: id, revision: library.revision }, 'trash', session);
+		Support.assert(typeof body.shared === 'boolean' && typeof body.editable === 'boolean', 'Sharing and editing must be booleans');
+		Support.assert(Array.isArray(body.members) && Array.isArray(body.groups) && body.members.length <= 1000 && body.groups.length <= 1000, 'Invalid grants');
+		const members = [...new Set(body.members.map(Support.id))];
+		const groups = [...new Set(body.groups.map(Support.id))];
+		Support.assert(await Member.countDocuments({ account: ctx.account, user: { $in: members } }).session(session) === members.length, 'Member belongs to another account');
+		Support.assert(await Group.countDocuments({ account: ctx.account, _id: { $in: groups } }).session(session) === groups.length, 'Group belongs to another account');
+		await Library.updateOne({ _id: library._id }, { $set: { name: Support.text(body.name), shared: body.shared, editable: body.editable, members, groups }, $inc: { revision: 1 } }, { session });
+		await Support.change(ctx.account, library._id, 'permissions', session);
+		return { library: Libraries.view(ctx, await Libraries.get(ctx, id, session)) };
 	}
-	static same(a, b) { return (a?.trigger ?? null) === (b?.trigger ?? null) && (a?.replace ?? null) === (b?.replace ?? null); }
+	static same(a, b) { return (a?.trigger ?? null) === (b?.trigger ?? null) && (a?.content?.text ?? a?.replace ?? null) === (b?.content?.text ?? b?.replace ?? null); }
 	static async upload(ctx, id, body, session) {
-		const library = await Libraries.get(ctx, id, session);
+		const library = await Libraries.get(ctx, id, session, true);
 		Support.assert(Support.access(ctx, library).edit, 'Library is read-only', 403);
 		Support.assert(Number.isInteger(body.base_revision) && body.base_revision >= 1 && body.base_revision <= library.revision, 'Invalid base revision', 409);
 		Support.assert(Array.isArray(body.changes) && body.changes.length <= 10000, 'Invalid changes');
@@ -72,33 +93,111 @@ export class Libraries {
 		for (const change of body.changes) {
 			Support.assert(typeof change.id === 'string' && /^[a-zA-Z0-9_-]{16,128}$/.test(change.id) && !seen.has(change.id), 'Invalid or repeated snippet ID');
 			seen.add(change.id);
-			const index = library.snippets.findIndex(snippet => snippet.id === change.id);
-			const server = library.snippets[index] || null;
-			const local = change.value === null ? null : { trigger: change.value?.trigger, replace: change.value?.replace };
-			if (local) await Yaml.run('matches: ' + JSON.stringify([local]));
-			if (Libraries.same(server, local)) continue;
-			if ((server?.revision ?? null) !== (change.base_revision ?? null)) {
-				const [conflict] = await Conflict.create([{ account: ctx.account, library: library._id, user: ctx.user, snippet: change.id, local, base: change.base || null, server }], { session });
+			const server = await Snippet.findOne({ library: library._id, id: change.id }).session(session).lean();
+			Support.assert(server?.state !== 'purged', 'Snippet was permanently purged; it cannot be restored', 410);
+			const local = change.value === null ? null : { trigger: change.value?.trigger, content: Libraries.content(change.value) };
+			if (local) await Libraries.validate([local]);
+			if (server?.state === 'active' && library.state === 'active' && Libraries.same(server, local)) continue;
+			if (server?.state === 'trashed' && local === null) continue;
+			if (library.state !== 'active' || server?.state === 'trashed' || (server?.revision ?? null) !== (change.base_revision ?? null)) {
+				const [conflict] = await Conflict.create([{ account: ctx.account, library: library._id, user: ctx.user, snippet: change.id, local, base: change.base || null, server: server ? Libraries.entry(server) : null }], { session });
 				conflicts.push(String(conflict._id));
 				continue;
 			}
-			const output = await Yaml.run(library.yaml, [{ index: index < 0 ? null : index, entry: local }]);
-			library.yaml = output.yaml;
+			if (!server && !local) continue;
 			if (local) {
-				const value = { id: index < 0 ? randomUUID() : change.id, ...local, revision: library.revision + 1 };
-				if (index < 0) library.snippets.push(value); else library.snippets[index] = value;
-			} else if (index >= 0) library.snippets.splice(index, 1);
+				await Snippet.updateOne({ library: library._id, id: change.id }, { $set: { account: ctx.account, trigger: local.trigger, content: local.content, state: 'active', revision: (server?.revision || 0) + 1 }, ...(!server ? { $setOnInsert: { position: library.records.length + seen.size } } : {}) }, { upsert: !server, session });
+			} else {
+				const now = new Date();
+				await Snippet.updateOne({ _id: server._id }, { $set: { state: 'trashed', trashed_at: now, expires_at: new Date(+now + Libraries.retention), trashed_by: ctx.user }, $inc: { revision: 1 } }, { session });
+			}
 		}
-		if (body.yaml !== undefined && body.base_revision === library.revision && conflicts.length === 0) {
-			const parsed = await Yaml.run(body.yaml);
-			Support.assert(parsed.matches.length === library.snippets.length && parsed.matches.every(entry => library.snippets.some(snippet => Libraries.same(entry, snippet))), 'YAML does not match submitted changes');
-			library.snippets = parsed.matches.map(entry => library.snippets.find(snippet => Libraries.same(entry, snippet)));
-			library.yaml = parsed.yaml;
+		await Libraries.validate(await Snippet.find({ library: library._id, state: 'active' }).session(session).lean());
+		await Library.updateOne({ _id: library._id }, { $inc: { revision: 1 } }, { session });
+		await Support.change(ctx.account, library._id, 'snippets', session);
+		return { library: Libraries.view(ctx, await Libraries.get(ctx, id, session, true)), conflicts };
+	}
+	static async trash(ctx, session) {
+		const rows = [];
+		const now = new Date();
+		const libraries = await Library.find({ account: ctx.account, state: { $ne: 'purged' } }).session(session || null).lean();
+		for (const library of libraries) {
+			const access = Support.access(ctx, library);
+			if (!access.read) continue;
+			if (library.state === 'trashed' && library.expires_at > now && access.manage) rows.push({ type: 'library', id: String(library._id), library: String(library._id), name: library.name, revision: library.revision, expires_at: library.expires_at, can_restore: true, can_purge: true });
+			if (library.state !== 'active' || !access.edit) continue;
+			for (const entry of await Snippet.find({ library: library._id, state: 'trashed', expires_at: { $gt: now } }).session(session || null).lean()) rows.push({ type: 'snippet', id: entry.id, library: String(library._id), name: entry.trigger, library_name: library.name, revision: entry.revision, expires_at: entry.expires_at, can_restore: true, can_purge: access.manage });
 		}
-		library.revision++;
-		await Library.replaceOne({ _id: library._id, account: ctx.account }, library, { session });
-		await Support.change(ctx.account, library._id, 'library', session);
-		return { library: Libraries.view(ctx, library), conflicts };
+		return rows;
+	}
+	static async validateVisible(ctx, session) {
+		const libraries = await Libraries.list(ctx, session);
+		Support.assert(libraries.length <= 256, 'Active libraries exceed the engine limit', 409);
+		const entries = libraries.flatMap(library => library.snippets);
+		await Libraries.validate(entries);
+		Support.assert(Buffer.byteLength(JSON.stringify(entries)) <= 8 * 1048576, 'Active snippets exceed the engine limit', 409);
+		for (const library of libraries) Support.assert(Buffer.byteLength(JSON.stringify(library.snippets)) <= 1048576, 'Library exceeds the engine limit', 409);
+	}
+	static async purge(library, entry, session) {
+		const filter = entry ? { library: library._id, id: entry.id } : { library: library._id };
+		const ids = (await Snippet.find(filter).select('id').session(session).lean()).map(row => row.id);
+		await Snippet.updateMany(filter, { $set: { state: 'purged' }, $inc: { revision: 1 }, $unset: { trigger: 1, content: 1, position: 1, trashed_by: 1, trashed_at: 1, expires_at: 1 } }, { session });
+		await Conflict.deleteMany({ library: library._id, ...(entry ? { snippet: { $in: ids } } : {}) }, { session });
+		if (!entry) {
+			const readers = [];
+			for (const member of await Member.find({ account: library.account }).session(session).lean()) if (Support.access(await Support.context(String(member.user), String(library.account), session), library).read) readers.push(member.user);
+			await Library.updateOne({ _id: library._id }, { $set: { state: 'purged', purge_readers: readers }, $unset: { name: 1, members: 1, groups: 1, shared: 1, editable: 1, creator: 1, trashed_at: 1, trashed_by: 1, expires_at: 1 } }, { session });
+		}
+		await Library.updateOne({ _id: library._id }, { $inc: { revision: 1 } }, { session });
+		await Support.change(library.account, library._id, 'purge', session);
+	}
+	static async trashAction(ctx, target, action, session) {
+		Support.assert(['library', 'snippet'].includes(target.type) && ['trash', 'restore', 'purge'].includes(action), 'Invalid Trash action');
+		const library = await Libraries.get(ctx, target.library, session, true);
+		const access = Support.access(ctx, library);
+		Support.assert((target.type === 'library' || action === 'purge') ? access.manage : access.edit, 'Not permitted to change this Trash item', 403);
+		const record = target.type === 'library' ? library : await Snippet.findOne({ library: library._id, id: target.id }).session(session).lean();
+		Support.assert(record && record.state !== 'purged', 'Item permanently removed', 410);
+		Support.assert(record.revision === target.revision, 'Item changed; review Trash again', 409);
+		Support.assert(action === 'trash' ? record.state === 'active' : record.state === 'trashed', 'Item is no longer in the expected state', 409);
+		if (action === 'restore') {
+			Support.assert(record.expires_at > new Date(), 'Trash retention expired', 410);
+			Support.assert(target.type === 'library' || library.state === 'active', 'Restore the library first', 409);
+		}
+		if (action === 'purge') await Libraries.purge(library, target.type === 'snippet' ? record : null, session);
+		else {
+			const model = target.type === 'library' ? Library : Snippet;
+			const now = new Date();
+			await model.updateOne({ _id: record._id }, { $set: { state: action === 'trash' ? 'trashed' : 'active', ...(action === 'trash' ? { trashed_at: now, expires_at: new Date(+now + Libraries.retention), trashed_by: ctx.user } : {}) }, ...(action === 'restore' ? { $unset: { trashed_at: 1, expires_at: 1, trashed_by: 1 } } : {}), $inc: { revision: 1 } }, { session });
+			if (target.type === 'snippet') await Library.updateOne({ _id: library._id }, { $inc: { revision: 1 } }, { session });
+			if (action === 'restore') await Libraries.validateVisible(ctx, session);
+			await Support.change(ctx.account, library._id, action, session);
+		}
+		const current = await Library.findById(library._id).session(session).lean();
+		return { ...(current.state === 'purged' ? { purged: [String(library._id)] } : { library: Libraries.view(ctx, await Libraries.hydrate(current, session)) }), affected: [target] };
+	}
+	static async empty(ctx, targets, session) {
+		Support.assert(Array.isArray(targets) && targets.length <= 10000, 'Invalid Trash selection');
+		const affected = [];
+		for (const target of targets) {
+			await Libraries.trashAction(ctx, target, 'purge', session);
+			affected.push(target);
+		}
+		return { affected };
+	}
+	static async cleanup() {
+		for (const account of await Account.find({}).select('_id').lean()) {
+			await mongoose.connection.transaction(async session => {
+				await Account.updateOne({ _id: account._id }, { $inc: { sequence: 1 } }, { session });
+				const now = new Date();
+				const libraries = await Library.find({ account: account._id, state: 'trashed', expires_at: { $lte: now } }).session(session).lean();
+				for (const library of libraries) await Libraries.purge(library, null, session);
+				for (const entry of await Snippet.find({ account: account._id, state: 'trashed', expires_at: { $lte: now } }).session(session).lean()) {
+					const library = await Library.findById(entry.library).session(session).lean();
+					if (library && library.state !== 'purged') await Libraries.purge(library, entry, session);
+				}
+			});
+		}
 	}
 	static async download(ctx, cursor) {
 		Support.assert(Number.isSafeInteger(cursor) && cursor >= 0, 'Invalid cursor');
@@ -107,27 +206,37 @@ export class Libraries {
 			ctx = await Support.context(ctx.user, ctx.account, session);
 			const account = await Account.findById(ctx.account).session(session).lean();
 			const changes = await Change.find({ account: ctx.account, sequence: { $gt: cursor, $lte: account.sequence } }).session(session).lean();
-			const all = await Library.find({ account: ctx.account, deleted: false }).session(session).lean();
+			const all = await Library.find({ account: ctx.account, state: { $ne: 'purged' } }).session(session).lean();
 			const visible = all.filter(library => Support.access(ctx, library).read);
 			const changed = new Set(changes.map(change => String(change.library)));
 			const permissions = changes.some(change => change.kind === 'membership');
-			const libraries = visible.filter(library => cursor === 0 || permissions || changed.has(String(library._id))).map(library => Libraries.view(ctx, library));
+			const libraries = await Promise.all(visible.filter(library => cursor === 0 || permissions || changed.has(String(library._id))).map(async library => Libraries.view(ctx, await Libraries.hydrate(library, session))));
+			const tombstones = await Snippet.find({ account: ctx.account, library: { $in: visible.map(row => row._id) }, state: 'purged' }).select('library id revision state').session(session).lean();
 			const conflicts = await Conflict.find({ account: ctx.account, resolved: false, library: { $in: visible.filter(library => Support.access(ctx, library).edit).map(library => library._id) } }).session(session).lean();
-			result = { cursor: account.sequence, accessible: visible.map(library => String(library._id)), libraries, conflicts };
+			const purged = (await Library.find({ account: ctx.account, state: 'purged', purge_readers: ctx.user }).select('_id').session(session).lean()).map(row => String(row._id));
+			result = { protocol: 2, purged, cursor: account.sequence, accessible: visible.map(library => String(library._id)), libraries, tombstones, conflicts, trash: await Libraries.trash(ctx, session) };
 		}, { readConcern: { level: 'snapshot' } });
 		return result;
 	}
 	static async resolve(ctx, id, body, session) {
 		const conflict = await Conflict.findOne({ _id: Support.id(id), account: ctx.account, resolved: false }).session(session).lean();
 		Support.assert(conflict, 'Conflict no longer exists', 404);
-		const library = await Libraries.get(ctx, String(conflict.library), session);
+		const library = await Libraries.get(ctx, String(conflict.library), session, true);
 		Support.assert(Support.access(ctx, library).edit, 'Library is read-only', 403);
-		Support.assert(body.base_revision === library.revision, 'Library changed; review the latest version', 409);
-		Support.assert(['local', 'server', 'merged'].includes(body.choice), 'Choose a conflict resolution');
+		Support.assert(body.base_revision === library.revision, 'Library changed; review latest version', 409);
+		Support.assert(['local', 'server', 'merged'].includes(body.choice), 'Choose a resolution');
 		let result = { library: Libraries.view(ctx, library) };
 		if (body.choice !== 'server') {
-			const current = library.snippets.find(snippet => snippet.id === conflict.snippet);
-			result = await Libraries.upload(ctx, String(library._id), { base_revision: library.revision, changes: [{ id: conflict.snippet, base_revision: current?.revision ?? null, value: body.choice === 'local' ? conflict.local : body.value }] }, session);
+			Support.assert(library.state === 'active', 'Restore the library before resolving this edit', 409);
+			let current = await Snippet.findOne({ library: library._id, id: conflict.snippet }).session(session).lean();
+			Support.assert(current?.state !== 'purged', 'Snippet permanently removed', 410);
+			const value = body.choice === 'local' ? conflict.local : body.value;
+			if (current?.state === 'trashed' && value) {
+				await Libraries.trashAction(ctx, { type: 'snippet', id: current.id, library: String(library._id), revision: current.revision }, 'restore', session);
+				current = await Snippet.findById(current._id).session(session).lean();
+			}
+			const fresh = await Library.findById(library._id).session(session).lean();
+			result = await Libraries.upload(ctx, String(library._id), { base_revision: fresh.revision, changes: [{ id: conflict.snippet, base_revision: current?.revision ?? null, value }] }, session);
 		}
 		await Conflict.updateOne({ _id: conflict._id }, { $set: { resolved: true } }, { session });
 		return { ...result, resolved: id };

@@ -7,6 +7,7 @@ class TypeRelay {
 	selected = null;
 	cursor = 0;
 	polling = false;
+	trashItems = [];
 	searchVersion = 0;
 	openVersion = 0;
 	searchTimer = null;
@@ -37,6 +38,7 @@ class TypeRelay {
 		document.querySelector('#form-modal')?.addEventListener('hidden.bs.modal', () => {
 			if (this.returnSettings) { this.returnSettings = false; bootstrap.Modal.getOrCreateInstance(document.querySelector('#settings')).show(); }
 		});
+		document.querySelector('#trash')?.addEventListener('show.bs.modal', () => this.loadTrash().catch(error => this.toast(error.message, 'error')));
 		if (this.account) {
 			this.poll().catch(error => this.toast(error.message, 'error'));
 			setInterval(() => this.poll().catch(() => {}), 30000);
@@ -47,7 +49,7 @@ class TypeRelay {
 	}
 	toast(title, icon = 'success') { return Swal.fire({ toast: true, position: 'top-end', title, icon, timer: 3500, showConfirmButton: false }); }
 	async request(path, method = 'GET', body, raw = false) {
-		const response = await fetch(path.startsWith('/') ? path : '/api/v1/' + path, { method, headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': document.querySelector('meta[name=csrf-token]').content, 'X-Account-Id': this.account || '' }, body: body ? JSON.stringify({ operation_id: this.submitting ? this.formOperation : crypto.randomUUID(), ...body }) : undefined });
+		const response = await fetch(path.startsWith('/') ? path : '/api/v2/' + path, { method, headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': document.querySelector('meta[name=csrf-token]').content, 'X-Account-Id': this.account || '' }, body: body ? JSON.stringify({ operation_id: this.submitting ? this.formOperation : crypto.randomUUID(), ...body }) : undefined });
 		if (!response.ok) throw new Error((await response.json()).error);
 		return raw ? response.text() : response.json();
 	}
@@ -62,6 +64,11 @@ class TypeRelay {
 		if (window.scrollX !== scroll.x || window.scrollY !== scroll.y) window.scrollTo(scroll.x, scroll.y);
 	}
 	async apply(result) {
+		if (result.purged) for (const id of result.purged) {
+			const previous = this.libraries.get(id);
+			if (previous) await this.apply({ library: { ...previous, deleted: true } });
+		}
+		if (!result.library) return;
 		const library = result.library;
 		const prior = this.libraries.get(library._id);
 		if (this.tombstones.has(library._id) && !library.deleted) return;
@@ -211,6 +218,21 @@ class TypeRelay {
 		if (card && !window.getSelection()?.toString()) return this.open(card.dataset.id);
 		const button = event.target.closest('button');
 		if (!button) return;
+		if (button.hasAttribute('data-restore-trash')) {
+			const target = JSON.parse(button.closest('[data-trash-id]').dataset.target);
+			const result = await this.request('trash/action', 'POST', { target, action: 'restore' });
+			if (result.library?.state === 'active') this.tombstones.delete(result.library._id);
+			await this.apply(result);
+			await this.loadTrash();
+			this.toast('Restored');
+			return;
+		}
+		if (button.id === 'empty-trash') {
+			const targets = this.trashItems.filter(item => item.can_purge);
+			if (!targets.length || !await this.confirm('Permanently remove ' + targets.length + ' eligible Trash items? This cannot be undone.')) return;
+			await this.request('trash/empty', 'POST', { targets });
+			await this.loadTrash(); this.toast('Trash emptied'); return;
+		}
 		if (button.id === 'search-trigger') return this.openSearch();
 		if (button.dataset.settingsTab) return this.settingsTab(button.dataset.settingsTab);
 		if (button.dataset.searchLibrary) {
@@ -225,8 +247,8 @@ class TypeRelay {
 		if (button.id === 'new-library') return this.form('library', {}, async fields => this.apply(await this.request('libraries', 'POST', { name: fields.get('name'), yaml: fields.get('yaml') })));
 		if ('librarySettings' in data) return this.form('library', { library: library._id }, async fields => this.apply(await this.request('libraries/' + library._id, 'PATCH', { base_revision: library.revision, name: fields.get('name'), shared: fields.has('shared'), editable: fields.get('editable') === 'true', members: fields.getAll('members'), groups: fields.getAll('groups') })));
 		if ('addSnippet' in data || data.editSnippet) return this.form('snippet', { library: library._id, snippet: data.editSnippet || '' }, fields => this.snippet(data.editSnippet, { trigger: fields.get('trigger'), replace: fields.get('replace') }, library));
-		if (data.deleteSnippet && await this.confirm('Delete this snippet?')) return this.snippet(data.deleteSnippet, null);
-		if (data.deleteLibrary && await this.confirm('Delete this library on all connected devices?')) {
+		if (data.deleteSnippet && await this.confirm('Move this snippet to Trash?')) return this.snippet(data.deleteSnippet, null);
+		if (data.deleteLibrary && await this.confirm('Move this library and its active snippets to Trash?')) {
 			await this.apply(await this.request('libraries/' + data.deleteLibrary, 'PATCH', { base_revision: library.revision, deleted: true }));
 			return bootstrap.Modal.getInstance(document.querySelector('#form-modal')).hide();
 		}
@@ -256,7 +278,7 @@ class TypeRelay {
 		if (data.revokeInvitation && await this.confirm('Revoke this invitation?')) { await this.request('team/invitations/' + data.revokeInvitation, 'DELETE'); document.querySelector('[data-invitation="' + data.revokeInvitation + '"]').remove(); }
 		if (data.revokeDevice && await this.confirm('Revoke this device?')) { await this.request('devices/' + data.revokeDevice, 'DELETE'); document.querySelector('[data-device="' + data.revokeDevice + '"]').remove(); }
 		if (data.resolve) return this.form('conflict', { library: data.library, conflict: data.resolve }, async fields => {
-			const current = this.libraries.get(data.library);
+			const current = (await this.request('library-view/' + data.library)).library;
 			const result = await this.request('conflicts/' + data.resolve, 'POST', { base_revision: current.revision, choice: fields.get('choice'), value: { trigger: fields.get('trigger'), replace: fields.get('replace') } });
 			await this.apply(result);
 			document.querySelector('[data-conflict="' + data.resolve + '"]').remove();
@@ -269,6 +291,7 @@ class TypeRelay {
 		try {
 		const result = await this.request('sync?cursor=' + this.cursor);
 		for (const library of result.libraries) {
+			if (library.state !== "active") { await this.apply({ library }); continue; }
 			this.tombstones.delete(library._id);
 			// Reuse mutation updater; fetch per-item snippets only when the revision changes.
 			const prior = this.libraries.get(library._id);
@@ -280,8 +303,25 @@ class TypeRelay {
 		const conflicts = new Set(result.conflicts.map(conflict => conflict._id));
 		document.querySelectorAll('[data-conflict]').forEach(node => { if (!conflicts.has(node.dataset.conflict)) node.remove(); });
 		for (const conflict of result.conflicts) if (!document.querySelector('[data-conflict="' + conflict._id + '"]')) this.update('[data-conflict="' + conflict._id + '"]', '#conflicts', await this.request('fragments/conflict/' + conflict._id, 'GET', null, true));
+		if (document.querySelector('#trash')?.classList.contains('show')) await this.loadTrash();
 		this.cursor = result.cursor;
 		} finally { this.polling = false; }
+	}
+	async loadTrash() {
+		const result = await this.request('trash');
+		const template = this.fragment(result.html);
+		const ids = new Set(result.items.map(item => item.type + '-' + item.id));
+		document.querySelectorAll('[data-trash-id]').forEach(node => { if (!ids.has(node.dataset.trashId)) node.remove(); });
+		for (const node of template.querySelectorAll('[data-trash-id]')) {
+			const previous = document.querySelector('[data-trash-id="' + node.dataset.trashId + '"]');
+			if (!previous) document.querySelector('#trash-items').append(node);
+			else if (previous.dataset.target !== node.dataset.target) previous.replaceWith(node);
+		}
+		this.trashItems = result.items;
+		const count = result.items.filter(item => item.can_purge).length;
+		document.querySelector('#empty-trash').disabled = count === 0;
+		document.querySelector('#empty-trash').textContent = 'Empty Trash (' + count + ')';
+		document.querySelector('#trash-empty').hidden = result.items.length !== 0;
 	}
 	async devices() { for (const device of await this.request('devices')) this.update('[data-device="' + device._id + '"]', '#devices', await this.request('fragments/device/' + device._id, 'GET', null, true)); }
 	async accept(token) { if (await this.confirm('Join this TypeRelay team?')) { const result = await this.request('team/accept', 'POST', { token }); location.href = '/?account=' + result.account; } }

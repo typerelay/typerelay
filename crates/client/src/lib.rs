@@ -6,3 +6,5 @@ pub mod bridge;
 #[cfg(target_os = "linux")]
 pub mod desktop;
 pub mod sync;
+pub mod database;
+mod legacy_yaml;

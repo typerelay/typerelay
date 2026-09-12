@@ -21,7 +21,7 @@ export class Support {
 	}
 	static admin(ctx) { return ['owner', 'admin'].includes(ctx.role); }
 	static access(ctx, library) {
-		if (!Support.equal(ctx.account, library.account) || library.deleted) return { read: false, edit: false, manage: false };
+		if (!Support.equal(ctx.account, library.account) || library.state === 'purged') return { read: false, edit: false, manage: false };
 		const creator = Support.equal(ctx.user, library.creator);
 		const admin = library.shared && Support.admin(ctx);
 		const assigned = library.shared && (library.members.some(id => Support.equal(id, ctx.user)) || library.groups.some(id => ctx.groups.includes(String(id))));
@@ -35,15 +35,18 @@ export class Support {
 	}
 }
 export class Yaml {
-	static async run(yaml, edits = []) {
-		Support.assert(typeof yaml === 'string' && Buffer.byteLength(yaml) <= 1048576, 'YAML exceeds 1 MiB');
+	static async run(yaml, edits = []) { return Yaml.execute({ yaml, edits }); }
+	static async export(matches) { return Yaml.execute({ matches, export: true }); }
+	static async validate(matches) { return Yaml.execute({ matches }); }
+	static async execute(payload) {
+		Support.assert(Buffer.byteLength(JSON.stringify(payload)) <= 16 * 1048576, 'Validation input too large');
 		return new Promise((resolve, reject) => {
 			const child = spawn(process.env.YAML_HELPER || '/usr/local/bin/typerelay-yaml', [], { stdio: ['pipe', 'pipe', 'pipe'] });
 			let output = '';
 			let error = '';
 			const timer = setTimeout(() => { child.kill(); reject(new Fault(422, 'YAML validation timed out')); }, 10000);
 			child.on('error', reject);
-			child.stdout.on('data', data => { output += data; if (output.length > 8 * 1048576) child.kill(); });
+			child.stdout.on('data', data => { output += data; if (output.length > 16 * 1048576) child.kill(); });
 			child.stderr.on('data', data => { if (error.length < 2048) error += data; });
 			child.on('close', code => {
 				clearTimeout(timer);
@@ -55,7 +58,7 @@ export class Yaml {
 				} catch (failure) { reject(failure); }
 			});
 			child.stdin.on('error', () => {});
-			child.stdin.end(JSON.stringify({ yaml, edits }) + '\n');
+			child.stdin.end(JSON.stringify(payload) + '\n');
 		});
 	}
 }

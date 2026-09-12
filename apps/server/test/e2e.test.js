@@ -20,7 +20,7 @@ class Fixture {
 		if (response.headers.get('set-cookie')) Fixture.cookie = response.headers.get('set-cookie').split(';')[0];
 		return response;
 	}
-	static async json(path, method, body) { const response = await Fixture.request('/api/v1/' + path, method, body); const result = await response.json(); assert.equal(response.status, 200, JSON.stringify(result)); return result; }
+	static async json(path, method, body) { const response = await Fixture.request('/api/v2/' + path, method, body); const result = await response.json(); assert.equal(response.status, 200, JSON.stringify(result)); return result; }
 	static async device(name, user = Fixture.actor.user, account = Fixture.account) {
 		const root = join(Fixture.root, name);
 		await mkdir(join(root, 'typerelay/snippets'), { recursive: true });
@@ -31,7 +31,8 @@ class Fixture {
 		return { root, device, config: join(root, 'typerelay'), snippets: join(root, 'typerelay/snippets') };
 	}
 	static async cli(device, ...args) { return promisify(execFile)('/usr/local/bin/typerelay', args, { env: { ...process.env, XDG_CONFIG_HOME: device.root }, timeout: 30000 }); }
-	static async state(device) { return JSON.parse(await readFile(join(device.config, 'sync/state.json'), 'utf8')); }
+	static async state(device) { return JSON.parse((await Fixture.cli(device, 'inspect')).stdout); }
+	static async edit(device, name, trigger, text) { return Fixture.cli(device, 'database-edit', name, trigger, ...(text === null ? ['--trash'] : ['--text', text])); }
 }
 before(async () => {
 	process.env.NODE_ENV = 'test';
@@ -95,81 +96,108 @@ test('actual desktop browser PKCE flow writes private credentials and settings',
 		assert.ok((await readFile(join(root, 'typerelay/settings.yml'), 'utf8')).includes(Fixture.origin));
 	} finally { child.kill(); await completed.catch(() => {}); }
 });
-test('desktop two-way sync, offline edits, recovery, missing files, activation collisions', async () => {
-	const yaml = '# personal\nmatches:\n- trigger: alpha\n  replace: First\n- trigger: beta\n  replace: Second\n';
+test('SQLite two-device edits, conflict recovery and generated YAML isolation', async () => {
+	const yaml = '# original comments\nmatches:\n- trigger: alpha\n  replace: First\n- trigger: beta\n  replace: Second\n';
 	await writeFile(join(Fixture.one.snippets, 'mine.yml'), yaml);
 	await writeFile(join(Fixture.one.snippets, 'local-only.yml'), 'matches: [{trigger: local, replace: Only here}]\n');
 	await Fixture.cli(Fixture.one, 'enroll', 'mine.yml');
+	await Fixture.cli(Fixture.one, 'sync');
 	await Fixture.cli(Fixture.two, 'sync');
-	const state = await Fixture.state(Fixture.one);
-	const id = Object.keys(state.files)[0];
-	const other = join(Fixture.two.snippets, 'library-' + id + '.yml');
-	assert.equal(await readFile(other, 'utf8'), yaml);
-	assert.equal((await readdir(Fixture.two.snippets)).filter(name => name.endsWith('.yml')).length, 1);
-	await writeFile(join(Fixture.one.snippets, 'mine.yml'), yaml.replace('First', 'Device one'));
-	await writeFile(other, yaml.replace('Second', 'Device two'));
+	let one = await Fixture.state(Fixture.one);
+	let two = await Fixture.state(Fixture.two);
+	const library = one.libraries.find(row => row.name === 'mine.yml');
+	assert.equal(two.libraries.filter(row => row.state === 'active').length, 1);
+	assert.ok(!two.libraries.some(row => row.name === 'local-only.yml'));
+	await Fixture.edit(Fixture.one, 'mine.yml', 'alpha', 'Device one');
+	await Fixture.edit(Fixture.two, 'mine.yml', 'beta', 'Device two');
 	await Fixture.cli(Fixture.one, 'sync');
 	await Fixture.cli(Fixture.two, 'sync');
 	await Fixture.cli(Fixture.one, 'sync');
-	const merged = await readFile(other, 'utf8');
-	assert.ok(merged.includes('Device one') && merged.includes('Device two') && merged.includes('# personal'));
-	// Same-snippet conflict preserves both and keeps local draft outside active files.
-	await writeFile(join(Fixture.one.snippets, 'mine.yml'), merged.replace('Device one', 'Winner'));
-	await writeFile(other, merged.replace('Device one', 'Conflicting draft'));
+	two = await Fixture.state(Fixture.two);
+	assert.deepEqual(two.libraries.find(row => row._id === library._id).records.filter(row => row.state === 'active').map(row => row.content.text), ['Device one', 'Device two']);
+	await Fixture.edit(Fixture.one, 'mine.yml', 'alpha', 'Winner');
+	await Fixture.edit(Fixture.two, 'mine.yml', 'alpha', 'Conflicting draft');
 	await Fixture.cli(Fixture.one, 'sync');
 	await Fixture.cli(Fixture.two, 'sync');
-	assert.equal((await Fixture.state(Fixture.two)).conflicts.length, 1);
-	const recoveries = await readdir(join(Fixture.two.config, 'sync/recovery'));
-	assert.ok((await Promise.all(recoveries.map(name => readFile(join(Fixture.two.config, 'sync/recovery', name), 'utf8')))).some(content => content.includes('Conflicting draft')));
-	assert.ok((await readFile(other, 'utf8')).includes('Winner'));
-	await rm(other);
+	two = await Fixture.state(Fixture.two);
+	assert.equal(two.conflicts.length, 1);
+	assert.ok(two.recovery > 0);
+	assert.equal(two.libraries.find(row => row._id === library._id).records.find(row => row.trigger === 'alpha').content.text, 'Winner');
+	const exportPath = join(Fixture.two.snippets, 'export.yml');
+	await Fixture.cli(Fixture.two, 'export', 'mine.yml', exportPath);
+	assert.ok((await readFile(exportPath, 'utf8')).startsWith('# Generated by TypeRelay.'));
+	await writeFile(exportPath, 'matches: [{trigger: alpha, replace: Tampered}]');
 	await Fixture.cli(Fixture.two, 'sync');
-	assert.ok((await readFile(other, 'utf8')).includes('Winner'));
-	// A downloaded collision is staged, leaving the existing working file unchanged.
-	await writeFile(join(Fixture.two.snippets, 'local.yml'), 'matches: [{trigger: collision, replace: Local}]\n');
-	const created = await Fixture.json('libraries', 'POST', { name: 'Collision', yaml: 'matches: [{trigger: collision, replace: Remote}]\n' });
-	await assert.rejects(Fixture.cli(Fixture.two, 'sync'), /Duplicate trigger/);
-	assert.equal(await readFile(join(Fixture.two.snippets, 'local.yml'), 'utf8'), 'matches: [{trigger: collision, replace: Local}]\n');
-	assert.ok((await readdir(join(Fixture.two.config, 'sync/staged'))).includes(created.library._id + '.json'));
-	await rm(join(Fixture.two.snippets, 'local.yml'));
+	assert.equal((await Fixture.state(Fixture.two)).libraries.find(row => row._id === library._id).records.find(row => row.trigger === 'alpha').content.text, 'Winner');
+	// Remote collision is staged and does not replace the last working local snapshot.
+	const source = join(Fixture.two.root, 'collision.yml');
+	await writeFile(source, 'matches: [{trigger: collision, replace: Local}]');
+	await Fixture.cli(Fixture.two, 'import', source, '--name', 'Local collision');
+	await Fixture.json('libraries', 'POST', { name: 'Remote collision', snippets: [{ trigger: 'collision', content: { version: 1, type: 'plain_text', text: 'Remote' } }] });
+	await assert.rejects(Fixture.cli(Fixture.two, 'sync'), /[Dd]uplicate/);
+	two = await Fixture.state(Fixture.two);
+	assert.ok(two.staged);
+	assert.ok(!two.libraries.some(row => row.name === 'Remote collision'));
+	await Fixture.edit(Fixture.two, 'Local collision', 'collision', null);
 	await Fixture.cli(Fixture.two, 'sync');
+	assert.ok((await Fixture.state(Fixture.two)).libraries.some(row => row.name === 'Remote collision'));
 });
-test('offline enrollment queues durably and a lost-response retry cannot duplicate libraries', async () => {
+test('offline SQLite outbox and lost-response replay create a library only once', async () => {
 	const device = await Fixture.device('offline');
 	const credentialsPath = join(device.config, 'sync/credentials.json');
 	const credentials = JSON.parse(await readFile(credentialsPath, 'utf8'));
 	await writeFile(join(device.snippets, 'offline.yml'), 'matches: [{trigger: offline, replace: Queued}]\n');
 	await writeFile(credentialsPath, JSON.stringify({ ...credentials, server: 'http://127.0.0.1:1' }));
-	await assert.rejects(Fixture.cli(device, 'enroll', 'offline.yml'));
-	const pending = (await Fixture.state(device)).pending;
+	await Fixture.cli(device, 'enroll', 'offline.yml');
+	await assert.rejects(Fixture.cli(device, 'sync'));
+	const pending = (await Fixture.state(device)).pending[0][1];
 	assert.ok(pending.body.operation_id);
 	await writeFile(credentialsPath, JSON.stringify(credentials));
 	await Fixture.cli(device, 'sync');
-	const state = await Fixture.state(device);
-	const id = Object.entries(state.files).find(([, file]) => file.filename === 'offline.yml')[0];
-	state.pending = pending;
-	await writeFile(join(device.config, 'sync/state.json'), JSON.stringify(state));
+	await Fixture.cli(device, 'database-replay', JSON.stringify(pending));
 	await Fixture.cli(device, 'sync');
 	assert.equal(await Library.countDocuments({ account: Fixture.account, name: 'offline.yml' }), 1);
-	assert.equal((await Fixture.state(device)).files[id].filename, 'offline.yml');
 });
-test('read-only manual edits never reach server; revoked files leave active directory', async () => {
+test('permission changes reject local writes, preserve pending drafts and remove revoked records', async () => {
 	const user = await User.create({ email: randomUUID() + '@example.test', name: 'Member' });
 	await Member.create({ account: Fixture.account, user: user._id, role: 'member' });
 	const device = await Fixture.device('member', String(user._id));
-	let { library } = await Fixture.json('libraries', 'POST', { name: 'Read only', yaml: 'matches: [{trigger: team, replace: Authorized}]\n' });
+	let { library } = await Fixture.json('libraries', 'POST', { name: 'Team library', snippets: [{ trigger: 'team', content: { version: 1, type: 'plain_text', text: 'Authorized' } }] });
+	({ library } = await Fixture.json('libraries/' + library._id, 'PATCH', { base_revision: library.revision, name: library.name, shared: true, editable: true, members: [String(user._id)], groups: [] }));
+	await Fixture.cli(device, 'sync');
+	await Fixture.edit(device, 'Team library', 'team', 'Unsent draft');
 	({ library } = await Fixture.json('libraries/' + library._id, 'PATCH', { base_revision: library.revision, name: library.name, shared: true, editable: false, members: [String(user._id)], groups: [] }));
 	await Fixture.cli(device, 'sync');
-	const path = join(device.snippets, 'library-' + library._id + '.yml');
-	await writeFile(path, 'matches: [{trigger: team, replace: Unauthorized}]\n');
-	await Fixture.cli(device, 'sync');
-	assert.ok((await readFile(path, 'utf8')).includes('Authorized'));
-	assert.ok((await readdir(join(device.config, 'sync/recovery'))).length > 0);
-	assert.ok((await Library.findById(library._id).lean()).yaml.includes('Authorized'));
-	await writeFile(path, 'matches: [{trigger: team, replace: Unsent}]\n');
+	const state = await Fixture.state(device);
+	assert.ok(state.recovery > 0);
+	assert.equal(state.libraries.find(row => row._id === library._id).records[0].content.text, 'Authorized');
+	await assert.rejects(Fixture.edit(device, 'Team library', 'team', 'Blocked'), /read-only/);
 	await Fixture.json('libraries/' + library._id, 'PATCH', { base_revision: library.revision, name: library.name, shared: false, editable: false, members: [], groups: [] });
 	await Fixture.cli(device, 'sync');
-	assert.ok(!(await readdir(device.snippets)).some(name => name.endsWith('.yml')));
+	assert.ok(!(await Fixture.state(device)).libraries.some(row => row.state === 'active'));
+});
+test('Trash and restore cross devices; Empty Trash purges copies and protocol v1 is rejected', async () => {
+	const device = await Fixture.device('trash-device');
+	let { library } = await Fixture.json('libraries', 'POST', { name: 'Trash sync', snippets: [{ trigger: 'trashsync', content: { version: 1, type: 'plain_text', text: 'Recover me' } }] });
+	await Fixture.cli(device, 'sync');
+	await Fixture.edit(device, 'Trash sync', 'trashsync', null);
+	await Fixture.cli(device, 'sync');
+	let items = (await Fixture.json('trash')).items;
+	const target = items.find(item => item.library === library._id);
+	assert.ok(target);
+	await Fixture.json('trash/action', 'POST', { target, action: 'restore' });
+	await Fixture.cli(device, 'sync');
+	assert.equal((await Fixture.state(device)).libraries.find(row => row._id === library._id).records[0].state, 'active');
+	await Fixture.edit(device, 'Trash sync', 'trashsync', null);
+	await Fixture.cli(device, 'sync');
+	items = (await Fixture.json('trash')).items;
+	await Fixture.json('trash/empty', 'POST', { targets: items.filter(item => item.library === library._id) });
+	await Fixture.cli(device, 'sync');
+	const record = (await Fixture.state(device)).libraries.find(row => row._id === library._id).records[0];
+	assert.equal(record.state, 'purged');
+	assert.equal(record.content, undefined);
+	const legacy = await Fixture.request('/api/v1/sync');
+	assert.equal(legacy.status, 426);
 });
 test('web AJAX updates only affected snippets; preserves panel, filter and multiline', async () => {
 	const { library } = await Fixture.json('libraries', 'POST', { name: 'Browser library', yaml: 'matches: [{trigger: web, replace: Before}, {trigger: untouched, replace: Keep}]\n' });
@@ -262,8 +290,8 @@ test('web AJAX updates only affected snippets; preserves panel, filter and multi
 	dom.window.close();
 });
 test('CSRF rejects writes, logout invalidates session', async () => {
-	const response = await fetch(Fixture.origin + '/api/v1/libraries', { method: 'POST', headers: { Cookie: Fixture.cookie, 'Content-Type': 'application/json', 'X-Account-Id': Fixture.account }, body: JSON.stringify({ name: 'Blocked' }) });
+	const response = await fetch(Fixture.origin + '/api/v2/libraries', { method: 'POST', headers: { Cookie: Fixture.cookie, 'Content-Type': 'application/json', 'X-Account-Id': Fixture.account }, body: JSON.stringify({ name: 'Blocked' }) });
 	assert.equal(response.status, 403);
 	assert.equal((await Fixture.request('/auth/logout', 'POST', {})).status, 200);
-	assert.equal((await Fixture.request('/api/v1/libraries')).status, 403);
+	assert.equal((await Fixture.request('/api/v2/libraries')).status, 403);
 });

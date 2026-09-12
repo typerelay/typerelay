@@ -112,6 +112,11 @@ class InstallerTests(unittest.TestCase):
         file = self.subject.snippets / "mine.yml"
         old_text = "matches:\n- trigger: ',old'\n  replace: original\n"
         file.write_text(old_text)
+        database = self.subject.snippets / "typerelay.sqlite"
+        database.write_bytes(b"previous database")
+        sync_state = self.subject.config / "sync/state.json"
+        sync_state.parent.mkdir()
+        sync_state.write_text('{"cursor": 3}')
         self.subject.destination.parent.mkdir(parents=True)
         self.subject.destination.write_bytes(b"old engine")
         self.subject.destination.with_name("typerelay-tui").write_bytes(b"old tui")
@@ -134,16 +139,31 @@ class InstallerTests(unittest.TestCase):
             saved.write_text(old_text)
             (backup / "manifest.json").write_text(json.dumps([{"path": str(file), "backup": str(saved)}]))
             file.write_text("matches:\n- trigger: old\n  replace: original\n")
+            database.write_bytes(b"new incompatible database")
+            database.with_name("typerelay.sqlite-wal").write_bytes(b"new WAL")
+            sync_state.unlink()
             return str(backup)
         self.subject.systemctl.side_effect = service
         self.subject.migrate_snippets = Mock(side_effect=migrate)
         with self.assertRaisesRegex(RuntimeError, "failed to start"):
             self.subject.install(False)
         self.assertEqual(file.read_text(), old_text)
+        self.assertEqual(database.read_bytes(), b"previous database")
+        self.assertFalse(database.with_name("typerelay.sqlite-wal").exists())
+        self.assertEqual(sync_state.read_text(), '{"cursor": 3}')
         self.assertEqual(self.subject.destination.read_bytes(), b"old engine")
         self.assertEqual(self.subject.destination.with_name("typerelay-tui").read_bytes(), b"old tui")
         self.assertEqual(self.subject.manifest.read_text(), old_manifest)
         self.subject.systemctl.assert_any_call("start", "typerelay.service", check=False)
+
+    def test_database_upgrade_does_not_reimport_legacy_yaml(self):
+        self.subject.snippets.mkdir(parents=True)
+        (self.subject.snippets / "typerelay.sqlite").write_bytes(b"existing database")
+        (self.subject.config / "poc.yml").write_text("matches: []")
+        self.subject.migrate_snippets(check=True)
+        self.subject.migrate_snippets()
+        self.assertFalse((self.subject.snippets / "mysnippets.yml").exists())
+        self.subject.command.assert_any_call(str(self.subject.binary), "validate", "--dir", str(self.subject.snippets))
 
     def test_uninstall_preserves_replaced_binary(self):
         self.subject.install(False)

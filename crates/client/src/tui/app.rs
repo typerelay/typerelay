@@ -6,9 +6,9 @@ use typerelay_core::Engine;
 use typerelay_client::{config::Match, editor::{EditorStore, OpenFile}, settings::SettingsStore};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Screen { Files, Browse, Edit, NewFile, Settings, Confirm }
+pub enum Screen { Files, Browse, Edit, NewFile, Settings, Trash, Confirm }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Destination { Files, Browse, Settings, Quit }
+enum Destination { Files, Browse, Settings, Trash, Quit }
 
 pub struct App {
     store: EditorStore,
@@ -32,6 +32,10 @@ pub struct App {
     original_prefix: String,
     pending: Option<Destination>,
     pending_delete: Option<usize>,
+    pending_trash: Option<(String, Vec<serde_json::Value>)>,
+    trash_rows: Vec<serde_json::Value>,
+    trash_state: ListState,
+    trash_buttons: Vec<Rect>,
     confirm_from: Screen,
     status: String,
     error: bool,
@@ -49,7 +53,7 @@ impl App {
         let files = store.files()?;
         let mut file_state = ListState::default();
         file_state.select(Some(0));
-        Ok(Self { store, settings, screen: Screen::Files, files, file_state, snippets_state: ListState::default(), file: None, search: TextArea::default(), search_focused: false, trigger: TextArea::default(), expansion: TextArea::default(), name: TextArea::default(), url: TextArea::default(), editor_focus: 0, editing: None, original_entry: None, original_url: String::new(), prefix: TextArea::default(), original_prefix: String::new(), pending: None, pending_delete: None, confirm_from: Screen::Files, status: "Choose a file, or create a new one".into(), error: false, quit: false, toolbar: Vec::new(), list_area: Rect::default(), field_areas: Vec::new(), save_area: Rect::default(), cancel_area: Rect::default(), confirm_buttons: Vec::new() })
+        Ok(Self { store, settings, screen: Screen::Files, files, file_state, snippets_state: ListState::default(), file: None, search: TextArea::default(), search_focused: false, trigger: TextArea::default(), expansion: TextArea::default(), name: TextArea::default(), url: TextArea::default(), editor_focus: 0, editing: None, original_entry: None, original_url: String::new(), prefix: TextArea::default(), original_prefix: String::new(), pending: None, pending_delete: None, pending_trash: None, trash_rows: Vec::new(), trash_state: ListState::default(), trash_buttons: Vec::new(), confirm_from: Screen::Files, status: "Choose a file, or create a new one".into(), error: false, quit: false, toolbar: Vec::new(), list_area: Rect::default(), field_areas: Vec::new(), save_area: Rect::default(), cancel_area: Rect::default(), confirm_buttons: Vec::new() })
     }
     fn text(value: &str) -> TextArea<'static> { TextArea::new(value.split('\n').map(str::to_owned).collect()) }
     fn value(field: &TextArea<'_>) -> String { field.lines().join("\n") }
@@ -68,6 +72,7 @@ impl App {
     fn apply(&mut self, destination: Destination) -> Result<()> {
         self.pending = None;
         match destination {
+            Destination::Trash => { self.load_trash()?; self.screen = Screen::Trash; }
             Destination::Quit => self.quit = true,
             Destination::Files => { self.files = self.store.files()?; self.file_state.select(Some(0)); self.screen = Screen::Files; }
             Destination::Browse => self.screen = if self.file.is_some() { Screen::Browse } else { Screen::Files },
@@ -100,7 +105,7 @@ impl App {
         self.search_focused = false;
         self.snippets_state.select(Some(0));
         self.screen = Screen::Browse;
-        self.message("Enter: edit selected snippet · /: search", false);
+        self.message("Enter: edit · /: search · F4: trash library · F7: Trash", false);
         Ok(())
     }
     fn edit(&mut self, new: bool) -> Result<()> {
@@ -150,6 +155,27 @@ impl App {
         }
         Ok(())
     }
+    fn load_trash(&mut self) -> Result<()> {
+        self.trash_rows = typerelay_client::database::Database::open(&self.store.directory)?.trash()?;
+        self.trash_state.select(if self.trash_rows.is_empty() { None } else { Some(self.trash_state.selected().unwrap_or(0).min(self.trash_rows.len()-1)) });
+        Ok(())
+    }
+    fn trash_request(&mut self, action: &str) -> Result<()> {
+        let db = typerelay_client::database::Database::open(&self.store.directory)?;
+        let targets = if action == "trash" {
+            anyhow::ensure!(self.screen == Screen::Browse, "Select a library first");
+            let file = self.file.as_ref().context("Select a library first")?;
+            let library = db.library(&file.id)?;
+            anyhow::ensure!(library["permissions"]["manage"] == true, "Library management permission required");
+            vec![serde_json::json!({"type":"library","id":file.id,"library":file.id,"revision":library["revision"]})]
+        } else if action == "purge" { self.trash_rows.iter().filter(|row| row["can_purge"] == true).cloned().collect() }
+        else { vec![self.trash_rows.get(self.trash_state.selected().unwrap_or(0)).context("Select a Trash item")?.clone()] };
+        anyhow::ensure!(!targets.is_empty(), "No eligible Trash items");
+        self.confirm_from = self.screen;
+        self.pending_trash = Some((action.into(), targets));
+        self.screen = Screen::Confirm;
+        Ok(())
+    }
     fn request_delete(&mut self) -> Result<()> {
         anyhow::ensure!(self.screen == Screen::Browse, "Choose a saved snippet from the list first");
         let index = self.selected().context("Select a snippet to delete")?;
@@ -161,6 +187,18 @@ impl App {
         Ok(())
     }
     fn confirm(&mut self, choice: usize) -> Result<()> {
+        if let Some((action, targets)) = self.pending_trash.clone() {
+            if choice == 0 {
+                let db = typerelay_client::database::Database::open(&self.store.directory)?;
+                if action == "purge" { db.empty(&targets)?; } else { db.trash_action(&targets[0], &action)?; }
+                self.message(if action == "restore" { "Restored" } else if action == "purge" { "Eligible Trash items removed" } else { "Library moved to Trash" }, false);
+            }
+            self.pending_trash = None;
+            if self.confirm_from == Screen::Trash { self.load_trash()?; self.screen = Screen::Trash; }
+            else if choice == 0 { self.file = None; self.apply(Destination::Files)?; }
+            else { self.screen = self.confirm_from; }
+            return Ok(());
+        }
         if let Some(index) = self.pending_delete {
             if choice == 0 {
                 let file = self.file.as_ref().context("Choose a file first")?;
@@ -169,7 +207,7 @@ impl App {
                 self.file = Some(saved);
                 let count = self.filtered().len();
                 self.snippets_state.select(if count == 0 { None } else { Some(self.snippets_state.selected().unwrap_or(0).min(count - 1)) });
-                self.message("Snippet deleted. Enrolled files sync automatically.", false);
+                self.message("Snippet moved to Trash. Enrolled libraries sync automatically.", false);
             }
             self.pending_delete = None;
             self.screen = Screen::Browse;
@@ -187,10 +225,11 @@ impl App {
         match index {
             0 => self.leave(Destination::Files),
             1 if self.screen == Screen::Browse => self.edit(true),
-            1 => { self.message("Choose a snippet file first", false); Ok(()) },
+            1 => { self.message("Choose a library first", false); Ok(()) },
             2 => { typerelay_client::sync::Sync::trigger(self.settings.config_dir())?; self.message("Sync requested. Use typerelay sync for immediate CLI status.", false); Ok(()) },
             3 => self.leave(Destination::Settings),
             4 => self.request_delete(),
+            5 => self.leave(Destination::Trash),
             _ => Ok(()),
         }
     }
@@ -220,6 +259,10 @@ impl App {
         if let Event::Key(key) = event {
             if key.kind == KeyEventKind::Release { return Ok(()); }
             if self.screen == Screen::Confirm {
+                if let Some((action, _)) = &self.pending_trash {
+                    let expected = if action == "restore" { 'r' } else if action == "purge" { 'e' } else { 'd' };
+                    return if key.code == KeyCode::Char(expected) { self.confirm(0) } else if matches!(key.code, KeyCode::Esc | KeyCode::Enter | KeyCode::Char('c')) { self.confirm(1) } else { Ok(()) };
+                }
                 if self.pending_delete.is_some() { return match key.code { KeyCode::Char('d') => self.confirm(0), KeyCode::Esc | KeyCode::Enter | KeyCode::Char('c') => self.confirm(1), _ => Ok(()) }; }
                 return match key.code { KeyCode::Char('s') => self.confirm(0), KeyCode::Char('d') => self.confirm(1), KeyCode::Char('c') | KeyCode::Esc | KeyCode::Enter => self.confirm(2), _ => Ok(()) };
             }
@@ -236,10 +279,20 @@ impl App {
                 KeyCode::F(2) => return self.toolbar_action(1),
                 KeyCode::F(5) => return self.toolbar_action(2),
                 KeyCode::F(6) => return self.toolbar_action(3),
+                KeyCode::F(7) => return self.toolbar_action(5),
+                KeyCode::F(4) if self.screen == Screen::Browse => return self.trash_request("trash"),
                 KeyCode::F(3) => return self.toolbar_action(4),
                 _ => (),
             }
             match self.screen {
+                Screen::Trash => match key.code {
+                    KeyCode::Esc => self.apply(Destination::Files)?,
+                    KeyCode::Char('r') | KeyCode::Enter => self.trash_request("restore")?,
+                    KeyCode::Char('e') => self.trash_request("purge")?,
+                    KeyCode::Down => { if !self.trash_rows.is_empty() { self.trash_state.select(Some((self.trash_state.selected().unwrap_or(0)+1).min(self.trash_rows.len()-1))); } }
+                    KeyCode::Up => self.trash_state.select(Some(self.trash_state.selected().unwrap_or(0).saturating_sub(1))),
+                    _ => (),
+                },
                 Screen::Files => match key.code {
                     KeyCode::Down | KeyCode::Char('j') => self.move_selection(true),
                     KeyCode::Up | KeyCode::Char('k') => self.move_selection(false),
@@ -287,6 +340,10 @@ impl App {
                     if let Some(index) = self.confirm_buttons.iter().position(|area| area.contains(position)) { self.confirm(index)?; }
                     return Ok(());
                 }
+                if self.screen == Screen::Trash {
+                    if let Some(index) = self.trash_buttons.iter().position(|area| area.contains(position)) { return self.trash_request(if index == 0 { "restore" } else { "purge" }); }
+                    if self.list_area.contains(position) { let index = usize::from(mouse.row.saturating_sub(self.list_area.y + 1)) + self.trash_state.offset(); if index < self.trash_rows.len() { self.trash_state.select(Some(index)); } return Ok(()); }
+                }
                 if let Some(index) = self.toolbar.iter().position(|area| area.contains(position)) { return self.toolbar_action(index); }
                 if self.save_area.contains(position) { return self.save(); }
                 if self.cancel_area.contains(position) { return self.leave(if self.screen == Screen::NewFile { Destination::Files } else { Destination::Browse }); }
@@ -315,24 +372,43 @@ impl App {
     fn button(frame: &mut Frame, area: Rect, title: &str, enabled: bool) {
         frame.render_widget(Paragraph::new(title.to_owned()).centered().block(Self::border("", false)).style(Style::default().fg(if enabled { Color::Cyan } else { Color::DarkGray })), area);
     }
+    pub fn refresh(&mut self) {
+        if self.screen == Screen::Trash { let _ = self.load_trash(); }
+        else if self.screen == Screen::Files { if let Ok(files) = self.store.files() { self.files = files; } }
+        else if self.screen == Screen::Browse && let Some(file) = &self.file {
+            match self.store.open(&file.name) {
+                Ok(current) => { self.file = Some(current); }
+                Err(_) => { self.file = None; let _ = self.apply(Destination::Files); }
+            }
+        }
+    }
     fn sync_status(&self) -> String {
         std::fs::read_to_string(self.settings.config_dir().join("sync/status")).unwrap_or_default()
     }
     pub fn draw(&mut self, frame: &mut Frame) {
-        self.toolbar.clear(); self.field_areas.clear(); self.list_area = Rect::default(); self.save_area = Rect::default(); self.cancel_area = Rect::default();
+        self.toolbar.clear(); self.trash_buttons.clear(); self.field_areas.clear(); self.list_area = Rect::default(); self.save_area = Rect::default(); self.cancel_area = Rect::default();
         let area = frame.area();
         if area.width < 60 || area.height < 20 { frame.render_widget(Paragraph::new("TypeRelay — resize terminal to at least 60 × 20. Ctrl+Q exits."), area); return; }
         let rows = Layout::vertical([Constraint::Length(2), Constraint::Length(3), Constraint::Min(8), Constraint::Length(3)]).split(area);
         let title = self.file.as_ref().map(|file| format!("TypeRelay  /  {}", file.name)).unwrap_or("TypeRelay  /  Snippet editor".into());
         frame.render_widget(Paragraph::new(title).style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)), rows[0]);
-        self.toolbar = Layout::horizontal([Constraint::Length(11), Constraint::Length(10), Constraint::Length(10), Constraint::Length(14), Constraint::Length(13), Constraint::Min(0)]).split(rows[1])[..5].to_vec();
-        for (index, title) in ["F1 Files", "F2 Add", "F5 Sync", "F6 Settings", "F3 Delete"].iter().enumerate() { Self::button(frame, self.toolbar[index], title, !matches!(index, 1 | 4) || (self.screen == Screen::Browse && (index != 4 || self.selected().is_some()))); }
+        self.toolbar = Layout::horizontal([Constraint::Length(10), Constraint::Length(9), Constraint::Length(9), Constraint::Length(12), Constraint::Length(10), Constraint::Length(10), Constraint::Min(0)]).split(rows[1])[..6].to_vec();
+        for (index, title) in ["F1 Libs", "F2 Add", "F5 Sync", "F6 Settings", "F3 Trash", "F7 Trash"].iter().enumerate() { Self::button(frame, self.toolbar[index], title, !matches!(index, 1 | 4) || (self.screen == Screen::Browse && (index != 4 || self.selected().is_some()))); }
         let body = rows[2];
         match self.effective_screen() {
+            Screen::Trash => {
+                let parts = Layout::vertical([Constraint::Min(5), Constraint::Length(3)]).split(body);
+                self.list_area = parts[0];
+                let items = self.trash_rows.iter().map(|row| ListItem::new(format!("{} · {}", row["name"].as_str().unwrap_or("Item"), row["type"].as_str().unwrap_or("")))).collect::<Vec<_>>();
+                frame.render_stateful_widget(List::new(items).block(Self::border("Trash · 30 days · Esc returns", true)).highlight_style(Style::default().bg(Color::DarkGray)), parts[0], &mut self.trash_state);
+                self.trash_buttons = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(parts[1]).to_vec();
+                Self::button(frame, self.trash_buttons[0], "R Restore", !self.trash_rows.is_empty());
+                Self::button(frame, self.trash_buttons[1], &format!("E Empty ({})", self.trash_rows.iter().filter(|row|row["can_purge"] == true).count()), self.trash_rows.iter().any(|row|row["can_purge"] == true));
+            }
             Screen::Files => {
-                let items = std::iter::once(ListItem::new("+ New file")).chain(self.files.iter().map(|name| ListItem::new(typerelay_client::sync::Sync::label(self.settings.config_dir(), &self.store.directory, name)))).collect::<Vec<_>>();
+                let items = std::iter::once(ListItem::new("+ New library")).chain(self.files.iter().map(|name| ListItem::new(typerelay_client::sync::Sync::label(self.settings.config_dir(), &self.store.directory, name)))).collect::<Vec<_>>();
                 self.list_area = body;
-                frame.render_stateful_widget(List::new(items).block(Self::border("Choose a snippet file", true)).highlight_style(Style::default().bg(Color::DarkGray)).highlight_symbol("› "), body, &mut self.file_state);
+                frame.render_stateful_widget(List::new(items).block(Self::border("Choose a library", true)).highlight_style(Style::default().bg(Color::DarkGray)).highlight_symbol("› "), body, &mut self.file_state);
             }
             Screen::Browse => {
                 let parts = Layout::vertical([Constraint::Length(3), Constraint::Min(3)]).split(body);
@@ -358,8 +434,8 @@ impl App {
             }
             Screen::NewFile => {
                 let parts = Layout::vertical([Constraint::Length(3), Constraint::Min(3), Constraint::Length(3)]).split(body);
-                self.name.set_block(Self::border("New filename (.yml or .yaml)", true)); frame.render_widget(&self.name, parts[0]);
-                frame.render_widget(Paragraph::new("Creates an empty snippet file. Existing files are never overwritten."), parts[1]);
+                self.name.set_block(Self::border("New library name", true)); frame.render_widget(&self.name, parts[0]);
+                frame.render_widget(Paragraph::new("Creates a local-only library. F4 moves a selected library to Trash."), parts[1]);
                 self.field_areas.push(parts[0]); self.form_buttons(frame, parts[2]);
             }
             Screen::Settings => {
@@ -376,12 +452,14 @@ impl App {
         if self.screen == Screen::Confirm {
             let dialog = Rect::new(area.x + (area.width - 56) / 2, area.y + (area.height - 7) / 2, 56, 7);
             frame.render_widget(Clear, dialog);
-            let prompt = if let Some(index) = self.pending_delete { format!("Delete abbreviation '{}'?", self.file.as_ref().unwrap().entries[index].trigger) } else { "Unsaved changes\nSave your draft before leaving?".into() };
+            let prompt = if let Some((action, targets)) = &self.pending_trash {
+                if action == "purge" { format!("Permanently remove {} eligible Trash items?\\nThis cannot be undone.", targets.len()) } else if action == "restore" { format!("Restore '{}'?", targets[0]["name"].as_str().unwrap_or("item")) } else { "Move this library and its active snippets to Trash?".into() }
+            } else if let Some(index) = self.pending_delete { format!("Move abbreviation to Trash '{}'?", self.file.as_ref().unwrap().entries[index].trigger) } else { "Unsaved changes\nSave your draft before leaving?".into() };
             frame.render_widget(Paragraph::new(prompt).block(Self::border("Confirm", true)), dialog);
             let buttons = Rect::new(dialog.x + 2, dialog.y + 3, dialog.width - 4, 3);
             self.confirm_buttons = Layout::horizontal([Constraint::Ratio(1, 3), Constraint::Ratio(1, 3), Constraint::Ratio(1, 3)]).split(buttons).to_vec();
-            if self.pending_delete.is_some() { self.confirm_buttons = vec![self.confirm_buttons[2], self.confirm_buttons[0]]; }
-            let titles: &[&str] = if self.pending_delete.is_some() { &["D Delete", "Esc Cancel"] } else { &["S Save", "D Discard", "Esc Cancel"] };
+            if self.pending_delete.is_some() || self.pending_trash.is_some() { self.confirm_buttons = vec![self.confirm_buttons[2], self.confirm_buttons[0]]; }
+            let titles: &[&str] = if let Some((action, _)) = &self.pending_trash { if action == "restore" { &["R Restore", "Esc Cancel"] } else if action == "purge" { &["E Empty", "Esc Cancel"] } else { &["D Trash", "Esc Cancel"] } } else if self.pending_delete.is_some() { &["D Trash", "Esc Cancel"] } else { &["S Save", "D Discard", "Esc Cancel"] };
             for (index, title) in titles.iter().enumerate() { Self::button(frame, self.confirm_buttons[index], title, true); }
         }
     }
@@ -411,7 +489,7 @@ mod tests {
         Fixture::key(&mut app, KeyCode::Tab, KeyModifiers::NONE);
         app.handle(Event::Paste("New expansion".into()));
         Fixture::key(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL);
-        assert_eq!(app.store.open("mine.yml").unwrap().entries[0].trigger, "new");
+        assert_eq!(app.store.open("mine").unwrap().entries[0].trigger, "new");
     }
     struct Fixture;
     impl Fixture {
@@ -430,7 +508,7 @@ mod tests {
         Fixture::key(&mut app, KeyCode::F(3), KeyModifiers::NONE);
         assert_eq!(app.screen, Screen::Confirm);
         Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
-        assert_eq!(app.store.open("mine.yml").unwrap().entries.len(), 2);
+        assert_eq!(app.store.open("mine").unwrap().entries.len(), 2);
         Fixture::key(&mut app, KeyCode::F(3), KeyModifiers::NONE);
         Fixture::key(&mut app, KeyCode::Char('d'), KeyModifiers::NONE);
         assert_eq!(app.file.as_ref().unwrap().entries[0].trigger, "first");
@@ -439,7 +517,7 @@ mod tests {
         app.snippets_state.select(Some(0));
         Fixture::key(&mut app, KeyCode::Delete, KeyModifiers::NONE);
         Fixture::key(&mut app, KeyCode::Char('d'), KeyModifiers::NONE);
-        assert!(app.store.open("mine.yml").unwrap().entries.is_empty());
+        assert!(app.store.open("mine").unwrap().entries.is_empty());
         assert_eq!(app.screen, Screen::Browse);
     }
     #[test]
@@ -451,7 +529,7 @@ mod tests {
         Fixture::key(&mut app, KeyCode::Delete, KeyModifiers::NONE);
         assert_eq!(app.screen, Screen::Browse);
         Fixture::key(&mut app, KeyCode::F(3), KeyModifiers::NONE);
-        std::fs::write(app.store.directory.join("mine.yml"), "matches: []\n").unwrap();
+        let concurrent = app.store.open("mine").unwrap(); app.store.delete(&concurrent, 0).unwrap();
         Fixture::key(&mut app, KeyCode::Char('d'), KeyModifiers::NONE);
         assert_eq!(app.screen, Screen::Confirm);
         assert!(app.error);
@@ -475,14 +553,39 @@ mod tests {
         app.handle(Event::Mouse(ratatui::crossterm::event::MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: button.x + 1, row: button.y + 1, modifiers: KeyModifiers::NONE }));
         assert!(app.file.as_ref().unwrap().entries.is_empty());
         app.file = Some(app.store.save(app.file.as_ref().unwrap(), None, Match { trigger: "shared".into(), replace: "Read only".into() }).unwrap());
-        let mut state = typerelay_client::sync::State::default();
-        state.files.insert("library".into(), typerelay_client::sync::Managed { filename: "mine.yml".into(), baseline: String::new(), library: serde_json::json!({"permissions":{"edit":false}}) });
-        std::fs::create_dir_all(temp.path().join("sync")).unwrap();
-        std::fs::write(temp.path().join("sync/state.json"), serde_json::to_vec(&state).unwrap()).unwrap();
+        let db = typerelay_client::database::Database::open(&app.store.directory).unwrap();
+        db.connection.execute("UPDATE libraries SET data=json_set(data,'$.permissions.edit',json('false'))", []).unwrap();
         Fixture::key(&mut app, KeyCode::F(3), KeyModifiers::NONE);
         assert_eq!(app.screen, Screen::Browse);
         assert!(app.status.contains("read-only"));
-        assert_eq!(app.store.open("mine.yml").unwrap().entries.len(), 1);
+        assert_eq!(app.store.open("mine").unwrap().entries.len(), 1);
+    }
+    #[test]
+    fn trash_page_restores_and_empties_with_confirmation() {
+        let temp = tempfile::tempdir().unwrap(); let mut app = Fixture::app(temp.path());
+        let file = app.store.create("Local").unwrap();
+        app.file = Some(app.store.save(&file, None, Match { trigger: "hello".into(), replace: "Hello".into() }).unwrap());
+        app.screen = Screen::Browse;
+        Fixture::key(&mut app, KeyCode::F(3), KeyModifiers::NONE);
+        Fixture::key(&mut app, KeyCode::Char('d'), KeyModifiers::NONE);
+        Fixture::key(&mut app, KeyCode::F(7), KeyModifiers::NONE);
+        assert_eq!(app.screen, Screen::Trash);
+        assert_eq!(app.trash_rows.len(), 1);
+        Fixture::key(&mut app, KeyCode::Char('r'), KeyModifiers::NONE);
+        Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(app.trash_rows.len(), 1);
+        Fixture::key(&mut app, KeyCode::Char('r'), KeyModifiers::NONE);
+        Fixture::key(&mut app, KeyCode::Char('r'), KeyModifiers::NONE);
+        assert!(app.trash_rows.is_empty());
+        app.file = Some(app.store.open("Local").unwrap()); app.screen = Screen::Browse;
+        Fixture::key(&mut app, KeyCode::F(4), KeyModifiers::NONE);
+        Fixture::key(&mut app, KeyCode::Char('d'), KeyModifiers::NONE);
+        Fixture::key(&mut app, KeyCode::F(7), KeyModifiers::NONE);
+        assert_eq!(app.trash_rows[0]["type"], "library");
+        Fixture::key(&mut app, KeyCode::Char('e'), KeyModifiers::NONE);
+        Fixture::key(&mut app, KeyCode::Char('e'), KeyModifiers::NONE);
+        assert!(app.trash_rows.is_empty());
+        assert!(app.store.files().unwrap().is_empty());
     }
     #[test]
     fn create_add_search_edit_and_dirty_confirmation() {
@@ -504,7 +607,7 @@ mod tests {
         assert_eq!(App::value(&app.trigger), "hello");
         assert!(!app.dirty());
         app.expansion.insert_str("changed"); Fixture::key(&mut app, KeyCode::F(1), KeyModifiers::NONE); Fixture::key(&mut app, KeyCode::Char('d'), KeyModifiers::NONE);
-        assert_eq!(app.screen, Screen::Files); assert_eq!(app.store.open("sales.yml").unwrap().entries[0].replace, "Hello\nworld\n");
+        assert_eq!(app.screen, Screen::Files); assert_eq!(app.store.open("sales").unwrap().entries[0].replace, "Hello\nworld\n");
     }
     #[test]
     fn disconnected_sync_settings_and_failed_save_keep_draft() {

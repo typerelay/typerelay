@@ -58,7 +58,7 @@ in the service file. The installer imports the current session values when avail
 - `~/.local/bin/typerelay`: engine executable, replaced atomically during upgrades.
 - `~/.local/bin/typerelay-tui`: [terminal snippet editor](TUI.md), installed with the engine.
 - `~/.config/systemd/user/typerelay.service`: graphical-session service.
-- `~/.config/typerelay/snippets/`: your active YAML files.
+- `~/.config/typerelay/snippets/`: your library SQLite database and related storage.
 - `~/.local/share/typerelay/`: installer state and the device-access helper.
 - `/etc/udev/rules.d/99-typerelay-<uid>.rules`: access for the effective keyd keyboard,
   pointer devices used for cancellation, and `/dev/uinput`.
@@ -70,37 +70,14 @@ input-group membership, world-writable device modes or root execution capability
 The persistent rules reapply access when the relevant device nodes are created. Installer
 updates preserve the original Espanso startup state for a later uninstall.
 
-## Multiple snippet files
+## Database-backed libraries
 
-```text
-~/.config/typerelay/snippets/
-  mysnippets.yml
-  sales.yml
-  code.yaml
-```
+Since v0.7, libraries live in SQLite under the configured directory. Manage them through the TUI/web app.
+YAML is explicit import/export only. First startup backs up and imports legacy YAML/sync state, then archives original files.
+The installer also backs up the stopped client configuration before replacing binaries for rollback.
+Active limits remain 256 libraries, 1 MiB serialized content per library, 8 MiB combined and 64 KiB per expansion.
+See [database migration](web/development.md).
 
-Each file has the same `matches:` list. TypeRelay loads all top-level regular `.yml` and
-`.yaml` files in filename order. It does not follow snippet-file symlinks or recurse into
-subdirectories. Keep backup files outside this folder or use a different extension.
-
-Changes, additions and deletions are checked every 500 ms and replace the entire validated
-snapshot. Duplicate triggers are errors, including duplicates across files; the error names
-both files. Invalid edits retain the last working snapshot. An empty directory intentionally
-loads zero snippets. Limits: 256 files, 1 MiB per file, 8 MiB combined.
-
-On first installation, if this directory contains no active YAML files, an existing
-`~/.config/typerelay/poc.yml` is copied to `mysnippets.yml`. The original is preserved. Active snippet files are then migrated to bare abbreviations
-with backups; see [configuration and migration](CONFIGURATION.md). Otherwise an empty `mysnippets.yml` is created.
-
-```fish
-typerelay validate                 # validate the default snippets directory
-typerelay validate --dir ~/snippets
-typerelay run --dir ~/snippets      # manual use with a different directory
-typerelay run --file ~/one-file.yml # original single-file mode remains supported
-```
-
-Do not run a manual client while the service is active. The existing process lock prevents
-two TypeRelay clients from taking over the keyboard.
 
 ## Service control and interference alerts
 

@@ -166,17 +166,17 @@ export class Security {
 		app.post('/auth/passkey/verify', limit, async (req, res) => res.json(await Security.passkeyVerify(req, false)));
 	}
 	static mountPrivate(app, limit) {
-		app.use('/api/v1/security', limit, (req, res, next) => { if (req.method !== 'GET') Security.fresh(req); res.setHeader('Cache-Control', 'no-store'); next(); });
-		app.get('/api/v1/security', async (req, res) => {
+		app.use('/api/v2/security', limit, (req, res, next) => { if (req.method !== 'GET') Security.fresh(req); res.setHeader('Cache-Control', 'no-store'); next(); });
+		app.get('/api/v2/security', async (req, res) => {
 			const user = await User.findById(req.ctx.user).lean();
 			res.json({ totp_enabled: user.totp_enabled, keys: await Passkey.find({ user: user._id }).select('_id name').lean() });
 		});
-		app.post('/api/v1/security/password', async (req, res) => {
+		app.post('/api/v2/security/password', async (req, res) => {
 			const result = await Security.resetPassword(req.ctx.user);
 			req.session.auth_version = result.version;
 			res.json({ password: result.password });
 		});
-		app.post('/api/v1/security/totp/setup', async (req, res) => {
+		app.post('/api/v2/security/totp/setup', async (req, res) => {
 			const user = await User.findById(req.ctx.user).lean();
 			Support.assert(!user.totp_enabled, 'Two-factor authentication is already enabled');
 			const secret = generateSecret();
@@ -184,7 +184,7 @@ export class Security {
 			const uri = generateURI({ issuer: 'TypeRelay', label: user.email, secret });
 			res.json({ secret, qr: await QRCode.toDataURL(uri) });
 		});
-		app.post('/api/v1/security/totp/confirm', async (req, res) => {
+		app.post('/api/v2/security/totp/confirm', async (req, res) => {
 			const pending = req.session.totp_setup;
 			Support.assert(pending?.expires > Date.now(), 'Setup expired; start again');
 			Support.assert(typeof req.body.code === 'string' && /^\d{6}$/.test(req.body.code) && verifySync({ secret: pending.secret, token: req.body.code }).valid, 'Invalid authentication code');
@@ -193,19 +193,19 @@ export class Security {
 			delete req.session.totp_setup;
 			res.json({ enabled: true });
 		});
-		app.post('/api/v1/security/totp/disable', async (req, res) => {
+		app.post('/api/v2/security/totp/disable', async (req, res) => {
 			const user = await User.findById(req.ctx.user).select('+totp_secret').lean();
 			await Security.verifyCode(user, req.body.code);
 			await User.updateOne({ _id: user._id }, { $set: { totp_enabled: false }, $unset: { totp_secret: 1, totp_step: 1 } });
 			res.json({ enabled: false });
 		});
-		app.post('/api/v1/security/passkeys/options', async (req, res) => res.json(await Security.passkeyOptions(req, true)));
-		app.post('/api/v1/security/passkeys/verify', async (req, res) => res.json(await Security.passkeyVerify(req, true)));
-		app.get('/api/v1/security/passkeys/:id', async (req, res) => {
+		app.post('/api/v2/security/passkeys/options', async (req, res) => res.json(await Security.passkeyOptions(req, true)));
+		app.post('/api/v2/security/passkeys/verify', async (req, res) => res.json(await Security.passkeyVerify(req, true)));
+		app.get('/api/v2/security/passkeys/:id', async (req, res) => {
 			const key = await Passkey.findOne({ _id: Support.id(req.params.id), user: req.ctx.user }).select('_id name').lean();
 			Support.assert(key, 'Passkey not found', 404);
 			res.render('ajax/passkey', { key });
 		});
-		app.delete('/api/v1/security/passkeys/:id', async (req, res) => { await Passkey.deleteOne({ _id: Support.id(req.params.id), user: req.ctx.user }); res.json({ deleted: req.params.id }); });
+		app.delete('/api/v2/security/passkeys/:id', async (req, res) => { await Passkey.deleteOne({ _id: Support.id(req.params.id), user: req.ctx.user }); res.json({ deleted: req.params.id }); });
 	}
 }
