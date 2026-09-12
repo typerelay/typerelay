@@ -28,6 +28,8 @@ pub struct App {
     editing: Option<usize>,
     original_entry: Option<Match>,
     original_url: String,
+    prefix: TextArea<'static>,
+    original_prefix: String,
     pending: Option<Destination>,
     confirm_from: Screen,
     status: String,
@@ -46,16 +48,16 @@ impl App {
         let files = store.files()?;
         let mut file_state = ListState::default();
         file_state.select(Some(0));
-        Ok(Self { store, settings, screen: Screen::Files, files, file_state, snippets_state: ListState::default(), file: None, search: TextArea::default(), search_focused: false, trigger: TextArea::default(), expansion: TextArea::default(), name: TextArea::default(), url: TextArea::default(), editor_focus: 0, editing: None, original_entry: None, original_url: String::new(), pending: None, confirm_from: Screen::Files, status: "Choose a file, or create a new one".into(), error: false, quit: false, toolbar: Vec::new(), list_area: Rect::default(), field_areas: Vec::new(), save_area: Rect::default(), cancel_area: Rect::default(), confirm_buttons: Vec::new() })
+        Ok(Self { store, settings, screen: Screen::Files, files, file_state, snippets_state: ListState::default(), file: None, search: TextArea::default(), search_focused: false, trigger: TextArea::default(), expansion: TextArea::default(), name: TextArea::default(), url: TextArea::default(), editor_focus: 0, editing: None, original_entry: None, original_url: String::new(), prefix: TextArea::default(), original_prefix: String::new(), pending: None, confirm_from: Screen::Files, status: "Choose a file, or create a new one".into(), error: false, quit: false, toolbar: Vec::new(), list_area: Rect::default(), field_areas: Vec::new(), save_area: Rect::default(), cancel_area: Rect::default(), confirm_buttons: Vec::new() })
     }
     fn text(value: &str) -> TextArea<'static> { TextArea::new(value.split('\n').map(str::to_owned).collect()) }
     fn value(field: &TextArea<'_>) -> String { field.lines().join("\n") }
-    fn draft(&self) -> Match { Match { trigger: format!("{}{}", Engine::PREFIX, Self::value(&self.trigger)), replace: Self::value(&self.expansion) } }
+    fn draft(&self) -> Match { Match { trigger: Self::value(&self.trigger), replace: Self::value(&self.expansion) } }
     fn effective_screen(&self) -> Screen { if self.screen == Screen::Confirm { self.confirm_from } else { self.screen } }
     fn dirty(&self) -> bool {
         match self.effective_screen() {
             Screen::Edit => self.original_entry.as_ref() != Some(&self.draft()),
-            Screen::Settings => Self::value(&self.url) != self.original_url,
+            Screen::Settings => Self::value(&self.url) != self.original_url || Self::value(&self.prefix) != self.original_prefix,
             _ => false,
         }
     }
@@ -72,6 +74,9 @@ impl App {
                 self.settings.reload()?;
                 self.original_url = self.settings.settings.sync_url.clone();
                 self.url = Self::text(&self.original_url);
+                self.original_prefix = self.settings.settings.trigger_prefix.clone();
+                self.prefix = Self::text(&self.original_prefix);
+                self.editor_focus = 0;
                 self.screen = Screen::Settings;
             }
         }
@@ -98,10 +103,11 @@ impl App {
         Ok(())
     }
     fn edit(&mut self, new: bool) -> Result<()> {
+        self.settings.reload()?;
         let file = self.file.as_ref().context("Choose a file first")?;
         self.editing = if new { None } else { Some(self.selected().context("Select a snippet")?) };
-        let entry = self.editing.map(|index| file.entries[index].clone()).unwrap_or(Match { trigger: Engine::PREFIX.to_string(), replace: String::new() });
-        self.trigger = Self::text(entry.trigger.strip_prefix(Engine::PREFIX).context("Missing trigger prefix")?);
+        let entry = self.editing.map(|index| file.entries[index].clone()).unwrap_or(Match { trigger: String::new(), replace: String::new() });
+        self.trigger = Self::text(&entry.trigger);
         self.trigger.move_cursor(ratatui_textarea::CursorMove::End);
         self.expansion = Self::text(&entry.replace);
         self.original_entry = Some(entry);
@@ -124,10 +130,11 @@ impl App {
                 self.message("Saved. The running engine reloads automatically.", false);
             }
             Screen::Settings => {
-                self.settings.save(&Self::value(&self.url))?;
+                self.settings.save(&Self::value(&self.url), &Self::value(&self.prefix))?;
                 self.original_url = self.settings.settings.sync_url.clone();
+                self.original_prefix = self.settings.settings.trigger_prefix.clone();
                 self.screen = if self.file.is_some() { Screen::Browse } else { Screen::Files };
-                self.message("Sync URL saved. Sync is not implemented yet.", false);
+                self.message("Settings saved. Prefix reloads automatically. Sync is not implemented yet.", false);
             }
             Screen::NewFile => {
                 self.file = Some(self.store.create(Self::value(&self.name).trim())?);
@@ -169,8 +176,8 @@ impl App {
     }
     fn abbreviation_input(&mut self, event: Event) {
         match event {
-            Event::Key(key) if key.code == KeyCode::Char(Engine::PREFIX) => (),
-            Event::Paste(text) => Self::single_input(&mut self.trigger, Event::Paste(text.strip_prefix(Engine::PREFIX).unwrap_or(&text).to_owned())),
+            Event::Key(key) if key.code == KeyCode::Char(self.settings.settings.trigger_prefix.chars().next().unwrap_or(Engine::DEFAULT_PREFIX)) => (),
+            Event::Paste(text) => Self::single_input(&mut self.trigger, Event::Paste(text.strip_prefix(self.settings.settings.trigger_prefix.as_str()).unwrap_or(&text).to_owned())),
             other => Self::single_input(&mut self.trigger, other),
         }
     }
@@ -230,14 +237,15 @@ impl App {
                     _ => { self.expansion.input(Event::Key(key)); }
                 },
                 Screen::NewFile => match key.code { KeyCode::Enter => self.save()?, KeyCode::Esc => self.apply(Destination::Files)?, _ => Self::single_input(&mut self.name, Event::Key(key)) },
-                Screen::Settings => match key.code { KeyCode::Esc => self.leave(Destination::Browse)?, _ => Self::single_input(&mut self.url, Event::Key(key)) },
+                Screen::Settings => match key.code { KeyCode::Esc => self.leave(Destination::Browse)?, KeyCode::Tab | KeyCode::BackTab => self.editor_focus = 1 - self.editor_focus, _ if self.editor_focus == 0 => Self::single_input(&mut self.url, Event::Key(key)), _ => Self::single_input(&mut self.prefix, Event::Key(key)) },
                 Screen::Confirm => (),
             }
         } else if let Event::Paste(text) = event {
             match self.screen {
                 Screen::Edit if self.editor_focus == 1 => { self.expansion.insert_str(text.replace("\r\n", "\n").replace('\r', "\n")); }
                 Screen::Edit => self.abbreviation_input(Event::Paste(text)),
-                Screen::Settings => Self::single_input(&mut self.url, Event::Paste(text)),
+                Screen::Settings if self.editor_focus == 0 => Self::single_input(&mut self.url, Event::Paste(text)),
+                Screen::Settings => Self::single_input(&mut self.prefix, Event::Paste(text)),
                 Screen::NewFile => Self::single_input(&mut self.name, Event::Paste(text)),
                 Screen::Browse if self.search_focused => { Self::single_input(&mut self.search, Event::Paste(text)); self.snippets_state.select(Some(0)); }
                 _ => (),
@@ -280,7 +288,7 @@ impl App {
     pub fn draw(&mut self, frame: &mut Frame) {
         self.toolbar.clear(); self.field_areas.clear(); self.list_area = Rect::default(); self.save_area = Rect::default(); self.cancel_area = Rect::default();
         let area = frame.area();
-        if area.width < 60 || area.height < 18 { frame.render_widget(Paragraph::new("TypeRelay — resize terminal to at least 60 × 18. Ctrl+Q exits."), area); return; }
+        if area.width < 60 || area.height < 20 { frame.render_widget(Paragraph::new("TypeRelay — resize terminal to at least 60 × 20. Ctrl+Q exits."), area); return; }
         let rows = Layout::vertical([Constraint::Length(2), Constraint::Length(3), Constraint::Min(8), Constraint::Length(3)]).split(area);
         let title = self.file.as_ref().map(|file| format!("TypeRelay  /  {}", file.name)).unwrap_or("TypeRelay  /  Snippet editor".into());
         frame.render_widget(Paragraph::new(title).style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)), rows[0]);
@@ -309,22 +317,25 @@ impl App {
             Screen::Edit => {
                 let parts = Layout::vertical([Constraint::Length(3), Constraint::Min(3), Constraint::Length(3)]).split(body);
                 let trigger_row = Layout::horizontal([Constraint::Length(5), Constraint::Length(1), Constraint::Min(1)]).split(parts[0]);
-                frame.render_widget(Paragraph::new(Engine::PREFIX.to_string()).centered().block(Self::border("", false)).style(Style::default().fg(Color::Gray)), trigger_row[0]);
+                frame.render_widget(Paragraph::new(self.settings.settings.trigger_prefix.clone()).centered().block(Self::border("", false)).style(Style::default().fg(Color::Gray)), trigger_row[0]);
                 self.trigger.set_block(Self::border("Abbreviation", self.editor_focus == 0));
                 self.expansion.set_block(Self::border("Expansion · Enter = newline · Ctrl+T = tab", self.editor_focus == 1));
                 frame.render_widget(&self.trigger, trigger_row[2]); frame.render_widget(&self.expansion, parts[1]); self.field_areas.extend([parts[0], parts[1]]);
                 self.form_buttons(frame, parts[2]);
             }
-            Screen::NewFile | Screen::Settings => {
+            Screen::NewFile => {
                 let parts = Layout::vertical([Constraint::Length(3), Constraint::Min(3), Constraint::Length(3)]).split(body);
-                if self.effective_screen() == Screen::NewFile {
-                    self.name.set_block(Self::border("New filename (.yml or .yaml)", true)); frame.render_widget(&self.name, parts[0]);
-                    frame.render_widget(Paragraph::new("Creates an empty snippet file. Existing files are never overwritten."), parts[1]);
-                } else {
-                    self.url.set_block(Self::border("URL to sync with", true)); frame.render_widget(&self.url, parts[0]);
-                    frame.render_widget(Paragraph::new("Sync is not implemented yet.\nSaving this setting makes no network request.\nClear the field to remove the URL."), parts[1]);
-                }
+                self.name.set_block(Self::border("New filename (.yml or .yaml)", true)); frame.render_widget(&self.name, parts[0]);
+                frame.render_widget(Paragraph::new("Creates an empty snippet file. Existing files are never overwritten."), parts[1]);
                 self.field_areas.push(parts[0]); self.form_buttons(frame, parts[2]);
+            }
+            Screen::Settings => {
+                let parts = Layout::vertical([Constraint::Length(3), Constraint::Length(3), Constraint::Min(2), Constraint::Length(3)]).split(body);
+                self.url.set_block(Self::border("URL to sync with", self.editor_focus == 0));
+                self.prefix.set_block(Self::border("Trigger prefix · e.g. , or ;", self.editor_focus == 1));
+                frame.render_widget(&self.url, parts[0]); frame.render_widget(&self.prefix, parts[1]);
+                frame.render_widget(Paragraph::new("Tab switches fields. The prefix is local to this machine.\nSync is not implemented yet; saving makes no network request."), parts[2]);
+                self.field_areas.extend([parts[0], parts[1]]); self.form_buttons(frame, parts[3]);
             }
             Screen::Confirm => (),
         }
@@ -349,6 +360,23 @@ impl App {
 mod tests {
     use super::*;
     use ratatui::crossterm::event::KeyEvent;
+    #[test]
+    fn settings_prefix_changes_form_but_saved_trigger_is_bare() {
+        let temp = tempfile::tempdir().unwrap(); let mut app = Fixture::app(temp.path());
+        app.file = Some(app.store.create("mine").unwrap()); app.screen = Screen::Browse;
+        Fixture::key(&mut app, KeyCode::F(6), KeyModifiers::NONE);
+        Fixture::key(&mut app, KeyCode::Tab, KeyModifiers::NONE);
+        Fixture::key(&mut app, KeyCode::Delete, KeyModifiers::NONE);
+        app.handle(Event::Paste(";".into()));
+        Fixture::key(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL);
+        assert_eq!(app.settings.settings.trigger_prefix, ";");
+        Fixture::key(&mut app, KeyCode::F(2), KeyModifiers::NONE);
+        app.handle(Event::Paste(";new".into()));
+        Fixture::key(&mut app, KeyCode::Tab, KeyModifiers::NONE);
+        app.handle(Event::Paste("New expansion".into()));
+        Fixture::key(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL);
+        assert_eq!(app.store.open("mine.yml").unwrap().entries[0].trigger, "new");
+    }
     struct Fixture;
     impl Fixture {
         fn app(directory: &std::path::Path) -> App { App::new(EditorStore::new(directory.join("snippets")).unwrap(), SettingsStore::open(directory.join("settings.yml")).unwrap()).unwrap() }
@@ -363,7 +391,7 @@ mod tests {
         assert_eq!(App::value(&app.trigger), "");
         app.handle(Event::Paste(",hello".into()));
         assert_eq!(App::value(&app.trigger), "hello");
-        assert_eq!(app.draft().trigger, ",hello");
+        assert_eq!(app.draft().trigger, "hello");
         Fixture::key(&mut app, KeyCode::Tab, KeyModifiers::NONE);
         app.handle(Event::Paste("Hello\nworld\n".into()));
         Fixture::key(&mut app, KeyCode::Esc, KeyModifiers::NONE); assert_eq!(app.screen, Screen::Confirm);

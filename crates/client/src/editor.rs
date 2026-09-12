@@ -84,21 +84,16 @@ impl EditorStore {
         self.open(&name)
     }
 
-    pub fn save(&self, file: &OpenFile, index: Option<usize>, entry: Match) -> Result<OpenFile> {
-        let _lock = self.lock()?;
-        let path = self.path(&file.name)?;
-        ensure!(!fs::metadata(&path)?.permissions().readonly(), "File is read-only; draft kept");
-        let observed = FileStore::read_files(&self.directory, true)?;
-        ensure!(observed.iter().any(|(p, bytes)| p == &path && bytes == &file.original), "File changed outside the TUI. Draft kept; reopen the file before applying your changes");
+    pub(crate) fn rewrite_entries(source: &str, updates: &[(usize, Match)]) -> Result<Vec<u8>> {
         use yaml_edit::AsYaml;
-        let source = std::str::from_utf8(&file.original)?;
+        let original: Document = serde_saphyr::from_str(source)?;
         let yaml = yaml_edit::YamlFile::from_str(source)?;
-        let document = yaml.documents().next().context("Expected one YAML document")?;
-        let matches = document.as_mapping().context("Expected YAML mapping")?.get_sequence("matches").context("Expected matches sequence")?;
-        let candidate = if let Some(index) = index {
-            let mapping = matches.get(index).and_then(|node| node.as_mapping().cloned()).context("Snippet no longer exists")?;
-            let previous = file.entries.get(index).context("Snippet no longer exists")?;
-            let mut edits = Vec::new();
+        let document = yaml.documents().next().context("Expected YAML document")?;
+        let matches = document.as_mapping().context("Expected mapping")?.get_sequence("matches").context("Expected matches sequence")?;
+        let mut edits = Vec::new();
+        for (index, entry) in updates {
+            let mapping = matches.get(*index).and_then(|node| node.as_mapping().cloned()).context("Snippet no longer exists")?;
+            let previous = original.matches.get(*index).context("Snippet no longer exists")?;
             for (key, value, old) in [("trigger", &entry.trigger, &previous.trigger), ("replace", &entry.replace, &previous.replace)] {
                 if value == old { continue; }
                 let node = mapping.get(key).context("Missing field")?;
@@ -114,10 +109,26 @@ impl EditorStore {
                 }
                 edits.push((start, end, replacement));
             }
+        }
             edits.sort_by_key(|(start, _, _)| std::cmp::Reverse(*start));
             let mut candidate = source.to_owned();
             for (start, end, replacement) in edits { candidate.replace_range(start..end, &replacement); }
-            candidate.into_bytes()
+            Ok(candidate.into_bytes())
+    }
+
+    pub fn save(&self, file: &OpenFile, index: Option<usize>, entry: Match) -> Result<OpenFile> {
+        let _lock = self.lock()?;
+        let path = self.path(&file.name)?;
+        ensure!(!fs::metadata(&path)?.permissions().readonly(), "File is read-only; draft kept");
+        let observed = FileStore::read_files(&self.directory, true)?;
+        ensure!(observed.iter().any(|(p, bytes)| p == &path && bytes == &file.original), "File changed outside the TUI. Draft kept; reopen the file before applying your changes");
+        use yaml_edit::AsYaml;
+        let source = std::str::from_utf8(&file.original)?;
+        let yaml = yaml_edit::YamlFile::from_str(source)?;
+        let document = yaml.documents().next().context("Expected one YAML document")?;
+        let matches = document.as_mapping().context("Expected YAML mapping")?.get_sequence("matches").context("Expected matches sequence")?;
+        let candidate = if let Some(index) = index {
+            Self::rewrite_entries(source, &[(index, entry.clone())])?
         } else {
             let encoded = serde_json::to_string(&entry)?;
             let sequence = matches.as_node().context("Missing sequence source range")?;
@@ -165,10 +176,10 @@ mod tests {
     fn append_to_indentless_sequence_after_quoted_multiline_value() {
         let temp = tempfile::tempdir().unwrap();
         let store = EditorStore::new(temp.path().into()).unwrap();
-        let original = "matches:\n- trigger: ',hth'\n  replace: 'First line\n\n    Second line\n\n\n    '\n";
+        let original = "matches:\n- trigger: 'hth'\n  replace: 'First line\n\n    Second line\n\n\n    '\n";
         fs::write(temp.path().join("imported.yml"), original).unwrap();
         let file = store.open("imported.yml").unwrap();
-        let saved = store.save(&file, None, Match { trigger: ",hth2".into(), replace: "This is new for everyone".into() }).unwrap();
+        let saved = store.save(&file, None, Match { trigger: "hth2".into(), replace: "This is new for everyone".into() }).unwrap();
         assert_eq!(saved.entries.len(), 2);
         assert_eq!(saved.entries[0], file.entries[0]);
         assert!(fs::read_to_string(temp.path().join("imported.yml")).unwrap().starts_with(original));
@@ -176,17 +187,17 @@ mod tests {
     #[test]
     fn append_handles_indentation_flow_and_document_endings() {
         for original in [
-            "matches:\n- trigger: ',old'\n  replace: old",
-            "matches:\n    - trigger: ',old'\n      replace: old\n",
-            "matches:\r\n- trigger: ',old'\r\n  replace: old\r\n",
-            "---\nmatches:\n- trigger: ',old'\n  replace: old\n...\n# footer\n",
-            "matches: [{trigger: ',old', replace: old}] # keep\n",
+            "matches:\n- trigger: 'old'\n  replace: old",
+            "matches:\n    - trigger: 'old'\n      replace: old\n",
+            "matches:\r\n- trigger: 'old'\r\n  replace: old\r\n",
+            "---\nmatches:\n- trigger: 'old'\n  replace: old\n...\n# footer\n",
+            "matches: [{trigger: 'old', replace: old}] # keep\n",
         ] {
             let temp = tempfile::tempdir().unwrap();
             let store = EditorStore::new(temp.path().into()).unwrap();
             fs::write(temp.path().join("test.yml"), original).unwrap();
             let file = store.open("test.yml").unwrap();
-            let saved = store.save(&file, None, Match { trigger: ",new".into(), replace: "New\nparagraph\n".into() }).unwrap();
+            let saved = store.save(&file, None, Match { trigger: "new".into(), replace: "New\nparagraph\n".into() }).unwrap();
             assert_eq!(saved.entries.len(), 2);
             assert_eq!(saved.entries[0], file.entries[0]);
             if original.contains("# footer") { assert!(fs::read_to_string(temp.path().join("test.yml")).unwrap().ends_with("...\n# footer\n")); }
@@ -196,15 +207,15 @@ mod tests {
     fn lossless_save_search_and_external_conflict() {
         let temp = tempfile::tempdir().unwrap();
         let store = EditorStore::new(temp.path().into()).unwrap();
-        let original = "# my notes\nmatches:\n  # greeting\n  - trigger: ',hi' # shorthand\n    replace: 'Hello'\n  # keep this exactly\n  - trigger: ',other'\n    replace: |+\n      Unchanged\n\n";
+        let original = "# my notes\nmatches:\n  # greeting\n  - trigger: 'hi' # shorthand\n    replace: 'Hello'\n  # keep this exactly\n  - trigger: 'other'\n    replace: |+\n      Unchanged\n\n";
         fs::write(temp.path().join("mine.yml"), original).unwrap();
         let file = store.open("mine.yml").unwrap();
         assert_eq!(file.search("HELLO"), vec![0]);
-        assert_eq!(file.search(",other"), vec![1]);
-        let file = store.save(&file, Some(0), Match { trigger: ",hi".into(), replace: "Hello\n\nCafé\tworld\n\n".into() }).unwrap();
+        assert_eq!(file.search("other"), vec![1]);
+        let file = store.save(&file, Some(0), Match { trigger: "hi".into(), replace: "Hello\n\nCafé\tworld\n\n".into() }).unwrap();
         let text = fs::read_to_string(temp.path().join("mine.yml")).unwrap();
         assert!(text.contains("# my notes") && text.contains("# greeting") && text.contains("# shorthand"));
-        assert!(text.ends_with("  # keep this exactly\n  - trigger: ',other'\n    replace: |+\n      Unchanged\n\n"));
+        assert!(text.ends_with("  # keep this exactly\n  - trigger: 'other'\n    replace: |+\n      Unchanged\n\n"));
         fs::write(temp.path().join("mine.yml"), original).unwrap();
         assert!(store.save(&file, Some(0), file.entries[0].clone()).unwrap_err().to_string().contains("outside"));
         assert_eq!(fs::read_to_string(temp.path().join("mine.yml")).unwrap(), original);
@@ -214,7 +225,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let store = EditorStore::new(temp.path().into()).unwrap();
         let file = store.create("sales").unwrap();
-        let file = store.save(&file, None, Match { trigger: ",sale".into(), replace: "Paragraph\nnext\n".into() }).unwrap();
+        let file = store.save(&file, None, Match { trigger: "sale".into(), replace: "Paragraph\nnext\n".into() }).unwrap();
         assert_eq!(file.entries.len(), 1);
         assert!(store.create("sales").is_err());
         assert!(store.create("../escape").is_err());
@@ -222,21 +233,21 @@ mod tests {
         assert!(store.save(&other, None, file.entries[0].clone()).is_err());
         assert!(store.open("code.yaml").unwrap().entries.is_empty());
         let _lock = store.lock().unwrap();
-        assert!(store.save(&file, None, Match { trigger: ",new".into(), replace: "text".into() }).is_err());
+        assert!(store.save(&file, None, Match { trigger: "new".into(), replace: "text".into() }).is_err());
         assert_eq!(store.open("sales.yml").unwrap().entries.len(), 1);
     }
     #[test]
     fn edit_block_scalar_and_append_preserve_unrelated_text() {
         let temp = tempfile::tempdir().unwrap();
         let store = EditorStore::new(temp.path().into()).unwrap();
-        let original = "# header\nmatches:\n  - trigger: ',block'\n    replace: |+ # signature\n      Original\n\n  # second\n  - trigger: ',two'\n    replace: 'Keep me' # trailing\n";
+        let original = "# header\nmatches:\n  - trigger: 'block'\n    replace: |+ # signature\n      Original\n\n  # second\n  - trigger: 'two'\n    replace: 'Keep me' # trailing\n";
         fs::write(temp.path().join("blocks.yml"), original).unwrap();
         let file = store.open("blocks.yml").unwrap();
-        let file = store.save(&file, Some(0), Match { trigger: ",block".into(), replace: "New\n\nText\n".into() }).unwrap();
+        let file = store.save(&file, Some(0), Match { trigger: "block".into(), replace: "New\n\nText\n".into() }).unwrap();
         let before = fs::read_to_string(temp.path().join("blocks.yml")).unwrap();
         assert!(before.contains("# signature"));
-        assert!(before.contains("  # second\n  - trigger: ',two'\n    replace: 'Keep me' # trailing\n"));
-        store.save(&file, None, Match { trigger: ",third".into(), replace: "Third\nline\n".into() }).unwrap();
+        assert!(before.contains("  # second\n  - trigger: 'two'\n    replace: 'Keep me' # trailing\n"));
+        store.save(&file, None, Match { trigger: "third".into(), replace: "Third\nline\n".into() }).unwrap();
         let after = fs::read_to_string(temp.path().join("blocks.yml")).unwrap();
         assert!(after.starts_with(&before), "Appending must preserve existing entries and comments");
     }
@@ -248,7 +259,7 @@ mod tests {
         let path = temp.path().join("readonly.yml");
         let original = fs::metadata(&path).unwrap().permissions();
         let mut permissions = original.clone(); permissions.set_readonly(true); fs::set_permissions(&path, permissions).unwrap();
-        let result = store.save(&file, None, Match { trigger: ",new".into(), replace: "draft".into() });
+        let result = store.save(&file, None, Match { trigger: "new".into(), replace: "draft".into() });
         fs::set_permissions(&path, original).unwrap();
         assert!(result.is_err());
         assert!(store.open("readonly.yml").unwrap().entries.is_empty());

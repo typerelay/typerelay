@@ -5,6 +5,7 @@ use evdev::{Device, EventType, InputEvent, KeyCode, InputId, BusType, uinput::Vi
 use fs2::FileExt;
 use std::{collections::{BTreeSet, VecDeque}, fs, io::Read, os::unix::net::UnixStream, path::PathBuf, process::Command, sync::{Arc, atomic::{AtomicBool, Ordering}}, thread, time::{Duration, Instant}};
 use typerelay_core::{Engine, Input, Expansion};
+use typerelay_client::{settings::SettingsStore, editor::Paths};
 
 pub struct Session;
 
@@ -143,6 +144,15 @@ impl Session {
             KeyCode::KEY_SPACE => Input::Space,
             KeyCode::KEY_BACKSPACE => Input::Backspace,
             KeyCode::KEY_COMMA => Input::Character(','),
+            KeyCode::KEY_SEMICOLON => Input::Character(';'),
+            KeyCode::KEY_DOT => Input::Character('.'),
+            KeyCode::KEY_SLASH => Input::Character('/'),
+            KeyCode::KEY_APOSTROPHE => Input::Character('\''),
+            KeyCode::KEY_LEFTBRACE => Input::Character('['),
+            KeyCode::KEY_RIGHTBRACE => Input::Character(']'),
+            KeyCode::KEY_BACKSLASH => Input::Character('\\'),
+            KeyCode::KEY_GRAVE => Input::Character('`'),
+            KeyCode::KEY_EQUAL => Input::Character('='),
             KeyCode::KEY_MINUS => Input::Character('-'),
             _ => {
                 let keys = [(KeyCode::KEY_A, 'a'), (KeyCode::KEY_B, 'b'), (KeyCode::KEY_C, 'c'), (KeyCode::KEY_D, 'd'), (KeyCode::KEY_E, 'e'), (KeyCode::KEY_F, 'f'), (KeyCode::KEY_G, 'g'), (KeyCode::KEY_H, 'h'), (KeyCode::KEY_I, 'i'), (KeyCode::KEY_J, 'j'), (KeyCode::KEY_K, 'k'), (KeyCode::KEY_L, 'l'), (KeyCode::KEY_M, 'm'), (KeyCode::KEY_N, 'n'), (KeyCode::KEY_O, 'o'), (KeyCode::KEY_P, 'p'), (KeyCode::KEY_Q, 'q'), (KeyCode::KEY_R, 'r'), (KeyCode::KEY_S, 's'), (KeyCode::KEY_T, 't'), (KeyCode::KEY_U, 'u'), (KeyCode::KEY_V, 'v'), (KeyCode::KEY_W, 'w'), (KeyCode::KEY_X, 'x'), (KeyCode::KEY_Y, 'y'), (KeyCode::KEY_Z, 'z'), (KeyCode::KEY_0, '0'), (KeyCode::KEY_1, '1'), (KeyCode::KEY_2, '2'), (KeyCode::KEY_3, '3'), (KeyCode::KEY_4, '4'), (KeyCode::KEY_5, '5'), (KeyCode::KEY_6, '6'), (KeyCode::KEY_7, '7'), (KeyCode::KEY_8, '8'), (KeyCode::KEY_9, '9')];
@@ -235,7 +245,9 @@ impl Session {
         let running = Arc::new(AtomicBool::new(true));
         let signal = running.clone();
         ctrlc::set_handler(move || signal.store(false, Ordering::SeqCst))?;
+        let mut settings = SettingsStore::open(Paths::config_dir()?.join("settings.yml"))?;
         let mut engine = Engine::new(store.snapshot.clone());
+        engine.set_prefix(&settings.settings.trigger_prefix).map_err(anyhow::Error::msg)?;
         let mut pressed = BTreeSet::new();
         let mut suppressed_space = false;
         let mut target = None;
@@ -247,7 +259,7 @@ impl Session {
         let mut last_stroke = Instant::now();
         let mut paste: Option<PasteState> = None;
         let mut last_conflict_check = Instant::now();
-        eprintln!("TypeRelay running: {} snippets; comma + abbreviation + Space. Ctrl+C stops. No keystrokes are logged.", store.snapshot.len());
+        eprintln!("TypeRelay running: {} snippets; configured prefix + abbreviation + Space. Ctrl+C stops. No keystrokes are logged.", store.snapshot.len());
         while running.load(Ordering::SeqCst) {
             if last_conflict_check.elapsed() >= Duration::from_secs(2) {
                 Self::check_interference(&Hyprland::query("devices")?)?;
@@ -262,6 +274,11 @@ impl Session {
                     Ok(Some(snapshot)) => { engine.replace_snapshot(snapshot); eprintln!("Snippet snapshot reloaded"); }
                     Ok(None) => (),
                     Err(error) => eprintln!("Snippet reload rejected: {error:#}; keeping last valid snapshot"),
+                }
+                match settings.reload() {
+                    Ok(true) => { engine.set_prefix(&settings.settings.trigger_prefix).map_err(anyhow::Error::msg)?; target = None; eprintln!("Trigger prefix updated"); }
+                    Ok(false) => (),
+                    Err(error) => eprintln!("Settings reload rejected: {error:#}; keeping previous prefix"),
                 }
                 last_reload = Instant::now();
             }
@@ -330,7 +347,7 @@ impl Session {
                         engine.feed(Input::Cancel);
                     } else {
                         if context.changed()? { engine.feed(Input::Cancel); target = None; }
-                        if matches!(Self::input(code), Input::Character(c) if c == Engine::PREFIX) { target = Self::target()?; if std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some() { eprintln!("Candidate target available: {}", target.is_some()); } }
+                        if matches!(Self::input(code), Input::Character(c) if c == engine.prefix()) { target = Self::target()?; if std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some() { eprintln!("Candidate target available: {}", target.is_some()); } }
                         let expansion = if target.is_some() { engine.feed(Self::input(code)) } else { engine.feed(Input::Cancel); None };
                         if expansion.is_some() && std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some() { eprintln!("Match found; held-key count {}", pressed.len()); }
                         if let Some(expansion) = expansion

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fs, io::Write, path::{Path, PathBuf}};
-use typerelay_core::{Engine, Snapshot, Snippet};
+use typerelay_core::{Snapshot, Snippet};
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -100,7 +100,7 @@ impl FileStore {
         for (index, entry) in document.matches.into_iter().enumerate() {
             let Some(trigger) = entry.trigger else { eprintln!("Skipped entry {}: missing simple trigger", index + 1); skipped += 1; continue; };
             let Some(replace) = entry.replace else { eprintln!("Skipped entry {}: missing static replacement", index + 1); skipped += 1; continue; };
-            let normalized = format!("{}{}", Engine::PREFIX, trigger.trim_start_matches([';', ':', Engine::PREFIX]));
+            let normalized = trigger.trim_start_matches([';', ':', ',']).to_owned();
             let invalid = Snapshot::new(vec![Snippet { trigger: normalized.clone(), replacement: replace.clone() }]).is_err();
             let supported_options = entry.extra.iter().all(|(key, value)| key == "force_mode" && value.as_str() == Some("clipboard"));
             if invalid || !supported_options {
@@ -119,7 +119,7 @@ impl FileStore {
         let mut file = options.open(destination).context("Destination must not already exist")?;
         file.write_all(yaml.as_bytes())?;
         file.sync_all()?;
-        println!("Imported {} static snippets with comma prefixes; skipped {skipped}. Source unchanged.", output.matches.len());
+        println!("Imported {} static snippets with bare abbreviations; skipped {skipped}. Source unchanged.", output.matches.len());
         Ok(())
     }
 }
@@ -133,17 +133,17 @@ mod tests {
         fs::create_dir_all(&directory).unwrap();
         let personal = directory.join("mysnippets.yml");
         let sales = directory.join("sales.yaml");
-        fs::write(&personal, "matches:\n- trigger: ',mine'\n  replace: personal\n").unwrap();
+        fs::write(&personal, "matches:\n- trigger: 'mine'\n  replace: personal\n").unwrap();
         fs::write(directory.join("ignored.txt"), "not YAML").unwrap();
         let mut store = FileStore::open(directory.clone()).unwrap();
         assert_eq!(store.snapshot.len(), 1);
-        fs::write(&sales, "matches:\n- trigger: ',sale'\n  replace: sales\n").unwrap();
+        fs::write(&sales, "matches:\n- trigger: 'sale'\n  replace: sales\n").unwrap();
         assert_eq!(store.reload().unwrap().unwrap().len(), 2);
-        fs::write(&sales, "matches:\n- trigger: ',mine'\n  replace: duplicate\n").unwrap();
+        fs::write(&sales, "matches:\n- trigger: 'mine'\n  replace: duplicate\n").unwrap();
         let error = store.reload().unwrap_err().to_string();
-        assert!(error.contains("mysnippets.yml") && error.contains("sales.yaml") && error.contains(",mine"));
+        assert!(error.contains("mysnippets.yml") && error.contains("sales.yaml") && error.contains("mine"));
         assert_eq!(store.snapshot.len(), 2);
-        fs::write(&sales, "matches:\n- trigger: ',sale'\n  replace: updated\n").unwrap();
+        fs::write(&sales, "matches:\n- trigger: 'sale'\n  replace: updated\n").unwrap();
         let mut engine = typerelay_core::Engine::new(store.reload().unwrap().unwrap());
         for c in ",sale".chars() { engine.feed(typerelay_core::Input::Character(c)); }
         assert_eq!(engine.feed(typerelay_core::Input::Space).unwrap().text, "updated");
@@ -155,12 +155,12 @@ mod tests {
     }
     #[test]
     fn rejects_dynamic_and_unknown_yaml() {
-        assert!(FileStore::parse(b"matches:\n  - trigger: ',a'\n    replace: ok\n    vars: []\n").is_err());
-        assert!(FileStore::parse(b"matches:\n  - trigger: ',a'\n    replace: ok\n").is_ok());
+        assert!(FileStore::parse(b"matches:\n  - trigger: 'a'\n    replace: ok\n    vars: []\n").is_err());
+        assert!(FileStore::parse(b"matches:\n  - trigger: 'a'\n    replace: ok\n").is_ok());
     }
     #[test]
     fn yaml_block_scalar_keeps_linebreaks() {
-        let snapshot = FileStore::parse(b"matches:\n  - trigger: ',naf'\n    replace: |\n      Sincerely,\n      Nitai\n\n      Ceo & Founder\n").unwrap();
+        let snapshot = FileStore::parse(b"matches:\n  - trigger: 'naf'\n    replace: |\n      Sincerely,\n      Nitai\n\n      Ceo & Founder\n").unwrap();
         let mut engine = typerelay_core::Engine::new(snapshot);
         for c in ",naf".chars() { engine.feed(typerelay_core::Input::Character(c)); }
         assert_eq!(engine.feed(typerelay_core::Input::Space).unwrap().text, "Sincerely,\nNitai\n\nCeo & Founder\n");
@@ -168,7 +168,7 @@ mod tests {
     #[test]
     fn invalid_reload_preserves_previous_snapshot_and_recovers() {
         let path = std::env::temp_dir().join(format!("typerelay-test-{}.yml", std::process::id()));
-        fs::write(&path, "matches:\n  - trigger: ',a'\n    replace: ok\n").unwrap();
+        fs::write(&path, "matches:\n  - trigger: 'a'\n    replace: ok\n").unwrap();
         let mut store = FileStore::open(path.clone()).unwrap();
         fs::write(&path, "bad yaml [").unwrap();
         assert!(store.reload().is_err());

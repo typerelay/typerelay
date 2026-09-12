@@ -152,7 +152,7 @@ class Smoke:
                 if espanso_running:
                     self.command("espanso", "stop")
                 log = (directory / "client.log").open("w+")
-                client = self.start(str(self.root / "target/debug/typerelay"), "run", "--file", str(self.root / "examples/matches.yml"), stdout=log, stderr=log)
+                client = self.start(str(self.root / "target/debug/typerelay"), "run", "--file", str(self.root / "examples/matches.yml"), stdout=log, stderr=log, env={**os.environ, "XDG_CONFIG_HOME": str(directory / "config")})
                 time.sleep(0.6)
                 if client.poll() is not None:
                     raise RuntimeError((directory / "client.log").read_text())

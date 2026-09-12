@@ -8,10 +8,9 @@ Choose a `.yml`/`.yaml` file or **New file** at startup. The default directory i
 `~/.config/typerelay/snippets/`; override with `typerelay-tui --dir /path/to/snippets`.
 Names without an extension gain `.yml`. Existing files are never overwritten by creation.
 
-The trigger form shows a fixed comma before an **Abbreviation** field. Enter `naf`,
-not the prefix; saving still writes `,naf` to YAML. Editing existing snippets shows only
-the abbreviation. A pasted full trigger has its leading prefix removed automatically.
-The prefix comes from the shared engine constant; no configurable-prefix setting is added yet.
+The trigger form displays the local prefix beside an **Abbreviation** field. Enter `naf`;
+saving writes `trigger: "naf"` to YAML. The engine adds the prefix from Settings. A pasted
+full trigger has its current prefix removed automatically. See [configuration and migration](CONFIGURATION.md).
 
 ## Controls
 
@@ -52,8 +51,9 @@ The running engine picks up saves through its existing watcher; no restart is ne
 
 ## Settings and sync
 
-`~/.config/typerelay/settings.yml` stores `sync_url` outside the snippet directory.
+`~/.config/typerelay/settings.yml` stores `sync_url` and `trigger_prefix` outside the snippet directory.
 `XDG_CONFIG_HOME` is respected. Accepts absolute HTTP(S) URLs; empty clears the value.
+Tab switches between URL and prefix. Prefix changes reload in the engine automatically.
 Saving makes no network request. Sync remains visibly disabled even with a URL configured,
 until a future server protocol is implemented.
 

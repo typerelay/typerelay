@@ -1,17 +1,17 @@
 matches:
-  - trigger: ",brb"
+  - trigger: "brb"
     replace: "Be right back."
-  - trigger: ",brbmore"
+  - trigger: "brbmore"
     replace: "I will be back a little later."
-  - trigger: ",hello"
+  - trigger: "hello"
     replace: "Hello from TypeRelay!"
-  - trigger: ",symbols"
+  - trigger: "symbols"
     replace: "Hello! (One + two) = 3; email@example.com / $5 #tag"
-  - trigger: ",naf"
+  - trigger: "naf"
     replace: |+
       Sincerely,
       Nitai
       Ceo & Founder
 
-  - trigger: ",paragraphs"
+  - trigger: "paragraphs"
     replace: "First paragraph.\n\nSecond paragraph with a tab:\tCafé ☕\n"

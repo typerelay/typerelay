@@ -1,5 +1,21 @@
 # POC verification — 2026-09-11
 
+## Local prefix / bare abbreviation migration (0.5.0, 2026-09-12)
+
+- Core tests cover bare abbreviations, configurable prefix matching, rejecting invalid
+  prefixes, and clearing unfinished matches when the prefix changes.
+- Settings/TUI tests cover persistence, live reload and saving bare abbreviations while
+  displaying the local prefix. Migration tests cover comments/text preservation, backups,
+  idempotence and rejecting collisions/double prefixes before data writes.
+- Installer rollback testing verifies restoration of original snippet data, binaries and
+  manifest if the new service fails to start.
+- Live GTK test verified comma activation, changing to semicolon without restarting the
+  engine, rejecting the old prefix and leaving the snippet file byte-for-byte unchanged.
+- Installed v0.5.0 engine and TUI on the user's machine. Migrated 64 active triggers with
+  backups and confirmed every expansion remained identical. A second migration preview
+  reported zero changes. The service was active afterward and the user was told to resume.
+- Existing persistent device permissions were reused; no administrator changes were needed.
+
 ## Append fix (0.4.1, 2026-09-12)
 
 - Reproduced failed additions to an indentless YAML list ending with a multiline quoted

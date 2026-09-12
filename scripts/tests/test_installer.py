@@ -35,7 +35,7 @@ class InstallerTests(unittest.TestCase):
         self.subject.prompt = Mock(return_value=True)
         self.subject.privileged = Mock()
         self.subject.conflicts = Mock(return_value={"manual": [], "possible": [], "espanso_process": True, "espanso_enabled": True, "espanso_active": True})
-        self.subject.command = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+        self.subject.command = Mock(return_value=subprocess.CompletedProcess([], 0, '{"backup": null}', ""))
         self.subject.systemctl = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
         self.sleep = patch.object(self.installer.time, "sleep")
         self.sleep.start()
@@ -73,7 +73,7 @@ class InstallerTests(unittest.TestCase):
 
     def test_install_upgrade_uninstall_preserve_snippets_and_restore_espanso(self):
         self.subject.config.mkdir(parents=True)
-        original = "matches:\n- trigger: ',mine'\n  replace: mine\n"
+        original = "matches:\n- trigger: 'mine'\n  replace: mine\n"
         (self.subject.config / "poc.yml").write_text(original)
         self.subject.install(False)
         migrated = self.subject.snippets / "mysnippets.yml"
@@ -105,6 +105,45 @@ class InstallerTests(unittest.TestCase):
         self.assertTrue(self.subject.manifest.exists(), "Recovery/uninstall must remain possible")
         self.subject.systemctl.assert_any_call("enable", "espanso.service", check=False)
         self.subject.systemctl.assert_any_call("start", "espanso.service", check=False)
+
+    def test_failed_upgrade_restores_migrated_files_binaries_and_manifest(self):
+        self.subject.config.mkdir(parents=True)
+        self.subject.snippets.mkdir()
+        file = self.subject.snippets / "mine.yml"
+        old_text = "matches:\n- trigger: ',old'\n  replace: original\n"
+        file.write_text(old_text)
+        self.subject.destination.parent.mkdir(parents=True)
+        self.subject.destination.write_bytes(b"old engine")
+        self.subject.destination.with_name("typerelay-tui").write_bytes(b"old tui")
+        self.subject.data.mkdir(parents=True)
+        old_manifest = '{"binary_sha256": "old", "espanso_enabled": false, "espanso_active": false}'
+        self.subject.manifest.write_text(old_manifest)
+        self.subject.conflicts.return_value.update(espanso_process=False, espanso_enabled=False, espanso_active=False)
+        active_checks = []
+        def service(*args, **kwargs):
+            if args == ("is-active", "typerelay.service"):
+                active_checks.append(True)
+                return subprocess.CompletedProcess([], 0 if len(active_checks) == 1 else 3, "", "")
+            return subprocess.CompletedProcess([], 0, "", "")
+        def migrate(check=False):
+            if check:
+                return None
+            backup = self.home / "migration-backup"
+            backup.mkdir()
+            saved = backup / "0.bak"
+            saved.write_text(old_text)
+            (backup / "manifest.json").write_text(json.dumps([{"path": str(file), "backup": str(saved)}]))
+            file.write_text("matches:\n- trigger: old\n  replace: original\n")
+            return str(backup)
+        self.subject.systemctl.side_effect = service
+        self.subject.migrate_snippets = Mock(side_effect=migrate)
+        with self.assertRaisesRegex(RuntimeError, "failed to start"):
+            self.subject.install(False)
+        self.assertEqual(file.read_text(), old_text)
+        self.assertEqual(self.subject.destination.read_bytes(), b"old engine")
+        self.assertEqual(self.subject.destination.with_name("typerelay-tui").read_bytes(), b"old tui")
+        self.assertEqual(self.subject.manifest.read_text(), old_manifest)
+        self.subject.systemctl.assert_any_call("start", "typerelay.service", check=False)
 
     def test_uninstall_preserves_replaced_binary(self):
         self.subject.install(False)

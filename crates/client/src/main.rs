@@ -33,6 +33,7 @@ impl ConfigSource {
 enum Commands {
     Validate { #[command(flatten)] source: ConfigSource },
     ImportEspanso { source: PathBuf, destination: PathBuf },
+    Migrate { #[command(flatten)] source: ConfigSource, #[arg(long)] check: bool, #[arg(long)] settings: Option<PathBuf>, #[arg(long)] json: bool },
     Doctor,
     #[cfg(target_os = "linux")]
     #[command(hide = true)]
@@ -52,6 +53,13 @@ impl Cli {
                 println!("Valid: {} snippets", store.snapshot.len());
             }
             Commands::ImportEspanso { source, destination } => config::FileStore::import(&source, &destination)?,
+            Commands::Migrate { source, check, settings, json } => {
+                let settings = settings.unwrap_or(typerelay_client::editor::Paths::config_dir()?.join("settings.yml"));
+                let report = typerelay_client::migration::Migration::run(&source.path()?, &settings, check)?;
+                if json { println!("{}", serde_json::to_string(&report)?); return Ok(()); }
+                println!("{}: {} triggers, {} files", if check { "Migration preview" } else { "Migration complete" }, report.snippets, report.files);
+                if let Some(backup) = report.backup { println!("Backups: {}", backup.display()); }
+            }
             #[cfg(target_os = "linux")]
             Commands::ClipboardServe => clipboard::PasteJob::serve_restored()?,
             #[cfg(target_os = "linux")]

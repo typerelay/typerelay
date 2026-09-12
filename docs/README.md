@@ -57,19 +57,20 @@ as root, grant `cap_dac_override`, or add the desktop user to the broad input gr
 ## Local snippets
 
 `matches` is a list of `trigger`/`replace` pairs, compatible with Espanso's static YAML
-format. No Espanso code or runtime is used. Triggers start with comma followed by 1–63
-lowercase ASCII letters, digits or hyphens. Replacements support Unicode, paragraphs,
+format. No Espanso code or runtime is used. Triggers store bare abbreviations of 1–63
+lowercase ASCII letters, digits or hyphens. The local `trigger_prefix` setting supplies the
+activation prefix (comma by default); see [configuration and migration](CONFIGURATION.md). Replacements support Unicode, paragraphs,
 newlines and tabs, up to 65536 UTF-8 bytes. CRLF line endings normalize to LF. Bare carriage
 returns, other control characters, dynamic markers and additional options are rejected.
 
 ```yaml
 matches:
-  - trigger: ",naf"
+  - trigger: "naf"
     replace: |-
       Sincerely,
       Nitai
       Ceo & Founder
-  - trigger: ",reply"
+  - trigger: "reply"
     replace: "First paragraph.\n\nSecond paragraph.\n"
 ```
 
@@ -85,8 +86,7 @@ chmod 600 ~/.config/typerelay/matches.yml
 ./target/debug/typerelay run --file ~/.config/typerelay/poc.yml
 ```
 
-The importer leaves the exact copy untouched, changes leading `;`/`:` to `,` (or prepends
-`,` to unprefixed triggers), and reports unsupported entry numbers without printing their
+The importer leaves the exact copy untouched, strips legacy leading `;`/`:`/`,` characters to produce bare abbreviations, and reports unsupported entry numbers without printing their
 content. Static entries with Espanso's `force_mode: clipboard` are accepted; insertion mode
 is chosen automatically. It refuses to overwrite an existing destination or accept duplicate normalized
 triggers. Personal files stay outside Git. Edit `poc.yml` to update snippets; the running

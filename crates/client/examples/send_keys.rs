@@ -19,7 +19,7 @@ impl Sender {
             let active: serde_json::Value = serde_json::from_slice(&active.stdout)?;
             anyhow::ensure!(active["class"].as_str() == Some(&expected_class), "Test window lost focus; input aborted");
             let name = match character {
-                ',' => "KEY_COMMA".into(), ' ' => "KEY_SPACE".into(), '-' => "KEY_MINUS".into(), '\u{8}' => "KEY_BACKSPACE".into(), '\n' => "KEY_ENTER".into(), '\u{1b}' => "KEY_ESC".into(),
+                ',' => "KEY_COMMA".into(), ';' => "KEY_SEMICOLON".into(), ' ' => "KEY_SPACE".into(), '-' => "KEY_MINUS".into(), '\u{8}' => "KEY_BACKSPACE".into(), '\n' => "KEY_ENTER".into(), '\u{1b}' => "KEY_ESC".into(),
                 c if c.is_ascii_lowercase() || c.is_ascii_digit() => format!("KEY_{}", c.to_ascii_uppercase()),
                 _ => anyhow::bail!("Unsupported test character"),
             };

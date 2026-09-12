@@ -89,8 +89,8 @@ both files. Invalid edits retain the last working snapshot. An empty directory i
 loads zero snippets. Limits: 256 files, 1 MiB per file, 8 MiB combined.
 
 On first installation, if this directory contains no active YAML files, an existing
-`~/.config/typerelay/poc.yml` is copied to `mysnippets.yml`. The original and all existing
-snippet files are preserved. Otherwise an empty `mysnippets.yml` is created.
+`~/.config/typerelay/poc.yml` is copied to `mysnippets.yml`. The original is preserved. Active snippet files are then migrated to bare abbreviations
+with backups; see [configuration and migration](CONFIGURATION.md). Otherwise an empty `mysnippets.yml` is created.
 
 ```fish
 typerelay validate                 # validate the default snippets directory

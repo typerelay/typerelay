@@ -6,10 +6,12 @@ import json
 import os
 import pathlib
 import pwd
+import runpy
 import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 
 
@@ -122,7 +124,21 @@ WantedBy=graphical-session.target
         active = self.systemctl("is-active", "espanso.service", check=False).returncode == 0
         return {"manual": manual, "possible": sorted(possible), "espanso_process": espanso_process, "espanso_enabled": enabled.startswith("enabled"), "espanso_active": active}
 
+    def permissions_current(self):
+        try:
+            uid = os.getuid()
+            access = runpy.run_path(str(self.helper))["SessionAccess"]()
+            rule = pathlib.Path(f"/etc/udev/rules.d/99-typerelay-{uid}.rules")
+            module = pathlib.Path(f"/etc/modules-load.d/typerelay-{uid}.conf")
+            saved = pathlib.Path(f"/var/lib/typerelay/access-{uid}.json")
+            return saved.exists() and rule.read_text() == access.rules(uid) and module.read_text() == access.marker + "\nuinput\n" and all(os.access(path, os.R_OK | (os.W_OK if permission == "rw" else 0)) for _, path, permission in access.paths())
+        except (OSError, KeyError, subprocess.CalledProcessError):
+            return False
+
     def privileged(self, action):
+        if action == "install" and self.permissions_current():
+            print("Existing persistent input access is current; no administrator changes needed.")
+            return
         arguments = ["/usr/bin/python3", str(self.helper), action, pwd.getpwuid(os.getuid()).pw_name]
         if shutil.which("sudo"):
             arguments.insert(0, "sudo")
@@ -151,7 +167,14 @@ WantedBy=graphical-session.target
         temporary.chmod(0o600)
         os.replace(temporary, path)
 
-    def migrate_snippets(self):
+    def migrate_snippets(self, check=False):
+        legacy = self.config / "poc.yml"
+        if check:
+            files = list(self.snippets.glob("*.yml")) + list(self.snippets.glob("*.yaml")) if self.snippets.exists() else []
+            source = ("--dir", self.snippets) if files else ("--file", legacy) if legacy.exists() else None
+            if source:
+                self.command(str(self.binary), "migrate", source[0], str(source[1]), "--settings", str(self.config / "settings.yml"), "--check")
+            return None
         self.snippets.mkdir(parents=True, exist_ok=True)
         self.snippets.chmod(0o700)
         existing = [p for p in self.snippets.iterdir() if p.suffix in (".yml", ".yaml") and p.is_file() and not p.is_symlink()]
@@ -159,7 +182,6 @@ WantedBy=graphical-session.target
             legacy = self.config / "poc.yml"
             target = self.snippets / "mysnippets.yml"
             if legacy.is_file():
-                self.command(str(self.binary), "validate", "--file", str(legacy))
                 if target.exists() or target.is_symlink():
                     raise RuntimeError("Refusing to overwrite mysnippets.yml")
                 shutil.copy2(legacy, target)
@@ -167,7 +189,11 @@ WantedBy=graphical-session.target
                 print("Copied poc.yml to snippets/mysnippets.yml; original preserved.")
             else:
                 self.write_private(target, "matches: []\n")
-        self.command(str(self.binary), "validate", "--dir", str(self.snippets))
+        result = self.command(str(self.binary), "migrate", "--dir", str(self.snippets), "--settings", str(self.config / "settings.yml"), "--json")
+        report = json.loads(result.stdout)
+        if report.get("backup"):
+            print("Snippet/settings backups: " + report["backup"])
+        return report.get("backup")
 
     def preflight(self):
         if os.getuid() == 0:
@@ -195,6 +221,7 @@ WantedBy=graphical-session.target
         if conflicts["possible"]:
             print("POSSIBLE INTERFERENCE: " + ", ".join(conflicts["possible"]) + ". These tools will not be stopped automatically.")
         if dry_run:
+            self.migrate_snippets(check=True)
             print("Dry run: nothing changed.\n\n" + self.service_text())
             return
         if not self.prompt("Install TypeRelay with this configuration?"):
@@ -207,8 +234,9 @@ WantedBy=graphical-session.target
         if conflicts["possible"] and not self.prompt("Continue despite these possible conflicts?", default=False):
             print("Cancelled. Nothing changed.")
             return
-        previous = json.loads(self.manifest.read_text()) if self.manifest.exists() else {"espanso_enabled": conflicts["espanso_enabled"], "espanso_active": conflicts["espanso_active"] or conflicts["espanso_process"]}
-        self.migrate_snippets()
+        old_manifest = self.manifest.read_bytes() if self.manifest.exists() else None
+        previous = json.loads(old_manifest) if old_manifest is not None else {"espanso_enabled": conflicts["espanso_enabled"], "espanso_active": conflicts["espanso_active"] or conflicts["espanso_process"]}
+        self.migrate_snippets(check=True)
         self.data.mkdir(parents=True, exist_ok=True)
         self.data.chmod(0o700)
         self.write_private(self.helper, self.permission_source)
@@ -217,6 +245,17 @@ WantedBy=graphical-session.target
         previous["binary_sha256"] = previous["binaries"]["typerelay"]
         self.write_private(self.manifest, json.dumps(previous, indent=2) + "\n")
         self.privileged("install")
+        rollback = tempfile.TemporaryDirectory(prefix="upgrade-", dir=self.data)
+        old_binaries = []
+        for name, _, destination in self.artifacts():
+            backup = pathlib.Path(rollback.name) / name
+            if destination.exists():
+                shutil.copy2(destination, backup)
+                old_binaries.append((destination, backup))
+            else:
+                old_binaries.append((destination, None))
+        migration_backup = None
+        old_service_active = self.systemctl("is-active", "typerelay.service", check=False).returncode == 0
         try:
             if conflicts["espanso_enabled"]:
                 self.systemctl("disable", "espanso.service")
@@ -232,6 +271,7 @@ WantedBy=graphical-session.target
                 shutil.copyfile(source, temporary)
                 temporary.chmod(0o755)
                 os.replace(temporary, destination)
+            migration_backup = self.migrate_snippets()
             self.write_private(self.unit, self.service_text())
             self.systemctl("daemon-reload")
             variables = [name for name in ["WAYLAND_DISPLAY", "HYPRLAND_INSTANCE_SIGNATURE", "XDG_RUNTIME_DIR"] if os.environ.get(name)]
@@ -249,6 +289,27 @@ WantedBy=graphical-session.target
         except Exception:
             self.systemctl("stop", "typerelay.service", check=False)
             self.systemctl("disable", "typerelay.service", check=False)
+            if migration_backup:
+                for item in json.loads((pathlib.Path(migration_backup) / "manifest.json").read_text()):
+                    destination = pathlib.Path(item["path"])
+                    if item["backup"]:
+                        temporary = destination.with_name(destination.name + ".restore")
+                        shutil.copy2(item["backup"], temporary)
+                        os.replace(temporary, destination)
+                    else:
+                        destination.unlink(missing_ok=True)
+            for destination, backup in old_binaries:
+                if backup:
+                    temporary = destination.with_name(destination.name + ".restore")
+                    shutil.copy2(backup, temporary)
+                    os.replace(temporary, destination)
+                else:
+                    destination.unlink(missing_ok=True)
+            if old_manifest is not None:
+                self.write_private(self.manifest, old_manifest.decode())
+            if old_service_active:
+                self.systemctl("enable", "typerelay.service", check=False)
+                self.systemctl("start", "typerelay.service", check=False)
             if conflicts["espanso_enabled"]:
                 self.systemctl("enable", "espanso.service", check=False)
             if conflicts["espanso_active"]:
@@ -257,6 +318,8 @@ WantedBy=graphical-session.target
                 self.command("espanso", "start", check=False)
             print("Installation incomplete. Snippets are preserved; rerun install or uninstall to recover.", file=sys.stderr)
             raise
+        finally:
+            rollback.cleanup()
 
     def uninstall(self, dry_run):
         if not self.manifest.exists():
