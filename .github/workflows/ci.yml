@@ -25,3 +25,12 @@ jobs:
         run: python3 -m unittest discover -s scripts/tests -v
       - if: runner.os == 'Linux'
         run: sh -n scripts/install.sh
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose up -d --build
+      - run: docker compose run --rm --no-deps server node --test --test-force-exit test/*.test.js
+      - if: always()
+        run: docker compose down -v

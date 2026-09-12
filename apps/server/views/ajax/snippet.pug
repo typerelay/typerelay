@@ -1,0 +1,8 @@
+article.snippet(data-snippet=snippet.id data-revision=snippet.revision)
+	.d-flex.align-items-center.justify-content-between.mb-3
+		h3.h6.mb-0= snippet.trigger
+		if library.permissions.edit
+			.d-flex
+				button.btn.btn-outline-secondary.btn-sm.ms-3(data-edit-snippet=snippet.id) Edit
+				button.btn.btn-outline-danger.btn-sm.ms-3(data-delete-snippet=snippet.id) Delete
+	pre.mb-0= snippet.replace

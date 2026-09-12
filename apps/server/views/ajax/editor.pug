@@ -1,0 +1,8 @@
+div(data-editor=library._id)
+	.d-flex.align-items-center.justify-content-between.mb-3
+		h2.h4(data-library-title)= library.name
+		button.btn.btn-outline-secondary.btn-sm(data-library-settings hidden=!library.permissions.manage) Sharing and settings
+	button.btn.btn-primary.btn-sm.mb-3(data-add-snippet hidden=!library.permissions.edit) Add snippet
+	#snippets
+		each snippet in library.snippets
+			include snippet

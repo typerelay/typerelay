@@ -105,6 +105,7 @@ impl App {
     fn edit(&mut self, new: bool) -> Result<()> {
         self.settings.reload()?;
         let file = self.file.as_ref().context("Choose a file first")?;
+        typerelay_client::sync::Sync::editable(&typerelay_client::editor::Paths::config_dir()?, &self.store.directory, &file.name)?;
         self.editing = if new { None } else { Some(self.selected().context("Select a snippet")?) };
         let entry = self.editing.map(|index| file.entries[index].clone()).unwrap_or(Match { trigger: String::new(), replace: String::new() });
         self.trigger = Self::text(&entry.trigger);
@@ -121,7 +122,7 @@ impl App {
             Screen::Edit => {
                 let file = self.file.as_ref().context("No file selected")?;
                 let entry = self.draft();
-                let saved = self.store.save(file, self.editing, entry.clone())?;
+                let saved = { typerelay_client::sync::Sync::editable(&typerelay_client::editor::Paths::config_dir()?, &self.store.directory, &file.name)?; self.store.save(file, self.editing, entry.clone())? };
                 self.file = Some(saved);
                 self.original_entry = Some(entry);
                 self.screen = Screen::Browse;
@@ -134,7 +135,7 @@ impl App {
                 self.original_url = self.settings.settings.sync_url.clone();
                 self.original_prefix = self.settings.settings.trigger_prefix.clone();
                 self.screen = if self.file.is_some() { Screen::Browse } else { Screen::Files };
-                self.message("Settings saved. Prefix reloads automatically. Sync is not implemented yet.", false);
+                self.message("Settings saved. Connect with typerelay connect --server URL.", false);
             }
             Screen::NewFile => {
                 self.file = Some(self.store.create(Self::value(&self.name).trim())?);
@@ -162,7 +163,7 @@ impl App {
             0 => self.leave(Destination::Files),
             1 if self.screen == Screen::Browse => self.edit(true),
             1 => { self.message("Choose a snippet file first", false); Ok(()) },
-            2 => { self.message("Sync is not implemented yet.", false); Ok(()) },
+            2 => { typerelay_client::sync::Sync::trigger(&typerelay_client::editor::Paths::config_dir()?)?; self.message("Sync requested. Use typerelay sync for immediate CLI status.", false); Ok(()) },
             3 => self.leave(Destination::Settings),
             _ => Ok(()),
         }
@@ -285,6 +286,9 @@ impl App {
     fn button(frame: &mut Frame, area: Rect, title: &str, enabled: bool) {
         frame.render_widget(Paragraph::new(title.to_owned()).centered().block(Self::border("", false)).style(Style::default().fg(if enabled { Color::Cyan } else { Color::DarkGray })), area);
     }
+    fn sync_status(&self) -> String {
+        typerelay_client::editor::Paths::config_dir().ok().and_then(|root| std::fs::read_to_string(root.join("sync/status")).ok()).unwrap_or_default()
+    }
     pub fn draw(&mut self, frame: &mut Frame) {
         self.toolbar.clear(); self.field_areas.clear(); self.list_area = Rect::default(); self.save_area = Rect::default(); self.cancel_area = Rect::default();
         let area = frame.area();
@@ -293,11 +297,11 @@ impl App {
         let title = self.file.as_ref().map(|file| format!("TypeRelay  /  {}", file.name)).unwrap_or("TypeRelay  /  Snippet editor".into());
         frame.render_widget(Paragraph::new(title).style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)), rows[0]);
         self.toolbar = Layout::horizontal([Constraint::Length(14), Constraint::Length(14), Constraint::Length(16), Constraint::Length(18), Constraint::Min(0)]).split(rows[1])[..4].to_vec();
-        for (index, title) in ["F1 Files", "F2 Add", "F5 Sync", "F6 Settings"].iter().enumerate() { Self::button(frame, self.toolbar[index], title, index != 2 && (index != 1 || self.screen == Screen::Browse)); }
+        for (index, title) in ["F1 Files", "F2 Add", "F5 Sync", "F6 Settings"].iter().enumerate() { Self::button(frame, self.toolbar[index], title, index != 1 || self.screen == Screen::Browse); }
         let body = rows[2];
         match self.effective_screen() {
             Screen::Files => {
-                let items = std::iter::once(ListItem::new("+ New file")).chain(self.files.iter().map(|name| ListItem::new(name.clone()))).collect::<Vec<_>>();
+                let items = std::iter::once(ListItem::new("+ New file")).chain(self.files.iter().map(|name| ListItem::new(typerelay_client::sync::Sync::label(&typerelay_client::editor::Paths::config_dir().unwrap_or_default(), &self.store.directory, name)))).collect::<Vec<_>>();
                 self.list_area = body;
                 frame.render_stateful_widget(List::new(items).block(Self::border("Choose a snippet file", true)).highlight_style(Style::default().bg(Color::DarkGray)).highlight_symbol("› "), body, &mut self.file_state);
             }
@@ -334,12 +338,12 @@ impl App {
                 self.url.set_block(Self::border("URL to sync with", self.editor_focus == 0));
                 self.prefix.set_block(Self::border("Trigger prefix · e.g. , or ;", self.editor_focus == 1));
                 frame.render_widget(&self.url, parts[0]); frame.render_widget(&self.prefix, parts[1]);
-                frame.render_widget(Paragraph::new("Tab switches fields. The prefix is local to this machine.\nSync is not implemented yet; saving makes no network request."), parts[2]);
+                frame.render_widget(Paragraph::new("Tab switches fields. The prefix is local to this machine.\nConnect with typerelay connect --server URL. F5 requests sync."), parts[2]);
                 self.field_areas.extend([parts[0], parts[1]]); self.form_buttons(frame, parts[3]);
             }
             Screen::Confirm => (),
         }
-        frame.render_widget(Paragraph::new(format!("{}\nCtrl+S Save · Esc Back · Ctrl+Q Quit", self.status)).style(Style::default().fg(if self.error { Color::Red } else { Color::Gray })).wrap(Wrap { trim: false }), rows[3]);
+        frame.render_widget(Paragraph::new(format!("{}\n{} · Ctrl+S Save · Esc Back · Ctrl+Q Quit", self.status, self.sync_status())).style(Style::default().fg(if self.error { Color::Red } else { Color::Gray })).wrap(Wrap { trim: false }), rows[3]);
         if self.screen == Screen::Confirm {
             let dialog = Rect::new(area.x + (area.width - 56) / 2, area.y + (area.height - 7) / 2, 56, 7);
             frame.render_widget(Clear, dialog);
@@ -405,9 +409,9 @@ mod tests {
         assert_eq!(app.screen, Screen::Files); assert_eq!(app.store.open("sales.yml").unwrap().entries[0].replace, "Hello\nworld\n");
     }
     #[test]
-    fn disabled_sync_settings_and_failed_save_keep_draft() {
+    fn disconnected_sync_settings_and_failed_save_keep_draft() {
         let temp = tempfile::tempdir().unwrap(); let mut app = Fixture::app(temp.path());
-        Fixture::key(&mut app, KeyCode::F(5), KeyModifiers::NONE); assert_eq!(app.status, "Sync is not implemented yet.");
+        Fixture::key(&mut app, KeyCode::F(5), KeyModifiers::NONE); assert!(app.status.contains("Connect first"));
         Fixture::key(&mut app, KeyCode::F(6), KeyModifiers::NONE); app.handle(Event::Paste("https://example.invalid/sync".into()));
         Fixture::key(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL); assert!(temp.path().join("settings.yml").exists());
         app.file = Some(app.store.create("mine").unwrap()); app.screen = Screen::Browse; app.edit(true).unwrap();

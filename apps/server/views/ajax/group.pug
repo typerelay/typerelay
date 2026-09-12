@@ -1,0 +1,4 @@
+li.list-group-item.d-flex.align-items-center.justify-content-between(data-group=group._id)
+	span= group.name
+	if ['owner', 'admin'].includes(ctx.role)
+		button.btn.btn-outline-secondary.btn-sm(data-edit-group=JSON.stringify(group)) Edit

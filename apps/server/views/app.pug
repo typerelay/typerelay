@@ -1,0 +1,76 @@
+extends layout
+block content
+	#workspace(data-account=account._id)
+		.d-flex.align-items-center.justify-content-between.mb-5
+			h1 Your libraries
+			.d-flex.align-items-center.gap-3
+				select#account-switch.form-select.form-select-sm(aria-label="Account")
+					each item in accounts
+						option(value=item._id selected=String(item._id) === String(account._id))= item.name
+				button.btn.btn-outline-secondary.btn-sm(data-bs-toggle="modal" data-bs-target="#settings") Settings
+				button#new-library.btn.btn-primary.btn-sm New library
+		.row
+			aside.col-md-4
+				label.form-label(for="search") Search libraries and snippets
+				input#search.form-control.form-control-sm.mb-3(type="search")
+				#libraries
+					each library in libraries
+						include ajax/library
+			section.col-md-8
+				#editor.card.p-4
+					h2 Select a library
+					p.text-muted Import YAML or create your first library.
+				#conflicts.mt-3
+		#settings.modal.fade(tabindex="-1" aria-label="Settings")
+			.modal-dialog.modal-lg
+				.modal-content
+					.modal-header
+						h2.modal-title.h5 Settings
+						button.btn-close(data-bs-dismiss="modal" aria-label="Close")
+					.modal-body
+						h3.h6 Profile and security
+						form#profile-form.mb-5
+							label.form-label(for="profile-name") Name
+							input#profile-name.form-control.form-control-sm.mb-3(name="name" value=profile.name required)
+							p.text-muted Sign-in links are single-use and expire after 15 minutes.
+							.d-flex.justify-content-between
+								button#logout.btn.btn-outline-secondary.btn-sm(type="button") Sign out
+								button.btn.btn-primary.btn-sm Save
+						h3.h6 Account and team
+						if ['owner', 'admin'].includes(ctx.role)
+							form#account-form.mb-3
+								label.form-label(for="account-name") Account name
+								input#account-name.form-control.form-control-sm.mb-3(name="name" value=account.name required)
+								.d-flex.justify-content-end
+									button.btn.btn-primary.btn-sm Save
+							form#invite-form.mb-3
+								label.form-label(for="invite-email") Invite by email
+								input#invite-email.form-control.form-control-sm.mb-3(name="email" type="email" required)
+								.d-flex.justify-content-end
+									button.btn.btn-primary.btn-sm Invite
+						ul#invitations.list-group.mb-3
+							each invitation in team.invitations
+								include ajax/invitation
+						ul#members.list-group.mb-3
+							each member in team.members
+								include ajax/member
+						h3.h6 Groups
+						ul#groups.list-group.mb-3
+							each group in team.groups
+								include ajax/group
+						if ['owner', 'admin'].includes(ctx.role)
+							button#new-group.btn.btn-outline-secondary.btn-sm.mb-5 New group
+						h3.h6 Connected devices
+						ul#devices.list-group.mb-3
+		#form-modal.modal.fade(tabindex="-1" aria-label="Edit")
+			.modal-dialog.modal-lg
+				.modal-content
+					.modal-header
+						h2#form-title.modal-title.h5
+						button.btn-close(data-bs-dismiss="modal" aria-label="Close")
+					.modal-body
+						form#record-form
+							#form-fields
+							.d-flex.justify-content-between.mt-3
+								button.btn.btn-outline-secondary.btn-sm(type="button" data-bs-dismiss="modal") Cancel
+								button.btn.btn-primary.btn-sm(type="submit") Save

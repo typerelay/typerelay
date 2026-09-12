@@ -1,0 +1,7 @@
+article.card.mb-3.library(data-id=library._id data-revision=library.revision data-record=JSON.stringify(library))
+	.card-body
+		.d-flex.align-items-center.justify-content-between.mb-3
+			button.btn.btn-link.text-start.library-open(type="button")
+				h2.h5.mb-0= library.name
+			span.badge.text-bg-light= library.shared ? (library.editable ? 'Shared · Editable' : 'Shared · Admin editable') : 'Personal'
+		span.text-muted= library.snippets.length + ' snippets'

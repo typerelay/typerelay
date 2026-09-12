@@ -1,0 +1,17 @@
+extends layout
+block content
+	section.auth.card.p-4
+		h1.mb-3 Connect your desktop
+		p.mb-3 TypeRelay will sync libraries available to the selected account.
+		form(method="post" action="/oauth/authorize")
+			input(type="hidden" name="_csrf" value=csrf)
+			each value, key in request
+				if ['client_id', 'redirect_uri', 'code_challenge', 'code_challenge_method', 'state', 'device_name'].includes(key)
+					input(type="hidden" name=key value=value)
+			label.form-label(for="account") Account
+			select#account.form-select.form-select-sm.mb-3(name="account")
+				each account in accounts
+					option(value=account._id)= account.name
+			.d-flex.justify-content-between
+				a.btn.btn-outline-secondary.btn-sm(href="/") Cancel
+				button.btn.btn-primary.btn-sm(type="submit") Connect device

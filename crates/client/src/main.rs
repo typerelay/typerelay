@@ -35,6 +35,10 @@ enum Commands {
     ImportEspanso { source: PathBuf, destination: PathBuf },
     Migrate { #[command(flatten)] source: ConfigSource, #[arg(long)] check: bool, #[arg(long)] settings: Option<PathBuf>, #[arg(long)] json: bool },
     Doctor,
+    Connect { #[arg(long)] server: Option<String>, #[arg(long)] no_browser: bool },
+    Enroll { filename: String },
+    Sync,
+    Disconnect,
     #[cfg(target_os = "linux")]
     #[command(hide = true)]
     ClipboardServe,
@@ -47,7 +51,12 @@ enum Commands {
 
 impl Cli {
     fn execute(self) -> Result<()> {
+        let root = typerelay_client::editor::Paths::config_dir()?;
         match self.command {
+            Commands::Connect { server, no_browser } => { let server = server.unwrap_or(typerelay_client::settings::SettingsStore::open(root.join("settings.yml"))?.settings.sync_url); typerelay_client::sync::Sync::new(root.clone(), root.join("snippets"))?.connect(&server, !no_browser)?; },
+            Commands::Enroll { filename } => typerelay_client::sync::Sync::new(root.clone(), root.join("snippets"))?.enroll(&filename)?,
+            Commands::Sync => typerelay_client::sync::Sync::new(root.clone(), root.join("snippets"))?.cycle()?,
+            Commands::Disconnect => typerelay_client::sync::Sync::new(root.clone(), root.join("snippets"))?.disconnect()?,
             Commands::Validate { source } => {
                 let store = config::FileStore::open(source.path()?)?;
                 println!("Valid: {} snippets", store.snapshot.len());
@@ -65,7 +74,11 @@ impl Cli {
             #[cfg(target_os = "linux")]
             Commands::Doctor => omarchy::Session::doctor()?,
             #[cfg(target_os = "linux")]
-            Commands::Run { source, device_name } => omarchy::Session::run(config::FileStore::open(source.path()?)?, &device_name)?,
+            Commands::Run { source, device_name } => {
+                let path = source.path()?;
+                if path.is_dir() { typerelay_client::sync::Sync::worker(root, path.clone()); }
+                omarchy::Session::run(config::FileStore::open(path)?, &device_name)?;
+            },
             #[cfg(target_os = "linux")]
             Commands::Install { dry_run } => installation::Installer::run("install", dry_run)?,
             #[cfg(target_os = "linux")]

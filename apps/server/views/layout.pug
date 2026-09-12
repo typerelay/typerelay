@@ -1,0 +1,20 @@
+doctype html
+html(lang="en")
+	head
+		meta(charset="utf-8")
+		meta(name="viewport" content="width=device-width, initial-scale=1")
+		meta(name="csrf-token" content=csrf)
+		title TypeRelay
+		link(rel="icon" href="/assets/favicon.ico")
+		link(rel="stylesheet" href="/vendor/bootstrap/css/bootstrap.min.css")
+		link(rel="stylesheet" href="/vendor/sweetalert2/sweetalert2.min.css")
+		link(rel="stylesheet" href="/assets/app.css")
+		script(src="/vendor/bootstrap/js/bootstrap.bundle.min.js" defer)
+		script(src="/vendor/sweetalert2/sweetalert2.all.min.js" defer)
+		script(src="/assets/app.js" type="module")
+	body
+		header.container-fluid.py-3.mb-5
+			a(href="/")
+				img.brand(src="/assets/typerelay-logo.svg" alt="TypeRelay")
+		main.container
+			block content

@@ -1,0 +1,18 @@
+:root { --bs-primary: #a15c40; --bs-primary-rgb: 161,92,64; }
+body { background: #f8f5ee; color: #302d29; }
+header { border-bottom: .0625rem solid #e7dfd2; }
+.brand { width: 12rem; height: 3rem; object-fit: contain; }
+.auth { max-width: 34rem; margin: 3rem auto; }
+.card { border-color: #e7dfd2; border-radius: .75rem; }
+.btn-primary { background: #9c593d; border-color: #9c593d; }
+.btn-primary:hover { background: #7e442f; border-color: #7e442f; }
+.btn-link { color: #74422e; padding: 0; text-decoration: none; }
+button, select, [data-id] { cursor: pointer; }
+textarea { min-height: 12rem; white-space: pre-wrap; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.snippet { border-top: .0625rem solid #e7dfd2; padding: 1rem 0; }
+.form-check-input { height: 1.25rem; width: 1.875rem; }
+
+.btn { white-space: nowrap; }
+.btn-link { --bs-btn-color: #74422e; --bs-btn-hover-color: #9c593d; }
+#account-switch { min-width: 10rem; }

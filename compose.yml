@@ -1,0 +1,43 @@
+name: typerelay
+services:
+  mongo:
+    image: mongo:8
+    command: ["mongod", "--replSet", "typerelay", "--bind_ip_all"]
+    volumes:
+      - typerelay-mongo:/data/db
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          mongosh --quiet --eval 'try { rs.status().ok } catch(e) { rs.initiate({_id:"typerelay",members:[{_id:0,host:"mongo:27017"}]}) }'
+      interval: 3s
+      timeout: 5s
+      retries: 30
+  mail:
+    image: axllent/mailpit:v1.27
+    ports:
+      - "127.0.0.1:8040:8025"
+  server:
+    build:
+      context: .
+      dockerfile: apps/server/Dockerfile
+    ports:
+      - "127.0.0.1:3040:3040"
+    environment:
+      MONGODB_URI: mongodb://mongo:27017/typerelay?replicaSet=typerelay
+      ORIGIN: http://localhost:3040
+      SMTP_HOST: mail
+      SESSION_SECRET_FILE: /data/session-secret
+    volumes:
+      - typerelay-server:/data
+      - ./apps/server:/app
+      - typerelay-node-modules:/app/node_modules
+    depends_on:
+      mongo:
+        condition: service_healthy
+      mail:
+        condition: service_started
+volumes:
+  typerelay-mongo:
+  typerelay-server:
+  typerelay-node-modules:

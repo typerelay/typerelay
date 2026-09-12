@@ -1,0 +1,13 @@
+extends layout
+block content
+	section.auth.card.p-4
+		h1.mb-3 Your words. Everywhere.
+		p.mb-5 Sign in or create your TypeRelay account with an email link.
+		form#login
+			.mb-3
+				label.form-label(for="email") Email
+				input#email.form-control.form-control-sm(type="email" name="email" required autocomplete="email")
+			.d-flex.justify-content-end
+				button.btn.btn-primary.btn-sm(type="submit") Send sign-in link
+		if returnTo
+			p.mt-3 After signing in, return to the desktop authorization tab.

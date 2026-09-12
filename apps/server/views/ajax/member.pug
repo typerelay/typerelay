@@ -1,0 +1,6 @@
+li.list-group-item.d-flex.align-items-center.justify-content-between(data-member=member._id)
+	span= member.profile.name + ' · ' + member.profile.email + ' · ' + member.role
+	if ctx.role === 'owner' && member.role !== 'owner'
+		button.btn.btn-outline-secondary.btn-sm(data-role=member._id data-next=member.role === 'admin' ? 'member' : 'admin')= member.role === 'admin' ? 'Make member' : 'Make admin'
+	if ['owner', 'admin'].includes(ctx.role) && member.role !== 'owner' && (ctx.role === 'owner' || member.role === 'member')
+		button.btn.btn-outline-danger.btn-sm(data-remove-member=member._id) Remove
