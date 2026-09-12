@@ -8,7 +8,7 @@ Desktop protocol 3 is negotiated by header; older desktop requests receive 426. 
 Content-free departures prevent stale edits recreating a moved snippet when its new library is inaccessible.
 Rejected operations restore server state and retain unsent content in recovery.
 
-Verified 85 checks: 43 Rust, 13 Python installer/terminal and 29 server/e2e.
+Verified 86 checks: 44 Rust, 13 Python installer/terminal and 29 server/e2e.
 Cases include duplicate/stale/permission rollback, retry identity, source ordering, single edit-and-move, offline moves followed by edits, pending enrollment remapping, inaccessible destinations and incremental DOM selection.
 Clippy and Docker build passed. Browser verified selection/action bar, cancel retention and the editor library picker.
 

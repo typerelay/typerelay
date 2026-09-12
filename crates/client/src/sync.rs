@@ -9,6 +9,19 @@ use std::{collections::BTreeMap, fs, io::{Read, Write}, net::TcpListener, path::
 use uuid::Uuid;
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Credentials { pub server: String, pub access_token: String, pub refresh_token: String }
+#[derive(Debug)]
+struct ServerError { status: u16, message: String }
+impl std::fmt::Display for ServerError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(formatter, "Server {}: {}", self.status, self.message) }
+}
+impl std::error::Error for ServerError {}
+impl ServerError {
+    fn rejected(error: &anyhow::Error, batch: bool) -> bool {
+        let status = error.downcast_ref::<Self>().map(|error|error.status);
+        matches!(status, Some(403 | 404 | 409 | 410)) || (batch && matches!(status, Some(400 | 422)))
+    }
+}
+
 pub struct Sync { root: PathBuf, directory: PathBuf, client: reqwest::blocking::Client }
 impl Sync {
     pub fn new(root: PathBuf, directory: PathBuf) -> Result<Self> {
@@ -31,7 +44,7 @@ impl Sync {
     fn response(response: reqwest::blocking::Response) -> Result<Value> {
         let status = response.status();
         let value: Value = response.json()?;
-        ensure!(status.is_success(), "Server {}: {}", status, value["error"].as_str().unwrap_or("Request failed"));
+        if !status.is_success() { return Err(ServerError { status: status.as_u16(), message: value["error"].as_str().unwrap_or("Request failed").into() }.into()); }
         Ok(value)
     }
     fn request(&self, credentials: &mut Credentials, method: reqwest::Method, path: &str, body: Option<&Value>) -> Result<Value> {
@@ -138,9 +151,10 @@ impl Sync {
                 Ok(result) => db.apply(&result, Some((seq, &operation)))?,
                 Err(error) => {
                     let message = error.to_string();
-                    if message.contains("403") || message.contains("410") || message.contains("404") || message.contains("409") || (operation["kind"] == "batch" && (message.contains("400") || message.contains("422"))) {
+                    let status = error.downcast_ref::<ServerError>().map(|error|error.status);
+                    if ServerError::rejected(&error, operation["kind"] == "batch") {
                         let transaction = db.connection.unchecked_transaction()?;
-                        if !message.contains("410") { db.recover_operation(&operation)?; }
+                        if status != Some(410) { db.recover_operation(&operation)?; }
                         db.connection.execute("DELETE FROM outbox WHERE seq=?1", [seq])?;
                         db.set_meta("last_failure", &json!(message))?;
                         transaction.commit()?;
@@ -199,5 +213,16 @@ impl Sync {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn transport_failures_never_discard_queued_operations() {
+        assert!(!ServerError::rejected(&anyhow::anyhow!("connection refused at http://127.0.0.1:40901"), true));
+        assert!(!ServerError::rejected(&ServerError { status: 503, message: "Try again".into() }.into(), true));
+        assert!(ServerError::rejected(&ServerError { status: 409, message: "Selection changed".into() }.into(), true));
     }
 }
