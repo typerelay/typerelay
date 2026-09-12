@@ -22,7 +22,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 #totp-qr { max-width: 12rem; width: 100%; }
 #totp-secret { overflow-wrap: anywhere; }
 #settings .modal-body { padding: 1.5rem; }
-.global-search { display: flex; align-items: center; gap: .2rem; flex: 1; max-width: 32rem; margin: 0 2rem; background: #fff; border: .0625rem solid #e7dfd2; color: #71685e; font-size: .875rem; text-align: left; }
+.global-search { display: flex; align-items: center; gap: .2rem; flex: 0 1 32rem; min-width: 0; max-width: 32rem; margin: 0 1.5rem 0 20rem; background: #fff; border: .0625rem solid #e7dfd2; color: #71685e; font-size: .875rem; text-align: left; }
 .global-search kbd { background: #f3eee5; color: #71685e; border: .0625rem solid #e7dfd2; font-size: .75rem; }
 .library { cursor: pointer; transition: border-color .15s, background-color .15s; }
 .library:hover, .library:focus-visible, .library.active-library { border-color: #a15c40; background: #fffdf8; }
@@ -36,6 +36,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .settings-content { flex: 1; min-width: 0; overflow-y: auto; padding: 1.5rem; }
 .search-preview { white-space: pre-wrap; overflow-wrap: anywhere; }
 .search-result:focus { outline: .125rem solid #a15c40; outline-offset: -.125rem; background: #f8f5ee; }
+@media (max-width: 70rem) { .global-search { margin-left: 2rem; } }
 @media (max-width: 40rem) {
 	.global-search { margin: 0 .75rem; max-width: 12rem; justify-content: center; }
 	.global-search span, #search-shortcut { display: none; }
@@ -49,3 +50,12 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .snippet-expansion { font-size: .825rem; }
 .snippet .btn-sm { font-size: .7rem; padding: .1rem .35rem; line-height: 1.25; }
 .snippet:focus-visible { outline: .125rem solid #a15c40; outline-offset: .125rem; }
+
+.app-navbar { position: sticky; top: 0; z-index: 1020; background: #f8f5ee; }
+.brand-link { flex-shrink: 0; }
+.library-controls { flex-wrap: wrap; }
+.library-controls #account-switch { flex: 1; width: auto; min-width: 0; }
+.editor-actions { flex-wrap: wrap; justify-content: flex-end; }
+.scroll-top { position: fixed; right: 1.5rem; bottom: 1.5rem; z-index: 1030; opacity: 0; visibility: hidden; pointer-events: none; transform: translateY(.5rem); transition: opacity .2s ease, transform .2s ease, visibility .2s; }
+.scroll-top.is-visible { opacity: 1; visibility: visible; pointer-events: auto; transform: translateY(0); }
+@media (prefers-reduced-motion: reduce) { .scroll-top { transition: none; } }

@@ -15,8 +15,8 @@ html(lang="en")
 		script(src="/assets/auth.js" type="module")
 		script(src="/assets/app.js" type="module")
 	body
-		header.container-fluid.py-3.mb-5.d-flex.align-items-center.justify-content-between
-			a(href="/")
+		header.app-navbar.container-fluid.py-3.mb-5.d-flex.align-items-center.justify-content-start
+			a.brand-link(href="/")
 				img.brand(src="/assets/typerelay-logo.svg" alt="TypeRelay")
 			if profile
 				button#search-trigger.btn.global-search(type="button" aria-haspopup="dialog" aria-controls="search-modal")
@@ -27,7 +27,7 @@ html(lang="en")
 					kbd.mx-2 /
 					span to search
 					kbd.ms-auto#search-shortcut Ctrl K
-				.dropdown
+				.dropdown.ms-auto
 					include ajax/avatar
 					ul.dropdown-menu.dropdown-menu-end
 						li
@@ -42,3 +42,7 @@ html(lang="en")
 							button#logout.dropdown-item(type="button") Sign out
 		main.container
 			block content
+		if profile
+			button#scroll-top.btn.btn-primary.btn-sm.scroll-top(type="button" aria-label="Scroll to top" aria-hidden="true" tabindex="-1")
+				span(aria-hidden="true") ↑
+				span.ms-2 Top

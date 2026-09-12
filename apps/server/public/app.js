@@ -43,6 +43,9 @@ class TypeRelay {
 			if (this.returnSettings) { this.returnSettings = false; bootstrap.Modal.getOrCreateInstance(document.querySelector('#settings')).show(); }
 		});
 		document.querySelector('#trash')?.addEventListener('show.bs.modal', () => this.loadTrash().catch(error => this.toast(error.message, 'error')));
+		window.addEventListener('scroll', () => this.updateScrollTop(), { passive: true });
+		window.addEventListener('resize', () => this.updateScrollTop());
+		this.updateScrollTop();
 		if (this.account) {
 			this.poll().catch(error => this.toast(error.message, 'error'));
 			setInterval(() => this.poll().catch(() => {}), 30000);
@@ -50,6 +53,15 @@ class TypeRelay {
 			const invitation = new URL(location.href).searchParams.get('invite');
 			if (invitation) this.accept(invitation);
 		}
+	}
+	updateScrollTop() {
+		const button = document.querySelector('#scroll-top');
+		if (!button) return;
+		const distance = document.documentElement.scrollHeight - window.innerHeight;
+		const visible = distance > 0 && window.scrollY / distance > .8;
+		button.classList.toggle('is-visible', visible);
+		button.setAttribute('aria-hidden', String(!visible));
+		button.tabIndex = visible ? 0 : -1;
 	}
 	toast(title, icon = 'success') { return Swal.fire({ toast: true, position: 'top-end', title, icon, timer: 3500, showConfirmButton: false }); }
 	async request(path, method = 'GET', body, raw = false) {
@@ -100,6 +112,7 @@ class TypeRelay {
 			}
 		}
 		document.querySelector('[data-id="' + library._id + '"]')?.classList.toggle('active-library', this.selected === library._id);
+		this.updateScrollTop();
 		if (document.querySelector('#search-modal')?.classList.contains('show')) await this.filter();
 	}
 	async filter() {
@@ -167,6 +180,7 @@ class TypeRelay {
 		if (version !== this.openVersion) return;
 		this.selected = id;
 		document.querySelector('#editor').replaceChildren(this.fragment(html));
+		this.updateScrollTop();
 		document.querySelectorAll('.library').forEach(node => {
 			node.classList.toggle('active-library', node.dataset.id === id);
 			node.setAttribute('aria-pressed', String(node.dataset.id === id));
@@ -253,6 +267,7 @@ class TypeRelay {
 			await this.request('trash/empty', 'POST', { targets });
 			await this.loadTrash(); this.toast('Trash emptied'); return;
 		}
+		if (button.id === 'scroll-top') { window.scrollTo({ top: 0, behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }); return; }
 		if (button.id === 'search-trigger') return this.openSearch();
 		if (button.dataset.settingsTab) return this.settingsTab(button.dataset.settingsTab);
 		if (button.dataset.searchLibrary) {

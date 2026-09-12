@@ -1,14 +1,13 @@
 extends layout
 block content
 	#workspace(data-account=account._id)
-		.d-flex.align-items-center.justify-content-end.mb-3
-			.d-flex.align-items-center.gap-3
-				select#account-switch.form-select.form-select-sm(aria-label="Account")
-					each item in accounts
-						option(value=item._id selected=String(item._id) === String(account._id))= item.name
-				button#new-library.btn.btn-primary.btn-sm New library
 		.row
 			aside.col-md-4
+				.library-controls.d-flex.align-items-center.gap-3.mb-3
+					select#account-switch.form-select.form-select-sm(aria-label="Account")
+						each item in accounts
+							option(value=item._id selected=String(item._id) === String(account._id))= item.name
+					button#new-library.btn.btn-primary.btn-sm New library
 				#libraries
 					each library in libraries
 						include ajax/library
