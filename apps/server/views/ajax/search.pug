@@ -1,0 +1,16 @@
+div.search-matches
+	if !query
+		p.text-muted.mb-0 Start typing to search your libraries and snippets.
+	else if !results.length
+		p.text-muted.mb-0 No matching libraries or snippets.
+	else
+		.list-group
+			each result in results
+				button.list-group-item.list-group-item-action.search-result.text-start(type="button" data-search-library=result.library data-search-snippet=result.snippet || '')
+					.d-flex.align-items-center.justify-content-between
+						span.fw-semibold= result.title
+						span.small.text-muted.ms-3= result.name
+					if result.preview
+						div.small.text-muted.search-preview.mt-1= result.preview
+		if truncated
+			p.small.text-muted.mt-3 Refine your search to see more results.

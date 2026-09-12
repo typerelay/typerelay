@@ -78,3 +78,11 @@ Security mutations and email-change requests require a browser sign-in within th
 WebAuthn binds credentials to the configured `ORIGIN` and its hostname; remote sites require HTTPS. The local browser preview uses `http://localhost:3040`.
 
 The top-right initials avatar opens Settings, Help and Sign out. Profile saves preserve the settings panel, update only the avatar and current member row, and retain input focus.
+
+## Settings navigation and search
+
+Settings follows Streamient/Mailtwine's left navigation and right content layout: Profile, Security, My team and Connected devices. Switching sections retains the existing forms and unsaved field values.
+
+The navbar search trigger opens a modal with `/`, Ctrl+K or Cmd+K. Slash is ignored in editable fields; shortcuts do not interrupt another open modal. Arrow keys navigate results, Enter opens them and Escape closes search. Results match library names, abbreviations and expansion text.
+
+`GET /api/v1/search?q=...` returns permission-filtered Pug search results (up to 60). Stale responses cannot replace a newer query. Search selection opens the library and focuses the matching snippet. Library cards also open from any card area or Enter/Space, not only the title.

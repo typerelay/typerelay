@@ -73,6 +73,16 @@ export class Server {
 		});
 		Security.mountPrivate(app, rateLimit({ windowMs: 900000, limit: 60, message: { error: 'Too many security requests; try again later.' } }));
 		app.get('/api/v1/library-view/:id', async (req, res) => Server.result(res, req.ctx, { library: Libraries.view(req.ctx, await Libraries.get(req.ctx, req.params.id)) }));
+		app.get('/api/v1/search', async (req, res) => {
+			const query = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 200).toLowerCase() : '';
+			const results = [];
+			if (query) for (const library of await Libraries.list(req.ctx)) {
+				if (library.name.toLowerCase().includes(query)) results.push({ library: library._id, title: library.name, name: 'Library' });
+				for (const snippet of library.snippets) if (snippet.trigger.toLowerCase().includes(query) || snippet.replace.toLowerCase().includes(query)) results.push({ library: library._id, snippet: snippet.id, title: snippet.trigger, name: library.name, preview: snippet.replace.slice(0, 240) });
+				if (results.length > 60) break;
+			}
+			res.render('ajax/search', { query, results: results.slice(0, 60), truncated: results.length > 60 });
+		});
 		app.get('/api/v1/libraries', async (req, res) => res.json(await Libraries.list(req.ctx)));
 		app.post('/api/v1/import/preview', async (req, res) => res.json(await Yaml.run(req.body.yaml)));
 		app.post('/api/v1/libraries', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, async (ctx, session) => ({ library: await Libraries.create(ctx, req.body, session) }))));

@@ -198,6 +198,65 @@ test('web AJAX updates only affected snippets; preserves panel, filter and multi
 	assert.equal(dom.window.document.activeElement, search);
 	assert.equal(dom.window.document.querySelector('[data-snippet="' + library.snippets[0].id + '"] pre').textContent, 'First\nSecond\n\n');
 	assert.deepEqual(errors, []);
+	const hiddenUser = await User.create({ email: randomUUID() + '@example.test', name: 'Private member' });
+	await Member.create({ account: Fixture.account, user: hiddenUser._id, role: 'member' });
+	const hiddenCtx = await Support.context(String(hiddenUser._id), Fixture.account);
+	await Libraries.mutate(hiddenCtx, randomUUID(), {}, async (ctx, session) => ({ library: await Libraries.create(ctx, { name: 'HiddenNavTest', yaml: 'matches: [{trigger: hiddennav, replace: SecretOnly}]' }, session) }));
+	const hiddenResults = await client.request('search?q=hiddennav', 'GET', null, true);
+	assert.ok(!hiddenResults.includes('SecretOnly') && !hiddenResults.includes('HiddenNavTest'));
+	// Settings switch panes without discarding draft DOM or navigating.
+	const draft = dom.window.document.querySelector('#profile-name');
+	draft.value = 'Unsaved profile draft';
+	await client.onClick({ target: dom.window.document.querySelector('[data-settings-tab="security"]') });
+	assert.equal(dom.window.document.querySelector('#settings-pane-profile').hidden, true);
+	assert.equal(dom.window.document.querySelector('#settings-pane-security').hidden, false);
+	client.settingsTab('profile');
+	assert.equal(dom.window.document.querySelector('#profile-name'), draft);
+	assert.equal(draft.value, 'Unsaved profile draft');
+	assert.ok(![...dom.window.document.querySelectorAll('h1')].some(node => node.textContent === 'Your libraries'));
+	assert.ok(dom.window.document.querySelector('header #search-trigger'));
+	// Every part of the card loads its library, including the count/badge area.
+	const card = dom.window.document.querySelector('[data-id="' + library._id + '"]');
+	client.selected = null;
+	await client.onClick({ target: card.querySelector('.text-muted') });
+	assert.equal(client.selected, library._id);
+	assert.equal(card.getAttribute('role'), 'button');
+	const modal = dom.window.document.querySelector('#search-modal');
+	dom.window.bootstrap.Modal.getOrCreateInstance = element => ({ show() { element.classList.add('show'); }, hide() { element.classList.remove('show'); } });
+	dom.window.bootstrap.Modal.getInstance = dom.window.bootstrap.Modal.getOrCreateInstance;
+	for (const options of [{ key: '/' }, { key: 'k', ctrlKey: true }, { key: 'k', metaKey: true }]) {
+		modal.classList.remove('show');
+		const event = new dom.window.KeyboardEvent('keydown', { ...options, bubbles: true, cancelable: true });
+		dom.window.document.body.dispatchEvent(event);
+		assert.equal(event.defaultPrevented, true);
+		assert.ok(modal.classList.contains('show'));
+	}
+	modal.classList.remove('show');
+	const slash = new dom.window.KeyboardEvent('keydown', { key: '/', bubbles: true, cancelable: true });
+	draft.dispatchEvent(slash);
+	assert.equal(slash.defaultPrevented, false);
+	assert.ok(!modal.classList.contains('show'));
+	search.value = 'Second';
+	await client.filter();
+	const result = dom.window.document.querySelector('[data-search-snippet="' + library.snippets[0].id + '"]');
+	assert.ok(result, 'Search matches expansion text, not just the abbreviation');
+	modal.classList.add('show');
+	await client.onClick({ target: result });
+	assert.equal(client.selected, library._id);
+	assert.ok(!modal.classList.contains('show'));
+	// Late search responses never replace a newer query.
+	const request = client.request.bind(client);
+	let finishOld;
+	client.request = (path, ...args) => path === 'search?q=old' ? new Promise(resolve => { finishOld = resolve; }) : request(path, ...args);
+	search.value = 'old';
+	const old = client.filter();
+	search.value = 'Second';
+	await client.filter();
+	const currentResults = dom.window.document.querySelector('#search-results').firstElementChild;
+	finishOld('<p>Outdated response</p>');
+	await old;
+	assert.equal(dom.window.document.querySelector('#search-results').firstElementChild, currentResults);
+	client.request = request;
 	await client.form('library', { library: library._id }, () => {});
 	assert.ok(dom.window.document.querySelector('#shared'));
 	dom.window.close();

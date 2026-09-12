@@ -7,12 +7,28 @@ class TypeRelay {
 	selected = null;
 	cursor = 0;
 	polling = false;
+	searchVersion = 0;
+	openVersion = 0;
+	searchTimer = null;
+	searchFocus = null;
 	submit = null;
 	constructor() {
 		document.querySelectorAll('.library').forEach(node => this.libraries.set(node.dataset.id, JSON.parse(node.dataset.record)));
 		document.addEventListener('submit', event => this.onSubmit(event));
 		document.addEventListener('click', event => this.onClick(event).catch(error => this.toast(error.message, 'error')));
-		document.querySelector('#search')?.addEventListener('input', () => this.filter());
+		document.querySelector('#search')?.addEventListener('input', () => {
+			this.searchVersion++;
+			clearTimeout(this.searchTimer);
+			this.searchTimer = setTimeout(() => this.filter().catch(error => this.toast(error.message, 'error')), 150);
+		});
+		document.addEventListener('keydown', event => this.keyboard(event));
+		document.querySelector('#search-modal')?.addEventListener('shown.bs.modal', () => {
+			document.querySelector('#search').focus();
+			this.filter().catch(error => this.toast(error.message, 'error'));
+		});
+		document.querySelector('#search-modal')?.addEventListener('hidden.bs.modal', () => { this.searchVersion++; this.searchFocus?.focus?.({ preventScroll: true }); if (this.searchFocus?.matches?.('[data-snippet]')) this.searchFocus.scrollIntoView({ block: 'center' }); });
+		const shortcut = document.querySelector('#search-shortcut');
+		if (shortcut && /Mac|iPhone|iPad/.test(navigator.platform)) shortcut.textContent = '⌘ K';
 		document.querySelector('#account-switch')?.addEventListener('change', event => { location.href = '/?account=' + event.target.value; });
 		document.addEventListener('change', async event => {
 			if (event.target.id === 'shared') document.querySelectorAll('#members-select,#groups-select').forEach(field => { field.disabled = !event.target.checked; });
@@ -72,19 +88,76 @@ class TypeRelay {
 				if (!node || Number(node.dataset.revision) < fragment.revision || prior?.permissions.edit !== library.permissions.edit) this.update('[data-snippet="' + fragment.id + '"]', '#snippets', fragment.html);
 			}
 		}
-		this.filter();
+		document.querySelector('[data-id="' + library._id + '"]')?.classList.toggle('active-library', this.selected === library._id);
+		if (document.querySelector('#search-modal')?.classList.contains('show')) await this.filter();
 	}
-	filter() {
-		const query = document.querySelector('#search').value.toLowerCase();
-		document.querySelectorAll('.library').forEach(node => {
-			const library = this.libraries.get(node.dataset.id);
-			node.hidden = ![library.name, ...library.snippets.flatMap(snippet => [snippet.trigger, snippet.replace])].some(text => text.toLowerCase().includes(query));
+	async filter() {
+		const input = document.querySelector('#search');
+		if (!input) return;
+		const query = input.value;
+		const version = ++this.searchVersion;
+		const html = await this.request('search?q=' + encodeURIComponent(query), 'GET', null, true);
+		if (version !== this.searchVersion || query !== input.value) return;
+		// Search queries are explicit navigation, never a mutation refresh.
+		document.querySelector('#search-results').replaceChildren(this.fragment(html));
+	}
+	openSearch() {
+		if (!this.account || document.querySelector('.modal.show:not(#search-modal)')) return;
+		if (!document.querySelector('#search-modal').classList.contains('show')) this.searchFocus = document.activeElement;
+		bootstrap.Modal.getOrCreateInstance(document.querySelector('#search-modal')).show();
+		document.querySelector('#search').focus();
+	}
+	settingsTab(id, focus = false) {
+		const tab = document.querySelector('[data-settings-tab="' + id + '"]');
+		if (!tab) return;
+		document.querySelectorAll('[data-settings-tab]').forEach(button => {
+			const selected = button === tab;
+			button.classList.toggle('active', selected);
+			button.setAttribute('aria-selected', String(selected));
+			button.tabIndex = selected ? 0 : -1;
 		});
+		document.querySelectorAll('.settings-pane').forEach(pane => { pane.hidden = pane.id !== 'settings-pane-' + id; });
+		if (focus) tab.focus();
+	}
+	keyboard(event) {
+		if (!this.account || event.isComposing) return;
+		const editing = event.target.closest?.('input,textarea,select,[contenteditable]:not([contenteditable="false"]),[role="textbox"]');
+		const command = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k' && !event.altKey;
+		if (command || (event.key === '/' && !editing && !event.ctrlKey && !event.metaKey && !event.altKey)) {
+			if (document.querySelector('.modal.show:not(#search-modal)')) return;
+			event.preventDefault(); this.openSearch(); return;
+		}
+		const tab = event.target.closest?.('[data-settings-tab]');
+		if (tab && ['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+			const tabs = [...document.querySelectorAll('[data-settings-tab]')];
+			const current = tabs.indexOf(tab);
+			const index = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (current + (event.key === 'ArrowDown' ? 1 : -1) + tabs.length) % tabs.length;
+			event.preventDefault(); this.settingsTab(tabs[index].dataset.settingsTab, true); return;
+		}
+		if (document.querySelector('#search-modal').classList.contains('show')) {
+			const results = [...document.querySelectorAll('.search-result')];
+			const index = results.indexOf(document.activeElement);
+			if (['ArrowDown', 'ArrowUp'].includes(event.key) && results.length) {
+				event.preventDefault();
+				results[index < 0 ? (event.key === 'ArrowDown' ? 0 : results.length - 1) : (index + (event.key === 'ArrowDown' ? 1 : -1) + results.length) % results.length].focus();
+			} else if (event.key === 'Enter' && event.target.id === 'search' && results.length) { event.preventDefault(); results[0].click(); }
+			return;
+		}
+		if (event.target.matches?.('.library') && ['Enter', ' '].includes(event.key)) {
+			event.preventDefault(); this.open(event.target.dataset.id).catch(error => this.toast(error.message, 'error'));
+		}
 	}
 	async open(id) {
+		const version = ++this.openVersion;
+		const html = await this.request('editor/' + id, 'GET', null, true);
+		if (version !== this.openVersion) return;
 		this.selected = id;
-		// Full detail rendering is initial navigation only.
-		document.querySelector('#editor').replaceChildren(this.fragment(await this.request('editor/' + id, 'GET', null, true)));
+		document.querySelector('#editor').replaceChildren(this.fragment(html));
+		document.querySelectorAll('.library').forEach(node => {
+			node.classList.toggle('active-library', node.dataset.id === id);
+			node.setAttribute('aria-pressed', String(node.dataset.id === id));
+		});
+
 	}
 	async form(kind, params, submit) {
 		document.querySelector('#form-title').textContent = ({ library: 'Library', snippet: 'Snippet', group: 'Group', conflict: 'Resolve conflict' })[kind];
@@ -134,11 +207,21 @@ class TypeRelay {
 		await this.poll();
 	}
 	async onClick(event) {
+		const card = event.target.closest('.library');
+		if (card && !window.getSelection()?.toString()) return this.open(card.dataset.id);
 		const button = event.target.closest('button');
 		if (!button) return;
+		if (button.id === 'search-trigger') return this.openSearch();
+		if (button.dataset.settingsTab) return this.settingsTab(button.dataset.settingsTab);
+		if (button.dataset.searchLibrary) {
+			await this.open(button.dataset.searchLibrary);
+			this.searchFocus = [...document.querySelectorAll('[data-snippet]')].find(node => node.dataset.snippet === button.dataset.searchSnippet) || document.querySelector('[data-id="' + button.dataset.searchLibrary + '"]');
+			if (this.searchFocus?.matches('[data-snippet]')) this.searchFocus.tabIndex = -1;
+			bootstrap.Modal.getInstance(document.querySelector('#search-modal'))?.hide();
+			return;
+		}
 		const data = button.dataset;
 		const library = this.libraries.get(this.selected);
-		if (button.classList.contains('library-open')) return this.open(button.closest('[data-id]').dataset.id);
 		if (button.id === 'new-library') return this.form('library', {}, async fields => this.apply(await this.request('libraries', 'POST', { name: fields.get('name'), yaml: fields.get('yaml') })));
 		if ('librarySettings' in data) return this.form('library', { library: library._id }, async fields => this.apply(await this.request('libraries/' + library._id, 'PATCH', { base_revision: library.revision, name: fields.get('name'), shared: fields.has('shared'), editable: fields.get('editable') === 'true', members: fields.getAll('members'), groups: fields.getAll('groups') })));
 		if ('addSnippet' in data || data.editSnippet) return this.form('snippet', { library: library._id, snippet: data.editSnippet || '' }, fields => this.snippet(data.editSnippet, { trigger: fields.get('trigger'), replace: fields.get('replace') }, library));
