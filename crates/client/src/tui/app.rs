@@ -2,6 +2,7 @@ use anyhow::{Result, Context};
 use ratatui::{Frame, layout::{Constraint, Layout, Rect, Position}, style::{Color, Modifier, Style}, text::Line, widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap}};
 use ratatui::crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 use ratatui_textarea::TextArea;
+use typerelay_core::Engine;
 use typerelay_client::{config::Match, editor::{EditorStore, OpenFile}, settings::SettingsStore};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,7 +50,7 @@ impl App {
     }
     fn text(value: &str) -> TextArea<'static> { TextArea::new(value.split('\n').map(str::to_owned).collect()) }
     fn value(field: &TextArea<'_>) -> String { field.lines().join("\n") }
-    fn draft(&self) -> Match { Match { trigger: Self::value(&self.trigger), replace: Self::value(&self.expansion) } }
+    fn draft(&self) -> Match { Match { trigger: format!("{}{}", Engine::PREFIX, Self::value(&self.trigger)), replace: Self::value(&self.expansion) } }
     fn effective_screen(&self) -> Screen { if self.screen == Screen::Confirm { self.confirm_from } else { self.screen } }
     fn dirty(&self) -> bool {
         match self.effective_screen() {
@@ -99,8 +100,8 @@ impl App {
     fn edit(&mut self, new: bool) -> Result<()> {
         let file = self.file.as_ref().context("Choose a file first")?;
         self.editing = if new { None } else { Some(self.selected().context("Select a snippet")?) };
-        let entry = self.editing.map(|index| file.entries[index].clone()).unwrap_or(Match { trigger: ",".into(), replace: String::new() });
-        self.trigger = Self::text(&entry.trigger);
+        let entry = self.editing.map(|index| file.entries[index].clone()).unwrap_or(Match { trigger: Engine::PREFIX.to_string(), replace: String::new() });
+        self.trigger = Self::text(entry.trigger.strip_prefix(Engine::PREFIX).context("Missing trigger prefix")?);
         self.trigger.move_cursor(ratatui_textarea::CursorMove::End);
         self.expansion = Self::text(&entry.replace);
         self.original_entry = Some(entry);
@@ -166,6 +167,13 @@ impl App {
         let current = state.selected().unwrap_or(0);
         state.select(Some(if down { (current + 1).min(count - 1) } else { current.saturating_sub(1) }));
     }
+    fn abbreviation_input(&mut self, event: Event) {
+        match event {
+            Event::Key(key) if key.code == KeyCode::Char(Engine::PREFIX) => (),
+            Event::Paste(text) => Self::single_input(&mut self.trigger, Event::Paste(text.strip_prefix(Engine::PREFIX).unwrap_or(&text).to_owned())),
+            other => Self::single_input(&mut self.trigger, other),
+        }
+    }
     fn single_input(field: &mut TextArea<'static>, event: Event) {
         if let Event::Key(key) = &event
             && matches!(key.code, KeyCode::Enter | KeyCode::Tab) { return; }
@@ -218,7 +226,7 @@ impl App {
                     KeyCode::Esc => self.leave(Destination::Browse)?,
                     KeyCode::Tab | KeyCode::BackTab => self.editor_focus = 1 - self.editor_focus,
                     KeyCode::Enter if self.editor_focus == 0 => self.editor_focus = 1,
-                    _ if self.editor_focus == 0 => Self::single_input(&mut self.trigger, Event::Key(key)),
+                    _ if self.editor_focus == 0 => self.abbreviation_input(Event::Key(key)),
                     _ => { self.expansion.input(Event::Key(key)); }
                 },
                 Screen::NewFile => match key.code { KeyCode::Enter => self.save()?, KeyCode::Esc => self.apply(Destination::Files)?, _ => Self::single_input(&mut self.name, Event::Key(key)) },
@@ -228,7 +236,7 @@ impl App {
         } else if let Event::Paste(text) = event {
             match self.screen {
                 Screen::Edit if self.editor_focus == 1 => { self.expansion.insert_str(text.replace("\r\n", "\n").replace('\r', "\n")); }
-                Screen::Edit => Self::single_input(&mut self.trigger, Event::Paste(text)),
+                Screen::Edit => self.abbreviation_input(Event::Paste(text)),
                 Screen::Settings => Self::single_input(&mut self.url, Event::Paste(text)),
                 Screen::NewFile => Self::single_input(&mut self.name, Event::Paste(text)),
                 Screen::Browse if self.search_focused => { Self::single_input(&mut self.search, Event::Paste(text)); self.snippets_state.select(Some(0)); }
@@ -300,9 +308,11 @@ impl App {
             }
             Screen::Edit => {
                 let parts = Layout::vertical([Constraint::Length(3), Constraint::Min(3), Constraint::Length(3)]).split(body);
-                self.trigger.set_block(Self::border("Trigger", self.editor_focus == 0));
+                let trigger_row = Layout::horizontal([Constraint::Length(5), Constraint::Length(1), Constraint::Min(1)]).split(parts[0]);
+                frame.render_widget(Paragraph::new(Engine::PREFIX.to_string()).centered().block(Self::border("", false)).style(Style::default().fg(Color::Gray)), trigger_row[0]);
+                self.trigger.set_block(Self::border("Abbreviation", self.editor_focus == 0));
                 self.expansion.set_block(Self::border("Expansion · Enter = newline · Ctrl+T = tab", self.editor_focus == 1));
-                frame.render_widget(&self.trigger, parts[0]); frame.render_widget(&self.expansion, parts[1]); self.field_areas.extend([parts[0], parts[1]]);
+                frame.render_widget(&self.trigger, trigger_row[2]); frame.render_widget(&self.expansion, parts[1]); self.field_areas.extend([parts[0], parts[1]]);
                 self.form_buttons(frame, parts[2]);
             }
             Screen::NewFile | Screen::Settings => {
@@ -350,7 +360,10 @@ mod tests {
         Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
         app.handle(Event::Paste("sales".into())); Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
         Fixture::key(&mut app, KeyCode::F(2), KeyModifiers::NONE);
-        app.handle(Event::Paste("hello".into()));
+        assert_eq!(App::value(&app.trigger), "");
+        app.handle(Event::Paste(",hello".into()));
+        assert_eq!(App::value(&app.trigger), "hello");
+        assert_eq!(app.draft().trigger, ",hello");
         Fixture::key(&mut app, KeyCode::Tab, KeyModifiers::NONE);
         app.handle(Event::Paste("Hello\nworld\n".into()));
         Fixture::key(&mut app, KeyCode::Esc, KeyModifiers::NONE); assert_eq!(app.screen, Screen::Confirm);
@@ -358,6 +371,8 @@ mod tests {
         Fixture::key(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL); assert_eq!(app.screen, Screen::Browse);
         Fixture::key(&mut app, KeyCode::Char('/'), KeyModifiers::NONE); app.handle(Event::Paste("WORLD".into())); assert_eq!(app.filtered(), vec![0]);
         Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE); Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(App::value(&app.trigger), "hello");
+        assert!(!app.dirty());
         app.expansion.insert_str("changed"); Fixture::key(&mut app, KeyCode::F(1), KeyModifiers::NONE); Fixture::key(&mut app, KeyCode::Char('d'), KeyModifiers::NONE);
         assert_eq!(app.screen, Screen::Files); assert_eq!(app.store.open("sales.yml").unwrap().entries[0].replace, "Hello\nworld\n");
     }
@@ -368,7 +383,7 @@ mod tests {
         Fixture::key(&mut app, KeyCode::F(6), KeyModifiers::NONE); app.handle(Event::Paste("https://example.invalid/sync".into()));
         Fixture::key(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL); assert!(temp.path().join("settings.yml").exists());
         app.file = Some(app.store.create("mine").unwrap()); app.screen = Screen::Browse; app.edit(true).unwrap();
-        app.trigger = App::text("invalid"); app.expansion = App::text("My draft");
+        app.trigger = App::text("invalid space"); app.expansion = App::text("My draft");
         Fixture::key(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL); assert_eq!(app.screen, Screen::Edit); assert!(app.error); assert_eq!(app.draft().replace, "My draft");
     }
     #[test]

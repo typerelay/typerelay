@@ -16,7 +16,7 @@ impl Snapshot {
     pub fn new(snippets: Vec<Snippet>) -> Result<Self, String> {
         let mut indexed = BTreeMap::new();
         for mut snippet in snippets {
-            let suffix = snippet.trigger.strip_prefix(',').ok_or("Triggers must start with a comma")?;
+            let suffix = snippet.trigger.strip_prefix(Engine::PREFIX).ok_or_else(|| format!("Triggers must start with {}", Engine::PREFIX))?;
             if suffix.is_empty() || suffix.len() > 63 || !suffix.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-') {
                 return Err("Triggers must be comma plus 1–63 lowercase ASCII letters, digits or hyphens".into());
             }
@@ -54,6 +54,7 @@ pub struct Engine {
 }
 
 impl Engine {
+    pub const PREFIX: char = ',';
     pub fn new(snapshot: Snapshot) -> Self { Self { snapshot, pending: String::new() } }
 
     /// Future sync publishes a complete validated snapshot through this same boundary.
@@ -72,7 +73,7 @@ impl Engine {
                 self.pending.clear();
                 return expansion;
             }
-            Input::Character(',') => self.pending = ",".into(),
+            Input::Character(c) if c == Self::PREFIX => self.pending = c.to_string(),
             Input::Character(c) if !self.pending.is_empty() && (c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') => {
                 self.pending.push(c);
                 if self.pending.len() > 64 { self.pending.clear(); }

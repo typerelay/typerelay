@@ -8,6 +8,11 @@ Choose a `.yml`/`.yaml` file or **New file** at startup. The default directory i
 `~/.config/typerelay/snippets/`; override with `typerelay-tui --dir /path/to/snippets`.
 Names without an extension gain `.yml`. Existing files are never overwritten by creation.
 
+The trigger form shows a fixed comma before an **Abbreviation** field. Enter `naf`,
+not the prefix; saving still writes `,naf` to YAML. Editing existing snippets shows only
+the abbreviation. A pasted full trigger has its leading prefix removed automatically.
+The prefix comes from the shared engine constant; no configurable-prefix setting is added yet.
+
 ## Controls
 
 | Control | Action |

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fs, io::Write, path::{Path, PathBuf}};
-use typerelay_core::{Snapshot, Snippet};
+use typerelay_core::{Engine, Snapshot, Snippet};
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -100,7 +100,7 @@ impl FileStore {
         for (index, entry) in document.matches.into_iter().enumerate() {
             let Some(trigger) = entry.trigger else { eprintln!("Skipped entry {}: missing simple trigger", index + 1); skipped += 1; continue; };
             let Some(replace) = entry.replace else { eprintln!("Skipped entry {}: missing static replacement", index + 1); skipped += 1; continue; };
-            let normalized = format!(",{}", trigger.trim_start_matches([';', ':', ',']));
+            let normalized = format!("{}{}", Engine::PREFIX, trigger.trim_start_matches([';', ':', Engine::PREFIX]));
             let invalid = Snapshot::new(vec![Snippet { trigger: normalized.clone(), replacement: replace.clone() }]).is_err();
             let supported_options = entry.extra.iter().all(|(key, value)| key == "force_mode" && value.as_str() == Some("clipboard"));
             if invalid || !supported_options {

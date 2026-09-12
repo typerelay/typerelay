@@ -330,7 +330,7 @@ impl Session {
                         engine.feed(Input::Cancel);
                     } else {
                         if context.changed()? { engine.feed(Input::Cancel); target = None; }
-                        if code == KeyCode::KEY_COMMA { target = Self::target()?; if std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some() { eprintln!("Candidate target available: {}", target.is_some()); } }
+                        if matches!(Self::input(code), Input::Character(c) if c == Engine::PREFIX) { target = Self::target()?; if std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some() { eprintln!("Candidate target available: {}", target.is_some()); } }
                         let expansion = if target.is_some() { engine.feed(Self::input(code)) } else { engine.feed(Input::Cancel); None };
                         if expansion.is_some() && std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some() { eprintln!("Match found; held-key count {}", pressed.len()); }
                         if let Some(expansion) = expansion
