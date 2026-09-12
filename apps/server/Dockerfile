@@ -8,7 +8,7 @@ RUN cargo build --release --locked --bins
 FROM node:24-bookworm-slim
 RUN npm install -g pnpm@12.0.0
 WORKDIR /app
-COPY apps/server/package.json apps/server/pnpm-lock.yaml ./
+COPY apps/server/package.json apps/server/pnpm-lock.yaml apps/server/pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY apps/server ./
 COPY docs/web/Streamient-LICENSE docs/web/attribution.md ./notices/

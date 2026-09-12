@@ -76,7 +76,7 @@ test('actual desktop browser PKCE flow writes private credentials and settings',
 		const page = await Fixture.request(authorize.pathname + authorize.search);
 		assert.ok(page.headers.get('content-security-policy').includes("form-action 'self' " + new URL(authorize.searchParams.get('redirect_uri')).origin + ';'));
 		const dom = new JSDOM(await page.text(), { url: authorize.href, runScripts: 'outside-only' });
-		dom.window.eval(await readFile('./public/app.js', 'utf8'));
+		dom.window.eval((await readFile('./public/app.js', 'utf8')).replace('export { client };', ''));
 		const form = dom.window.document.querySelector('form[action="/oauth/authorize"]');
 		form.elements.account.value = Fixture.account;
 		const submit = new dom.window.Event('submit', { bubbles: true, cancelable: true });
@@ -182,7 +182,7 @@ test('web AJAX updates only affected snippets; preserves panel, filter and multi
 		const response = await fetch(new URL(path, Fixture.origin), { ...options, headers: { ...options.headers, Cookie: Fixture.cookie } });
 		return response;
 	};
-	const source = (await readFile('./public/app.js', 'utf8')).replace('new TypeRelay();', 'window.client = new TypeRelay();');
+	const source = (await readFile('./public/app.js', 'utf8')).replace('new TypeRelay();', 'window.client = new TypeRelay();').replace('export { client };', '');
 	dom.window.eval(source);
 	const client = dom.window.client;
 	await client.open(library._id);

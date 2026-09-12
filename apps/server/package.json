@@ -12,6 +12,9 @@
     "test": "node --test test/*.test.js"
   },
   "dependencies": {
+    "@simplewebauthn/browser": "^13.3.0",
+    "@simplewebauthn/server": "^14.0.1",
+    "bcryptjs": "^3.0.3",
     "bootstrap": "^5.3.8",
     "connect-mongo": "^6.0.0",
     "express": "^5.1.0",
@@ -20,10 +23,13 @@
     "helmet": "^8.1.0",
     "mongoose": "^9.0.0",
     "nodemailer": "^7.0.0",
+    "otplib": "^13.5.0",
     "pug": "^3.0.3",
+    "qrcode": "^1.5.4",
     "sweetalert2": "^11.23.0"
   },
   "devDependencies": {
+    "cbor-x": "^1.6.6",
     "jsdom": "^26.1.0"
   }
 }

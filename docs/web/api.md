@@ -56,3 +56,25 @@ Changes to separate snippet IDs merge. Divergent changes to one ID retain local/
 - `DELETE /api/v1/connection`: revoke currently authenticated desktop device.
 
 Errors use `{error:string}`: 400 invalid input; 401 expired/revoked authentication; 403 permission/CSRF; 404 inaccessible resource; 409 stale base or reused operation; 422 invalid YAML.
+
+## Account login and security
+
+Login follows Streamient/Mailtwine: password, Magic Link, Passkey, forgot-password and verified signup. Existing email-only accounts remain valid.
+
+- `GET /login`, `GET /signup`, `POST /auth/signup {name,email}`: verification link creates the named account.
+- `POST /auth/password {email,password}`: bcrypt password check; returns redirect or `requires2FA`.
+- `GET/POST /auth/two-factor {code}`: complete a five-minute pending login; enabled TOTP applies to password and magic-link sign-in. Codes cannot be replayed in the same time step.
+- `GET /forgot-password`, `POST /auth/forgot-password {email}`: neutral response; email a hashed, single-use 15-minute reset link.
+- `GET /auth/reset-password?token=...`, `POST /auth/reset-password {token}`: explicit confirmation generates a random password to copy. Only bcrypt hashes are retained. Password changes invalidate older browser sessions.
+- `POST /auth/passkey/options`, `POST /auth/passkey/verify {response}`: discoverable WebAuthn sign-in with required user verification. Challenges expire after five minutes and are consumed atomically.
+- `PATCH /api/v1/profile {name,email}`: update name immediately; send verification to a changed email. Returns avatar and member-row Pug fragments. Email remains unchanged until logged-in `POST /auth/email {token}` confirms the link; existing addresses cannot be claimed.
+- `GET /api/v1/security`: own 2FA status and passkey names.
+- `POST /api/v1/security/password`: generate/display a new password, matching Streamient's reset workflow.
+- `POST /api/v1/security/totp/setup`, `/confirm {code}`, `/disable {code}`: authenticator setup/verification/removal. QR code and manual secret appear only during setup.
+- `POST /api/v1/security/passkeys/options`, `/verify {name,response}`: register a passkey.
+- `GET/DELETE /api/v1/security/passkeys/:id`: render/remove an owned passkey.
+
+Security mutations and email-change requests require a browser sign-in within the last 15 minutes. Desktop tokens cannot authorize these mutations. Existing sessions without a recent authentication timestamp must sign out and back in.
+WebAuthn binds credentials to the configured `ORIGIN` and its hostname; remote sites require HTTPS. The local browser preview uses `http://localhost:3040`.
+
+The top-right initials avatar opens Settings, Help and Sign out. Profile saves preserve the settings panel, update only the avatar and current member row, and retain input focus.

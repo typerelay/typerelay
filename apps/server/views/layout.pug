@@ -11,10 +11,24 @@ html(lang="en")
 		link(rel="stylesheet" href="/assets/app.css")
 		script(src="/vendor/bootstrap/js/bootstrap.bundle.min.js" defer)
 		script(src="/vendor/sweetalert2/sweetalert2.all.min.js" defer)
+		script(src="/vendor/webauthn/index.umd.min.js" defer)
+		script(src="/assets/auth.js" type="module")
 		script(src="/assets/app.js" type="module")
 	body
-		header.container-fluid.py-3.mb-5
+		header.container-fluid.py-3.mb-5.d-flex.align-items-center.justify-content-between
 			a(href="/")
 				img.brand(src="/assets/typerelay-logo.svg" alt="TypeRelay")
+			if profile
+				.dropdown
+					include ajax/avatar
+					ul.dropdown-menu.dropdown-menu-end
+						li
+							button.dropdown-item(type="button" data-bs-toggle="modal" data-bs-target="#settings") Settings
+						li
+							button.dropdown-item(type="button" data-bs-toggle="modal" data-bs-target="#help") Help
+						li
+							hr.dropdown-divider
+						li
+							button#logout.dropdown-item(type="button") Sign out
 		main.container
 			block content

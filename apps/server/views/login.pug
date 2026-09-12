@@ -1,13 +1,33 @@
+//- Adapted from Streamient/Mailtwine auth/login.pug (AGPL-3.0).
 extends layout
 block content
 	section.auth.card.p-4
-		h1.mb-3 Your words. Everywhere.
-		p.mb-5 Sign in or create your TypeRelay account with an email link.
-		form#login
-			.mb-3
-				label.form-label(for="email") Email
-				input#email.form-control.form-control-sm(type="email" name="email" required autocomplete="email")
-			.d-flex.justify-content-end
-				button.btn.btn-primary.btn-sm(type="submit") Send sign-in link
+		h1.h2.mb-3 Sign in to TypeRelay
 		if returnTo
-			p.mt-3 After signing in, return to the desktop authorization tab.
+			p.text-muted.mb-3 Sign in to continue connecting your desktop.
+		#login-options
+			p.text-secondary.small.mb-2 Sign in with
+			.d-flex.gap-3.mb-3
+				button#magic-link-btn.btn.btn-primary.btn-sm.flex-fill(type="button") Magic Link
+				button#passkey-btn.btn.btn-primary.btn-sm.flex-fill(type="button") Passkey
+			p.text-secondary.small.mb-3 Or continue with email and password
+			form#password-login-form
+				label.form-label(for="email") Email address
+				input#email.form-control.form-control-sm.mb-3(type="email" name="email" autocomplete="email" required autofocus)
+				.d-flex.justify-content-between
+					label.form-label(for="password") Password
+					a.small(href="/forgot-password") Forgot password?
+				input#password.form-control.form-control-sm.mb-3(type="password" name="password" autocomplete="current-password" required)
+				.d-flex.justify-content-end
+					button.btn.btn-primary.btn-sm(type="submit") Sign in
+			p.mt-3.mb-0
+				span No account yet?
+				a.ms-1(href="/signup") Create one
+		#magic-link-form.d-none
+			p.mb-3 Enter your email to receive a login link.
+			form#login
+				label.form-label(for="magic-email") Email address
+				input#magic-email.form-control.form-control-sm.mb-3(type="email" name="email" required autocomplete="email")
+				.d-flex.justify-content-between
+					button#magic-link-back.btn.btn-outline-secondary.btn-sm(type="button") Back to login
+					button.btn.btn-primary.btn-sm(type="submit") Send magic link

@@ -1,0 +1,48 @@
+extends layout
+block content
+	section.auth.card.p-4
+		if kind === 'signup'
+			h1.h2.mb-3 Create your account
+			form#signup-form
+				label.form-label(for="name") Name
+				input#name.form-control.form-control-sm.mb-3(name="name" autocomplete="name" required)
+				label.form-label(for="email") Email address
+				input#email.form-control.form-control-sm.mb-3(type="email" name="email" autocomplete="email" required)
+				.d-flex.justify-content-end
+					button.btn.btn-primary.btn-sm Sign up
+		if kind === 'forgot'
+			h1.h2.mb-3 Reset password
+			p Enter your email to receive a password reset link.
+			form#forgot-form
+				label.form-label(for="email") Email address
+				input#email.form-control.form-control-sm.mb-3(type="email" name="email" autocomplete="email" required)
+				.d-flex.justify-content-end
+					button.btn.btn-primary.btn-sm Send reset link
+		if kind === 'factor'
+			h1.h2.mb-3 Two-factor authentication
+			form#factor-form
+				label.form-label(for="code") Authentication code
+				input#code.form-control.form-control-sm.mb-3(name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required)
+				.d-flex.justify-content-end
+					button.btn.btn-primary.btn-sm Verify
+		if kind === 'reset'
+			h1.h2.mb-3 Reset your password
+			p Generate a new random password, then copy it and use it to sign in.
+			form#redeem-reset-form
+				input(type="hidden" name="token" value=token)
+				.d-flex.justify-content-end
+					button.btn.btn-primary.btn-sm Generate password
+			#public-password-result.d-none.mt-3
+				label.form-label(for="new-password") Your new password
+				input#new-password.form-control.form-control-sm.mb-3(type="text" readonly autocomplete="off")
+				.d-flex.justify-content-between
+					button#copy-password.btn.btn-outline-secondary.btn-sm(type="button") Copy
+					a.btn.btn-primary.btn-sm(href="/login") I copied it — continue to login
+		if kind === 'email'
+			h1.h2.mb-3 Confirm your email address
+			form#confirm-email-form
+				input(type="hidden" name="token" value=token)
+				.d-flex.justify-content-end
+					button.btn.btn-primary.btn-sm Confirm email address
+		p.mt-3.mb-0
+			a(href="/login") Back to login

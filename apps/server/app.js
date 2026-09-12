@@ -10,6 +10,7 @@ import { Auth } from './services/auth.js';
 import { Support, Yaml } from './services/support.js';
 import { Libraries } from './services/libraries.js';
 import { Team } from './services/team.js';
+import { Security } from './services/security.js';
 
 export class Server {
 	static async start() {
@@ -23,24 +24,29 @@ export class Server {
 		app.use(helmet({ contentSecurityPolicy: { directives: { 'script-src': ["'self'"], 'style-src': ["'self'"], 'img-src': ["'self'", 'data:'] } } }));
 		app.use(express.json({ limit: '2mb' }), express.urlencoded({ extended: false, limit: '32kb' }));
 		app.use('/assets', express.static('public'));
+		app.use('/vendor/webauthn', express.static('node_modules/@simplewebauthn/browser/dist/bundle'));
 		app.use('/vendor/bootstrap', express.static('node_modules/bootstrap/dist'));
 		app.use('/vendor/sweetalert2', express.static('node_modules/sweetalert2/dist'));
 		const sessionStore = MongoStore.create({ mongoUrl: process.env.MONGODB_URI, collectionName: 'web_sessions' });
 		app.use(session({ name: 'typerelay.sid', secret: readFileSync(secretPath, 'utf8'), store: sessionStore, resave: false, saveUninitialized: false, cookie: { httpOnly: true, sameSite: 'lax', secure: Auth.origin.startsWith('https:'), maxAge: 7 * 86400000 } }));
-		app.use((req, res, next) => {
+		app.use(async (req, res, next) => {
+			if (req.session.user) {
+				const user = await User.findById(req.session.user).select('auth_version').lean();
+				if (!user || (user.auth_version || 0) !== (req.session.auth_version || 0)) { delete req.session.user; delete req.session.auth_at; }
+			}
+			res.locals.serverOrigin = Auth.origin;
 			res.locals.csrf = req.session.csrf ||= Support.token();
 			if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && req.path !== '/oauth/token' && !req.headers.authorization) Support.assert((req.headers['x-csrf-token'] || req.body._csrf) === req.session.csrf, 'Session expired; reload and retry', 403);
 			next();
 		});
 		app.get('/health', (req, res) => res.json({ ok: true }));
-		const authLimit = rateLimit({ windowMs: 900000, limit: 30 });
+		const authLimit = rateLimit({ windowMs: 900000, limit: 30, message: { error: 'Too many sign-in attempts; try again later.' } });
+		Security.mount(app, authLimit);
 		app.post('/auth/login', authLimit, async (req, res) => { await Auth.login(req.body.email); res.json({ message: 'Check your email for a sign-in link.' }); });
 		app.get('/auth/callback', async (req, res) => {
 			const user = await Auth.consume(req.query.token);
-			const destination = req.session.return_to || '/';
-			await new Promise((resolve, reject) => req.session.regenerate(error => error ? reject(error) : resolve()));
-			req.session.user = user;
-			res.redirect(destination);
+			const result = await Security.establish(req, user);
+			res.redirect(result.redirect);
 		});
 		app.post('/auth/logout', async (req, res) => { await new Promise(resolve => req.session.destroy(resolve)); res.json({ signed_out: true }); });
 		app.post('/oauth/token', authLimit, async (req, res) => res.json(await Auth.exchange(req.body)));
@@ -65,6 +71,7 @@ export class Server {
 			req.ctx = req.headers.authorization ? await Auth.bearer(req.headers.authorization.replace(/^Bearer /, '')) : await Support.context(req.session.user, req.headers['x-account-id']);
 			next();
 		});
+		Security.mountPrivate(app, rateLimit({ windowMs: 900000, limit: 60, message: { error: 'Too many security requests; try again later.' } }));
 		app.get('/api/v1/library-view/:id', async (req, res) => Server.result(res, req.ctx, { library: Libraries.view(req.ctx, await Libraries.get(req.ctx, req.params.id)) }));
 		app.get('/api/v1/libraries', async (req, res) => res.json(await Libraries.list(req.ctx)));
 		app.post('/api/v1/import/preview', async (req, res) => res.json(await Yaml.run(req.body.yaml)));
@@ -83,7 +90,11 @@ export class Server {
 		app.delete('/api/v1/connection', async (req, res) => { Support.assert(req.ctx.device, 'Device authentication required', 401); await Device.updateOne({ _id: req.ctx.device, user: req.ctx.user, account: req.ctx.account }, { $set: { revoked: true } }); res.json({ disconnected: true }); });
 		app.get('/api/v1/devices', async (req, res) => res.json(await Device.find({ account: req.ctx.account, user: req.ctx.user, revoked: false }).select('_id name createdAt').lean()));
 		app.delete('/api/v1/devices/:id', async (req, res) => { await Device.updateOne({ _id: Support.id(req.params.id), account: req.ctx.account, user: req.ctx.user }, { $set: { revoked: true } }); res.json({ deleted: req.params.id }); });
-		app.patch('/api/v1/profile', async (req, res) => { await User.updateOne({ _id: req.ctx.user }, { $set: { name: Support.text(req.body.name) } }); res.json({ name: req.body.name }); });
+		app.patch('/api/v1/profile', async (req, res) => {
+			const result = await Security.profile(req);
+			const member = await Member.findOne({ account: req.ctx.account, user: req.ctx.user }).lean();
+			res.json({ ...result, avatar: pug.renderFile('./views/ajax/avatar.pug', { profile: result }), member: { id: String(member._id), html: pug.renderFile('./views/ajax/member.pug', { member: { ...member, profile: result }, ctx: req.ctx }) } });
+		});
 		app.patch('/api/v1/account', async (req, res) => { Support.assert(Support.admin(req.ctx), 'Admin required', 403); await Account.updateOne({ _id: req.ctx.account }, { $set: { name: Support.text(req.body.name) } }); res.json({ name: req.body.name }); });
 		app.get('/api/v1/forms/:kind', async (req, res) => {
 			const kind = req.params.kind;

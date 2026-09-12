@@ -7,11 +7,11 @@ import { Support } from './support.js';
 export class Auth {
 	static origin = process.env.ORIGIN || 'http://localhost:3040';
 	static mail = nodemailer.createTransport({ host: process.env.SMTP_HOST || 'mail', port: 1025 });
-	static async login(email) {
+	static async login(email, name) {
 		email = Support.text(email, 254).toLowerCase();
 		Support.assert(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email), 'Enter a valid email');
 		const token = Support.token();
-		await Ticket.create({ hash: Support.hash(token), kind: 'login', email, expires: new Date(Date.now() + 900000) });
+		await Ticket.create({ hash: Support.hash(token), kind: 'login', email, data: name ? { name: Support.text(name) } : undefined, expires: new Date(Date.now() + 900000) });
 		await Auth.mail.sendMail({ from: 'TypeRelay <login@typerelay.local>', to: email, subject: 'Sign in to TypeRelay', text: Auth.origin + '/auth/callback?token=' + token });
 	}
 	static async consume(token) {
@@ -21,7 +21,7 @@ export class Auth {
 			Support.assert(ticket, 'Link expired or already used', 401);
 			user = await User.findOne({ email: ticket.email }).session(session).lean();
 			if (!user) {
-				[user] = await User.create([{ email: ticket.email, name: ticket.email.split('@')[0] }], { session });
+				[user] = await User.create([{ email: ticket.email, name: ticket.data?.name || ticket.email.split('@')[0] }], { session });
 				const [account] = await Account.create([{ name: user.name + '’s team' }], { session });
 				await Member.create([{ account: account._id, user: user._id, role: 'owner' }], { session });
 			}

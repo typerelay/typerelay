@@ -1,0 +1,2 @@
+button#account-avatar.btn.avatar.rounded-circle(type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Account menu" title=profile.name)
+	span(aria-hidden="true")= profile.name.trim().split(/\s+/).map(word => word[0]).slice(0, 2).join('').toUpperCase()

@@ -2,7 +2,8 @@ import mongoose from 'mongoose';
 
 const objectid = mongoose.Schema.Types.ObjectId;
 const mixed = mongoose.Schema.Types.Mixed;
-const User = mongoose.model('User', new mongoose.Schema({ email: { type: String, unique: true }, name: String }, { timestamps: true }));
+const User = mongoose.model('User', new mongoose.Schema({ email: { type: String, unique: true }, name: String, password: { type: String, select: false }, totp_secret: { type: String, select: false }, totp_enabled: { type: Boolean, default: false }, totp_step: { type: Number, select: false }, auth_version: { type: Number, default: 0 } }, { timestamps: true }));
+const Passkey = mongoose.model('Passkey', new mongoose.Schema({ user: { type: objectid, index: true }, credential_id: { type: String, unique: true }, public_key: { type: String, select: false }, counter: Number, transports: [String], name: String }, { timestamps: true }));
 const Account = mongoose.model('Account', new mongoose.Schema({ name: String, sequence: { type: Number, default: 0 } }));
 const membership = new mongoose.Schema({ account: objectid, user: objectid, role: { type: String, enum: ['owner', 'admin', 'member'] } });
 membership.index({ account: 1, user: 1 }, { unique: true });
@@ -19,4 +20,4 @@ operation.index({ account: 1, user: 1, operation: 1 }, { unique: true });
 const Operation = mongoose.model('Operation', operation);
 const Conflict = mongoose.model('Conflict', new mongoose.Schema({ account: objectid, library: objectid, user: objectid, snippet: String, local: mixed, base: mixed, server: mixed, resolved: { type: Boolean, default: false } }, { timestamps: true }));
 
-export { mongoose, User, Account, Member, Group, Ticket, Library, Device, Change, Operation, Conflict };
+export { mongoose, User, Account, Member, Group, Ticket, Library, Device, Change, Operation, Conflict, Passkey };

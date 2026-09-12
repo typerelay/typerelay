@@ -108,7 +108,13 @@ class TypeRelay {
 		if (button) button.disabled = true;
 		try {
 			if (form.id === 'login') this.toast((await this.request('/auth/login', 'POST', { email: data.get('email') })).message);
-			if (form.id === 'profile-form') { await this.request('profile', 'PATCH', { name: data.get('name') }); this.toast('Profile saved'); }
+			if (form.id === 'profile-form') {
+				const result = await this.request('profile', 'PATCH', { name: data.get('name'), email: data.get('email') });
+				this.update('#account-avatar', 'header .dropdown', result.avatar);
+				this.update('[data-member="' + result.member.id + '"]', '#members', result.member.html);
+				document.querySelector('#profile-status').textContent = result.pending_email ? 'Verification sent to ' + result.pending_email + '. Your current email remains ' + result.email + ' until confirmed.' : 'Profile saved.';
+				this.toast(result.pending_email ? 'Name saved. Check your new email to confirm the change.' : 'Profile saved');
+			}
 			if (form.id === 'account-form') {
 				await this.request('account', 'PATCH', { name: data.get('name') });
 				document.querySelector('#account-switch').selectedOptions[0].textContent = data.get('name');
@@ -197,4 +203,5 @@ class TypeRelay {
 	async devices() { for (const device of await this.request('devices')) this.update('[data-device="' + device._id + '"]', '#devices', await this.request('fragments/device/' + device._id, 'GET', null, true)); }
 	async accept(token) { if (await this.confirm('Join this TypeRelay team?')) { const result = await this.request('team/accept', 'POST', { token }); location.href = '/?account=' + result.account; } }
 }
-new TypeRelay();
+const client = new TypeRelay();
+export { client };

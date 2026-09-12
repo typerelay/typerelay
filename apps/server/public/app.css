@@ -16,3 +16,9 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .btn { white-space: nowrap; }
 .btn-link { --bs-btn-color: #74422e; --bs-btn-hover-color: #9c593d; }
 #account-switch { min-width: 10rem; }
+.avatar { width: 2.5rem; height: 2.5rem; padding: 0; background: #eadbcb; border: .0625rem solid #c69270; color: #633b29; font-weight: 600; }
+.avatar:hover, .avatar.show { background: #dec5ac; }
+.dropdown-item { cursor: pointer; }
+#totp-qr { max-width: 12rem; width: 100%; }
+#totp-secret { overflow-wrap: anywhere; }
+#settings .modal-body { padding: 1.5rem; }

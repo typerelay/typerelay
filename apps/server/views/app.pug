@@ -7,7 +7,6 @@ block content
 				select#account-switch.form-select.form-select-sm(aria-label="Account")
 					each item in accounts
 						option(value=item._id selected=String(item._id) === String(account._id))= item.name
-				button.btn.btn-outline-secondary.btn-sm(data-bs-toggle="modal" data-bs-target="#settings") Settings
 				button#new-library.btn.btn-primary.btn-sm New library
 		.row
 			aside.col-md-4
@@ -28,14 +27,16 @@ block content
 						h2.modal-title.h5 Settings
 						button.btn-close(data-bs-dismiss="modal" aria-label="Close")
 					.modal-body
-						h3.h6 Profile and security
+						h3.h6 Profile
 						form#profile-form.mb-5
 							label.form-label(for="profile-name") Name
 							input#profile-name.form-control.form-control-sm.mb-3(name="name" value=profile.name required)
-							p.text-muted Sign-in links are single-use and expire after 15 minutes.
-							.d-flex.justify-content-between
-								button#logout.btn.btn-outline-secondary.btn-sm(type="button") Sign out
+							label.form-label(for="profile-email") Email address
+							input#profile-email.form-control.form-control-sm.mb-3(name="email" type="email" value=profile.email required)
+							p#profile-status.text-muted New email addresses must be verified before they replace your current address.
+							.d-flex.justify-content-end
 								button.btn.btn-primary.btn-sm Save
+						include ajax/security
 						h3.h6 Account and team
 						if ['owner', 'admin'].includes(ctx.role)
 							form#account-form.mb-3
@@ -74,3 +75,20 @@ block content
 							.d-flex.justify-content-between.mt-3
 								button.btn.btn-outline-secondary.btn-sm(type="button" data-bs-dismiss="modal") Cancel
 								button.btn.btn-primary.btn-sm(type="submit") Save
+
+		#help.modal.fade(tabindex="-1" aria-label="Help")
+			.modal-dialog
+				.modal-content
+					.modal-header
+						h2.modal-title.h5 TypeRelay help
+						button.btn-close(data-bs-dismiss="modal" aria-label="Close")
+					.modal-body
+						h3.h6 Libraries
+						p Create a library or import a YAML file, then add abbreviations and expansions. The trigger prefix stays in your desktop settings.
+						h3.h6 Connect your desktop
+						pre= 'typerelay connect --server ' + serverOrigin
+						pre typerelay enroll mysnippets.yml
+						p Only files you enroll are uploaded. Shared libraries available to you download automatically.
+						h3.h6 Sync and conflicts
+						p Press F5 in the TUI to sync now. Conflicts appear here for review; local drafts are kept in your TypeRelay sync/recovery directory.
+						a(href="https://github.com/typerelay/typerelay/tree/main/docs" target="_blank" rel="noopener") Documentation
