@@ -23,7 +23,7 @@ impl PanelIpc {
     fn process_start(pid:u32)->Result<String> { Ok(fs::read_to_string(format!("/proc/{pid}/stat"))?.rsplit_once(") ").context("Invalid process")?.1.split_whitespace().nth(19).context("Missing process identity")?.into()) }
     pub fn owns_window(pid:u32)->bool { (||->Result<bool>{let (owner,start):(u32,String)=serde_json::from_slice(&fs::read(PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").context("Missing runtime directory")?).join("typerelay-panel/process.json"))?)?;Ok(owner==pid && Self::process_start(pid)?==start)})().unwrap_or(false) }
     pub fn notify() -> bool {
-        Self::directory().and_then(|root| { UnixDatagram::unbound()?.send_to(b"show",root.join("events.sock"))?; Ok(()) }).is_ok()
+        Self::directory().and_then(|root| { let pid=fs::read_to_string(root.join("ready"))?.parse::<u32>()?; anyhow::ensure!(Self::owns_window(pid),"Panel is not running"); let socket=UnixDatagram::unbound()?;socket.set_nonblocking(true)?;socket.send_to(b"show",root.join("events.sock"))?; Ok(()) }).is_ok()
     }
     pub fn engine(running: Arc<AtomicBool>) -> Result<mpsc::Receiver<Insertion>> {
         let path = Self::directory()?.join("engine.sock"); let _ = fs::remove_file(&path);
@@ -39,8 +39,10 @@ impl PanelIpc {
                     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis();
                     anyhow::ensure!(now >= request.created_ms && now - request.created_ms < 2000, "Insertion request expired; nothing inserted");
                     let text = Panel::selected(&Paths::config_dir()?.join("snippets"), &request.hit)?;
+                    let elapsed=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis().saturating_sub(request.created_ms);
+                    anyhow::ensure!(elapsed<2000,"Insertion request expired; nothing inserted");
                     let (reply, wait) = mpsc::channel();
-                    tx.try_send(Insertion { deadline: std::time::Instant::now() + Duration::from_secs(2), text, target: request.target, reply }).context("Expansion service is busy")?;
+                    tx.try_send(Insertion { deadline: std::time::Instant::now() + Duration::from_millis((2000-elapsed) as u64), text, target: request.target, reply }).context("Expansion service is busy")?;
                     wait.recv_timeout(Duration::from_secs(5)).context("Insertion timed out")?.map_err(anyhow::Error::msg)
                 })();
                 let result: std::result::Result<(),String> = outcome.map_err(|error|error.to_string());

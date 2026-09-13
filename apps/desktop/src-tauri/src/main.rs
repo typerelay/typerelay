@@ -12,18 +12,26 @@ use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 struct Runtime { root:PathBuf, target:Mutex<Option<platform::Target>>, last:Mutex<Option<platform::Target>>, busy:AtomicBool, settings:AtomicBool, status:Mutex<String>, #[cfg(target_os="linux")] registration:Mutex<Option<typerelay_client::desktop::Registration>> }
 impl Runtime {
+    fn quit(app:&tauri::AppHandle) {
+        if app.state::<Runtime>().busy.load(Ordering::SeqCst) {let _=app.emit("panel-error","Insertion is finishing; try Quit again in a moment");return;}
+        app.exit(0);
+    }
     fn open(app: &tauri::AppHandle, settings:bool) {
         let state=app.state::<Runtime>(); if state.busy.load(Ordering::SeqCst) {return;}
         let Some(window)=app.get_webview_window("panel") else{return;};
         if !window.is_visible().unwrap_or(false) {
             let captured=platform::Target::capture();
-            let target=captured.as_ref().ok().cloned().or_else(||state.last.lock().unwrap().clone());
-            *state.status.lock().unwrap()=if target.is_none(){captured.err().map(|e|e.to_string()).unwrap_or("Choose an application to insert into".into())}else{String::new()};
+            let target=captured.as_ref().ok().cloned().or_else(||if platform::fallback_allowed(){state.last.lock().unwrap().clone()}else{None});
+            if target.is_none(){*state.status.lock().unwrap()=captured.err().map(|e|e.to_string()).unwrap_or("Choose an application to insert into".into());}
             *state.target.lock().unwrap()=target;
         }
         state.settings.store(settings,Ordering::SeqCst);
         if let Some(target)=state.target.lock().unwrap().as_ref() {
-            if let Some((x,y,w,h))=target.bounds { let _=window.set_position(tauri::LogicalPosition::new(x as f64+(w as f64-640.)/2., y as f64+(h as f64-480.)/2.)); }
+            if let Some((x,y,w,h))=target.bounds {
+                let point=(x as f64+w as f64/2.,y as f64+h as f64/2.);
+                let monitor=window.available_monitors().ok().and_then(|monitors|monitors.into_iter().find(|m|{let scale=if cfg!(target_os="windows"){1.}else{m.scale_factor()};let p=m.position();let size=m.size();point.0>=p.x as f64/scale && point.1>=p.y as f64/scale && point.0<(p.x as f64+size.width as f64)/scale && point.1<(p.y as f64+size.height as f64)/scale}));
+                if let Some(m)=monitor{let scale=m.scale_factor();let _=window.set_position(tauri::PhysicalPosition::new(m.position().x+((m.size().width as f64-640.*scale)/2.) as i32,m.position().y+((m.size().height as f64-480.*scale)/2.) as i32));}else{let _=window.center();}
+            }
             else {let _=window.center();}
         } else {let _=window.center();}
         let _=window.show(); let _=window.set_focus();
@@ -33,17 +41,19 @@ impl Runtime {
             let app=app.clone(); std::thread::spawn(move || {
                 use typerelay_client::desktop::{Hyprland,Registration};
                 for _ in 0..40 {
-                    if let Ok(window)=Hyprland::query("activewindow") {
-                        if window["pid"] == std::process::id() {
+                    if let Ok(window)=Hyprland::query("activewindow")
+                        && window["pid"] == std::process::id() {
                             if let Some(address)=window["address"].as_str() {
-                                let _=Hyprland::query(&format!("dispatch setfloating address:{address}"));
-                                let _=Hyprland::query(&format!("dispatch resizewindowpixel exact 640 480,address:{address}"));
-                                let _=Hyprland::query("dispatch centerwindow");
+                                let selector=serde_json::to_string(&format!("address:{address}")).unwrap();
+                                let mut commands=String::new();
+                                if window["floating"] != true { commands.push_str(&format!("hl.dispatch(hl.dsp.window.float({{window={selector}, action=\"toggle\"}}));")); }
+                                commands.push_str(&format!("hl.dispatch(hl.dsp.window.resize({{window={selector},x=640,y=480}}));"));
+                                if let Some((x,y,w,h))=app.state::<Runtime>().target.lock().unwrap().as_ref().and_then(|target|target.bounds) { commands.push_str(&format!("hl.dispatch(hl.dsp.window.move({{window={selector},x={},y={}}}));",x+(w as i32-640)/2,y+(h as i32-480)/2)); }
+                                let _=std::process::Command::new("hyprctl").args(["eval",&commands]).output();
                                 if let Ok(registration)=Registration::panel(address) { *app.state::<Runtime>().registration.lock().unwrap()=Some(registration); }
                             }
                             break;
                         }
-                    }
                     std::thread::sleep(std::time::Duration::from_millis(20));
                 }
             });
@@ -74,7 +84,15 @@ impl Runtime {
             if old != Some(value) { app.global_shortcut().on_shortcut(value,|app,_,event| {if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {Runtime::open(app,false);}}).context("Shortcut already in use; choose another")?; if let Some(old)=old {let _=app.global_shortcut().unregister(old);} }
         }
         #[cfg(target_os="linux")]
-        { let _=(app,old); }
+        {
+            let _=(app,old);
+            let binds=typerelay_client::desktop::Hyprland::query("binds")?;
+            let parts:Vec<_>=value.split('+').collect(); let key=parts.last().unwrap().to_lowercase();
+            let mask=parts[..parts.len()-1].iter().map(|part|match *part{"Ctrl"|"Control"=>4,"Shift"=>1,"Alt"=>8,"Super"|"Meta"=>64,_=>0}).sum::<u64>();
+            let key=match key.as_str(){"comma"=>",","period"=>".","slash"=>"/","semicolon"=>";",other=>other};
+            anyhow::ensure!(!binds.as_array().is_some_and(|rows|rows.iter().any(|binding|binding["modmask"].as_u64()==Some(mask) && binding["key"].as_str().is_some_and(|name|name.eq_ignore_ascii_case(key)))),"Shortcut is assigned in Hyprland; choose another");
+            Paths::atomic_write(&typerelay_client::panel_ipc::PanelIpc::directory()?.join("ready"),std::process::id().to_string().as_bytes(),false)?;
+        }
         Ok(())
     }
 }
@@ -104,6 +122,7 @@ async fn insert(app:tauri::AppHandle,hit:Hit)->std::result::Result<(),String> {
         Ok(())
     }).await.map_err(|e|e.to_string()).and_then(|r|r.map_err(|e|e.to_string()));
     app.state::<Runtime>().busy.store(false,Ordering::SeqCst);
+    if result.is_ok(){app.state::<Runtime>().status.lock().unwrap().clear();}
     if let Err(error)=&result { *app.state::<Runtime>().status.lock().unwrap()=error.clone(); if let Some(window)=app.get_webview_window("panel"){let _=window.show();let _=window.set_focus();} }
     result
 }
@@ -122,7 +141,7 @@ fn save_settings(app:tauri::AppHandle,config:PanelSettings)->std::result::Result
     let old=Panel::settings(root).map_err(|e|e.to_string())?;
     Runtime::shortcut(&app,Some(&old.shortcut),&config.shortcut).map_err(|e|e.to_string())?;
     let result=(||->Result<()>{if config.launch_at_login{app.autolaunch().enable()?;}else{app.autolaunch().disable()?;} Panel::save_settings(root,&config)})();
-    if result.is_err(){let _=Runtime::shortcut(&app,Some(&config.shortcut),&old.shortcut);}
+    if result.is_err(){let _=Runtime::shortcut(&app,Some(&config.shortcut),&old.shortcut);if old.launch_at_login{let _=app.autolaunch().enable();}else{let _=app.autolaunch().disable();}}
     result.map_err(|e|e.to_string())
 }
 #[tauri::command]
@@ -138,33 +157,42 @@ async fn libraries(app:tauri::AppHandle)->std::result::Result<Value,String>{
 #[tauri::command]
 async fn enroll(app:tauri::AppHandle,names:Vec<String>)->std::result::Result<(),String>{let root=app.state::<Runtime>().root.clone();tauri::async_runtime::spawn_blocking(move||->Result<()>{let sync=Sync::new(root.clone(),root.join("snippets"))?;for name in names{sync.enroll(&name)?;}Ok(())}).await.map_err(|e|e.to_string())?.map_err(|e|e.to_string())}
 fn main() {
+    if std::env::args().any(|a|a=="--version"){println!("typerelay-panel {}",env!("CARGO_PKG_VERSION"));return;}
+    #[cfg(target_os="linux")]
+    if std::env::args().any(|a|a=="--quit") {if let Ok(root)=typerelay_client::panel_ipc::PanelIpc::directory()&& let Ok(socket)=std::os::unix::net::UnixDatagram::unbound(){let _=socket.send_to(b"quit",root.join("events.sock"));}return;}
+
     #[cfg(target_os="linux")]
     if std::env::args().any(|a|a=="clipboard-serve") {let _=typerelay_client::clipboard::PasteJob::serve_restored();return;}
-    let builder=tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app,_,_|Runtime::open(app,false))).plugin(tauri_plugin_autostart::Builder::new().args(["--background"]).build());
+    let builder=tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app,args,_|{if args.iter().any(|arg|arg=="--uninstall"){let _=app.autolaunch().disable();Runtime::quit(app);}else if args.iter().any(|arg|arg=="--quit"){Runtime::quit(app);}else if !args.iter().any(|arg|arg=="--background"){Runtime::open(app,false);}})).plugin(tauri_plugin_autostart::Builder::new().args(["--background"]).build());
     #[cfg(not(target_os="linux"))]
     let builder=builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());
     let result=builder.setup(|app| {
+        #[cfg(target_os="macos")]
+        app.set_activation_policy(tauri::ActivationPolicy::Accessory);
         let root=Paths::config_dir()?; Database::open(&root.join("snippets"))?;
         Sync::worker(root.clone(),root.join("snippets"));
         let config=Panel::settings(&root)?;
         app.manage(Runtime{root,target:Mutex::new(None),last:Mutex::new(None),busy:AtomicBool::new(false),settings:AtomicBool::new(false),status:Mutex::new(String::new()),#[cfg(target_os="linux")] registration:Mutex::new(None)});
+        #[cfg(target_os="linux")]
+        {let _=std::fs::remove_file(typerelay_client::panel_ipc::PanelIpc::directory()?.join("ready"));}
+        if std::env::args().any(|arg|arg=="--quit"||arg=="--uninstall") {if std::env::args().any(|arg|arg=="--uninstall"){app.autolaunch().disable()?;}app.handle().exit(0);return Ok(());}
         if let Err(error)=Runtime::shortcut(app.handle(),None,&config.shortcut){*app.state::<Runtime>().status.lock().unwrap()=error.to_string();}
-        if config.launch_at_login { if let Err(error)=app.autolaunch().enable(){*app.state::<Runtime>().status.lock().unwrap()=format!("Could not enable launch at login: {error}");} }
+        if config.launch_at_login && let Err(error)=app.autolaunch().enable(){*app.state::<Runtime>().status.lock().unwrap()=format!("Could not enable launch at login: {error}");}
         if let Err(error)=tray::install(app.handle()){*app.state::<Runtime>().status.lock().unwrap()=format!("Tray unavailable: {error}. Use the shortcut or launcher.");}
         let handle=app.handle().clone();
-        std::thread::spawn(move||loop { if let Some(window)=handle.get_webview_window("panel") {if !window.is_visible().unwrap_or(false){if let Ok(target)=platform::Target::capture(){*handle.state::<Runtime>().last.lock().unwrap()=Some(target);}}} std::thread::sleep(std::time::Duration::from_millis(150)); });
+        std::thread::spawn(move||loop { if let Some(window)=handle.get_webview_window("panel")&& !window.is_visible().unwrap_or(false)&& let Ok(target)=platform::Target::capture(){*handle.state::<Runtime>().last.lock().unwrap()=Some(target);} std::thread::sleep(std::time::Duration::from_millis(150)); });
         #[cfg(target_os="linux")]
         {
             app.manage(typerelay_client::panel_ipc::PanelIpc::register()?);
             let path=typerelay_client::panel_ipc::PanelIpc::directory()?.join("events.sock");let _=std::fs::remove_file(&path);
             let socket=std::os::unix::net::UnixDatagram::bind(path)?;let handle=app.handle().clone();
-            std::thread::spawn(move||{let mut bytes=[0;32];loop{if socket.recv(&mut bytes).is_ok(){let app=handle.clone();let _=handle.run_on_main_thread(move||Runtime::open(&app,false));}}});
+            std::thread::spawn(move||{let mut bytes=[0;32];loop{if let Ok(length)=socket.recv(&mut bytes){let quit=&bytes[..length]==b"quit";let app=handle.clone();let _=handle.run_on_main_thread(move||if quit{Runtime::quit(&app);}else{Runtime::open(&app,false);});}}});
         }
         if !std::env::args().any(|a|a=="--background"){Runtime::open(app.handle(),false);}
         Ok(())
     }).on_window_event(|window,event|match event {
         tauri::WindowEvent::CloseRequested{api,..}=>{api.prevent_close();Runtime::hide(window.app_handle());},
-        tauri::WindowEvent::Focused(false)=>{if !window.app_handle().state::<Runtime>().busy.load(Ordering::SeqCst){Runtime::hide(window.app_handle());}},_=>()
+        tauri::WindowEvent::Focused(false)if !window.app_handle().state::<Runtime>().busy.load(Ordering::SeqCst)=> {Runtime::hide(window.app_handle());},_=>()
     }).invoke_handler(tauri::generate_handler![initialize,search,insert,copy_snippet,dismiss,sync_now,save_settings,connect,libraries,enroll]).run(tauri::generate_context!());
     if let Err(error)=result {eprintln!("TypeRelay panel: {error}");std::process::exit(1);}
 }

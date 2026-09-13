@@ -33,7 +33,11 @@ class Installer:
         self.permission_source = permission_source
 
     def artifacts(self):
-        return [("typerelay", self.binary, self.destination), ("typerelay-tui", self.binary.with_name("typerelay-tui"), self.destination.with_name("typerelay-tui"))]
+        artifacts = [("typerelay", self.binary, self.destination), ("typerelay-tui", self.binary.with_name("typerelay-tui"), self.destination.with_name("typerelay-tui"))]
+        panel = self.binary.with_name("typerelay-panel")
+        if panel.exists():
+            artifacts.append(("typerelay-panel", panel, self.destination.with_name("typerelay-panel")))
+        return artifacts
 
     def validate_bundle(self):
         versions = []
@@ -246,7 +250,7 @@ WantedBy=graphical-session.target
         self.data.chmod(0o700)
         self.write_private(self.helper, self.permission_source)
         # Save recovery information before any privileged mutation.
-        previous["binaries"] = {name: hashlib.sha256(source.read_bytes()).hexdigest() for name, source, _ in self.artifacts()}
+        previous["binaries"] = {**previous.get("binaries", {}), **{name: hashlib.sha256(source.read_bytes()).hexdigest() for name, source, _ in self.artifacts()}}
         previous["binary_sha256"] = previous["binaries"]["typerelay"]
         self.write_private(self.manifest, json.dumps(previous, indent=2) + "\n")
         self.privileged("install")
@@ -276,6 +280,10 @@ WantedBy=graphical-session.target
             storage_backup = pathlib.Path(tempfile.mkdtemp(prefix="storage-upgrade-", dir=self.data))
             if self.config.exists():
                 shutil.copytree(self.config, storage_backup / "config", symlinks=True)
+            panel_destination = self.destination.with_name("typerelay-panel")
+            if panel_destination.exists() and any(name == "typerelay-panel" for name, _, _ in self.artifacts()):
+                self.command(str(panel_destination), "--quit", check=False)
+                time.sleep(0.3)
             self.destination.parent.mkdir(parents=True, exist_ok=True)
             for name, source, destination in self.artifacts():
                 temporary = destination.with_name(name + ".new")
@@ -295,6 +303,11 @@ WantedBy=graphical-session.target
                 time.sleep(1)
                 if self.systemctl("is-active", "typerelay.service", check=False).returncode:
                     raise RuntimeError("Service failed to start; inspect journalctl --user -u typerelay -n 30")
+            panel = self.destination.with_name("typerelay-panel")
+            if any(name == "typerelay-panel" for name, _, _ in self.artifacts()):
+                launcher = self.data.parent / "applications/typerelay-panel.desktop"
+                self.write_private(launcher, "[Desktop Entry]\nType=Application\nName=TypeRelay\nExec=" + str(panel) + "\nTerminal=false\nCategories=Utility;\n")
+                subprocess.Popen([str(panel), "--background"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
             print("Installed. Manage with systemctl --user start|stop|restart typerelay.")
             print("Manage libraries in typerelay-tui. YAML files are import/export only.")
             if storage_backup:
@@ -357,18 +370,26 @@ WantedBy=graphical-session.target
         if self.unit.exists():
             self.systemctl("disable", "--now", "typerelay.service")
         self.stop_manual(self.conflicts()["manual"])
+        panel = self.destination.with_name("typerelay-panel")
+        if panel.exists() and hashlib.sha256(panel.read_bytes()).hexdigest() == state.get("binaries", {}).get("typerelay-panel"):
+            self.command(str(panel), "--quit", check=False)
         self.write_private(self.helper, self.permission_source)
         self.privileged("uninstall")
         self.unit.unlink(missing_ok=True)
         self.systemctl("daemon-reload")
         self.systemctl("reset-failed", "typerelay.service", check=False)
         hashes = state.get("binaries", {"typerelay": state.get("binary_sha256")})
-        for name, _, destination in self.artifacts():
+        for name in ("typerelay", "typerelay-tui", "typerelay-panel"):
+            destination = self.destination.with_name(name)
             if destination.exists():
                 if hashlib.sha256(destination.read_bytes()).hexdigest() == hashes.get(name):
                     destination.unlink()
                 else:
                     print("Preserved binary changed since installation or not owned: " + str(destination))
+        panel = self.destination.with_name("typerelay-panel")
+        for path in [self.data.parent / "applications/typerelay-panel.desktop", self.config.parent / "autostart/TypeRelay.desktop"]:
+            if path.exists() and str(panel) in path.read_text():
+                path.unlink()
         self.helper.unlink(missing_ok=True)
         self.manifest.unlink()
         if restore:

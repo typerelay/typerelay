@@ -19,10 +19,12 @@ impl Target {
         ensure!(Self::start(self.pid)? == self.start, "Original application closed");
         let clients = Hyprland::query("clients")?;
         ensure!(clients.as_array().is_some_and(|rows|rows.iter().any(|w|w["address"] == self.address && w["pid"] == self.pid)), "Original window closed");
-        Hyprland::query(&format!("dispatch focuswindow address:{}",self.address)).or_else(|_| Ok::<_,anyhow::Error>(serde_json::Value::Null))?;
-        // Dispatch responds with plain 'ok', not JSON; verify actual focus below.
+        let script=format!("hl.dispatch(hl.dsp.focus({{window = {}}}))",serde_json::to_string(&format!("address:{}",self.address))?);
+        let response=std::process::Command::new("hyprctl").args(["eval",&script]).output()?;
+        ensure!(response.status.success(),"Hyprland refused focus restoration");
         for _ in 0..40 { if self.focused()? { return Ok(()); } std::thread::sleep(std::time::Duration::from_millis(15)); }
         anyhow::bail!("Could not restore original window; use Copy")
     }
     pub fn focused(&self) -> Result<bool> { let window = Hyprland::query("activewindow")?; Ok(window["address"] == self.address && window["pid"] == self.pid && Self::start(self.pid).ok().as_ref() == Some(&self.start)) }
 }
+pub fn fallback_allowed()->bool { Hyprland::query("activewindow").is_ok_and(|window|window["pid"] == std::process::id()) }

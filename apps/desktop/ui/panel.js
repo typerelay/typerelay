@@ -5,7 +5,7 @@ class Panel {
 		this.query=document.querySelector('#query');
 		this.list=document.querySelector('#results');
 		this.status=document.querySelector('#status');
-		this.query.addEventListener('input',()=>{clearTimeout(this.timer);const sequence=++this.sequence;this.timer=setTimeout(()=>this.search(sequence),60);});
+		this.query.addEventListener('input',()=>{clearTimeout(this.timer);const sequence=++this.sequence;this.rows=[];this.render();this.timer=setTimeout(()=>this.search(sequence),60);});
 		document.addEventListener('keydown',event=>{
 			if(event.key==='Escape'){event.preventDefault();this.invoke('dismiss');return;}
 			if(!document.querySelector('#settings-view').hidden)return;
@@ -20,6 +20,7 @@ class Panel {
 		document.querySelector('#connect-form').onsubmit=event=>{event.preventDefault();this.action(async()=>{this.status.textContent='Complete sign-in in your browser…';await this.invoke('connect',{url:document.querySelector('#server').value});this.status.textContent='Connected';await this.settings(true);});};
 		document.querySelector('#sync').onclick=()=>this.action(async()=>{await this.invoke('sync_now');this.status.textContent='Sync requested';});
 		document.querySelector('#enroll-form').onsubmit=event=>{event.preventDefault();this.action(async()=>{const names=[...document.querySelectorAll('#local-libraries input:checked')].map(input=>input.value);if(!names.length)throw Error('Select local libraries first');await this.invoke('enroll',{names});await this.settings(true);this.status.textContent='Upload queued';});};
+		window.__TAURI__.event.listen('panel-error',event=>this.status.textContent=String(event.payload));
 		window.__TAURI__.event.listen('panel-open',event=>this.open(event.payload));
 		this.invoke('initialize').then(value=>{this.configure(value);this.open(value);}).catch(error=>this.status.textContent=String(error));
 	}
@@ -30,6 +31,6 @@ class Panel {
 	render(){this.list.replaceChildren();document.querySelector('#hint').hidden=!!this.rows.length;document.querySelector('#hint').textContent=this.query.value?'No matching snippets.':'Type an abbreviation or part of a snippet.';for(const [index,row] of this.rows.entries()){const node=document.querySelector('#result-template').content.firstElementChild.cloneNode(true);node.querySelector('.result-title').textContent=row.title||row.abbreviation||'Untitled snippet';node.querySelector('.result-library').textContent=row.library_name;node.querySelector('.result-abbreviation').textContent=row.abbreviation;node.querySelector('.result-preview').textContent=row.preview;node.onclick=()=>this.select(index);node.ondblclick=()=>{this.select(index);this.insert();};this.list.append(node);}this.select(0);}
 	select(index){this.index=Math.max(0,Math.min(index,this.rows.length-1));[...this.list.children].forEach((node,i)=>{node.setAttribute('aria-selected',String(i===this.index));if(i===this.index)node.scrollIntoView({block:'nearest'});});document.querySelector('#copy').disabled=!this.rows.length;}
 	async action(action){if(this.busy)return;this.busy=true;try{await action();}catch(error){this.status.textContent=String(error);}finally{this.busy=false;}}
-	insert(){if(!this.rows.length)return;this.action(()=>this.invoke('insert',{hit:this.rows[this.index]}));}
+	insert(){this.action(async()=>{const sequence=this.sequence;if(!this.rows.length&&this.query.value){clearTimeout(this.timer);await this.search(sequence);}if(sequence===this.sequence&&this.rows.length)await this.invoke('insert',{hit:this.rows[this.index]});});}
 }
 new Panel();

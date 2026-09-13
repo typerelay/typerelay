@@ -5,6 +5,7 @@
     set -eu
     requested_ref=main
     dry_run=false
+    with_panel=true
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --ref)
@@ -13,8 +14,9 @@
                 shift 2
                 ;;
             --dry-run) dry_run=true; shift ;;
+            --without-panel) with_panel=false; shift ;;
             --help|-h)
-                printf '%s\n' 'TypeRelay GitHub installer' 'Usage: sh install.sh [--ref BRANCH_TAG_OR_COMMIT] [--dry-run]' 'Requires Linux, Rust/Cargo, Python 3, tar, and gh or curl.'
+                printf '%s\n' 'TypeRelay GitHub installer' 'Usage: sh install.sh [--ref BRANCH_TAG_OR_COMMIT] [--dry-run] [--without-panel]' 'Requires Linux, Rust/Cargo, Python 3, tar, gh/curl; panel also needs Node, pnpm, GTK3 and WebKitGTK 4.1.'
                 exit 0
                 ;;
             *) printf 'Unknown option: %s\n' "$1" >&2; exit 2 ;;
@@ -60,6 +62,10 @@
     tar -xzf "$bootstrap_dir/source.tar.gz" -C "$bootstrap_dir/source" --strip-components=1
     printf '%s\n' 'Building TypeRelay from the downloaded source. Existing installation remains active.'
     cargo build --manifest-path "$bootstrap_dir/source/Cargo.toml" --workspace --bins --release --locked --target-dir "$bootstrap_dir/target" </dev/null
+    if [ "$with_panel" = true ]; then
+        sh "$bootstrap_dir/source/scripts/build-panel.sh" </dev/null
+        cp "$bootstrap_dir/source/target/release/typerelay-panel" "$bootstrap_dir/target/release/typerelay-panel"
+    fi
     if [ "$dry_run" = true ]; then
         "$bootstrap_dir/target/release/typerelay" install --dry-run </dev/null
     else

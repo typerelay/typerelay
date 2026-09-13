@@ -14,6 +14,15 @@ impl Sender {
         thread::sleep(Duration::from_millis(800));
         let text = std::env::args().nth(1).ok_or_else(|| anyhow::anyhow!("Supply test text"))?;
         let expected_class = std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("Supply the disposable window's exact class"))?;
+        if text == "--panel-hotkey" {
+            let active = std::process::Command::new("hyprctl").args(["-j", "activewindow"]).output()?;
+            let active: serde_json::Value = serde_json::from_slice(&active.stdout)?;
+            anyhow::ensure!(active["class"].as_str() == Some(&expected_class), "Test window lost focus; input aborted");
+            for (key,value) in [(KeyCode::KEY_LEFTCTRL,1),(KeyCode::KEY_LEFTSHIFT,1),(KeyCode::KEY_COMMA,1),(KeyCode::KEY_COMMA,0),(KeyCode::KEY_LEFTSHIFT,0),(KeyCode::KEY_LEFTCTRL,0)] {
+                device.emit(&[InputEvent::new(EventType::KEY.0,key.0,value)])?; thread::sleep(Duration::from_millis(10));
+            }
+            thread::sleep(Duration::from_millis(800)); return Ok(());
+        }
         for character in text.chars() {
             let active = std::process::Command::new("hyprctl").args(["-j", "activewindow"]).output()?;
             let active: serde_json::Value = serde_json::from_slice(&active.stdout)?;

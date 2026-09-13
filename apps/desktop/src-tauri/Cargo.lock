@@ -5438,6 +5438,7 @@ version = "0.10.0"
 dependencies = [
  "anyhow",
  "clipboard-rs",
+ "clipboard-win",
  "core-graphics",
  "enigo",
  "fs2",

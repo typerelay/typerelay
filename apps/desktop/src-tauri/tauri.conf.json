@@ -40,6 +40,11 @@
           "libwebkit2gtk-4.1-0"
         ]
       }
+    },
+    "windows": {
+      "nsis": {
+        "installerHooks": "installer-hooks.nsh"
+      }
     }
   }
 }

@@ -74,7 +74,9 @@ impl Drop for ClipboardLease {
 
 impl PasteJob {
     pub fn copy_text(text: String) -> Result<()> {
-        let executable = std::env::current_exe()?.with_file_name("typerelay");
+        let current = std::env::current_exe()?;
+        let sibling = current.with_file_name("typerelay");
+        let executable = if sibling.exists() { sibling } else if current.file_stem().is_some_and(|name|name == "typerelay-panel") { current } else { anyhow::bail!("Install the matching typerelay binary before copying"); };
         Self::publish_snapshot(&BTreeMap::from([("text/plain;charset=utf-8".into(), text.into_bytes())]), executable)
     }
     fn publish_snapshot(snapshot: &BTreeMap<String, Vec<u8>>, executable: std::path::PathBuf) -> Result<()> {

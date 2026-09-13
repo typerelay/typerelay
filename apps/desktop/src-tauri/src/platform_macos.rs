@@ -21,3 +21,30 @@ impl Target {
     pub fn focused(&self)->Result<bool> { unsafe { if NSWorkspace::sharedWorkspace().frontmostApplication().map(|app|app.processIdentifier()) != Some(self.pid) {return Ok(false);} let app=AXUIElementCreateApplication(self.pid); let current=Self::attribute(app,"AXFocusedWindow"); CFRelease(app); let current=current?; let equal=CFEqual(current,self.window.0 as Ref); CFRelease(current); Ok(equal) } }
 }
 pub fn keys_down()->bool { [56,60,59,62,58,61,55,54,36,43].iter().any(|key|unsafe{CGEventSourceKeyState(1,*key)}) }
+pub fn fallback_allowed()->bool { NSWorkspace::sharedWorkspace().frontmostApplication().is_some_and(|app|app.processIdentifier()==std::process::id() as i32) }
+
+pub struct ClipboardLease { context:clipboard_rs::ClipboardContext, saved:Vec<clipboard_rs::ClipboardContent>, marker:Vec<u8>, active:bool }
+impl ClipboardLease {
+    pub fn publish(text:String)->Result<Self> {
+        use clipboard_rs::{Clipboard,ClipboardContent,ClipboardContext};
+        let board=objc2_app_kit::NSPasteboard::generalPasteboard();
+        let count=board.pasteboardItems().map(|items|items.count()).unwrap_or(0);
+        ensure!(count<=1,"Clipboard contains multiple items; use Copy to leave them untouched until you choose to copy");
+        let context=ClipboardContext::new().map_err(|e|anyhow::anyhow!("{e}"))?;
+        let formats=if count==0{Vec::new()}else{context.available_formats().map_err(|e|anyhow::anyhow!("{e}"))?};
+        ensure!(formats.len()<=64,"Too many clipboard formats; use Copy");
+        let mut saved=Vec::new();let mut total=0;
+        for format in formats {let bytes=context.get_buffer(&format).map_err(|e|anyhow::anyhow!("Cannot preserve clipboard: {e}"))?;total+=bytes.len();ensure!(total<=16*1024*1024,"Clipboard too large to preserve; use Copy");saved.push(ClipboardContent::Other(format,bytes));}
+        let marker=uuid::Uuid::new_v4().to_string().into_bytes();
+        let mut lease=Self{context,saved,marker,active:true};
+        if let Err(error)=lease.context.set(vec![ClipboardContent::Text(text),ClipboardContent::Other("com.typerelay.clipboard-owner".into(),lease.marker.clone())]) {let saved=std::mem::take(&mut lease.saved);let _=lease.context.set(saved);lease.active=false;return Err(anyhow::anyhow!("Clipboard write failed: {error}"));}
+        Ok(lease)
+    }
+    pub fn restore(&mut self)->Result<()> {
+        use clipboard_rs::Clipboard;
+        if !self.active{return Ok(());}
+        if self.context.get_buffer("com.typerelay.clipboard-owner").ok().as_deref()==Some(self.marker.as_slice()){self.context.set(std::mem::take(&mut self.saved)).map_err(|e|anyhow::anyhow!("Cannot restore clipboard: {e}"))?;}
+        self.active=false;Ok(())
+    }
+}
+impl Drop for ClipboardLease {fn drop(&mut self){let _=self.restore();}}

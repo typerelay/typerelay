@@ -44,6 +44,25 @@ class InstallerTests(unittest.TestCase):
         self.stdout.__enter__()
         self.addCleanup(self.stdout.__exit__, None, None, None)
 
+    def test_optional_panel_install_tracks_ownership_and_uninstall_preserves_data(self):
+        panel = self.subject.binary.with_name("typerelay-panel")
+        panel.write_bytes(b"test-panel")
+        with patch.object(self.installer.subprocess, "Popen") as launch:
+            self.subject.install(False)
+            launch.assert_called_once()
+        installed = self.subject.destination.with_name("typerelay-panel")
+        self.assertEqual(installed.read_bytes(), b"test-panel")
+        state = json.loads(self.subject.manifest.read_text())
+        self.assertIn("typerelay-panel", state["binaries"])
+        self.assertTrue((self.home / ".local/share/applications/typerelay-panel.desktop").exists())
+        self.subject.config.mkdir(parents=True, exist_ok=True)
+        settings = self.subject.config / "panel.json"
+        settings.write_text('{"shortcut":"Ctrl+Shift+Comma"}')
+        panel.unlink()  # Uninstall must use ownership, even without an installer-side panel.
+        self.subject.uninstall(False)
+        self.assertFalse(installed.exists())
+        self.assertTrue(settings.exists())
+
     def test_bundle_checks_both_binaries_before_mutations(self):
         self.subject.command.side_effect = lambda path, *args, **kwargs: subprocess.CompletedProcess([], 0, ("typerelay" if pathlib.Path(path) == self.subject.binary else "typerelay-tui") + " 0.4.0\n", "")
         self.subject.validate_bundle()
