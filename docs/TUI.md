@@ -50,4 +50,4 @@ The TUI requests enhanced keyboard reporting so supported terminals distinguish 
 
 ## Editor field layout and navigation
 
-Title, Language and a visible Type indicator stay above Abbreviation in both modes. F9 toggles Text/Code without moving fields or focus and reports the selected type in the status line. Tab/Shift+Tab follow visual field order and wrap. In the code field, Tab inserts a literal tab; F2 or Ctrl+Tab advances to Title, and Shift+Tab returns to Abbreviation. F2 advances from every field; Shift+F2 goes backward. All editable fields are also mouse-focusable.
+Title and a visible Type indicator stay above Abbreviation in both modes. The TUI has no language selector; edit language in the web app. Existing language metadata is preserved when saving in the TUI. F9 toggles Text/Code without moving fields or focus. Tab/Shift+Tab cycle Title, Abbreviation and Expansion. In code, Tab inserts a literal tab (display width four); F2 or Ctrl+Tab leaves for Title, and Shift+Tab returns to Abbreviation. F2 advances from every field; Shift+F2 goes backward. Indentation width/spaces configuration is currently web-only.

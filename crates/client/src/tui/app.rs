@@ -22,7 +22,7 @@ pub struct App {
     search_focused: bool,
     trigger: TextArea<'static>,
     title: TextArea<'static>,
-    language: TextArea<'static>,
+    language: String,
     code: bool,
     preview_x: u16,
     expansion: TextArea<'static>,
@@ -66,15 +66,15 @@ impl App {
         let files = store.files()?;
         let mut file_state = ListState::default();
         file_state.select(Some(0));
-        Ok(Self { store, settings, screen: Screen::Files, files, file_state, snippets_state: ListState::default(), file: None, search: TextArea::default(), search_focused: false, trigger: TextArea::default(), title: TextArea::default(), language: Self::text("plain_text"), code: false, preview_x: 0, expansion: TextArea::default(), name: TextArea::default(), url: TextArea::default(), editor_focus: 0, editing: None, original_entry: None, original_url: String::new(), prefix: TextArea::default(), original_prefix: String::new(), pending: None, pending_delete: None, selected_ids: std::collections::BTreeSet::new(), selection_anchor: None, move_destination: None, move_choices: Vec::new(), move_state: ListState::default(), move_from: Screen::Browse, move_items: Vec::new(), pending_batch: None, bulk_buttons: Vec::new(), pending_trash: None, trash_rows: Vec::new(), trash_state: ListState::default(), trash_buttons: Vec::new(), confirm_from: Screen::Files, status: "Choose a file, or create a new one".into(), error: false, quit: false, toolbar: Vec::new(), list_area: Rect::default(), field_areas: Vec::new(), save_area: Rect::default(), cancel_area: Rect::default(), confirm_buttons: Vec::new() })
+        Ok(Self { store, settings, screen: Screen::Files, files, file_state, snippets_state: ListState::default(), file: None, search: TextArea::default(), search_focused: false, trigger: TextArea::default(), title: TextArea::default(), language: "plain_text".into(), code: false, preview_x: 0, expansion: TextArea::default(), name: TextArea::default(), url: TextArea::default(), editor_focus: 0, editing: None, original_entry: None, original_url: String::new(), prefix: TextArea::default(), original_prefix: String::new(), pending: None, pending_delete: None, selected_ids: std::collections::BTreeSet::new(), selection_anchor: None, move_destination: None, move_choices: Vec::new(), move_state: ListState::default(), move_from: Screen::Browse, move_items: Vec::new(), pending_batch: None, bulk_buttons: Vec::new(), pending_trash: None, trash_rows: Vec::new(), trash_state: ListState::default(), trash_buttons: Vec::new(), confirm_from: Screen::Files, status: "Choose a file, or create a new one".into(), error: false, quit: false, toolbar: Vec::new(), list_area: Rect::default(), field_areas: Vec::new(), save_area: Rect::default(), cancel_area: Rect::default(), confirm_buttons: Vec::new() })
     }
     fn text(value: &str) -> TextArea<'static> { TextArea::new(value.split('\n').map(str::to_owned).collect()) }
     fn value(field: &TextArea<'_>) -> String { field.lines().join("\n") }
-    fn draft(&self) -> Match { Match { trigger: Self::value(&self.trigger), replace: Self::value(&self.expansion), title: Self::value(&self.title), kind: if self.code { "code" } else { "plain_text" }.into(), language: Self::value(&self.language) } }
+    fn draft(&self) -> Match { Match { trigger: Self::value(&self.trigger), replace: Self::value(&self.expansion), title: Self::value(&self.title), kind: if self.code { "code" } else { "plain_text" }.into(), language: self.language.clone() } }
     fn next_editor_field(&mut self, backwards: bool) {
-        let order = [2, 3, 0, 1];
+        let order = [2, 0, 1];
         let index = order.iter().position(|field| *field == self.editor_focus).unwrap_or(0);
-        self.editor_focus = order[(index + if backwards { 3 } else { 1 }) % order.len()];
+        self.editor_focus = order[(index + if backwards { order.len() - 1 } else { 1 }) % order.len()];
     }
     fn effective_screen(&self) -> Screen { if self.screen == Screen::Confirm { self.confirm_from } else { self.screen } }
     fn dirty(&self) -> bool {
@@ -135,7 +135,7 @@ impl App {
         typerelay_client::sync::Sync::editable(self.settings.config_dir(), &self.store.directory, &file.name)?;
         self.editing = if new { None } else { Some(self.selected().context("Select a snippet")?) };
         let entry = self.editing.map(|index| file.entries[index].clone()).unwrap_or(Match { trigger: String::new(), replace: String::new(), ..Match::default() });
-        self.title = Self::text(&entry.title); self.language = Self::text(&entry.language); self.code = entry.kind == "code";
+        self.title = Self::text(&entry.title); self.language = entry.language.clone(); self.code = entry.kind == "code";
         self.trigger = Self::text(&entry.trigger);
         self.trigger.move_cursor(ratatui_textarea::CursorMove::End);
         self.expansion = Self::text(&entry.replace); self.expansion.set_hard_tab_indent(true);
@@ -449,7 +449,6 @@ impl App {
                     KeyCode::Enter if self.editor_focus == 0 => self.editor_focus = 1,
                     _ if self.editor_focus == 0 => self.abbreviation_input(Event::Key(key)),
                     _ if self.editor_focus == 2 => Self::single_input(&mut self.title, Event::Key(key)),
-                    _ if self.editor_focus == 3 => Self::single_input(&mut self.language, Event::Key(key)),
                     _ => { self.expansion.input(Event::Key(key)); }
                 },
                 Screen::NewFile => match key.code { KeyCode::Enter => self.save()?, KeyCode::Esc => self.apply(Destination::Files)?, _ => Self::single_input(&mut self.name, Event::Key(key)) },
@@ -460,7 +459,6 @@ impl App {
             match self.screen {
                 Screen::Edit if self.editor_focus == 1 => { self.expansion.insert_str(text.replace("\r\n", "\n").replace('\r', "\n")); }
                 Screen::Edit if self.editor_focus == 2 => Self::single_input(&mut self.title, Event::Paste(text)),
-                Screen::Edit if self.editor_focus == 3 => Self::single_input(&mut self.language, Event::Paste(text)),
                 Screen::Edit => self.abbreviation_input(Event::Paste(text)),
                 Screen::Settings if self.editor_focus == 0 => Self::single_input(&mut self.url, Event::Paste(text)),
                 Screen::Settings => Self::single_input(&mut self.prefix, Event::Paste(text)),
@@ -582,19 +580,17 @@ impl App {
             }
             Screen::Edit => {
                 let parts = Layout::vertical([Constraint::Length(3), Constraint::Length(3), Constraint::Min(3), Constraint::Length(0), Constraint::Length(2), Constraint::Length(3)]).split(body);
-                let metadata = Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(25), Constraint::Percentage(20)]).split(parts[0]);
+                let metadata = Layout::horizontal([Constraint::Percentage(80), Constraint::Percentage(20)]).split(parts[0]);
                 let title_area = metadata[0];
-                let language_area = metadata[1];
-                frame.render_widget(Paragraph::new(if self.code { "Code · F9 toggles" } else { "Text · F9 toggles" }).style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)).block(Self::border("Type", false)), metadata[2]);
+                frame.render_widget(Paragraph::new(if self.code { "Code · F9 toggles" } else { "Text · F9 toggles" }).style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)).block(Self::border("Type", false)), metadata[1]);
                 let trigger_row = Layout::horizontal([Constraint::Length(5), Constraint::Length(1), Constraint::Min(1)]).split(parts[1]);
                 frame.render_widget(Paragraph::new(self.settings.settings.trigger_prefix.clone()).centered().block(Self::border("", false)).style(Style::default().fg(Color::Gray)), trigger_row[0]);
                 self.trigger.set_block(Self::border("Abbreviation (optional)", self.editor_focus == 0));
-                self.expansion.set_block(Self::border(if self.code { "Code · Tab indents · F2 next field · Shift+Tab previous" } else { "Text · Tab next field · Shift+Tab previous · F9 Code" }, self.editor_focus == 1));
+                self.expansion.set_block(Self::border(if self.code { "Code · Tab inserts tab · F2 / Ctrl+Tab exit · Shift+Tab back" } else { "Text · Tab next field · Shift+Tab previous · F9 Code" }, self.editor_focus == 1));
                 self.title.set_block(Self::border("Title (optional)", self.editor_focus == 2));
-                self.language.set_block(Self::border("Language", self.editor_focus == 3));
-                frame.render_widget(&self.title, title_area); frame.render_widget(&self.language, language_area);
+                frame.render_widget(&self.title, title_area);
                 frame.render_widget(&self.trigger, trigger_row[2]); frame.render_widget(&self.expansion, parts[2]);
-                self.field_areas.extend([trigger_row[2], parts[2], title_area, language_area]);
+                self.field_areas.extend([trigger_row[2], parts[2], title_area]);
                 let destination = self.move_destination.as_ref().and_then(|id| self.move_choices.iter().find(|library|library["_id"] == *id)).and_then(|library|library["name"].as_str()).unwrap_or("Current library");
                 frame.render_widget(Paragraph::new(format!("Library: {destination} · Ctrl+M / F8 changes destination · F9 Text/Code · F10 Copy")), parts[4]);
                 self.form_buttons(frame, parts[5]);
@@ -656,7 +652,7 @@ mod tests {
             app.code = code;
             terminal.draw(|frame| app.draw(frame)).unwrap();
             assert!(app.field_areas[2].y < app.field_areas[0].y);
-            assert_eq!(app.field_areas[3].y, app.field_areas[2].y);
+            assert_eq!(app.field_areas.len(), 3);
             let before = app.field_areas.clone(); let focus = app.editor_focus;
             app.error = true;
             Fixture::key(&mut app, KeyCode::F(9), KeyModifiers::NONE);
@@ -664,9 +660,9 @@ mod tests {
             assert_eq!(before, app.field_areas); assert_eq!(focus, app.editor_focus);
             assert!(app.status.starts_with("Type:")); assert!(!app.error);
             Fixture::key(&mut app, KeyCode::F(9), KeyModifiers::NONE);
-            let order = [2, 3, 0, 1];
+            let order = [2, 0, 1];
             app.editor_focus = order[0];
-            for expected in order.into_iter().cycle().skip(1).take(4) {
+            for expected in order.into_iter().cycle().skip(1).take(3) {
                 let key = if code && app.editor_focus == 1 { KeyCode::F(2) } else { KeyCode::Tab };
                 Fixture::key(&mut app, key, KeyModifiers::NONE);
                 assert_eq!(app.editor_focus, expected);
@@ -675,7 +671,7 @@ mod tests {
                 Fixture::key(&mut app, KeyCode::BackTab, KeyModifiers::SHIFT);
                 assert_eq!(app.editor_focus, expected);
             }
-            for field in 0..4 {
+            for field in 0..3 {
                 let area = app.field_areas[field];
                 app.handle(Event::Mouse(ratatui::crossterm::event::MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: area.x + 1, row: area.y + 1, modifiers: KeyModifiers::NONE }));
                 assert_eq!(app.editor_focus, field);
@@ -695,7 +691,7 @@ mod tests {
         Fixture::key(&mut app, KeyCode::F(2), KeyModifiers::NONE);
         app.handle(Event::Paste("Code title".into()));
         Fixture::key(&mut app, KeyCode::F(2), KeyModifiers::NONE);
-        app.language = App::text("Rust");
+        app.language = "Rust".into();
         Fixture::key(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL);
         let entry = &app.store.open("Code").unwrap().entries[0];
         assert_eq!(entry.replace, "\t  {{ λ }}  \n\n");
