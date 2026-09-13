@@ -11,6 +11,7 @@ import { JSDOM } from 'jsdom';
 import { mongoose, User, Ticket, Member, Passkey } from '../model/index.js';
 import { Support } from '../services/support.js';
 import { Auth } from '../services/auth.js';
+import { Security } from '../services/security.js';
 
 class Browser {
 	cookie = ''; csrf = ''; account = '';
@@ -204,4 +205,16 @@ test('login exposes all requested methods and native OAuth form remains unaffect
 	assert.ok(page.querySelector('a[href="/forgot-password"]'));
 	assert.ok(page.querySelector('a[href="/signup"]'));
 	dom.window.close();
+});
+
+test('login waits for persistence before returning its redirect, including pending 2FA', async () => {
+	const { user } = await Fixture.account();
+	for (const factor of [false, true]) {
+		await User.updateOne({ _id: user._id }, { $set: { totp_enabled: factor } });
+		let persisted = false;
+		const req = { session: { regenerate: callback => callback(), save: callback => setTimeout(() => { persisted = true; callback(); }, 30) } };
+		const result = await Security.establish(req, user._id);
+		assert.equal(persisted, true);
+		assert.equal(result.redirect, factor ? '/auth/two-factor' : '/');
+	}
 });
