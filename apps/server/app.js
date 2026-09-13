@@ -11,6 +11,7 @@ import { Support, Yaml } from './services/support.js';
 import { Libraries } from './services/libraries.js';
 import { Team } from './services/team.js';
 import { StorageMigration } from './services/storage_migration.js';
+import { PublicApi } from './api/public.js';
 import { Security } from './services/security.js';
 
 export class Server {
@@ -22,10 +23,13 @@ export class Server {
 		await Libraries.cleanup();
 		const secretPath = process.env.SESSION_SECRET_FILE || '/data/session-secret';
 		try { writeFileSync(secretPath, Support.token(), { flag: 'wx', mode: 0o600 }); } catch (error) { if (error.code !== 'EEXIST') throw error; }
+		const mcpSecretPath = process.env.MCP_SECRET_FILE || '/data/mcp-secret';
+		try { writeFileSync(mcpSecretPath, Support.token(), { flag: 'wx', mode: 0o600 }); } catch (error) { if (error.code !== 'EEXIST') throw error; }
 		const app = express();
 		app.set('view engine', 'pug');
 		app.set('views', './views');
 		app.use((req, res, next) => { res.locals.styleNonce = Support.token(); next(); });
+		app.use('/docs', helmet({ contentSecurityPolicy: false }), express.static(process.env.DOCS_DIR || '/docs', { extensions: ['html'] }));
 		app.use(helmet({ contentSecurityPolicy: { directives: { 'script-src': ["'self'"], 'style-src': ["'self'", (req, res) => "'nonce-" + res.locals.styleNonce + "'"], 'img-src': ["'self'", 'data:'] } } }));
 		app.use(express.json({ limit: '12mb' }), express.urlencoded({ extended: false, limit: '32kb' }));
 		app.use('/assets/generated', express.static(process.env.CODE_EDITOR_DIR || '/data/editor'));
@@ -42,12 +46,13 @@ export class Server {
 			}
 			res.locals.serverOrigin = Auth.origin;
 			res.locals.csrf = req.session.csrf ||= Support.token();
-			if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && req.path !== '/oauth/token' && !req.headers.authorization) Support.assert((req.headers['x-csrf-token'] || req.body._csrf) === req.session.csrf, 'Session expired; reload and retry', 403);
+			if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !['/oauth/token', '/integrations/token', '/integrations/register'].includes(req.path) && !req.headers.authorization) Support.assert((req.headers['x-csrf-token'] || req.body._csrf) === req.session.csrf, 'Session expired; reload and retry', 403);
 			next();
 		});
 		app.get('/health', (req, res) => res.json({ ok: true }));
 		const authLimit = rateLimit({ windowMs: 900000, limit: 30, message: { error: 'Too many sign-in attempts; try again later.' } });
 		Security.mount(app, authLimit);
+		await PublicApi.mount(app, authLimit);
 		app.post('/auth/login', authLimit, async (req, res) => { await Auth.login(req.body.email); res.json({ message: 'Check your email for a sign-in link.' }); });
 		app.get('/auth/callback', async (req, res) => {
 			const user = await Auth.consume(req.query.token);
@@ -71,7 +76,7 @@ export class Server {
 			const accounts = await Account.find({ _id: { $in: memberships.map(member => member.account) } }).lean();
 			const account = accounts.find(account => String(account._id) === req.query.account) || accounts[0];
 			const ctx = await Support.context(req.session.user, String(account._id));
-			res.render('app', { importFormats: Libraries.importFormats, accounts, account, ctx, libraries: await Libraries.list(ctx), team: await Team.list(ctx), profile: await User.findById(ctx.user).lean() });
+			res.render('app', { integrationScopes: Auth.scopes, importFormats: Libraries.importFormats, accounts, account, ctx, libraries: await Libraries.list(ctx), team: await Team.list(ctx), profile: await User.findById(ctx.user).lean() });
 		});
 		app.use('/api/v1', (req, res) => res.status(426).json({ error: 'Upgrade TypeRelay: snippet moves require sync protocol 4', protocol: 4 }));
 		app.use('/api/v2', async (req, res, next) => {
@@ -79,6 +84,7 @@ export class Server {
 			req.ctx = req.headers.authorization ? await Auth.bearer(req.headers.authorization.replace(/^Bearer /, '')) : await Support.context(req.session.user, req.headers['x-account-id']);
 			next();
 		});
+		PublicApi.mountSettings(app);
 		Security.mountPrivate(app, rateLimit({ windowMs: 900000, limit: 60, message: { error: 'Too many security requests; try again later.' } }));
 		app.get('/api/v2/operations/:id', async (req, res) => {
 			const receipt = await Operation.findOne({ account: req.ctx.account, user: req.ctx.user, operation: req.params.id }).lean();

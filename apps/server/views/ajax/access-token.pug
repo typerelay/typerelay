@@ -1,0 +1,7 @@
+li.list-group-item(data-access-token=String(grant._id))
+	.d-flex.align-items-center.justify-content-between
+		div
+			strong= grant.name
+			div.small.text-muted= grant.kind + ' · ' + grant.scopes.join(', ')
+			div.small.text-muted= 'Expires ' + new Date(grant.expires).toLocaleDateString() + ' · Last used: ' + (grant.last_used ? new Date(grant.last_used).toLocaleString() : 'Never')
+		button.btn.btn-outline-danger.btn-sm.ms-3(type="button" data-revoke-token=String(grant._id)) Revoke

@@ -21,6 +21,7 @@ class TypeRelay {
 		document.addEventListener('input', event => { if ((event.target.id === 'trigger' || event.target.hasAttribute('data-import-trigger')) && !event.isComposing) Abbreviation.field(event.target); });
 		document.addEventListener('compositionend', event => { if (event.target.id === 'trigger') Abbreviation.field(event.target); });
 		document.addEventListener('submit', event => this.onSubmit(event));
+		document.querySelector('#settings')?.addEventListener('hidden.bs.modal', () => { const secret = document.querySelector('#token-secret-value'); if (secret) secret.textContent = ''; document.querySelector('#token-secret')?.setAttribute('hidden', ''); });
 		document.addEventListener('click', event => this.onClick(event).catch(error => this.toast(error.message, 'error')));
 		document.querySelector('#search')?.addEventListener('input', () => {
 			this.searchVersion++;
@@ -151,6 +152,13 @@ class TypeRelay {
 		});
 		document.querySelectorAll('.settings-pane').forEach(pane => { pane.hidden = pane.id !== 'settings-pane-' + id; });
 		if (focus) tab.focus();
+		if (id === 'tokens') this.tokens().catch(error => this.toast(error.message, 'error'));
+	}
+	async tokens() {
+		const rows = await this.request('access-tokens');
+		const ids = new Set(rows.map(row => row.id));
+		for (const row of rows) this.update('[data-access-token="' + row.id + '"]', '#access-tokens', row.html);
+		for (const node of document.querySelectorAll('[data-access-token]')) if (!ids.has(node.dataset.accessToken)) node.remove();
 	}
 	keyboard(event) {
 		if (!this.account || event.isComposing) return;
@@ -256,7 +264,7 @@ class TypeRelay {
 	}
 	async onSubmit(event) {
 		const form = event.target;
-		if (!['login', 'profile-form', 'account-form', 'invite-form', 'record-form'].includes(form.id)) return;
+		if (!['login', 'access-token-form', 'profile-form', 'account-form', 'invite-form', 'record-form'].includes(form.id)) return;
 		event.preventDefault();
 		const abbreviation = form.querySelector('#trigger');
 		if (abbreviation) Abbreviation.field(abbreviation);
@@ -265,6 +273,7 @@ class TypeRelay {
 		if (button) button.disabled = true;
 		try {
 			if (form.id === 'login') this.toast((await this.request('/auth/login', 'POST', { email: data.get('email') })).message);
+			if (form.id === 'access-token-form') { const row = await this.request('access-tokens', 'POST', { name: form.elements.name.value, days: Number(form.elements.days.value), scopes: [...form.querySelectorAll('[name=scopes]:checked')].map(input => input.value) }); this.update('[data-access-token="' + row.id + '"]', '#access-tokens', row.html); document.querySelector('#token-secret-value').textContent = row.token; document.querySelector('#token-secret').hidden = false; form.reset(); return; }
 			if (form.id === 'profile-form') {
 				const result = await this.request('profile', 'PATCH', { name: data.get('name'), email: data.get('email') });
 				this.update('#account-avatar', 'header .dropdown', result.avatar);
@@ -375,6 +384,8 @@ class TypeRelay {
 		if (button.id === 'scroll-top') { window.scrollTo({ top: 0, behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }); return; }
 		if (button.id === 'search-trigger') return this.openSearch();
 		if (button.dataset.settingsTab) return this.settingsTab(button.dataset.settingsTab);
+		if (button.id === 'dismiss-token') { document.querySelector('#token-secret-value').textContent = ''; document.querySelector('#token-secret').hidden = true; return; }
+		if (button.dataset.revokeToken && await this.confirm('Revoke this integration?')) { await this.request('access-tokens/' + button.dataset.revokeToken, 'DELETE'); document.querySelector('[data-access-token="' + button.dataset.revokeToken + '"]').remove(); return; }
 		if (button.dataset.searchLibrary) {
 			const id = button.dataset.searchLibrary;
 			const snippet = button.dataset.searchSnippet;

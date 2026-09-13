@@ -13,6 +13,6 @@ RUN pnpm install --frozen-lockfile
 COPY apps/server ./
 COPY docs/web/Streamient-LICENSE docs/web/Mailtwine-LICENSE docs/web/attribution.md ./notices/
 COPY --from=rust /src/target/release/typerelay-yaml /src/target/release/typerelay /usr/local/bin/
-RUN mkdir /data && chown node:node /data
+RUN mkdir /data /integrations && chown node:node /data /integrations
 USER node
 CMD ["node", "scripts/start.js"]

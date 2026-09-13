@@ -4,3 +4,7 @@ target
 .env*
 **/__pycache__
 *.log
+
+.pnpm-store
+docs/.vitepress/dist
+docs/.vitepress/cache

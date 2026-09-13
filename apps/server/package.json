@@ -21,6 +21,7 @@
     "@simplewebauthn/browser": "^13.3.0",
     "@simplewebauthn/server": "^14.0.1",
     "@xmldom/xmldom": "^0.9.12",
+    "ajv": "^8.20.0",
     "bcryptjs": "^3.0.3",
     "bootstrap": "^5.3.8",
     "connect-mongo": "^6.0.0",

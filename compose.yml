@@ -28,15 +28,73 @@ services:
       ORIGIN: http://localhost:3040
       SMTP_HOST: mail
       SESSION_SECRET_FILE: /data/session-secret
+      MCP_SECRET_FILE: /integrations/mcp-secret
     volumes:
       - typerelay-server:/data
+      - typerelay-integrations:/integrations
+      - ./docs/.vitepress/dist:/docs:ro
       - ./apps/server:/app
       - typerelay-node-modules:/app/node_modules
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3040/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
     depends_on:
       mongo:
         condition: service_healthy
       mail:
         condition: service_started
+  docs:
+    profiles: [tools]
+    image: node:24-bookworm-slim
+    working_dir: /repo/docs
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    environment:
+      npm_config_cache: /tmp/npm-cache
+    volumes:
+      - .:/repo
+    ports:
+      - "127.0.0.1:5173:5173"
+    command: [sh, -c, "npx --yes pnpm@12.0.0 install --frozen-lockfile && npx --yes pnpm@12.0.0 run build"]
+  mcp:
+    profiles: [integrations]
+    build:
+      context: .
+      dockerfile: apps/mcp/Dockerfile
+    ports:
+      - "127.0.0.1:3041:3041"
+    environment:
+      API_BASE: http://server:3040
+      APP_ORIGIN: http://localhost:3040
+      MCP_ORIGIN: http://localhost:3041/mcp
+      MCP_SECRET_FILE: /run/typerelay/mcp-secret
+    volumes:
+      - typerelay-integrations:/run/typerelay:ro
+    depends_on:
+      server:
+        condition: service_healthy
+  mcp-tools:
+    profiles: [tools]
+    image: node:24-bookworm-slim
+    working_dir: /repo/apps/mcp
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    environment:
+      npm_config_cache: /tmp/npm-cache
+    volumes:
+      - .:/repo
+    command: [sh, -c, "npx --yes pnpm@12.0.0 install --frozen-lockfile && npx --yes pnpm@12.0.0 test"]
+  browser-check:
+    depends_on:
+      server:
+        condition: service_healthy
+    profiles: [tools]
+    build:
+      context: .
+      dockerfile: docs/Dockerfile.test
+    volumes:
+      - .:/repo:ro
+      - /tmp/typerelay-docs-artifacts:/artifacts
   secrets:
     profiles: [tools]
     image: ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
@@ -48,3 +106,4 @@ volumes:
   typerelay-mongo:
   typerelay-server:
   typerelay-node-modules:
+  typerelay-integrations:

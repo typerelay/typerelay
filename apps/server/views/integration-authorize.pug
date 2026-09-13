@@ -1,0 +1,20 @@
+extends layout
+block content
+	section.auth.card.p-4
+		h1.h4.fw-bold Authorize integration
+		p.mb-3= client.name + ' requests access to your TypeRelay account.'
+		ul.mb-3
+			each scope in scopes
+				li= scope
+		form(method="post" action="/integrations/authorize")
+			input(type="hidden" name="_csrf" value=csrf)
+			each value, key in request
+				if ['client_id', 'redirect_uri', 'code_challenge', 'code_challenge_method', 'state', 'resource', 'scope', 'response_type'].includes(key)
+					input(type="hidden" name=key value=value)
+			label.form-label(for="integration-account") Account
+			select#integration-account.form-select.form-select-sm.mb-3(name="account")
+				each account in accounts
+					option(value=account._id)= account.name
+			.d-flex.justify-content-between
+				button.btn.btn-outline-secondary.btn-sm(type="submit" name="decision" value="deny") Cancel
+				button.btn.btn-primary.btn-sm Authorize

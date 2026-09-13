@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { execFile, spawn } from 'node:child_process';
 import { JSDOM } from 'jsdom';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { mongoose, Account, Member, User, Device, Ticket, Library } from '../model/index.js';
 import { Support } from '../services/support.js';
 import { Auth } from '../services/auth.js';
@@ -40,6 +40,7 @@ before(async () => {
 	process.env.MONGODB_URI = process.env.MONGODB_URI.replace('/typerelay?', '/typerelay_e2e?');
 	Fixture.root = await mkdtemp(join(tmpdir(), 'typerelay-e2e-'));
 	process.env.SESSION_SECRET_FILE = join(Fixture.root, 'session');
+	process.env.MCP_SECRET_FILE = join(Fixture.root, 'mcp-secret');
 	const { Server } = await import('../app.js');
 	Fixture.server = await Server.start();
 	const user = await User.create({ email: randomUUID() + '@example.test', name: 'Test owner' });
@@ -523,6 +524,46 @@ test('all Bootstrap modals resist Escape and background clicks but explicit clos
 	} finally { dom.window.close(); }
 });
 
+test('public API edits reach two SQLite clients and token settings update individual rows', async () => {
+	const token = await Fixture.json('access-tokens', 'POST', { name: 'API integration', scopes: ['content:read', 'content:write'], days: 1 });
+	assert.match(token.token, /^tr_pat_/); assert.ok(token.html.includes('data-access-token'));
+	const list = await Fixture.json('access-tokens'); assert.ok(!JSON.stringify(list).includes(token.token));
+	const headers = { Authorization: 'Token ' + token.token, 'Content-Type': 'application/json' };
+	const body = { operation_id: randomUUID(), name: 'Public API sync', snippets: [{ id: randomUUID(), title: 'API code', trigger: null, content: { version: 1, type: 'code', language: 'rust', text: '\t  fn api() {}\n\n' } }] };
+	const response = await fetch(Fixture.origin + '/api/v3/libraries', { method: 'POST', headers, body: JSON.stringify(body) });
+	assert.equal(response.status, 200); const created = await response.json();
+	for (const device of [Fixture.one, Fixture.two]) { await Fixture.cli(device, 'sync'); const state = await Fixture.state(device); const library = state.libraries.find(row => row._id === created.library.id); assert.ok(library); assert.equal(library.records[0].content.text, body.snippets[0].content.text); assert.equal(library.records[0].content.language, 'rust'); }
+	const dom = new JSDOM(await (await Fixture.request('/')).text(), { url: Fixture.origin, runScripts: 'outside-only' });
+	try {
+		const document = dom.window.document; const pane = document.querySelector('#settings-pane-tokens');
+		const script = (await readFile('./public/app.js', 'utf8')).replace("import { Abbreviation } from './abbreviation.js';", (await readFile('./public/abbreviation.js', 'utf8')).replace('export class', 'class')).replace('export { client };', 'window.testClient = client;');
+		dom.window.eval(script); const client = dom.window.testClient;
+		client.request = async () => token; client.toast = () => {};
+		const form = document.querySelector('#access-token-form'); form.elements.name.value = 'Test';
+		await client.onSubmit({ target: form, preventDefault() {}, submitter: form.querySelector('button[type=submit]') });
+		assert.equal(document.querySelector('#settings-pane-tokens'), pane);
+		assert.equal(document.querySelectorAll('[data-access-token="' + token.id + '"]').length, 1);
+		assert.equal(document.querySelector('#token-secret-value').textContent, token.token);
+		document.querySelector('#settings').dispatchEvent(new dom.window.Event('hidden.bs.modal'));
+		assert.equal(document.querySelector('#token-secret-value').textContent, '');
+	} finally { dom.window.close(); }
+	await Fixture.json('access-tokens/' + token.id, 'DELETE');
+	assert.equal((await fetch(Fixture.origin + '/api/v3/libraries', { headers })).status, 401);
+});
+test('integration approval uses native form submission and allows its approved redirect', async () => {
+	const registered = await Fixture.request('/integrations/register', 'POST', { client_name: 'Browser integration', redirect_uris: ['https://example.test/callback'], token_endpoint_auth_method: 'none' });
+	assert.equal(registered.status, 201); const client = await registered.json();
+	const verifier = Support.token();
+	const request = { client_id: client.client_id, redirect_uri: client.redirect_uris[0], response_type: 'code', state: Support.token(), code_challenge_method: 'S256', code_challenge: createHash('sha256').update(verifier).digest('base64url'), resource: Auth.apiResource(), scope: 'content:read' };
+	const page = await Fixture.request('/integrations/authorize?' + new URLSearchParams(request)); assert.equal(page.status, 200);
+	assert.ok(page.headers.get('content-security-policy').includes("form-action 'self' https://example.test"));
+	const dom = new JSDOM(await page.text()); const form = dom.window.document.querySelector('form'); assert.equal(form.action, '/integrations/authorize'); dom.window.close();
+	const approval = await Fixture.request('/integrations/authorize', 'POST', { ...request, account: Fixture.account }); assert.equal(approval.status, 302);
+	const code = new URL(approval.headers.get('location')).searchParams.get('code');
+	const response = await Fixture.request('/integrations/token', 'POST', { grant_type: 'authorization_code', code, client_id: client.client_id, redirect_uri: request.redirect_uri, resource: request.resource, code_verifier: verifier }); assert.equal(response.status, 200);
+	assert.equal(response.headers.get('cache-control'), 'no-store');
+	const denial = await Fixture.request('/integrations/authorize', 'POST', { ...request, decision: 'deny' }); assert.equal(new URL(denial.headers.get('location')).searchParams.get('error'), 'access_denied');
+});
 test('CSRF rejects writes, logout invalidates session', async () => {
 	const response = await fetch(Fixture.origin + '/api/v2/libraries', { method: 'POST', headers: { Cookie: Fixture.cookie, 'Content-Type': 'application/json', 'X-Account-Id': Fixture.account }, body: JSON.stringify({ name: 'Blocked' }) });
 	assert.equal(response.status, 403);

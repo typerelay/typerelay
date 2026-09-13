@@ -31,7 +31,7 @@ block content
 						button.btn-close(data-bs-dismiss="modal" aria-label="Close")
 					.modal-body.settings-body.p-0
 						nav.settings-nav.list-group.list-group-flush(role="tablist" aria-label="Settings sections" aria-orientation="vertical")
-							each label, key in {profile: 'Profile', security: 'Security', team: 'My team', devices: 'Connected devices'}
+							each label, key in {profile: 'Profile', security: 'Security', team: 'My team', devices: 'Connected devices', tokens: 'Access tokens'}
 								button.list-group-item.list-group-item-action(type="button" role="tab" id='settings-tab-' + key data-settings-tab=key aria-controls='settings-pane-' + key aria-selected=(key === 'profile').toString() tabindex=key === 'profile' ? '0' : '-1' class=key === 'profile' ? 'active' : '')= label
 						.settings-content
 							section.settings-pane(id="settings-pane-profile" role="tabpanel" aria-labelledby="settings-tab-profile" hidden=false)
@@ -74,6 +74,27 @@ block content
 							section.settings-pane(id="settings-pane-devices" role="tabpanel" aria-labelledby="settings-tab-devices" hidden=true)
 								h3.h6.fw-bold Connected devices
 								ul#devices.list-group.mb-3
+							section.settings-pane(id="settings-pane-tokens" role="tabpanel" aria-labelledby="settings-tab-tokens" hidden=true)
+								h3.h6.fw-bold Access tokens and authorized integrations
+								ul#access-tokens.list-group.mb-5
+								form#access-token-form
+									label.form-label(for="token-name") Name
+									input#token-name.form-control.form-control-sm.mb-3(name="name" required maxlength="100")
+									label.form-label(for="token-days") Expiry in days
+									input#token-days.form-control.form-control-sm.mb-3(name="days" type="number" min="1" max="365" value="90" required)
+									fieldset.mb-3
+										legend.h6 Permissions
+										each scope in integrationScopes
+											.form-check
+												input.form-check-input(type="checkbox" name="scopes" value=scope id='scope-' + scope checked=scope === 'content:read')
+												label.form-check-label(for='scope-' + scope)= scope
+									.d-flex.justify-content-between
+										button.btn.btn-outline-secondary.btn-sm(type="reset") Cancel
+										button.btn.btn-primary.btn-sm Create token
+								div#token-secret.mb-3(hidden)
+									p Copy this token now. It will not be shown again.
+									code#token-secret-value
+									button#dismiss-token.btn.btn-outline-secondary.btn-sm.ms-3(type="button") Done
 		#form-modal.modal.fade(tabindex="-1" aria-label="Edit" data-bs-backdrop="static" data-bs-keyboard="false")
 			.modal-dialog.modal-lg.modal-dialog-scrollable
 				.modal-content

@@ -29,3 +29,14 @@ const Operation = mongoose.model('Operation', operation);
 const Conflict = mongoose.model('Conflict', new mongoose.Schema({ account: objectid, library: objectid, user: objectid, snippet: String, local: mixed, base: mixed, server: mixed, resolved: { type: Boolean, default: false } }, { timestamps: true }));
 
 export { mongoose, User, Account, Member, Group, Ticket, Library, Device, Change, Operation, Conflict, Passkey, Snippet, Migration, MigrationBackup };
+
+// Integration credentials are independent of desktop enrollment.
+export const Integration = mongoose.model('Integration', new mongoose.Schema({ account: objectid, user: objectid, name: String, kind: { type: String, enum: ['pat', 'oauth'] }, scopes: [String], hash: { type: String, select: false }, expires: Date, revoked: { type: Boolean, default: false }, last_used: Date, client: String, resource: String, refresh: { type: String, select: false }, refresh_expires: Date }, { timestamps: true }));
+export const OAuthClient = mongoose.model('OAuthClient', new mongoose.Schema({ client_id: { type: String, unique: true }, name: String, redirects: [String] }));
+export const IntegrationToken = mongoose.model('IntegrationToken', new mongoose.Schema({ hash: { type: String, unique: true }, grant: objectid, resource: String, expires: Date }, { timestamps: true }));
+export const ApiAudit = mongoose.model('ApiAudit', new mongoose.Schema({ account: objectid, user: objectid, credential: objectid, operation: String, status: Number, expires: { type: Date, expires: 0 } }, { timestamps: true }));
+IntegrationToken.schema.index({ expires: 1 }, { expireAfterSeconds: 0 });
+Ticket.schema.index({ expires: 1 }, { expireAfterSeconds: 0 });
+Integration.schema.index({ hash: 1 }, { unique: true, sparse: true });
+Integration.schema.index({ refresh: 1 }, { unique: true, sparse: true });
+Integration.schema.index({ account: 1, user: 1 });
