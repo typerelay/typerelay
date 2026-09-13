@@ -37,6 +37,13 @@ services:
         condition: service_healthy
       mail:
         condition: service_started
+  secrets:
+    profiles: [tools]
+    image: ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+    volumes:
+      - .:/repo:ro
+    command: [git, /repo, "--log-opts=--all --full-history", --redact]
+
 volumes:
   typerelay-mongo:
   typerelay-server:

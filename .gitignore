@@ -14,3 +14,19 @@ node_modules/
 /apps/desktop/src-tauri/target/
 
 /apps/desktop/src-tauri/gen/
+
+# Local credentials, signing material and runtime databases
+*.pem
+*.key
+*.p8
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa
+id_ed25519
+credentials*.json
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.db
