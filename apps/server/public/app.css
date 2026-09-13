@@ -66,7 +66,11 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 @media (max-width: 60rem) { #search-shortcut { display: none; } }
 
 .bulk-actions[hidden] { display: none !important; }
-.snippet-controls { min-height: 3.5rem; border-bottom: .0625rem solid #e7dfd2; flex-wrap: wrap; }
+.snippet-controls { min-height: 3.5rem; flex-wrap: wrap; }
 .snippet-selection { min-width: 0; }
 
 .snippet-expansion { tab-size: 4; }
+
+#code-options .form-label { font-size: .75rem; font-weight: 400; margin-bottom: .25rem; }
+#code-options .form-select { font-size: .75rem; min-height: 1.75rem; padding-top: .15rem; padding-bottom: .15rem; }
+#code-options p { font-size: .75rem; margin-bottom: .5rem; }
