@@ -13,6 +13,9 @@ struct Cli { #[arg(long)] dir: Option<PathBuf> }
 impl Cli {
     fn run(self) -> Result<()> {
         ensure!(std::io::stdin().is_terminal() && std::io::stdout().is_terminal(), "Run typerelay-tui in an interactive terminal");
+        let running = Arc::new(AtomicBool::new(true));
+        let signal = running.clone();
+        ctrlc::set_handler(move || signal.store(false, Ordering::SeqCst))?;
         let config = Paths::config_dir()?;
         let store = EditorStore::new(self.dir.unwrap_or(config.join("snippets")))?;
         let settings = SettingsStore::open(config.join("settings.yml"))?;
@@ -22,9 +25,6 @@ impl Cli {
         let mut app = app::App::new(store, settings)?;
         #[cfg(target_os = "linux")]
         let _registration = typerelay_client::desktop::Registration::current_window()?;
-        let running = Arc::new(AtomicBool::new(true));
-        let signal = running.clone();
-        ctrlc::set_handler(move || signal.store(false, Ordering::SeqCst))?;
         let (_guard, mut terminal) = terminal::TerminalSession::enter()?;
         let interval = Duration::from_millis(33);
         let mut last_draw = Instant::now() - interval;
@@ -51,4 +51,7 @@ impl Cli {
     }
 }
 
-fn main() -> Result<()> { Cli::parse().run() }
+fn main() -> Result<()> {
+    let interactive = std::io::stdin().is_terminal();
+    Cli::parse().run().or_else(|error| if interactive && !terminal::TerminalSession::connected() { Ok(()) } else { Err(error) })
+}

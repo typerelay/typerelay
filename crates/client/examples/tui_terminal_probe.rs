@@ -9,11 +9,12 @@ impl Probe {
         let running = Arc::new(AtomicBool::new(true));
         let signal = running.clone();
         ctrlc::set_handler(move || signal.store(false, Ordering::SeqCst))?;
-        let (_guard, _terminal) = terminal::TerminalSession::enter()?;
+        let (_guard, mut screen) = terminal::TerminalSession::enter()?;
+        screen.draw(|frame| frame.render_widget(ratatui::widgets::Paragraph::new("TypeRelay terminal probe"), frame.area()))?;
         while running.load(Ordering::SeqCst) && terminal::TerminalSession::connected() {
-            if ratatui::crossterm::event::poll(Duration::from_millis(100))? { let _ = ratatui::crossterm::event::read()?; }
+            if ratatui::crossterm::event::poll(Duration::from_millis(100))? && let ratatui::crossterm::event::Event::Key(key) = ratatui::crossterm::event::read()? && key.code == ratatui::crossterm::event::KeyCode::Char('q') { break; }
         }
         Ok(())
     }
 }
-fn main() -> anyhow::Result<()> { Probe::run() }
+fn main() -> anyhow::Result<()> { Probe::run().or_else(|error| if terminal::TerminalSession::connected() { Err(error) } else { Ok(()) }) }

@@ -43,14 +43,31 @@ class TerminalTests(unittest.TestCase):
             self.assertLess(cpu_seconds, 0.03, "Idle reader is busy-looping")
         finally:
             os.close(master)
-        process.wait(timeout=2)
+        self.assertEqual(process.wait(timeout=2), 0)
 
     def test_disconnect_during_incomplete_escape_sequence(self):
         process, master, _, _ = self.launch()
         os.write(master, b"\x1b[")
         time.sleep(0.02)
         os.close(master)
-        process.wait(timeout=2)
+        self.assertEqual(process.wait(timeout=2), 0)
+
+    def test_normal_quit_restores_terminal_mode(self):
+        process, master, slave, before = self.launch()
+        try:
+            os.write(master, b"q")
+            self.assertEqual(process.wait(timeout=2), 0)
+            self.assertEqual(termios.tcgetattr(slave), before)
+        finally:
+            os.close(master)
+
+    def test_hangup_signal_exits_cleanly(self):
+        process, master, _, _ = self.launch()
+        try:
+            process.send_signal(signal.SIGHUP)
+            self.assertEqual(process.wait(timeout=2), 0)
+        finally:
+            os.close(master)
 
     def test_signal_exits_and_restores_terminal_mode(self):
         process, master, slave, before = self.launch()

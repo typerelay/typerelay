@@ -53,3 +53,7 @@ The TUI requests enhanced keyboard reporting so supported terminals distinguish 
 Title and a visible Type indicator stay above Abbreviation in both modes. The TUI has no language selector; edit language in the web app. Existing language metadata is preserved when saving in the TUI. F9 toggles Text/Code without moving fields or focus. Tab/Shift+Tab cycle Title, Abbreviation and Expansion. In code, Tab inserts a literal tab (display width four); F2 or Ctrl+Tab leaves for Title, and Shift+Tab returns to Abbreviation. F2 advances from every field; Shift+F2 goes backward. Indentation width/spaces configuration is currently web-only.
 
 In code mode, Enter continues the current line’s leading tabs and spaces without converting them. Text-mode Enter remains a plain newline. The toolbar distinguishes F3 Move to Trash (selected/current snippet) from F7 Trash (open recovery), and F1 is labeled Libraries. Narrow terminals wrap the toolbar onto two rows.
+
+## Terminal closure
+
+Normal quit and terminal hangup exit successfully. Closed-terminal I/O errors are ignored during shutdown; other errors remain visible. Terminal cleanup uses fallible restoration and a disconnect-aware output writer, avoiding Ratatui’s stderr panic/double-abort when its cursor restoration fails after a PTY closes. No Omarchy crash notifications are disabled. Closing a terminal does not save an unsaved draft; normal quit retains the existing save/discard prompt.

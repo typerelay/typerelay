@@ -1,13 +1,23 @@
 use anyhow::Result;
 use ratatui::crossterm::{event::{EnableMouseCapture, DisableMouseCapture, EnableBracketedPaste, DisableBracketedPaste, PushKeyboardEnhancementFlags, PopKeyboardEnhancementFlags, KeyboardEnhancementFlags}, execute};
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
+use ratatui::crossterm::terminal::{enable_raw_mode, EnterAlternateScreen};
+
+pub struct TerminalOutput;
+impl Write for TerminalOutput {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> { std::io::stdout().write(bytes).or_else(|error| if TerminalSession::connected() { Err(error) } else { Ok(bytes.len()) }) }
+    fn flush(&mut self) -> std::io::Result<()> { std::io::stdout().flush().or_else(|error| if TerminalSession::connected() { Err(error) } else { Ok(()) }) }
+}
+pub type Terminal = ratatui::Terminal<ratatui::backend::CrosstermBackend<TerminalOutput>>;
 
 pub struct TerminalSession;
 impl TerminalSession {
-    pub fn enter() -> Result<(Self, ratatui::DefaultTerminal)> {
-        let terminal = ratatui::try_init()?;
+    pub fn enter() -> Result<(Self, Terminal)> {
+        enable_raw_mode()?;
         let guard = Self;
-        execute!(std::io::stdout(), PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES), EnableMouseCapture, EnableBracketedPaste)?;
+        execute!(TerminalOutput, EnterAlternateScreen)?;
+        let terminal = Terminal::new(ratatui::backend::CrosstermBackend::new(TerminalOutput))?;
+        execute!(TerminalOutput, PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES), EnableMouseCapture, EnableBracketedPaste)?;
         Ok((guard, terminal))
     }
     pub fn connected() -> bool {
@@ -22,7 +32,7 @@ impl TerminalSession {
 }
 impl Drop for TerminalSession {
     fn drop(&mut self) {
-        let _ = execute!(std::io::stdout(), DisableMouseCapture, DisableBracketedPaste, PopKeyboardEnhancementFlags);
-        ratatui::restore();
+        let _ = execute!(TerminalOutput, DisableMouseCapture, DisableBracketedPaste, PopKeyboardEnhancementFlags);
+        let _ = ratatui::try_restore();
     }
 }
