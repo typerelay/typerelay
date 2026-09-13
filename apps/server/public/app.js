@@ -282,7 +282,7 @@ class TypeRelay {
 		} catch (error) { this.toast(error.message, 'error'); }
 		finally { this.submitting = false; if (button) button.disabled = false; }
 	}
-	async confirm(title) { return (await Swal.fire({ title, icon: 'warning', showCancelButton: true, confirmButtonText: 'Confirm' })).isConfirmed; }
+	async confirm(title) { return (await Swal.fire({ title, icon: 'warning', showCancelButton: true, allowOutsideClick: false, allowEscapeKey: false, confirmButtonText: 'Confirm' })).isConfirmed; }
 	async snippet(id, value, snapshot = null) {
 		const library = snapshot || this.libraries.get(this.selected);
 		const previous = library.snippets.find(snippet => snippet.id === id);

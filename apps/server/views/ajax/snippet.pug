@@ -6,9 +6,9 @@ article.snippet(tabindex="0" role="group" aria-label="Snippet " + (snippet.title
 			h3.h6.mb-0.fw-bold= (snippet.title || snippet.trigger || 'Untitled snippet')
 			if snippet.title && snippet.trigger
 				span.small.text-muted= snippet.trigger
-		if library.permissions.edit
-			.d-flex
+		.d-flex.align-items-center
+			button.btn.btn-outline-secondary.btn-sm.ms-3(type="button" data-copy-snippet=snippet.id) Copy
+			if library.permissions.edit
 				button.btn.btn-outline-secondary.btn-sm.ms-3(data-edit-snippet=snippet.id) Edit
 				button.btn.btn-outline-danger.btn-sm.ms-3(data-delete-snippet=snippet.id) Trash
-	button.btn.btn-outline-secondary.btn-sm.mb-3(type="button" data-copy-snippet=snippet.id) Copy
 	pre.mb-0.snippet-expansion= snippet.replace

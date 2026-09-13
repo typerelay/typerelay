@@ -74,3 +74,11 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 #code-options .form-label { font-size: .75rem; font-weight: 400; margin-bottom: .25rem; }
 #code-options .form-select { font-size: .75rem; min-height: 1.75rem; padding-top: .15rem; padding-bottom: .15rem; }
 #code-options p { font-size: .75rem; margin-bottom: .5rem; }
+
+/* Adapted from Mailtwine's beta notice (AGPL-3.0); see docs/web/attribution.md. */
+.beta-notice-trigger { position: fixed; left: -4rem; bottom: 2rem; z-index: 1040; display: inline-flex; align-items: center; justify-content: center; width: 13rem; min-height: 2rem; padding: .3rem .8rem; border: .0625rem solid #74422e; border-right: 0; border-left: 0; border-radius: 0; background: #eadbcb; color: #633b29; box-shadow: 0 .1875rem 0 rgb(48 45 41 / 30%); font-family: monospace; font-size: .625rem; font-weight: 800; letter-spacing: .1em; line-height: 1; text-transform: uppercase; transform: rotate(45deg); cursor: pointer; }
+.beta-notice-trigger:hover, .beta-notice-trigger:focus-visible { background: #dec5ac; transform: rotate(45deg) translateY(-.0625rem); }
+@media (max-width: 48rem) {
+ .beta-notice-trigger { left: 1rem; bottom: 1rem; width: auto; height: 1.5rem; min-height: 1.5rem; padding: .2rem .45rem; border: .0625rem solid #74422e; border-radius: 999rem; transform: none; }
+ .beta-notice-trigger:hover, .beta-notice-trigger:focus-visible { transform: translateY(-.0625rem); }
+}

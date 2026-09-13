@@ -74,7 +74,7 @@ block content
 							section.settings-pane(id="settings-pane-devices" role="tabpanel" aria-labelledby="settings-tab-devices" hidden=true)
 								h3.h6.fw-bold Connected devices
 								ul#devices.list-group.mb-3
-		#form-modal.modal.fade(tabindex="-1" aria-label="Edit")
+		#form-modal.modal.fade(tabindex="-1" aria-label="Edit" data-bs-backdrop="static" data-bs-keyboard="false")
 			.modal-dialog.modal-lg.modal-dialog-scrollable
 				.modal-content
 					.modal-header
@@ -87,7 +87,7 @@ block content
 								button.btn.btn-outline-secondary.btn-sm(type="button" data-bs-dismiss="modal") Cancel
 								button.btn.btn-primary.btn-sm(type="submit") Save
 
-		#help.modal.fade(tabindex="-1" aria-label="Help")
+		#help.modal.fade(tabindex="-1" aria-label="Help" data-bs-backdrop="static" data-bs-keyboard="false")
 			.modal-dialog
 				.modal-content
 					.modal-header
@@ -104,7 +104,7 @@ block content
 						p Press F5 in the TUI to sync now. Conflicts appear here for review; local drafts are kept in your TypeRelay sync/recovery directory.
 						a(href="https://github.com/typerelay/typerelay/tree/main/docs" target="_blank" rel="noopener") Documentation
 
-		#search-modal.modal(tabindex="-1" aria-labelledby="search-title")
+		#search-modal.modal(tabindex="-1" aria-labelledby="search-title" data-bs-backdrop="static" data-bs-keyboard="false")
 			.modal-dialog.modal-lg.modal-dialog-scrollable
 				.modal-content
 					h2#search-title.visually-hidden.fw-bold Search
@@ -115,15 +115,15 @@ block content
 						label.visually-hidden(for="search") Search libraries and snippets
 						input#search.form-control.form-control-sm.border-0(type="search" autocomplete="off" aria-describedby="search-help")
 						button.btn.btn-sm.ms-3(type="button" data-bs-dismiss="modal" aria-label="Close search")
-							kbd Esc
+							span Close
 					.modal-body
 						p#search-help.text-muted.small Search library names, abbreviations and expansion text.
 						#search-results(aria-live="polite")
 					.modal-footer.justify-content-between
 						span.small.text-muted ↑ ↓ Navigate · Enter Open
-						span.small.text-muted Esc Close
+						span.small.text-muted Use Close to dismiss
 
-		#trash.modal.fade(tabindex="-1" aria-label="Trash")
+		#trash.modal.fade(tabindex="-1" aria-label="Trash" data-bs-backdrop="static" data-bs-keyboard="false")
 			.modal-dialog.modal-lg.modal-dialog-scrollable
 				.modal-content
 					.modal-header
@@ -135,3 +135,15 @@ block content
 						p#trash-empty.text-muted Trash is empty.
 					.modal-footer
 						button#empty-trash.btn.btn-outline-danger.btn-sm(type="button" disabled) Empty Trash
+
+		button#beta-notice-trigger.beta-notice-trigger(type="button" data-bs-toggle="modal" data-bs-target="#beta-notice-modal" aria-label="About the TypeRelay beta") Beta
+		#beta-notice-modal.modal.fade(tabindex="-1" aria-labelledby="beta-notice-title" data-bs-backdrop="static" data-bs-keyboard="false")
+			.modal-dialog.modal-sm.modal-dialog-centered
+				.modal-content
+					.modal-header
+						h2#beta-notice-title.modal-title.h5.fw-bold TypeRelay is in beta
+						button.btn-close(type="button" data-bs-dismiss="modal" aria-label="Close")
+					.modal-body
+						p TypeRelay is still improving. You may encounter bugs or incomplete features during beta.
+					.modal-footer
+						button.btn.btn-primary.btn-sm(type="button" data-bs-dismiss="modal") Got it

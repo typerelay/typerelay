@@ -279,6 +279,7 @@ test('web AJAX updates only affected snippets; preserves panel, filter and multi
 	const opened = [];
 	client.editSnippet = async (current, id) => { opened.push(id); };
 	const row = dom.window.document.querySelector('[data-snippet="' + library.snippets[0].id + '"]');
+	assert.equal(row.querySelector('[data-copy-snippet]').parentElement, row.querySelector('[data-edit-snippet]').parentElement);
 	await client.onClick({ target: row.querySelector('pre') });
 	assert.deepEqual(opened, [library.snippets[0].id]);
 	client.confirm = async () => false;
@@ -497,6 +498,29 @@ test('code imports sync to two desktops, preserve metadata offline and reject pr
 	const credential = JSON.parse(await readFile(join(one.config, 'sync/credentials.json'), 'utf8'));
 	const rejected = await fetch(Fixture.origin + '/api/v2/sync', { headers: { Authorization: 'Bearer ' + credential.access_token, 'X-TypeRelay-Sync-Protocol': '3' } });
 	assert.equal(rejected.status, 426);
+});
+
+test('all Bootstrap modals resist Escape and background clicks but explicit close works', async () => {
+	const html = await (await Fixture.request('/')).text();
+	const dom = new JSDOM(html, { url: Fixture.origin, runScripts: 'outside-only', pretendToBeVisual: true });
+	dom.window.eval(await readFile('./node_modules/bootstrap/dist/js/bootstrap.bundle.js', 'utf8'));
+	try {
+		assert.ok(dom.window.document.querySelector('#beta-notice-trigger'));
+		for (const modal of dom.window.document.querySelectorAll('.modal')) {
+			assert.equal(modal.dataset.bsBackdrop, 'static'); assert.equal(modal.dataset.bsKeyboard, 'false');
+			modal.classList.remove('fade');
+			const instance = new dom.window.bootstrap.Modal(modal);
+			instance.show();
+			modal.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+			assert.ok(modal.classList.contains('show'), modal.id + ' must ignore Escape');
+			modal.dispatchEvent(new dom.window.MouseEvent('mousedown', { bubbles: true }));
+			modal.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+			assert.ok(modal.classList.contains('show'), modal.id + ' must ignore backdrop clicks');
+			modal.querySelector('[data-bs-dismiss="modal"]').click();
+			assert.ok(!modal.classList.contains('show'), modal.id + ' must allow explicit close');
+			instance.dispose();
+		}
+	} finally { dom.window.close(); }
 });
 
 test('CSRF rejects writes, logout invalidates session', async () => {
