@@ -30,3 +30,5 @@ Editor licensing: CodeMirror 6 and its language packages retain their MIT licens
 Changelog drafting is unavailable in this checkout: no `.codex/managani-changelog.json` target or hook state was supplied. No release was published.
 
 Installed v0.9 engine/TUI and restarted the development server. All 63 active local snippet IDs, locations, abbreviations and content match the pre-upgrade fingerprint; protocol 4 sync has zero pending operations. Installer backup: `~/.local/share/typerelay/storage-upgrade-4os9jmai`. Background browser verification confirmed Rust highlighting, literal Tab and Escape/Tab focus escape; the disposable draft was discarded and preview account signed out.
+
+Code-editor Enter now copies the current line’s exact leading tabs/spaces, up to the insertion point, on both web and TUI. Pasting and saving still do not reformat existing content.

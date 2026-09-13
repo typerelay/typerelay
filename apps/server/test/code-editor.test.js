@@ -24,6 +24,12 @@ test('code editor preserves whitespace, captures Tab, changes indentation and su
 		await editor.configure('UnknownLexer', true, 2);
 		editor.view.contentDOM.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Tab', keyCode: 9, bubbles: true, cancelable: true }));
 		assert.equal(field.value, '\t  ' + text);
+		for (const prefix of ['\t', '    ', '\t  ', '']) {
+			const value = prefix + 'example';
+			editor.view.dispatch({ changes: { from: 0, to: editor.view.state.doc.length, insert: value }, selection: { anchor: value.length } });
+			editor.view.contentDOM.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true, cancelable: true }));
+			assert.equal(field.value, value + '\n' + prefix);
+		}
 		const before = field.value;
 		editor.setReadonly(true);
 		editor.view.contentDOM.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Tab', keyCode: 9, bubbles: true, cancelable: true }));

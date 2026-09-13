@@ -446,6 +446,12 @@ impl App {
                     KeyCode::Esc => self.leave(Destination::Browse)?,
                     KeyCode::Tab if self.editor_focus == 1 && self.code && key.modifiers.is_empty() => { self.expansion.insert_str("\t"); }
                     KeyCode::Tab | KeyCode::BackTab => self.next_editor_field(key.code == KeyCode::BackTab || key.modifiers.contains(KeyModifiers::SHIFT)),
+                    KeyCode::Enter if self.editor_focus == 1 && self.code => {
+                        let cursor = self.expansion.cursor();
+                        let (row, column) = self.expansion.selection_range().map(|range| range.0).unwrap_or((cursor.0, cursor.1));
+                        let indent: String = self.expansion.lines()[row].chars().take(column).take_while(|c| matches!(c, ' ' | '\t')).collect();
+                        self.expansion.insert_str(format!("\n{indent}"));
+                    }
                     KeyCode::Enter if self.editor_focus == 0 => self.editor_focus = 1,
                     _ if self.editor_focus == 0 => self.abbreviation_input(Event::Key(key)),
                     _ if self.editor_focus == 2 => Self::single_input(&mut self.title, Event::Key(key)),
@@ -532,11 +538,15 @@ impl App {
         self.toolbar.clear(); self.trash_buttons.clear(); self.bulk_buttons.clear(); self.field_areas.clear(); self.list_area = Rect::default(); self.save_area = Rect::default(); self.cancel_area = Rect::default();
         let area = frame.area();
         if area.width < 60 || area.height < 20 { frame.render_widget(Paragraph::new("TypeRelay — resize terminal to at least 60 × 20. Ctrl+Q exits."), area); return; }
-        let rows = Layout::vertical([Constraint::Length(2), Constraint::Length(3), Constraint::Min(8), Constraint::Length(3)]).split(area);
+        let rows = Layout::vertical([Constraint::Length(2), Constraint::Length(if area.width < 75 { 6 } else { 3 }), Constraint::Min(8), Constraint::Length(3)]).split(area);
         let title = self.file.as_ref().map(|file| format!("TypeRelay  /  {}", file.name)).unwrap_or("TypeRelay  /  Snippet editor".into());
         frame.render_widget(Paragraph::new(title).style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)), rows[0]);
-        self.toolbar = Layout::horizontal([Constraint::Length(10), Constraint::Length(9), Constraint::Length(9), Constraint::Length(12), Constraint::Length(10), Constraint::Length(10), Constraint::Min(0)]).split(rows[1])[..6].to_vec();
-        for (index, title) in ["F1 Libs", "F2 Add", "F5 Sync", "F6 Settings", "F3 Trash", "F7 Trash"].iter().enumerate() { Self::button(frame, self.toolbar[index], title, !matches!(index, 1 | 4) || (self.screen == Screen::Browse && (index != 4 || self.selected().is_some()))); }
+        let widths = [14, 9, 9, 13, 20, 10];
+        self.toolbar = if area.width < 75 {
+            let bands = Layout::vertical([Constraint::Length(3), Constraint::Length(3)]).split(rows[1]);
+            bands.iter().enumerate().flat_map(|(row, area)| Layout::horizontal(widths[row * 3..row * 3 + 3].iter().map(|width| Constraint::Length(*width)).chain(std::iter::once(Constraint::Min(0)))).split(*area)[..3].to_vec()).collect()
+        } else { Layout::horizontal(widths.map(Constraint::Length).into_iter().chain(std::iter::once(Constraint::Min(0)))).split(rows[1])[..6].to_vec() };
+        for (index, title) in ["F1 Libraries", "F2 Add", "F5 Sync", "F6 Settings", "F3 Move to Trash", "F7 Trash"].iter().enumerate() { Self::button(frame, self.toolbar[index], title, !matches!(index, 1 | 4) || (self.screen == Screen::Browse && (index != 4 || self.selected().is_some()))); }
         let body = rows[2];
         match self.effective_screen() {
             Screen::Trash => {
@@ -642,6 +652,19 @@ impl App {
 mod tests {
     use super::*;
     use ratatui::crossterm::event::KeyEvent;
+    #[test]
+    fn code_enter_retains_exact_leading_whitespace() {
+        let temp = tempfile::tempdir().unwrap(); let mut app = Fixture::app(temp.path());
+        app.screen = Screen::Edit; app.editor_focus = 1;
+        for prefix in ["\t", "    ", "\t  ", ""] {
+            for code in [false, true] {
+                app.code = code; app.expansion = App::text(&format!("{prefix}example"));
+                app.expansion.move_cursor(ratatui_textarea::CursorMove::End);
+                Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+                assert_eq!(App::value(&app.expansion), format!("{prefix}example\n{}", if code { prefix } else { "" }));
+            }
+        }
+    }
     #[test]
     fn editor_layout_and_navigation_reach_every_field_in_both_modes() {
         let temp = tempfile::tempdir().unwrap(); let mut app = Fixture::app(temp.path());
