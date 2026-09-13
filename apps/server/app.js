@@ -71,7 +71,7 @@ export class Server {
 			const accounts = await Account.find({ _id: { $in: memberships.map(member => member.account) } }).lean();
 			const account = accounts.find(account => String(account._id) === req.query.account) || accounts[0];
 			const ctx = await Support.context(req.session.user, String(account._id));
-			res.render('app', { accounts, account, ctx, libraries: await Libraries.list(ctx), team: await Team.list(ctx), profile: await User.findById(ctx.user).lean() });
+			res.render('app', { importFormats: Libraries.importFormats, accounts, account, ctx, libraries: await Libraries.list(ctx), team: await Team.list(ctx), profile: await User.findById(ctx.user).lean() });
 		});
 		app.use('/api/v1', (req, res) => res.status(426).json({ error: 'Upgrade TypeRelay: snippet moves require sync protocol 4', protocol: 4 }));
 		app.use('/api/v2', async (req, res, next) => {
@@ -108,9 +108,9 @@ export class Server {
 			res.render('ajax/search', { query, results: results.slice(0, 60), truncated: results.length > 60 });
 		});
 		app.get('/api/v2/libraries', async (req, res) => res.json(await Libraries.list(req.ctx)));
-		app.post('/api/v2/import/snippetslab/preview', async (req, res) => { const preview = await Libraries.snippetsLab(req.body.source); res.json({ ...preview, html: pug.renderFile('./views/ajax/snippetslab.pug', preview) }); });
-		app.post('/api/v2/import/snippetslab', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.importSnippetsLab(ctx, req.body, session))));
+		app.post('/api/v2/import/:format/preview', async (req, res) => { const preview = await Libraries.previewImport(req.params.format, req.body); res.json({ ...preview, html: pug.renderFile('./views/ajax/snippetslab.pug', preview) }); });
 		app.post('/api/v2/import/preview', async (req, res) => res.json(await Yaml.run(req.body.yaml)));
+		app.post('/api/v2/import/:format', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.commitImport(ctx, req.params.format, req.body, session))));
 		app.post('/api/v2/libraries', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, async (ctx, session) => ({ library: await Libraries.create(ctx, req.body, session) }))));
 		app.patch('/api/v2/libraries/:id', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.settings(ctx, req.params.id, req.body, session))));
 		app.post('/api/v2/libraries/:id/snippets', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.upload(ctx, req.params.id, req.body, session))));
@@ -134,13 +134,14 @@ export class Server {
 		app.patch('/api/v2/account', async (req, res) => { Support.assert(Support.admin(req.ctx), 'Admin required', 403); await Account.updateOne({ _id: req.ctx.account }, { $set: { name: Support.text(req.body.name) } }); res.json({ name: req.body.name }); });
 		app.get('/api/v2/forms/:kind', async (req, res) => {
 			const kind = req.params.kind;
-			Support.assert(['library', 'snippet', 'group', 'conflict', 'move', 'snippetslab'].includes(kind), 'Unknown form');
+			if (kind === 'import') Support.assert(Object.hasOwn(Libraries.importFormats, req.query.format || ''), 'Unknown import format');
+			Support.assert(['library', 'snippet', 'group', 'conflict', 'move', 'snippetslab', 'import'].includes(kind), 'Unknown form');
 			const library = req.query.library ? Libraries.view(req.ctx, await Libraries.get(req.ctx, req.query.library, null, true)) : null;
 			const group = req.query.group ? await Group.findOne({ _id: Support.id(req.query.group), account: req.ctx.account }).lean() : null;
 			const conflict = req.query.conflict ? await Conflict.findOne({ _id: Support.id(req.query.conflict), account: req.ctx.account, library: library?._id, resolved: false }).lean() : null;
 			if (kind === 'conflict') Support.assert(conflict && library.permissions.edit, 'Conflict not found', 404);
 			const current = library?.records.find(snippet => snippet.id === conflict?.snippet) || null;
-			res.render('ajax/form', { kind, destinations: library ? (await Libraries.list(req.ctx)).filter(item => item.permissions.edit && item._id !== library._id) : [], library, group, conflict, current, snippet: kind === 'conflict' ? (conflict.local ? Libraries.entry(conflict.local) : current) : library?.snippets.find(snippet => snippet.id === req.query.snippet), team: await Team.list(req.ctx) });
+			res.render('ajax/form', { kind, importFormat: Libraries.importFormats[kind === 'snippetslab' ? 'snippetslab' : req.query.format], destinations: library ? (await Libraries.list(req.ctx)).filter(item => item.permissions.edit && item._id !== library._id) : [], library, group, conflict, current, snippet: kind === 'conflict' ? (conflict.local ? Libraries.entry(conflict.local) : current) : library?.snippets.find(snippet => snippet.id === req.query.snippet), team: await Team.list(req.ctx) });
 		});
 		app.get('/api/v2/editor/:id', async (req, res) => {
 			const library = Libraries.view(req.ctx, await Libraries.get(req.ctx, req.params.id));

@@ -1,3 +1,6 @@
+import { parse as parseCsv } from 'csv-parse/sync';
+import { parseDocument } from 'htmlparser2';
+import { DOMParser } from '@xmldom/xmldom';
 import { Abbreviation } from '../public/abbreviation.js';
 import { randomUUID } from 'node:crypto';
 import { mongoose, Library, Snippet, Operation, Conflict, Account, Change, Member, Group } from '../model/index.js';
@@ -36,6 +39,126 @@ export class Libraries {
 	static async validate(entries) {
 		return Yaml.validate(entries.map(Libraries.yaml));
 	}
+	static importFormats = {
+		yaml: { name: 'TypeRelay YAML', accept: '.yml,.yaml', instructions: 'Choose a TypeRelay YAML export.', beta: false },
+		snippetslab: { name: 'SnippetsLab', accept: '.json', instructions: 'In SnippetsLab, use Library → Export → JSON.', beta: false },
+		textexpander: { name: 'TextExpander', accept: '.csv', instructions: 'On TextExpander.com, open Import/Export → Export and download a group as CSV. Native .textexpander files are not supported.', beta: true },
+		textblaze: { name: 'Text Blaze', accept: '.json', instructions: 'Open the Text Blaze dashboard’s Import/Export page and export folders as JSON.', beta: true },
+		typeit4me: { name: 'TypeIt4Me', accept: '.typeit4me', instructions: 'Choose a .typeit4me snippet set from Finder. Beta supports recognized XML set and XML property-list layouts; binary files are not supported.', beta: true },
+	};
+	static htmlText(html) {
+		Support.assert(typeof html === 'string', 'Invalid HTML content');
+		const document = parseDocument(html);
+		const render = (node, depth = 0) => {
+			Support.assert(depth < 100, 'HTML nesting is too deep');
+			if (node.type === 'text') return node.data;
+			if (['script', 'style', 'iframe', 'object', 'img', 'head'].includes(node.name)) return '';
+			if (node.name === 'br') return '\n';
+			const text = (node.children || []).map(child => render(child, depth + 1)).join('');
+			return text + (['p', 'div', 'li', 'tr', 'h1', 'h2', 'h3'].includes(node.name) && !text.endsWith('\n') ? '\n' : '');
+		};
+		return render(document);
+	}
+	static xmlSet(source) {
+		Support.assert(typeof source === 'string', 'Choose a TypeIt4Me XML set');
+		// Recognize the standard plist declaration without resolving its external DTD.
+		source = source.replace(/<!DOCTYPE plist PUBLIC "-\/\/Apple(?: Computer)?\/\/DTD PLIST 1\.0\/\/EN" "https?:\/\/www\.apple\.com\/DTDs\/PropertyList-1\.0\.dtd"\s*>/g, '');
+		Support.assert(!/<!DOCTYPE|<!ENTITY/i.test(source), 'XML declarations with DTDs/entities are not supported');
+		let invalid = false;
+		const document = new DOMParser({ onError: () => { invalid = true; } }).parseFromString(source, 'application/xml');
+		Support.assert(!invalid && document.documentElement, 'Malformed TypeIt4Me XML');
+		const children = node => Array.from(node.childNodes || []).filter(child => child.nodeType === 1);
+		const decode = (node, depth = 0) => {
+			Support.assert(depth < 30, 'XML nesting is too deep');
+			if (node.tagName === 'dict') {
+				const items = children(node); const result = Object.create(null);
+				Support.assert(items.length % 2 === 0, 'Malformed property-list dictionary');
+				for (let index = 0; index < items.length; index += 2) { Support.assert(items[index].tagName === 'key', 'Invalid property-list key'); result[items[index].textContent] = decode(items[index + 1], depth + 1); }
+				return result;
+			}
+			if (node.tagName === 'array') return children(node).map(child => decode(child, depth + 1));
+			if (node.tagName === 'string') return node.textContent;
+			if (node.tagName === 'true' || node.tagName === 'false') return node.tagName === 'true';
+			return null;
+		};
+		const root = document.documentElement;
+		if (root.tagName === 'plist') { const nodes = children(root); Support.assert(nodes.length === 1, 'Invalid property list'); return decode(nodes[0]); }
+		Support.assert(['typeit4me', 'snippets', 'clippings'].includes(root.tagName.toLowerCase()), 'Unrecognized TypeIt4Me XML layout');
+		const records = children(root);
+		Support.assert(records.every(node => ['snippet', 'clipping'].includes(node.tagName.toLowerCase())), 'Unrecognized TypeIt4Me record layout');
+		return { name: root.getAttribute('name'), snippets: records.map(node => Object.fromEntries(children(node).map(field => [field.tagName, field.textContent]))) };
+	}
+	static async previewImport(format, body) {
+		Support.assert(Object.hasOwn(Libraries.importFormats, format), 'Unknown import format');
+		Support.assert(body && Buffer.byteLength(JSON.stringify(body.source) || '') <= 8 * 1048576, 'Import exceeds 8 MiB');
+		if (format === 'snippetslab') {
+			let source = body.source;
+			if (typeof source === 'string') { try { source = JSON.parse(source); } catch { Support.assert(false, 'Invalid SnippetsLab JSON'); } }
+			const preview = await Libraries.snippetsLab(source);
+			Support.assert(preview.entries.length > 0, 'No snippets found in this export');
+			return preview;
+		}
+		const filename = typeof body.filename === 'string' ? body.filename : Libraries.importFormats[format].name;
+		const name = filename.split(/[\\/]/).pop().replace(/\.[^.]+$/, '').slice(0, 85) || 'Imported snippets';
+		let groups;
+		if (format === 'yaml') {
+			const parsed = await Yaml.run(body.source);
+			groups = [{ name, snippets: parsed.matches }];
+		} else if (format === 'textexpander') {
+			Support.assert(typeof body.source === 'string', 'Choose a CSV export');
+			let records;
+			try { records = parseCsv(body.source, { bom: true, columns: headers => { Support.assert(new Set(headers).size === headers.length, 'Duplicate CSV headers'); return headers; }, skip_empty_lines: true, max_record_size: 1048576, to: 1001 }); } catch { Support.assert(false, 'Malformed CSV: check quoting and column counts'); }
+			Support.assert(records.length > 0 && Object.hasOwn(records[0], 'abbreviation') && Object.hasOwn(records[0], 'snippet'), 'CSV requires abbreviation and snippet headers; label is optional');
+			groups = [{ name, snippets: records.map(record => ({ trigger: record.abbreviation, title: record.label || '', text: record.snippet })) }];
+		} else {
+			let source;
+			try { source = format === 'typeit4me' ? Libraries.xmlSet(body.source) : (typeof body.source === 'string' ? JSON.parse(body.source) : body.source); } catch (error) { Support.assert(false, error.status ? error.message : 'Invalid ' + Libraries.importFormats[format].name + ' export'); }
+			Support.assert(source && typeof source === 'object', 'Unrecognized export structure');
+			if (Array.isArray(source) && source.length && source.every(record => record && typeof record === 'object' && ['text', 'body', 'snippet', 'replace', 'plainText', 'content', 'clip'].some(key => typeof record[key] === 'string'))) source = { name, snippets: source };
+			const rows = Array.isArray(source) ? source : source.folders || source.sets;
+			if (rows) {
+				Support.assert(Array.isArray(rows), 'Invalid folder/set collection');
+				groups = []; const queue = rows.map(row => ({ row, path: [], depth: 0 }));
+				while (queue.length) {
+					const { row, path, depth } = queue.shift();
+					Support.assert(row && typeof row === 'object' && depth < 20 && groups.length < 256, 'Invalid or excessive folder hierarchy');
+					if (Array.isArray(row.snippets || row.clippings)) {
+						const next = [...path, row.name || row.title || name];
+						groups.push({ name: next.join(' › '), snippets: row.snippets || row.clippings });
+						Support.assert(!row.children || Array.isArray(row.children), 'Invalid child folders');
+						queue.push(...(row.children || []).map(child => ({ row: child, path: next, depth: depth + 1 })));
+					} else { Support.assert(false, 'Unrecognized folder/set layout: expected a snippets or clippings array'); }
+				}
+			} else {
+				Support.assert(Array.isArray(source.snippets || source.clippings), 'Unrecognized export layout: expected folders, sets, snippets or clippings');
+				groups = [{ name: source.name || source.title || name, snippets: source.snippets || source.clippings }];
+			}
+		}
+		const entries = []; const warnings = [];
+		Support.assert(groups.length <= 256, 'Import exceeds 256 libraries');
+		for (const [groupIndex, group] of groups.entries()) {
+			Support.assert(typeof group.name === 'string', 'Invalid library name');
+			for (const [index, record] of group.snippets.entries()) {
+				Support.assert(entries.length < 1000 && record && typeof record === 'object', 'Invalid record or more than 1000 snippets');
+				const original = record.trigger ?? record.shortcut ?? record.abbreviation ?? record.abbr ?? null;
+				const entry = { key: groupIndex + ':' + index, folder: String(groupIndex), name: group.name.replaceAll('/', '∕').replaceAll('\\', '∖').slice(0, 85), title: record.title ?? record.name ?? record.label ?? '', original_trigger: original, trigger: Abbreviation.normalize(original) || null, warnings: [] };
+				let text = record.text ?? record.body ?? record.snippet ?? record.replace ?? record.plainText ?? record.content ?? record.clip;
+				if (record.html && format === 'textblaze') { const converted = Libraries.htmlText(record.html); text = converted.trim() || typeof text !== 'string' ? converted : text; entry.warnings.push('Converted rich text to plain text; styling and images omitted.'); }
+				if (record.html && typeof text === 'string' && !text.trim()) entry.error = 'No readable text found; image-only HTML cannot be imported.';
+				if (typeof text === 'string' && /^\{\\rtf/i.test(text)) entry.error = 'RTF content is not supported by this beta importer; export plain text instead.';
+				if (typeof text !== 'string') { entry.error = 'No readable text found; images/binary content cannot be imported.'; text = ''; }
+				const dynamic = format !== 'yaml' && (/\{(?:[a-z][a-z0-9_-]*(?=[:;}])|=)/i.test(text) || /%[A-Za-z]|%\{|[⊢⊣]|\{\{|\$\|\$/.test(text) || /script|macro/i.test(String(record.type || record.kind || '')));
+				entry.review = dynamic;
+				if (dynamic) { entry.title = (entry.title || original || 'Imported snippet') + ' (Needs review)'; entry.trigger = null; entry.warnings.push('Unsupported commands preserved literally. No abbreviation is assigned.'); }
+				entry.content = format === 'yaml' ? Libraries.content(record) : { version: 1, type: dynamic ? 'code' : 'plain_text', text: text.replaceAll('\r\n', '\n'), ...(dynamic ? { language: 'plain_text' } : {}) };
+				try { await Libraries.validate([{ ...entry, trigger: null }]); } catch (error) { entry.error ||= error.message; }
+				if (entry.trigger && (typeof entry.trigger !== 'string' || !/^[a-z0-9-]{1,63}$/.test(entry.trigger))) entry.trigger_error = 'Correct or clear this abbreviation before importing.';
+				entries.push(entry);
+			}
+		}
+		Support.assert(entries.length > 0, 'No snippets found; this export layout may not be supported');
+		return { entries, warnings };
+	}
 	static async snippetsLab(source) {
 		Support.assert(source && typeof source === 'object' && source.contents && Array.isArray(source.contents.snippets), 'Choose a SnippetsLab JSON library export');
 		Support.assert(Buffer.byteLength(JSON.stringify(source)) <= 8 * 1048576, 'Import exceeds 8 MiB');
@@ -71,8 +194,9 @@ export class Libraries {
 		}
 		return { entries, warnings: [...warnings] };
 	}
-	static async importSnippetsLab(ctx, body, session) {
-		const preview = await Libraries.snippetsLab(body.source);
+	static async importSnippetsLab(ctx, body, session) { return Libraries.commitImport(ctx, 'snippetslab', body, session); }
+	static async commitImport(ctx, format, body, session) {
+		const preview = await Libraries.previewImport(format, body);
 		Support.assert(Array.isArray(body.selected) && body.selected.length > 0 && new Set(body.selected.map(item => item.key)).size === body.selected.length, 'Select valid fragments first');
 		const groups = new Map();
 		for (const selected of body.selected) {
@@ -80,7 +204,7 @@ export class Libraries {
 			Support.assert(entry && !entry.error, 'Selected fragment is invalid');
 			const key = entry.folder;
 			if (!groups.has(key)) groups.set(key, { name: entry.name, snippets: [] });
-			groups.get(key).snippets.push({ ...Libraries.value(entry), trigger: Abbreviation.normalize(selected.trigger) || null });
+			groups.get(key).snippets.push({ ...Libraries.value(entry), trigger: entry.review ? null : Abbreviation.normalize(selected.trigger === undefined ? entry.trigger : selected.trigger) || null });
 		}
 		const libraries = [];
 		const used = new Set((await Library.find({ account: ctx.account, creator: ctx.user }).session(session).select('name').lean()).map(item => item.name));

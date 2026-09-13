@@ -95,9 +95,12 @@ if kind === 'group'
 	if group
 		button.btn.btn-outline-danger.btn-sm(type="button" data-delete-group=group._id) Delete group
 
-if kind === 'snippetslab'
-	label.form-label.fw-bold(for="snippetslab-file") SnippetsLab JSON export
-	input#snippetslab-file.form-control.form-control-sm.mb-3(type="file" accept=".json,application/json")
-	p.small.text-muted Export JSON using SnippetsLab’s Library → Export menu. Imported libraries are private. Native bundles are not supported.
-	button#preview-snippetslab.btn.btn-outline-secondary.btn-sm.mb-3(type="button") Preview import
-	#snippetslab-preview
+if kind === 'snippetslab' || kind === 'import'
+	label.form-label.fw-bold(for="import-file")= importFormat.name + ' export'
+	input#import-file.form-control.form-control-sm.mb-3(type="file" accept=importFormat.accept)
+	p.small.text-muted= importFormat.instructions
+	if importFormat.beta
+		p.small.text-muted Beta: export layouts may vary between app versions. Review the preview before importing.
+	p.small.text-muted Imported libraries are private. Existing libraries are never replaced.
+	button#preview-import.btn.btn-outline-secondary.btn-sm.mb-3(type="button") Preview import
+	#import-preview

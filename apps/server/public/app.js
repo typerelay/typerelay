@@ -18,7 +18,7 @@ class TypeRelay {
 	submit = null;
 	constructor() {
 		document.querySelectorAll('.library').forEach(node => this.libraries.set(node.dataset.id, JSON.parse(node.dataset.record)));
-		document.addEventListener('input', event => { if (event.target.id === 'trigger' && !event.isComposing) Abbreviation.field(event.target); });
+		document.addEventListener('input', event => { if ((event.target.id === 'trigger' || event.target.hasAttribute('data-import-trigger')) && !event.isComposing) Abbreviation.field(event.target); });
 		document.addEventListener('compositionend', event => { if (event.target.id === 'trigger') Abbreviation.field(event.target); });
 		document.addEventListener('submit', event => this.onSubmit(event));
 		document.addEventListener('click', event => this.onClick(event).catch(error => this.toast(error.message, 'error')));
@@ -40,6 +40,8 @@ class TypeRelay {
 			if (event.target.id === 'trigger') Abbreviation.field(event.target);
 			if (['snippet-type', 'code-language', 'code-indent', 'code-width'].includes(event.target.id)) await this.codeEditor().catch(error => this.toast(error.message, 'error'));
 			if (event.target.id === 'shared') document.querySelectorAll('#members-select,#groups-select').forEach(field => { field.disabled = !event.target.checked; });
+			if (event.target.hasAttribute('data-import-key')) { const field = document.querySelector('[data-import-trigger="' + event.target.dataset.importKey + '"]'); if (field) field.disabled = !event.target.checked || field.dataset.review === 'true'; }
+			if (event.target.id === 'import-file') { this.importSource = null; document.querySelector('#import-preview').replaceChildren(); document.querySelector('#record-form button[type=submit]').disabled = true; }
 			if (event.target.id === 'yaml-file' && event.target.files[0]) document.querySelector('#yaml').value = await event.target.files[0].text();
 		});
 		document.querySelector('#form-modal')?.addEventListener('hidden.bs.modal', () => {
@@ -237,13 +239,13 @@ class TypeRelay {
 	}
 	async form(kind, params, submit) {
 		this.codeView?.destroy(); this.codeView = null; this.codeReadonly = false;
-		document.querySelector('#form-title').textContent = ({ library: 'Library', snippet: 'Snippet', group: 'Group', conflict: 'Resolve conflict', move: 'Move snippets', snippetslab: 'Import SnippetsLab' })[kind];
+		document.querySelector('#form-title').textContent = ({ library: 'Library', snippet: 'Snippet', group: 'Group', conflict: 'Resolve conflict', move: 'Move snippets', snippetslab: 'Import SnippetsLab', import: 'Import snippets' })[kind];
 		document.querySelector('#form-fields').replaceChildren();
 		const template = document.createElement('template');
 		template.innerHTML = await this.request('forms/' + kind + '?' + new URLSearchParams(params), 'GET', null, true);
 		document.querySelector('#form-fields').replaceChildren(template.content);
-		document.querySelector('#record-form button[type="submit"]').disabled = kind === 'snippetslab' || (kind === 'move' && !document.querySelector('#destination-library option'));
-		document.querySelector('#record-form button[type="submit"]').textContent = kind === 'move' ? 'Move' : 'Save';
+		document.querySelector('#record-form button[type="submit"]').disabled = ['snippetslab', 'import'].includes(kind) || (kind === 'move' && !document.querySelector('#destination-library option'));
+		document.querySelector('#record-form button[type="submit"]').textContent = kind === 'move' ? 'Move' : ['import', 'snippetslab'].includes(kind) ? 'Import' : 'Save';
 		await this.codeEditor();
 		this.submit = submit;
 		this.formOperation = crypto.randomUUID();
@@ -394,18 +396,18 @@ class TypeRelay {
 		const library = this.libraries.get(this.selected);
 		if (button.dataset.copySnippet) { await navigator.clipboard.writeText(this.libraries.get(this.selected).snippets.find(item => item.id === button.dataset.copySnippet).replace); return this.toast('Copied'); }
 		if (button.id === 'copy-code') { await navigator.clipboard.writeText(document.querySelector('#replace').value); return this.toast('Copied'); }
-		if (button.id === 'import-snippetslab') { this.importSource = null; return this.form('snippetslab', {}, async () => {
+		if (button.dataset.importFormat) { this.importSource = null; this.importFormat = button.dataset.importFormat; return this.form('import', { format: this.importFormat }, async () => {
 			const selected = [...document.querySelectorAll('[data-import-key]:checked')].map(input => ({ key: input.dataset.importKey, trigger: Abbreviation.normalize(document.querySelector('[data-import-trigger="' + input.dataset.importKey + '"]').value) }));
-			await this.applyBatch(await this.request('import/snippetslab', 'POST', { source: this.importSource, selected }), false);
+			await this.applyBatch(await this.request('import/' + this.importFormat, 'POST', { source: this.importSource, filename: this.importFilename, selected }), false);
 		}); }
-		if (button.id === 'preview-snippetslab') {
-			const file = document.querySelector('#snippetslab-file').files[0];
-			if (!file || file.size > 8 * 1048576) throw new Error('Choose a JSON export up to 8 MiB');
-			button.disabled = true;
+		if (button.id === 'preview-import') {
+			const file = document.querySelector('#import-file').files[0];
+			if (!file || file.size > 8 * 1048576) throw new Error('Choose an export up to 8 MiB');
+			button.disabled = true; document.querySelector('#record-form button[type=submit]').disabled = true;
 			try {
-				this.importSource = JSON.parse(await file.text());
-				const preview = await this.request('import/snippetslab/preview', 'POST', { source: this.importSource });
-				document.querySelector('#snippetslab-preview').replaceChildren(this.fragment(preview.html));
+				this.importSource = await file.text(); this.importFilename = file.name;
+				const preview = await this.request('import/' + this.importFormat + '/preview', 'POST', { source: this.importSource, filename: this.importFilename });
+				document.querySelector('#import-preview').replaceChildren(this.fragment(preview.html));
 				document.querySelector('#record-form button[type="submit"]').disabled = !preview.entries.some(entry => !entry.error);
 			} finally { button.disabled = false; }
 			return;

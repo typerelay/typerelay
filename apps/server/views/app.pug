@@ -8,10 +8,16 @@ block content
 						each item in accounts
 							option(value=item._id selected=String(item._id) === String(account._id))= item.name
 					button#new-library.btn.btn-primary.btn-sm New library
-				button#import-snippetslab.btn.btn-outline-secondary.btn-sm.mb-3 Import SnippetsLab
 				#libraries
 					each library in libraries
 						include ajax/library
+				.dropdown.mt-3
+					button#import-menu.btn.btn-outline-secondary.btn-sm.dropdown-toggle(type="button" data-bs-toggle="dropdown" aria-expanded="false") Import
+					ul.dropdown-menu
+						each format, id in importFormats
+							li
+								button.dropdown-item(type="button" data-import-format=id)= format.name + (format.beta ? ' · Beta' : '')
+
 			section.col-md-8
 				#editor.card.p-4
 					h2.fw-bold Select a library

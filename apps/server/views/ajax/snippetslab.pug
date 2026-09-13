@@ -1,18 +1,24 @@
 .snippetslab-results
 	each warning in warnings
 		p.text-warning= warning
-	p.small.text-muted Select fragments to import. Abbreviations are optional. Existing libraries will not be replaced.
+	p.small.text-muted Select snippets to import. Abbreviations are optional. Existing libraries will not be replaced.
 	each entry in entries
 		.border-bottom.pb-3.mb-3(data-import-entry=entry.key)
 			.form-check.mb-3
 				input.form-check-input(type="checkbox" id='import-' + entry.key data-import-key=entry.key checked=!entry.error disabled=!!entry.error)
 				label.form-check-label.fw-bold(for='import-' + entry.key)= entry.title
-			p.small= entry.name + ' · ' + entry.content.language
+			p.small= entry.name + ' · ' + (entry.content.language || 'Text')
+			each warning in entry.warnings || []
+				p.small.text-warning= warning
+			if entry.original_trigger != null
+				p.small.text-muted= 'Original abbreviation: ' + entry.original_trigger
+			if entry.trigger_error
+				p.small.text-warning= entry.trigger_error
 			if entry.error
 				p.text-danger= entry.error
 			else
 				label.form-label(for='abbr-' + entry.key) Abbreviation (optional)
 				.input-group.input-group-sm.mb-3
 					span.input-group-text ,
-					input.form-control.form-control-sm(id='abbr-' + entry.key data-import-trigger=entry.key pattern="[a-z0-9\\-]{1,63}")
+					input.form-control.form-control-sm(id='abbr-' + entry.key data-import-trigger=entry.key value=entry.trigger data-review=entry.review disabled=entry.review pattern="[a-z0-9\\-]{1,63}")
 				pre.small= entry.content.text

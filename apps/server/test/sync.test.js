@@ -313,3 +313,48 @@ test('code metadata, optional abbreviations, import previews and idempotent impo
 	await assert.rejects(Libraries.mutate(owner, randomUUID(), bad, (ctx, session) => Libraries.importSnippetsLab(ctx, bad, session)), /invalid/);
 	await assert.rejects(Libraries.snippetsLab({ contents: { snippets: [{ title: 'Missing' }] } }), /no fragments/);
 });
+
+test('beta importers parse CSV, HTML JSON and XML sets with review-only commands', async () => {
+	const csv = '\ufeffabbreviation,snippet,label\r\n,hello,Greeting\r\n",sig","\t  Hello ""world""\r\nnext\r\n",Signature\r\nUPPER,Text,Invalid\r\ndate,%Y,Date\r\n';
+	const preview = await Libraries.previewImport('textexpander', { source: csv, filename: 'Sales.csv' });
+	assert.equal(preview.entries.length, 4);
+	assert.equal(preview.entries[1].trigger, 'sig');
+	assert.equal(preview.entries[1].original_trigger, ',sig');
+	assert.equal(preview.entries[1].content.text, '\t  Hello "world"\nnext\n');
+	assert.equal(preview.entries[2].trigger, 'UPPER'); assert.ok(preview.entries[2].trigger_error);
+	assert.equal(preview.entries[3].review, true); assert.equal(preview.entries[3].trigger, null);
+	assert.equal(preview.entries[3].title, 'Date (Needs review)');
+	await assert.rejects(Libraries.previewImport('textexpander', { source: 'abbreviation,snippet\nx,"bad' }), /Malformed CSV/);
+	const blaze = { folders: [{ name: 'Parent', snippets: [{ name: 'Rich', shortcut: ',html', html: '<p>Hello <b>world</b></p><p>Next<br>line<img src="https://invalid.test/x"></p>' }, { name: 'Dynamic', shortcut: 'form', body: 'Hello {formtext: name=Name}' }], children: [{ name: 'Child', snippets: [{ shortcut: 'child', body: '\tchild  \n' }, { name: 'Image', html: '<img src="x">' }] }] }] };
+	const rich = await Libraries.previewImport('textblaze', { source: blaze });
+	assert.equal(rich.entries[0].content.text, 'Hello world\nNext\nline\n');
+	assert.ok(rich.entries[0].warnings.length); assert.equal(rich.entries[1].review, true);
+	assert.equal(rich.entries[2].name, 'Parent › Child'); assert.ok(rich.entries[3].error);
+	const xml = '<?xml version="1.0"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>name</key><string>Mac</string><key>clippings</key><array><dict><key>abbr</key><string>,mac</string><key>clip</key><string>\tMac &amp; λ\n</string></dict></array></dict></plist>';
+	const mac = await Libraries.previewImport('typeit4me', { source: xml });
+	assert.equal(mac.entries[0].trigger, 'mac'); assert.equal(mac.entries[0].content.text, '\tMac & λ\n');
+	const simple = await Libraries.previewImport('typeit4me', { source: '<TypeIt4Me name="Set"><clipping><abbreviation>x</abbreviation><snippet>Text</snippet></clipping></TypeIt4Me>' });
+	assert.equal(simple.entries[0].content.text, 'Text');
+	await assert.rejects(Libraries.previewImport('typeit4me', { source: '<!DOCTYPE x [<!ENTITY read SYSTEM "file:///etc/passwd">]><clippings/>' }), /DTDs/);
+	await assert.rejects(Libraries.previewImport('typeit4me', { source: '<unknown/>' }), /Unrecognized/);
+	await assert.rejects(Libraries.previewImport('textblaze', { source: { unexpected: [] } }), /Unrecognized/);
+	await assert.rejects(Libraries.previewImport('textblaze', { source: { folders: [] } }), /No snippets/);
+});
+
+test('shared import commit corrects abbreviations, stays private, retries and rolls back collisions', async () => {
+	const owner = await Fixture.user('owner', (await Account.create({ name: 'Beta import' }))._id);
+	const body = { source: 'abbreviation,snippet,label\nUPPER,hello,Title\nmacro,%Y,Year\n', filename: 'Beta.csv', selected: [{ key: '0:0', trigger: 'fixed' }, { key: '0:1', trigger: 'must-not-activate' }] };
+	const operation = randomUUID();
+	const run = () => Libraries.mutate(owner, operation, body, (ctx, session) => Libraries.commitImport(ctx, 'textexpander', body, session));
+	const { libraries } = await run();
+	assert.equal(libraries[0].snippets[0].trigger, 'fixed'); assert.equal(libraries[0].snippets[1].trigger, null);
+	assert.equal(libraries[0].shared, false); assert.equal((await run()).libraries[0]._id, libraries[0]._id);
+	const before = await Library.countDocuments({ account: owner.account });
+	await assert.rejects(Libraries.mutate(owner, randomUUID(), body, (ctx, session) => Libraries.commitImport(ctx, 'textexpander', body, session)), /Duplicate/);
+	assert.equal(await Library.countDocuments({ account: owner.account }), before);
+	const cleared = { ...body, selected: [{ key: '0:0', trigger: '' }] };
+	const next = await Libraries.mutate(owner, randomUUID(), cleared, (ctx, session) => Libraries.commitImport(ctx, 'textexpander', cleared, session));
+	assert.equal(next.libraries[0].name, 'Beta (2)'); assert.equal(next.libraries[0].snippets[0].trigger, null);
+	const admin = await Fixture.user('admin', owner.account);
+	await assert.rejects(Libraries.get(admin, libraries[0]._id), /not found/);
+});
