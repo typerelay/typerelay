@@ -4,6 +4,13 @@ use std::{fs, io::{Read, Write}, os::unix::{fs::{MetadataExt, PermissionsExt}, n
 
 pub struct Hyprland;
 impl Hyprland {
+    pub fn shortcut_conflicts(value: &str, binds: &serde_json::Value) -> Result<bool> {
+        let (code, groups) = crate::panel::Panel::shortcut(value)?;
+        let mask = groups.iter().map(|group| match group[0] { 29 => 4, 42 => 1, 56 => 8, 125 => 64, _ => 0 }).sum::<u64>();
+        let name = value.rsplit('+').next().unwrap().to_lowercase();
+        let symbol = match name.as_str() { "comma" => ",", "period" => ".", "slash" => "/", "semicolon" => ";", other => other };
+        Ok(binds.as_array().is_some_and(|rows| rows.iter().any(|binding| binding["modmask"].as_u64() == Some(mask) && (binding["keycode"].as_u64() == Some(code as u64 + 8) || binding["key"].as_str().is_some_and(|key| key.eq_ignore_ascii_case(&name) || key.eq_ignore_ascii_case(symbol))))))
+    }
     pub fn is_terminal(window: &serde_json::Value) -> bool {
         window["tags"].as_array().is_some_and(|tags| tags.iter().any(|tag| tag.as_str().is_some_and(|name| name.trim_end_matches('*') == "terminal")))
     }
@@ -89,6 +96,11 @@ impl Drop for Registration { fn drop(&mut self) { let _ = fs::remove_file(&self.
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn shortcut_conflicts_accept_keysym_names_symbols_and_keycodes() {
+        for binding in [serde_json::json!({"modmask":5,"key":"comma"}),serde_json::json!({"modmask":5,"key":","}),serde_json::json!({"modmask":5,"keycode":59})] { assert!(Hyprland::shortcut_conflicts("Ctrl+Shift+Comma", &serde_json::json!([binding])).unwrap()); }
+        assert!(!Hyprland::shortcut_conflicts("Ctrl+Shift+Comma", &serde_json::json!([{"modmask":4,"key":"comma"}])).unwrap());
+    }
     #[test]
     fn launching_app_cannot_be_mistaken_for_editor_terminal() {
         assert!(!Hyprland::is_terminal(&serde_json::json!({"class": "chatgpt", "tags": ["default-opacity*"]})));

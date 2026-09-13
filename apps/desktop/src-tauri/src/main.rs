@@ -87,10 +87,7 @@ impl Runtime {
         {
             let _=(app,old);
             let binds=typerelay_client::desktop::Hyprland::query("binds")?;
-            let parts:Vec<_>=value.split('+').collect(); let key=parts.last().unwrap().to_lowercase();
-            let mask=parts[..parts.len()-1].iter().map(|part|match *part{"Ctrl"|"Control"=>4,"Shift"=>1,"Alt"=>8,"Super"|"Meta"=>64,_=>0}).sum::<u64>();
-            let key=match key.as_str(){"comma"=>",","period"=>".","slash"=>"/","semicolon"=>";",other=>other};
-            anyhow::ensure!(!binds.as_array().is_some_and(|rows|rows.iter().any(|binding|binding["modmask"].as_u64()==Some(mask) && binding["key"].as_str().is_some_and(|name|name.eq_ignore_ascii_case(key)))),"Shortcut is assigned in Hyprland; choose another");
+            anyhow::ensure!(!typerelay_client::desktop::Hyprland::shortcut_conflicts(value,&binds)?,"Shortcut is assigned in Hyprland; choose another");
             Paths::atomic_write(&typerelay_client::panel_ipc::PanelIpc::directory()?.join("ready"),std::process::id().to_string().as_bytes(),false)?;
         }
         Ok(())
