@@ -1,0 +1,56 @@
+doctype html
+html(lang="en")
+	head
+		meta(charset="utf-8")
+		meta(name="viewport" content="width=device-width, initial-scale=1")
+		title TypeRelay
+		link(rel="stylesheet" href="panel.css")
+		script(src="panel.js" defer)
+	body
+		main
+			header
+				img(src="icon.svg" alt="" width="24" height="24")
+				strong TypeRelay
+				button#settings-toggle(type="button") Settings
+				button#close(type="button" aria-label="Close panel") ×
+			section#search-view
+				label(for="query") Search snippets
+				input#query(type="search" autocomplete="off" spellcheck="false" aria-controls="results")
+				p#hint Type an abbreviation or part of a snippet.
+				ul#results(role="listbox" aria-label="Snippets")
+				footer
+					span ↑ ↓ Select · Enter Insert · Esc Close
+					button#copy(type="button" disabled) Copy
+			section#settings-view(hidden)
+				form#settings-form
+					label(for="shortcut") Search shortcut
+					input#shortcut(required)
+					small Ctrl, Shift, Alt or Super + Comma, A–Z, 0–9 or F1–F12
+					label.check
+						input#autostart(type="checkbox")
+						span Start at login
+					.row
+						button#settings-cancel(type="button") Back
+						button(type="submit") Save
+				form#connect-form
+					label(for="server") Sync server URL
+					input#server(type="url" required)
+					.row
+						button#sync(type="button") Sync now
+						button(type="submit") Connect in browser
+				form#enroll-form
+					p Upload selected local libraries as private libraries
+					div#local-libraries
+					button(type="submit") Upload selected
+			p#status(role="status" aria-live="polite")
+		template#result-template
+			li(role="option" aria-selected="false")
+				.row
+					strong.result-title
+					span.result-library
+				code.result-abbreviation
+				pre.result-preview
+		template#library-template
+			label.check
+				input(type="checkbox")
+				span

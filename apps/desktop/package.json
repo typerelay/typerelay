@@ -1,0 +1,9 @@
+{
+  "name": "typerelay-desktop",
+  "private": true,
+  "version": "0.10.0",
+  "type": "module",
+  "packageManager": "pnpm@12.0.0",
+  "scripts": { "build": "node build.mjs", "tauri": "tauri" },
+  "devDependencies": { "pug": "^3.0.3", "@tauri-apps/cli": "^2" }
+}

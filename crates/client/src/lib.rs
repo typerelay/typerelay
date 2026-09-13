@@ -11,3 +11,8 @@ mod legacy_yaml;
 
 #[cfg(target_os = "linux")]
 pub mod clipboard;
+
+pub mod panel;
+
+#[cfg(target_os = "linux")]
+pub mod panel_ipc;

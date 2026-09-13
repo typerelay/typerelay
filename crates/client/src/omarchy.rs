@@ -22,6 +22,7 @@ struct PasteState {
     job: PasteJob,
     expansion: Expansion,
     target: Option<String>,
+    reply: Option<std::sync::mpsc::Sender<std::result::Result<(), String>>>,
     started: bool,
     sent: bool,
     cancelled: bool,
@@ -123,6 +124,7 @@ impl Session {
     fn target() -> Result<Option<String>> {
         if Hyprland::query("locked")?["locked"].as_bool() != Some(false) { return Ok(None); }
         let active = Hyprland::query("activewindow")?;
+        if active["pid"].as_u64().is_some_and(|pid|typerelay_client::panel_ipc::PanelIpc::owns_window(pid as u32)) { return Ok(None); }
         Ok(active["address"].as_str().filter(|s| *s != "0x0" && !Registration::inhibited(s)).map(str::to_owned))
     }
 
@@ -250,6 +252,9 @@ impl Session {
         engine.set_prefix(&settings.settings.trigger_prefix).map_err(anyhow::Error::msg)?;
         let mut pressed = BTreeSet::new();
         let mut suppressed_space = false;
+        let mut suppressed_panel_key = None;
+        let panel_requests = typerelay_client::panel_ipc::PanelIpc::engine(running.clone())?;
+        let mut panel_shortcut = typerelay_client::panel::Panel::settings(settings.config_dir()).ok().and_then(|value|typerelay_client::panel::Panel::shortcut(&value.shortcut).ok());
         let mut target = None;
         let mut last_reload = Instant::now();
         let mut last_input = Instant::now();
@@ -280,6 +285,7 @@ impl Session {
                     Ok(false) => (),
                     Err(error) => eprintln!("Settings reload rejected: {error:#}; keeping previous prefix"),
                 }
+                panel_shortcut = typerelay_client::panel::Panel::settings(settings.config_dir()).ok().and_then(|value|typerelay_client::panel::Panel::shortcut(&value.shortcut).ok());
                 last_reload = Instant::now();
             }
             let events: Vec<InputEvent> = match keyboard.fetch_events() {
@@ -289,6 +295,12 @@ impl Session {
             };
             buffered.extend(events);
             if buffered.len() > 8192 { bail!("Input backlog exceeded safety limit; stopping"); }
+            if paste.is_none() && insertion.is_empty() && pressed.is_empty() && buffered.is_empty() && let Ok(request) = panel_requests.try_recv() {
+                    if Instant::now() < request.deadline && Self::target()? == Some(request.target.clone()) {
+                        engine.feed(Input::Cancel);
+                        paste = Some(PasteState { job: PasteJob::start(request.text.clone()), expansion: Expansion { erase: 0, text: request.text }, target: Some(request.target), reply: Some(request.reply), started: false, sent: false, cancelled: false });
+                    } else { let _ = request.reply.send(Err("Original window lost focus; nothing inserted".into())); }
+            }
             if let Some(state) = &mut paste {
                 match state.job.progress.try_recv() {
                     Ok(Ok(Progress::Ready)) if !state.cancelled && Self::target()? == state.target && !context.changed()? => {
@@ -298,10 +310,10 @@ impl Session {
                         state.started = true;
                     }
                     Ok(Ok(Progress::Ready)) => { state.cancelled = true; state.job.cancel(); }
-                    Ok(Ok(Progress::Finished)) => { paste = None; continue; }
+                    Ok(Ok(Progress::Finished)) => { if let Some(reply) = state.reply.take() { let _ = reply.send(if state.sent && !state.cancelled { Ok(()) } else { Err("Insertion cancelled; nothing retried".into()) }); } paste = None; continue; }
                     Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                         eprintln!("Clipboard paste failed; no automatic retry");
-                        if !state.started && !state.cancelled && Self::target()? == state.target { for event in Self::stroke(KeyCode::KEY_SPACE, false) { output.emit(&[event])?; } }
+                        if state.reply.is_none() && !state.started && !state.cancelled && Self::target()? == state.target { for event in Self::stroke(KeyCode::KEY_SPACE, false) { output.emit(&[event])?; } }
                         paste = None;
                         continue;
                     }
@@ -333,12 +345,19 @@ impl Session {
             while let Some(event) = buffered.pop_front() {
                 if event.event_type() != EventType::KEY { continue; }
                 let code = KeyCode(event.code());
+                if suppressed_panel_key == Some(code.0) {
+                    if event.value() == 0 { suppressed_panel_key = None; pressed.remove(&code.0); }
+                    continue;
+                }
                 if suppressed_space && code == KeyCode::KEY_SPACE {
                     if event.value() == 0 { suppressed_space = false; }
                     continue;
                 }
                 if event.value() == 0 { pressed.remove(&code.0); }
                 if event.value() == 1 { pressed.insert(code.0); }
+                if event.value() == 1 && panel_shortcut.as_ref().is_some_and(|(key, groups)| *key == code.0 && groups.iter().all(|group|group.iter().any(|key|pressed.contains(key))) && pressed.iter().all(|key|*key == code.0 || groups.iter().any(|group|group.contains(key)))) && typerelay_client::panel_ipc::PanelIpc::notify() {
+                    suppressed_panel_key = Some(code.0); engine.feed(Input::Cancel); target = None; continue;
+                }
                 if event.value() != 0 {
                     last_input = Instant::now();
                     if code == KeyCode::KEY_CAPSLOCK && event.value() == 1 { caps = !caps; }
@@ -353,7 +372,7 @@ impl Session {
                         if let Some(expansion) = expansion
                             && Self::target()? == target && !context.changed()? && pressed.len() == 1 {
                                 if expansion.requires_paste() {
-                                    paste = Some(PasteState { job: PasteJob::start(expansion.text.clone()), expansion, target: target.clone(), started: false, sent: false, cancelled: false });
+                                    paste = Some(PasteState { job: PasteJob::start(expansion.text.clone()), expansion, target: target.clone(), reply: None, started: false, sent: false, cancelled: false });
                                 } else {
                                     insertion = Self::inject(&expansion, None)?;
                                 }

@@ -5,6 +5,10 @@ use std::{fs, io::Write, path::{Path, PathBuf}};
 pub struct Paths;
 impl Paths {
     pub fn config_dir() -> Result<PathBuf> {
+        #[cfg(target_os = "windows")]
+        if std::env::var_os("XDG_CONFIG_HOME").is_none() { return Ok(PathBuf::from(std::env::var_os("LOCALAPPDATA").context("LOCALAPPDATA is missing")?).join("TypeRelay")); }
+        #[cfg(target_os = "macos")]
+        if std::env::var_os("XDG_CONFIG_HOME").is_none() { return Ok(PathBuf::from(std::env::var_os("HOME").context("HOME is missing")?).join("Library/Application Support/TypeRelay")); }
         let root = match std::env::var_os("XDG_CONFIG_HOME") {
             Some(path) => PathBuf::from(path),
             None => PathBuf::from(std::env::var_os("HOME").context("HOME is missing")?).join(".config"),
@@ -20,6 +24,7 @@ impl Paths {
         temporary.write_all(bytes)?;
         temporary.as_file().sync_all()?;
         if new { temporary.persist_noclobber(path)?; } else { temporary.persist(path)?; }
+        #[cfg(unix)]
         fs::File::open(parent)?.sync_all()?;
         Ok(())
     }

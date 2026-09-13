@@ -79,7 +79,8 @@ impl Sync {
         authorize.query_pairs_mut().extend_pairs([("client_id", "typerelay-desktop"), ("redirect_uri", &redirect), ("code_challenge", &challenge), ("code_challenge_method", "S256"), ("state", &state), ("device_name", "TypeRelay desktop")]);
         println!("Open this URL in your browser:\n{authorize}");
         #[cfg(target_os = "linux")] { if open_browser { let _ = std::process::Command::new("xdg-open").arg(authorize.as_str()).spawn(); } }
-        #[cfg(not(target_os = "linux"))] let _ = open_browser;
+        #[cfg(target_os = "macos")] { if open_browser { std::process::Command::new("open").arg(authorize.as_str()).spawn()?; } }
+        #[cfg(target_os = "windows")] { if open_browser { std::process::Command::new("rundll32.exe").args(["url.dll,FileProtocolHandler", authorize.as_str()]).spawn()?; } }
         let deadline = Instant::now() + Duration::from_secs(300);
         loop {
             ensure!(Instant::now() < deadline, "Browser sign-in timed out");

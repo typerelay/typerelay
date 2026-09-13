@@ -38,6 +38,11 @@ impl Registration {
         }
         Err(last.unwrap())
     }
+    pub fn panel(address: &str) -> Result<Self> {
+        let active = Hyprland::query("activewindow")?;
+        ensure!(active["pid"] == std::process::id() && active["address"] == address, "Panel does not own the focused window");
+        Self::create(&Self::directory()?, address)
+    }
     fn try_current_window() -> Result<Self> {
         let active = Hyprland::query("activewindow")?;
         ensure!(Hyprland::is_terminal(&active), "Focus the Omarchy terminal launching the TUI before starting it");
