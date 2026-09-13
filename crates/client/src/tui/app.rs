@@ -71,6 +71,11 @@ impl App {
     fn text(value: &str) -> TextArea<'static> { TextArea::new(value.split('\n').map(str::to_owned).collect()) }
     fn value(field: &TextArea<'_>) -> String { field.lines().join("\n") }
     fn draft(&self) -> Match { Match { trigger: Self::value(&self.trigger), replace: Self::value(&self.expansion), title: Self::value(&self.title), kind: if self.code { "code" } else { "plain_text" }.into(), language: Self::value(&self.language) } }
+    fn next_editor_field(&mut self, backwards: bool) {
+        let order = if self.code { [2, 0, 1, 3] } else { [2, 3, 0, 1] };
+        let index = order.iter().position(|field| *field == self.editor_focus).unwrap_or(0);
+        self.editor_focus = order[(index + if backwards { 3 } else { 1 }) % order.len()];
+    }
     fn effective_screen(&self) -> Screen { if self.screen == Screen::Confirm { self.confirm_from } else { self.screen } }
     fn dirty(&self) -> bool {
         match self.effective_screen() {
@@ -137,7 +142,7 @@ impl App {
         self.original_entry = Some(entry);
         self.editor_focus = 0;
         self.screen = Screen::Edit;
-        self.message("F2 switches fields · F9 Text/Code · F10 Copy · Ctrl+S saves", false);
+        self.message("Tab / Shift+Tab switch fields · Code: F2 leaves editor · F9 Text/Code · Ctrl+S saves", false);
         Ok(())
     }
     fn save(&mut self) -> Result<()> {
@@ -386,7 +391,7 @@ impl App {
             }
             match key.code {
                 KeyCode::F(1) => return self.toolbar_action(0),
-                KeyCode::F(2) if self.screen == Screen::Edit => { self.editor_focus = (self.editor_focus + 1) % 4; return Ok(()); }
+                KeyCode::F(2) if self.screen == Screen::Edit => { self.next_editor_field(key.modifiers.contains(KeyModifiers::SHIFT)); return Ok(()); }
                 KeyCode::F(9) if self.screen == Screen::Edit => { self.code = !self.code; return Ok(()); }
                 KeyCode::F(10) if matches!(self.screen, Screen::Edit | Screen::Browse) => {
                     let text = if self.screen == Screen::Edit { Self::value(&self.expansion) } else { self.selected().map(|i|self.file.as_ref().unwrap().entries[i].replace.clone()).unwrap_or_default() };
@@ -439,8 +444,8 @@ impl App {
                 },
                 Screen::Edit => match key.code {
                     KeyCode::Esc => self.leave(Destination::Browse)?,
-                    KeyCode::Tab if self.editor_focus == 1 && self.code => { self.expansion.insert_str("\t"); }
-                    KeyCode::Tab | KeyCode::BackTab => self.editor_focus = if self.editor_focus < 2 { 1 - self.editor_focus } else { (self.editor_focus + 1) % 4 },
+                    KeyCode::Tab if self.editor_focus == 1 && self.code && key.modifiers.is_empty() => { self.expansion.insert_str("\t"); }
+                    KeyCode::Tab | KeyCode::BackTab => self.next_editor_field(key.code == KeyCode::BackTab || key.modifiers.contains(KeyModifiers::SHIFT)),
                     KeyCode::Enter if self.editor_focus == 0 => self.editor_focus = 1,
                     _ if self.editor_focus == 0 => self.abbreviation_input(Event::Key(key)),
                     _ if self.editor_focus == 2 => Self::single_input(&mut self.title, Event::Key(key)),
@@ -576,20 +581,22 @@ impl App {
                 frame.render_widget(Paragraph::new(preview).scroll((0, self.preview_x)).block(Self::border("Preview · ←/→ scroll · F10 Copy", false)), columns[1]);
             }
             Screen::Edit => {
-                let parts = Layout::vertical([Constraint::Length(3), Constraint::Min(3), Constraint::Length(2), Constraint::Length(3), Constraint::Length(3)]).split(body);
-                let destination = self.move_destination.as_ref().and_then(|id| self.move_choices.iter().find(|library|library["_id"] == *id)).and_then(|library|library["name"].as_str()).unwrap_or("Current library");
-                frame.render_widget(Paragraph::new(format!("Library: {destination} · Ctrl+M / F8 changes destination")), parts[2]);
-                let trigger_row = Layout::horizontal([Constraint::Length(5), Constraint::Length(1), Constraint::Min(1)]).split(parts[0]);
+                let parts = Layout::vertical([Constraint::Length(3), Constraint::Length(3), Constraint::Min(3), Constraint::Length(if self.code { 3 } else { 0 }), Constraint::Length(2), Constraint::Length(3)]).split(body);
+                let metadata = Layout::horizontal([Constraint::Percentage(65), Constraint::Percentage(35)]).split(parts[0]);
+                let title_area = if self.code { parts[0] } else { metadata[0] };
+                let language_area = if self.code { parts[3] } else { metadata[1] };
+                let trigger_row = Layout::horizontal([Constraint::Length(5), Constraint::Length(1), Constraint::Min(1)]).split(parts[1]);
                 frame.render_widget(Paragraph::new(self.settings.settings.trigger_prefix.clone()).centered().block(Self::border("", false)).style(Style::default().fg(Color::Gray)), trigger_row[0]);
                 self.trigger.set_block(Self::border("Abbreviation (optional)", self.editor_focus == 0));
-                self.expansion.set_block(Self::border(if self.code { "Code · Tab indents · F2 next field · F9 Text · F10 Copy" } else { "Text · F2 next field · F9 Code · F10 Copy" }, self.editor_focus == 1));
-                frame.render_widget(&self.trigger, trigger_row[2]); frame.render_widget(&self.expansion, parts[1]); self.field_areas.extend([parts[0], parts[1]]);
-                let metadata = Layout::horizontal([Constraint::Percentage(65), Constraint::Percentage(35)]).split(parts[3]);
+                self.expansion.set_block(Self::border(if self.code { "Code · Tab indents · F2 next field · Shift+Tab previous" } else { "Text · Tab next field · Shift+Tab previous · F9 Code" }, self.editor_focus == 1));
                 self.title.set_block(Self::border("Title (optional)", self.editor_focus == 2));
                 self.language.set_block(Self::border("Language", self.editor_focus == 3));
-                frame.render_widget(&self.title, metadata[0]); frame.render_widget(&self.language, metadata[1]);
-                self.field_areas.extend([metadata[0], metadata[1]]);
-                self.form_buttons(frame, parts[4]);
+                frame.render_widget(&self.title, title_area); frame.render_widget(&self.language, language_area);
+                frame.render_widget(&self.trigger, trigger_row[2]); frame.render_widget(&self.expansion, parts[2]);
+                self.field_areas.extend([trigger_row[2], parts[2], title_area, language_area]);
+                let destination = self.move_destination.as_ref().and_then(|id| self.move_choices.iter().find(|library|library["_id"] == *id)).and_then(|library|library["name"].as_str()).unwrap_or("Current library");
+                frame.render_widget(Paragraph::new(format!("Library: {destination} · Ctrl+M / F8 changes destination · F9 Text/Code · F10 Copy")), parts[4]);
+                self.form_buttons(frame, parts[5]);
             }
             Screen::NewFile => {
                 let parts = Layout::vertical([Constraint::Length(3), Constraint::Min(3), Constraint::Length(3)]).split(body);
@@ -639,6 +646,36 @@ mod tests {
     use super::*;
     use ratatui::crossterm::event::KeyEvent;
     #[test]
+    fn editor_layout_and_navigation_reach_every_field_in_both_modes() {
+        let temp = tempfile::tempdir().unwrap(); let mut app = Fixture::app(temp.path());
+        app.file = Some(app.store.create("Layout").unwrap()); app.screen = Screen::Browse;
+        app.edit(true).unwrap();
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+        for code in [false, true] {
+            app.code = code;
+            terminal.draw(|frame| app.draw(frame)).unwrap();
+            assert!(app.field_areas[2].y < app.field_areas[0].y);
+            if code { assert!(app.field_areas[3].y > app.field_areas[1].y); }
+            else { assert_eq!(app.field_areas[3].y, app.field_areas[2].y); }
+            let order = if code { [2, 0, 1, 3] } else { [2, 3, 0, 1] };
+            app.editor_focus = order[0];
+            for expected in order.into_iter().cycle().skip(1).take(4) {
+                let key = if code && app.editor_focus == 1 { KeyCode::F(2) } else { KeyCode::Tab };
+                Fixture::key(&mut app, key, KeyModifiers::NONE);
+                assert_eq!(app.editor_focus, expected);
+            }
+            for expected in order.into_iter().rev() {
+                Fixture::key(&mut app, KeyCode::BackTab, KeyModifiers::SHIFT);
+                assert_eq!(app.editor_focus, expected);
+            }
+            for field in 0..4 {
+                let area = app.field_areas[field];
+                app.handle(Event::Mouse(ratatui::crossterm::event::MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: area.x + 1, row: area.y + 1, modifiers: KeyModifiers::NONE }));
+                assert_eq!(app.editor_focus, field);
+            }
+        }
+    }
+    #[test]
     fn code_editor_keeps_tabs_and_metadata_without_abbreviation() {
         let temp = tempfile::tempdir().unwrap(); let mut app = Fixture::app(temp.path());
         app.file = Some(app.store.create("Code").unwrap()); app.screen = Screen::Browse;
@@ -649,9 +686,9 @@ mod tests {
         app.handle(Event::Paste("  {{ λ }}  \n\n".into()));
         assert_eq!(app.editor_focus, 1);
         Fixture::key(&mut app, KeyCode::F(2), KeyModifiers::NONE);
-        app.handle(Event::Paste("Code title".into()));
-        Fixture::key(&mut app, KeyCode::F(2), KeyModifiers::NONE);
         app.language = App::text("Rust");
+        Fixture::key(&mut app, KeyCode::F(2), KeyModifiers::NONE);
+        app.handle(Event::Paste("Code title".into()));
         Fixture::key(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL);
         let entry = &app.store.open("Code").unwrap().entries[0];
         assert_eq!(entry.replace, "\t  {{ λ }}  \n\n");
