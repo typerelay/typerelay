@@ -11,7 +11,6 @@ html(lang="en")
 			header
 				img(src="icon.svg" alt="" width="24" height="24")
 				strong TypeRelay
-				button#settings-toggle(type="button") Settings
 				button#close(type="button" aria-label="Close panel") ×
 			section#search-view
 				label(for="query") Search snippets
@@ -37,7 +36,7 @@ html(lang="en")
 					input#server(type="url" required)
 					.row
 						button#sync(type="button") Sync now
-						button(type="submit") Connect in browser
+						button(type="submit") Authenticate in browser
 				form#enroll-form
 					p Upload selected local libraries as private libraries
 					div#local-libraries

@@ -14,7 +14,6 @@ class Panel {
 		});
 		document.querySelector('#copy').onclick=()=>this.action(async()=>{await this.invoke('copy_snippet',{hit:this.rows[this.index]});this.status.textContent='Copied';});
 		document.querySelector('#close').onclick=()=>this.invoke('dismiss');
-		document.querySelector('#settings-toggle').onclick=()=>this.settings(true);
 		document.querySelector('#settings-cancel').onclick=()=>this.settings(false);
 		document.querySelector('#settings-form').onsubmit=event=>{event.preventDefault();this.action(async()=>{await this.invoke('save_settings',{config:{shortcut:document.querySelector('#shortcut').value,launch_at_login:document.querySelector('#autostart').checked}});this.status.textContent='Settings saved';});};
 		document.querySelector('#connect-form').onsubmit=event=>{event.preventDefault();this.action(async()=>{this.status.textContent='Complete sign-in in your browser…';await this.invoke('connect',{url:document.querySelector('#server').value});this.status.textContent='Connected';await this.settings(true);});};

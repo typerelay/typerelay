@@ -44,7 +44,7 @@ test('late responses are ignored; keyboard selection, Copy and Escape use explic
  }finally{f.dom.window.close();}
 });
 
-test('settings mode reaches native focus policy from toolbar, tray and Back',async()=>{
+test('settings mode reaches native focus policy from tray and Back',async()=>{
  const f=await Fixture.create();try{
   await f.panel.settings(true);
   assert.equal(f.calls.filter(call=>call.name==='set_settings_view').at(-1).args.enabled,true);
