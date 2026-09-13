@@ -43,3 +43,15 @@ test('late responses are ignored; keyboard selection, Copy and Escape use explic
   assert.ok(f.calls.some(call=>call.name==='dismiss'));
  }finally{f.dom.window.close();}
 });
+
+test('settings mode reaches native focus policy from toolbar, tray and Back',async()=>{
+ const f=await Fixture.create();try{
+  await f.panel.settings(true);
+  assert.equal(f.calls.filter(call=>call.name==='set_settings_view').at(-1).args.enabled,true);
+  assert.equal(f.dom.window.document.querySelector('#settings-view').hidden,false);
+  await f.panel.settings(false);
+  assert.equal(f.calls.filter(call=>call.name==='set_settings_view').at(-1).args.enabled,false);
+  await f.panel.open({settings:true,theme:{os:'linux'}});
+  assert.equal(f.calls.filter(call=>call.name==='set_settings_view').at(-1).args.enabled,true);
+ }finally{f.dom.window.close();}
+});

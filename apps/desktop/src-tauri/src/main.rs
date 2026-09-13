@@ -129,6 +129,8 @@ async fn copy_snippet(app:tauri::AppHandle,hit:Hit)->std::result::Result<(),Stri
     tauri::async_runtime::spawn_blocking(move ||Panel::selected(&directory,&hit).and_then(platform::copy).map_err(|e|e.to_string())).await.map_err(|e|e.to_string())?
 }
 #[tauri::command]
+fn set_settings_view(app:tauri::AppHandle,enabled:bool){app.state::<Runtime>().settings.store(enabled,Ordering::SeqCst);}
+#[tauri::command]
 fn dismiss(app:tauri::AppHandle){Runtime::hide(&app);}
 #[tauri::command]
 fn sync_now(app:tauri::AppHandle)->std::result::Result<(),String>{Sync::trigger(&app.state::<Runtime>().root).map_err(|e|e.to_string())}
@@ -189,7 +191,7 @@ fn main() {
         Ok(())
     }).on_window_event(|window,event|match event {
         tauri::WindowEvent::CloseRequested{api,..}=>{api.prevent_close();Runtime::hide(window.app_handle());},
-        tauri::WindowEvent::Focused(false)if !window.app_handle().state::<Runtime>().busy.load(Ordering::SeqCst)=> {Runtime::hide(window.app_handle());},_=>()
-    }).invoke_handler(tauri::generate_handler![initialize,search,insert,copy_snippet,dismiss,sync_now,save_settings,connect,libraries,enroll]).run(tauri::generate_context!());
+        tauri::WindowEvent::Focused(false)if !window.app_handle().state::<Runtime>().busy.load(Ordering::SeqCst) && !window.app_handle().state::<Runtime>().settings.load(Ordering::SeqCst)=> {Runtime::hide(window.app_handle());},_=>()
+    }).invoke_handler(tauri::generate_handler![initialize,search,insert,copy_snippet,set_settings_view,dismiss,sync_now,save_settings,connect,libraries,enroll]).run(tauri::generate_context!());
     if let Err(error)=result {eprintln!("TypeRelay panel: {error}");std::process::exit(1);}
 }
