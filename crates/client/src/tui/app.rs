@@ -72,7 +72,7 @@ impl App {
     fn value(field: &TextArea<'_>) -> String { field.lines().join("\n") }
     fn draft(&self) -> Match { Match { trigger: Self::value(&self.trigger), replace: Self::value(&self.expansion), title: Self::value(&self.title), kind: if self.code { "code" } else { "plain_text" }.into(), language: Self::value(&self.language) } }
     fn next_editor_field(&mut self, backwards: bool) {
-        let order = if self.code { [2, 0, 1, 3] } else { [2, 3, 0, 1] };
+        let order = [2, 3, 0, 1];
         let index = order.iter().position(|field| *field == self.editor_focus).unwrap_or(0);
         self.editor_focus = order[(index + if backwards { 3 } else { 1 }) % order.len()];
     }
@@ -392,7 +392,7 @@ impl App {
             match key.code {
                 KeyCode::F(1) => return self.toolbar_action(0),
                 KeyCode::F(2) if self.screen == Screen::Edit => { self.next_editor_field(key.modifiers.contains(KeyModifiers::SHIFT)); return Ok(()); }
-                KeyCode::F(9) if self.screen == Screen::Edit => { self.code = !self.code; return Ok(()); }
+                KeyCode::F(9) if self.screen == Screen::Edit => { self.code = !self.code; self.message(if self.code { "Type: Code · Tab indents; F2 moves to the next field" } else { "Type: Text · Tab moves to the next field" }, false); return Ok(()); }
                 KeyCode::F(10) if matches!(self.screen, Screen::Edit | Screen::Browse) => {
                     let text = if self.screen == Screen::Edit { Self::value(&self.expansion) } else { self.selected().map(|i|self.file.as_ref().unwrap().entries[i].replace.clone()).unwrap_or_default() };
                     typerelay_client::clipboard::PasteJob::copy_text(text)?;
@@ -581,10 +581,11 @@ impl App {
                 frame.render_widget(Paragraph::new(preview).scroll((0, self.preview_x)).block(Self::border("Preview · ←/→ scroll · F10 Copy", false)), columns[1]);
             }
             Screen::Edit => {
-                let parts = Layout::vertical([Constraint::Length(3), Constraint::Length(3), Constraint::Min(3), Constraint::Length(if self.code { 3 } else { 0 }), Constraint::Length(2), Constraint::Length(3)]).split(body);
-                let metadata = Layout::horizontal([Constraint::Percentage(65), Constraint::Percentage(35)]).split(parts[0]);
-                let title_area = if self.code { parts[0] } else { metadata[0] };
-                let language_area = if self.code { parts[3] } else { metadata[1] };
+                let parts = Layout::vertical([Constraint::Length(3), Constraint::Length(3), Constraint::Min(3), Constraint::Length(0), Constraint::Length(2), Constraint::Length(3)]).split(body);
+                let metadata = Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(25), Constraint::Percentage(20)]).split(parts[0]);
+                let title_area = metadata[0];
+                let language_area = metadata[1];
+                frame.render_widget(Paragraph::new(if self.code { "Code · F9 toggles" } else { "Text · F9 toggles" }).style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)).block(Self::border("Type", false)), metadata[2]);
                 let trigger_row = Layout::horizontal([Constraint::Length(5), Constraint::Length(1), Constraint::Min(1)]).split(parts[1]);
                 frame.render_widget(Paragraph::new(self.settings.settings.trigger_prefix.clone()).centered().block(Self::border("", false)).style(Style::default().fg(Color::Gray)), trigger_row[0]);
                 self.trigger.set_block(Self::border("Abbreviation (optional)", self.editor_focus == 0));
@@ -655,9 +656,15 @@ mod tests {
             app.code = code;
             terminal.draw(|frame| app.draw(frame)).unwrap();
             assert!(app.field_areas[2].y < app.field_areas[0].y);
-            if code { assert!(app.field_areas[3].y > app.field_areas[1].y); }
-            else { assert_eq!(app.field_areas[3].y, app.field_areas[2].y); }
-            let order = if code { [2, 0, 1, 3] } else { [2, 3, 0, 1] };
+            assert_eq!(app.field_areas[3].y, app.field_areas[2].y);
+            let before = app.field_areas.clone(); let focus = app.editor_focus;
+            app.error = true;
+            Fixture::key(&mut app, KeyCode::F(9), KeyModifiers::NONE);
+            terminal.draw(|frame| app.draw(frame)).unwrap();
+            assert_eq!(before, app.field_areas); assert_eq!(focus, app.editor_focus);
+            assert!(app.status.starts_with("Type:")); assert!(!app.error);
+            Fixture::key(&mut app, KeyCode::F(9), KeyModifiers::NONE);
+            let order = [2, 3, 0, 1];
             app.editor_focus = order[0];
             for expected in order.into_iter().cycle().skip(1).take(4) {
                 let key = if code && app.editor_focus == 1 { KeyCode::F(2) } else { KeyCode::Tab };
@@ -686,9 +693,9 @@ mod tests {
         app.handle(Event::Paste("  {{ λ }}  \n\n".into()));
         assert_eq!(app.editor_focus, 1);
         Fixture::key(&mut app, KeyCode::F(2), KeyModifiers::NONE);
-        app.language = App::text("Rust");
-        Fixture::key(&mut app, KeyCode::F(2), KeyModifiers::NONE);
         app.handle(Event::Paste("Code title".into()));
+        Fixture::key(&mut app, KeyCode::F(2), KeyModifiers::NONE);
+        app.language = App::text("Rust");
         Fixture::key(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL);
         let entry = &app.store.open("Code").unwrap().entries[0];
         assert_eq!(entry.replace, "\t  {{ λ }}  \n\n");

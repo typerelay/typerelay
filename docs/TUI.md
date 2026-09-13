@@ -50,4 +50,4 @@ The TUI requests enhanced keyboard reporting so supported terminals distinguish 
 
 ## Editor field layout and navigation
 
-Text mode places Title and Language above Abbreviation. Code mode keeps Title above Abbreviation and places Language below the code field. Tab/Shift+Tab follow visual field order and wrap. In the code field, Tab inserts a literal tab; F2 or Ctrl+Tab advances to Language, and Shift+Tab returns to Abbreviation. F2 advances from every field; Shift+F2 goes backward. All fields are also mouse-focusable.
+Title, Language and a visible Type indicator stay above Abbreviation in both modes. F9 toggles Text/Code without moving fields or focus and reports the selected type in the status line. Tab/Shift+Tab follow visual field order and wrap. In the code field, Tab inserts a literal tab; F2 or Ctrl+Tab advances to Title, and Shift+Tab returns to Abbreviation. F2 advances from every field; Shift+F2 goes backward. All editable fields are also mouse-focusable.
