@@ -8,3 +8,6 @@ pub mod desktop;
 pub mod sync;
 pub mod database;
 mod legacy_yaml;
+
+#[cfg(target_os = "linux")]
+pub mod clipboard;

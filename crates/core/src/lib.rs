@@ -21,7 +21,7 @@ impl Snapshot {
                 return Err("Store only the abbreviation: 1–63 lowercase ASCII letters, digits or hyphens (no prefix). Run typerelay migrate for older files".into());
             }
             snippet.replacement = snippet.replacement.replace("\r\n", "\n");
-            if snippet.replacement.is_empty() || snippet.replacement.len() > 65536 || snippet.replacement.chars().any(|c| c.is_control() && c != '\n' && c != '\t') || snippet.replacement.contains("{{") || snippet.replacement.contains("$|$") {
+            if snippet.replacement.is_empty() || snippet.replacement.len() > 65536 || snippet.replacement.chars().any(|c| c.is_control() && c != '\n' && c != '\t') {
                 return Err("Replacements must be 1–65536 UTF-8 bytes of static text; only newline and tab controls are supported".into());
             }
             if indexed.insert(snippet.trigger.clone(), snippet).is_some() {

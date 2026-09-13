@@ -2,7 +2,7 @@ use typerelay_client::config;
 #[cfg(target_os = "linux")]
 mod omarchy;
 #[cfg(target_os = "linux")]
-mod clipboard;
+use typerelay_client::clipboard;
 #[cfg(target_os = "linux")]
 mod installation;
 
@@ -69,7 +69,7 @@ impl Cli {
             Commands::Sync => typerelay_client::sync::Sync::new(root.clone(), root.join("snippets"))?.cycle()?,
             Commands::Import { source, name } => { typerelay_client::database::Database::open(&root.join("snippets"))?.import(&name, &std::fs::read_to_string(source)?)?; },
             Commands::Export { name, destination } => typerelay_client::database::Database::open(&root.join("snippets"))?.export(&name, &destination)?,
-            Commands::DatabaseEdit { name, trigger, text, trash } => { let db = typerelay_client::database::Database::open(&root.join("snippets"))?; let file = db.editor(&name)?; let index = file.entries.iter().position(|entry|entry.trigger == trigger); anyhow::ensure!(!trash || index.is_some(), "Snippet missing"); db.edit(&file, index, if trash { None } else { Some(config::Match { trigger, replace: text.ok_or_else(||anyhow::anyhow!("Text required"))? }) })?; },
+            Commands::DatabaseEdit { name, trigger, text, trash } => { let db = typerelay_client::database::Database::open(&root.join("snippets"))?; let file = db.editor(&name)?; let index = file.entries.iter().position(|entry|entry.trigger == trigger); anyhow::ensure!(!trash || index.is_some(), "Snippet missing"); db.edit(&file, index, if trash { None } else { Some(config::Match { trigger, replace: text.ok_or_else(||anyhow::anyhow!("Text required"))?, ..index.map(|i|file.entries[i].clone()).unwrap_or_default() }) })?; },
             Commands::DatabaseBatch { source, destination, triggers } => {
                 let db = typerelay_client::database::Database::open(&root.join("snippets"))?;
                 let file = db.editor(&source)?;

@@ -9,7 +9,25 @@ pub struct Document { pub matches: Vec<Match> }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct Match { pub trigger: String, pub replace: String }
+pub struct Match {
+    #[serde(default, deserialize_with = "Match::abbreviation")]
+    pub trigger: String,
+    pub replace: String,
+    #[serde(default)] pub title: String,
+    #[serde(default = "Match::plain", rename = "type")] pub kind: String,
+    #[serde(default = "Match::plain")] pub language: String,
+}
+impl Default for Match {
+    fn default() -> Self { Self { trigger: String::new(), replace: String::new(), title: String::new(), kind: Self::plain(), language: Self::plain() } }
+}
+impl Match {
+    fn plain() -> String { "plain_text".into() }
+    fn abbreviation<'de, D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<String, D::Error> { Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default()) }
+    pub fn value(&self) -> serde_json::Value {
+        serde_json::json!({"trigger":if self.trigger.is_empty() { None } else { Some(&self.trigger) },"title":self.title,"content":if self.kind == "code" { serde_json::json!({"version":1,"type":"code","language":self.language,"text":self.replace.replace("\r\n", "\n")}) } else { serde_json::json!({"version":1,"type":"plain_text","text":self.replace.replace("\r\n", "\n")}) }})
+    }
+    pub fn label(&self) -> &str { if self.title.is_empty() { if self.trigger.is_empty() { "Untitled snippet" } else { &self.trigger } } else { &self.title } }
+}
 
 #[derive(Deserialize)]
 struct LegacyDocument { matches: Vec<LegacyMatch> }
@@ -48,11 +66,11 @@ impl FileStore {
         for (path, bytes) in files {
             let document: Document = serde_saphyr::from_str(std::str::from_utf8(bytes)?).with_context(|| format!("Invalid YAML in {}", path.display()))?;
             for entry in document.matches {
-                if let Some(previous) = origins.insert(entry.trigger.clone(), path) { bail!("Duplicate trigger '{}' in {} and {}", entry.trigger, previous.display(), path.display()); }
-                snippets.push(Snippet { trigger: entry.trigger, replacement: entry.replace });
+                if !entry.trigger.is_empty() && let Some(previous) = origins.insert(entry.trigger.clone(), path) { bail!("Duplicate trigger '{}' in {} and {}", entry.trigger, previous.display(), path.display()); }
+                snippets.push(entry);
             }
         }
-        Snapshot::new(snippets).map_err(anyhow::Error::msg)
+        crate::bridge::Bridge::validate(&snippets)
     }
 
     pub(crate) fn read_files(path: &Path, directory: bool) -> Result<Vec<(PathBuf, Vec<u8>)>> {
@@ -108,7 +126,7 @@ impl FileStore {
                 skipped += 1;
                 continue;
             }
-            matches.push(Match { trigger: normalized, replace });
+            matches.push(Match { trigger: normalized, replace, ..Match::default() });
         }
         let output = Document { matches };
         let yaml = serde_saphyr::to_string(&output)?;

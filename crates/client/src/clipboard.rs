@@ -60,14 +60,7 @@ impl ClipboardLease {
                 copy::clear(copy::ClipboardType::Regular, copy::Seat::All)?;
             } else {
                 // The clipboard owner must survive the client exiting.
-                let mut child = Command::new(std::env::current_exe()?).arg("clipboard-serve").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()?;
-                let mut input = child.stdin.take().context("Missing clipboard helper stdin")?;
-                serde_json::to_writer(&mut input, &self.previous)?;
-                drop(input);
-                let mut response = String::new();
-                std::io::BufReader::new(child.stdout.take().context("Missing clipboard helper stdout")?).read_line(&mut response)?;
-                if response.trim() != "ready" { let _ = child.kill(); let _ = child.wait(); bail!("Clipboard restore helper failed"); }
-                thread::spawn(move || { let _ = child.wait(); });
+                PasteJob::publish_snapshot(&self.previous, std::env::current_exe()?)?;
             }
         }
         self.published = false;
@@ -80,6 +73,22 @@ impl Drop for ClipboardLease {
 }
 
 impl PasteJob {
+    pub fn copy_text(text: String) -> Result<()> {
+        let executable = std::env::current_exe()?.with_file_name("typerelay");
+        Self::publish_snapshot(&BTreeMap::from([("text/plain;charset=utf-8".into(), text.into_bytes())]), executable)
+    }
+    fn publish_snapshot(snapshot: &BTreeMap<String, Vec<u8>>, executable: std::path::PathBuf) -> Result<()> {
+                let mut child = Command::new(executable).arg("clipboard-serve").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()?;
+                let mut input = child.stdin.take().context("Missing clipboard helper stdin")?;
+                serde_json::to_writer(&mut input, snapshot)?;
+                drop(input);
+                let mut response = String::new();
+                std::io::BufReader::new(child.stdout.take().context("Missing clipboard helper stdout")?).read_line(&mut response)?;
+                if response.trim() != "ready" { let _ = child.kill(); let _ = child.wait(); bail!("Clipboard restore helper failed"); }
+                thread::spawn(move || { let _ = child.wait(); });
+        Ok(())
+    }
+
     pub fn serve_restored() -> Result<()> {
         let snapshot: BTreeMap<String, Vec<u8>> = serde_json::from_reader(std::io::stdin().take(128 * 1024 * 1024))?;
         let sources = snapshot.into_iter().map(|(mime, bytes)| MimeSource { source: Source::Bytes(bytes.into()), mime_type: MimeType::Specific(mime) }).collect();

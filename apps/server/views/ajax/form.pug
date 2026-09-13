@@ -34,12 +34,37 @@ if kind === 'move'
 		p.text-muted No other editable libraries are available.
 	p.text-muted Moved snippets inherit the destination library’s sharing and editing permissions.
 if kind === 'snippet' || kind === 'conflict'
-	label.form-label.fw-bold(for="trigger") Abbreviation
+	label.form-label.fw-bold(for="snippet-title") Title (optional)
+	input#snippet-title.form-control.form-control-sm.mb-3(name="title" value=snippet ? snippet.title : '' maxlength="500")
+	label.form-label.fw-bold(for="snippet-type") Type
+	select#snippet-type.form-select.form-select-sm.mb-3(name="type")
+		option(value="plain_text" selected=!snippet || (snippet.content && snippet.content.type) !== 'code') Text
+		option(value="code" selected=snippet && (snippet.content && snippet.content.type) === 'code') Code
+	label.form-label.fw-bold(for="trigger") Abbreviation (optional)
 	.input-group.input-group-sm.mb-4
 		span.input-group-text(aria-hidden="true") ,
-		input#trigger.form-control.form-control-sm(name="trigger" value=snippet ? snippet.trigger : '' required pattern="[a-z0-9\\-]{1,63}" autocapitalize="off" spellcheck="false")
+		input#trigger.form-control.form-control-sm(name="trigger" value=snippet ? snippet.trigger : '' pattern="[a-z0-9\\-]{1,63}" autocapitalize="off" spellcheck="false")
+	#code-options.mb-3(hidden=!snippet || (snippet.content && snippet.content.type) !== 'code')
+		.row.align-items-center
+			.col-md-6
+				label.form-label.fw-bold(for="code-language") Language
+				select#code-language.form-select.form-select-sm.mb-3(name="language" data-language=(snippet && snippet.content && snippet.content.language) || 'plain_text')
+					option(value="plain_text") Plain text
+			.col-md-3
+				label.form-label.fw-bold(for="code-indent") Tab inserts
+				select#code-indent.form-select.form-select-sm.mb-3
+					option(value="tabs") Literal tab
+					option(value="spaces") Spaces
+			.col-md-3
+				label.form-label.fw-bold(for="code-width") Width
+				select#code-width.form-select.form-select-sm.mb-3
+					each width in [2, 4, 8]
+						option(value=width selected=width === 4)= width
+		p.small.text-muted Tab indents; Shift+Tab outdents. Press Escape then Tab to leave the editor. Existing whitespace stays unchanged.
 	label.form-label.fw-bold(for="replace") Expansion
-	textarea#replace.form-control.form-control-sm.mb-4(name="replace" required)= snippet ? snippet.replace : ''
+	textarea#replace.form-control.form-control-sm.mb-4(name="replace")= '\n' + (snippet ? snippet.replace : '')
+	#code-editor.mb-3
+	button#copy-code.btn.btn-outline-secondary.btn-sm.mb-3(type="button") Copy
 	if kind === 'snippet' && snippet
 		label.form-label.fw-bold(for="destination-library") Library
 		select#destination-library.form-select.form-select-sm.mb-4(name="destination_library" disabled=!library.permissions.edit)
@@ -66,3 +91,10 @@ if kind === 'group'
 			option(value=member.user selected=group && group.users.map(String).includes(String(member.user)))= member.profile.email
 	if group
 		button.btn.btn-outline-danger.btn-sm(type="button" data-delete-group=group._id) Delete group
+
+if kind === 'snippetslab'
+	label.form-label.fw-bold(for="snippetslab-file") SnippetsLab JSON export
+	input#snippetslab-file.form-control.form-control-sm.mb-3(type="file" accept=".json,application/json")
+	p.small.text-muted Export JSON using SnippetsLab’s Library → Export menu. Imported libraries are private. Native bundles are not supported.
+	button#preview-snippetslab.btn.btn-outline-secondary.btn-sm.mb-3(type="button") Preview import
+	#snippetslab-preview

@@ -15,4 +15,4 @@ COPY docs/web/Streamient-LICENSE docs/web/attribution.md ./notices/
 COPY --from=rust /src/target/release/typerelay-yaml /src/target/release/typerelay /usr/local/bin/
 RUN mkdir /data && chown node:node /data
 USER node
-CMD ["node", "app.js"]
+CMD ["node", "scripts/start.js"]

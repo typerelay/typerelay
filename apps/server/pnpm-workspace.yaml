@@ -1,2 +1,3 @@
 allowBuilds:
   cbor-extract: false
+  esbuild: true

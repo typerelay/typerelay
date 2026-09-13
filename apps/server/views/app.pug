@@ -8,6 +8,7 @@ block content
 						each item in accounts
 							option(value=item._id selected=String(item._id) === String(account._id))= item.name
 					button#new-library.btn.btn-primary.btn-sm New library
+				button#import-snippetslab.btn.btn-outline-secondary.btn-sm.mb-3 Import SnippetsLab
 				#libraries
 					each library in libraries
 						include ajax/library
@@ -68,7 +69,7 @@ block content
 								h3.h6.fw-bold Connected devices
 								ul#devices.list-group.mb-3
 		#form-modal.modal.fade(tabindex="-1" aria-label="Edit")
-			.modal-dialog.modal-lg
+			.modal-dialog.modal-lg.modal-dialog-scrollable
 				.modal-content
 					.modal-header
 						h2#form-title.modal-title.h5.fw-bold

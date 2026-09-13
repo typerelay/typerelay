@@ -15,8 +15,9 @@ import { Security } from './services/security.js';
 
 export class Server {
 	static async start() {
-		await mongoose.connect(process.env.MONGODB_URI);
-		await Promise.all(Object.values(mongoose.models).map(model => model.init()));
+		await mongoose.connect(process.env.MONGODB_URI, { autoIndex: false });
+		await StorageMigration.code();
+		await Promise.all(Object.values(mongoose.models).map(model => model.createIndexes()));
 		await StorageMigration.run();
 		await Libraries.cleanup();
 		const secretPath = process.env.SESSION_SECRET_FILE || '/data/session-secret';
@@ -24,8 +25,10 @@ export class Server {
 		const app = express();
 		app.set('view engine', 'pug');
 		app.set('views', './views');
-		app.use(helmet({ contentSecurityPolicy: { directives: { 'script-src': ["'self'"], 'style-src': ["'self'"], 'img-src': ["'self'", 'data:'] } } }));
-		app.use(express.json({ limit: '2mb' }), express.urlencoded({ extended: false, limit: '32kb' }));
+		app.use((req, res, next) => { res.locals.styleNonce = Support.token(); next(); });
+		app.use(helmet({ contentSecurityPolicy: { directives: { 'script-src': ["'self'"], 'style-src': ["'self'", (req, res) => "'nonce-" + res.locals.styleNonce + "'"], 'img-src': ["'self'", 'data:'] } } }));
+		app.use(express.json({ limit: '12mb' }), express.urlencoded({ extended: false, limit: '32kb' }));
+		app.use('/assets/generated', express.static(process.env.CODE_EDITOR_DIR || '/data/editor'));
 		app.use('/assets', express.static('public'));
 		app.use('/vendor/webauthn', express.static('node_modules/@simplewebauthn/browser/dist/bundle'));
 		app.use('/vendor/bootstrap', express.static('node_modules/bootstrap/dist'));
@@ -70,9 +73,9 @@ export class Server {
 			const ctx = await Support.context(req.session.user, String(account._id));
 			res.render('app', { accounts, account, ctx, libraries: await Libraries.list(ctx), team: await Team.list(ctx), profile: await User.findById(ctx.user).lean() });
 		});
-		app.use('/api/v1', (req, res) => res.status(426).json({ error: 'Upgrade TypeRelay: snippet moves require sync protocol 3', protocol: 3 }));
+		app.use('/api/v1', (req, res) => res.status(426).json({ error: 'Upgrade TypeRelay: snippet moves require sync protocol 4', protocol: 4 }));
 		app.use('/api/v2', async (req, res, next) => {
-			Support.assert(!req.headers.authorization || req.headers['x-typerelay-sync-protocol'] === '3', 'Upgrade TypeRelay: snippet moves require sync protocol 3', 426);
+			Support.assert(!req.headers.authorization || req.headers['x-typerelay-sync-protocol'] === '4', 'Upgrade TypeRelay: snippet moves require sync protocol 4', 426);
 			req.ctx = req.headers.authorization ? await Auth.bearer(req.headers.authorization.replace(/^Bearer /, '')) : await Support.context(req.session.user, req.headers['x-account-id']);
 			next();
 		});
@@ -90,7 +93,7 @@ export class Server {
 		app.post('/api/v2/trash/empty', async (req, res) => res.json(await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.empty(ctx, req.body.targets, session))));
 		app.get('/api/v2/libraries/:id/export', async (req, res) => {
 			const library = await Libraries.get(req.ctx, req.params.id);
-			const output = await Yaml.export(library.snippets.map(entry => ({ trigger: entry.trigger, replace: entry.content.text })));
+			const output = await Yaml.export(library.snippets.map(Libraries.yaml));
 			res.type('text/yaml').attachment('library-' + library._id + '.yml').send(output.yaml);
 		});
 		app.get('/api/v2/library-view/:id', async (req, res) => Server.result(res, req.ctx, { library: Libraries.view(req.ctx, await Libraries.get(req.ctx, req.params.id, null, true)) }));
@@ -99,12 +102,14 @@ export class Server {
 			const results = [];
 			if (query) for (const library of await Libraries.list(req.ctx)) {
 				if (library.name.toLowerCase().includes(query)) results.push({ library: library._id, title: library.name, name: 'Library' });
-				for (const snippet of library.snippets) if (snippet.trigger.toLowerCase().includes(query) || snippet.replace.toLowerCase().includes(query)) results.push({ library: library._id, snippet: snippet.id, title: snippet.trigger, name: library.name, preview: snippet.replace.slice(0, 240) });
+				for (const snippet of library.snippets) if ((snippet.trigger || '').toLowerCase().includes(query) || (snippet.title || '').toLowerCase().includes(query) || snippet.replace.toLowerCase().includes(query)) results.push({ library: library._id, snippet: snippet.id, title: snippet.title || snippet.trigger || 'Untitled snippet', name: library.name, preview: snippet.replace.slice(0, 240) });
 				if (results.length > 60) break;
 			}
 			res.render('ajax/search', { query, results: results.slice(0, 60), truncated: results.length > 60 });
 		});
 		app.get('/api/v2/libraries', async (req, res) => res.json(await Libraries.list(req.ctx)));
+		app.post('/api/v2/import/snippetslab/preview', async (req, res) => { const preview = await Libraries.snippetsLab(req.body.source); res.json({ ...preview, html: pug.renderFile('./views/ajax/snippetslab.pug', preview) }); });
+		app.post('/api/v2/import/snippetslab', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.importSnippetsLab(ctx, req.body, session))));
 		app.post('/api/v2/import/preview', async (req, res) => res.json(await Yaml.run(req.body.yaml)));
 		app.post('/api/v2/libraries', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, async (ctx, session) => ({ library: await Libraries.create(ctx, req.body, session) }))));
 		app.patch('/api/v2/libraries/:id', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.settings(ctx, req.params.id, req.body, session))));
@@ -129,7 +134,7 @@ export class Server {
 		app.patch('/api/v2/account', async (req, res) => { Support.assert(Support.admin(req.ctx), 'Admin required', 403); await Account.updateOne({ _id: req.ctx.account }, { $set: { name: Support.text(req.body.name) } }); res.json({ name: req.body.name }); });
 		app.get('/api/v2/forms/:kind', async (req, res) => {
 			const kind = req.params.kind;
-			Support.assert(['library', 'snippet', 'group', 'conflict', 'move'].includes(kind), 'Unknown form');
+			Support.assert(['library', 'snippet', 'group', 'conflict', 'move', 'snippetslab'].includes(kind), 'Unknown form');
 			const library = req.query.library ? Libraries.view(req.ctx, await Libraries.get(req.ctx, req.query.library, null, true)) : null;
 			const group = req.query.group ? await Group.findOne({ _id: Support.id(req.query.group), account: req.ctx.account }).lean() : null;
 			const conflict = req.query.conflict ? await Conflict.findOne({ _id: Support.id(req.query.conflict), account: req.ctx.account, library: library?._id, resolved: false }).lean() : null;

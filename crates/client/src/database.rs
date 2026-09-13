@@ -55,8 +55,8 @@ impl Database {
     pub fn entries(records: &[Value]) -> Result<Vec<Match>> {
         records.iter().filter(|entry| entry["state"] == "active").map(|entry| {
             let content = &entry["content"];
-            ensure!(content["version"] == 1 && content["type"] == "plain_text", "Unsupported snippet content");
-            Ok(Match { trigger: entry["trigger"].as_str().context("Missing abbreviation")?.into(), replace: content["text"].as_str().context("Missing text")?.into() })
+            ensure!(content["version"] == 1 && (content["type"] == "plain_text" || content["type"] == "code"), "Unsupported snippet content");
+            Ok(Match { trigger: entry["trigger"].as_str().unwrap_or_default().into(), replace: content["text"].as_str().context("Missing text")?.into(), title: entry["title"].as_str().unwrap_or_default().into(), kind: content["type"].as_str().unwrap().into(), language: content["language"].as_str().unwrap_or("plain_text").into() })
         }).collect()
     }
     pub fn snapshot(&self) -> Result<Snapshot> {
@@ -119,10 +119,10 @@ impl Database {
         let records = self.records(&file.id)?;
         let old = records.iter().find(|record| record["id"] == id).cloned();
         let base = old.as_ref().and_then(|record| record["revision"].as_i64());
-        let value = entry.as_ref().map(|entry| json!({"trigger":entry.trigger,"content":{"version":1,"type":"plain_text","text":entry.replace}}));
+        let value = entry.as_ref().map(|entry| entry.value());
         let mut record = old.clone().unwrap_or(json!({"id":id,"position":records.iter().filter_map(|entry|entry["position"].as_i64()).max().unwrap_or(-1)+1}));
         record["revision"] = json!(base.unwrap_or(0) + 1);
-        if let Some(value) = &value { record["trigger"] = value["trigger"].clone(); record["content"] = value["content"].clone(); record["state"] = json!("active"); }
+        if let Some(value) = &value { record["trigger"] = value["trigger"].clone(); record["content"] = value["content"].clone(); record["title"] = value["title"].clone(); record["state"] = json!("active"); }
         else { Self::mark_trash(&mut record, !self.synced(&file.id)?); }
         self.put_record(&file.id, &record)?;
         if self.synced(&file.id)? {
@@ -157,7 +157,7 @@ impl Database {
         let transaction = self.connection.unchecked_transaction()?;
         let id = file.ids.get(index).context("Snippet missing")?;
         let mut items = self.batch_items(file, std::slice::from_ref(id))?;
-        items[0]["value"] = json!({"trigger":entry.trigger,"content":{"version":1,"type":"plain_text","text":entry.replace}});
+        items[0]["value"] = entry.value();
         self.batch_inner(&file.id, Some(destination), &items, true)?;
         self.validate_transaction()?;
         transaction.commit()?;
@@ -195,7 +195,7 @@ impl Database {
                 next["library"] = json!(id); next["position"] = json!(position); position += 1;
                 if let Some(value) = items.iter().find(|item|item["id"] == record["id"]).and_then(|item|item.get("value")) {
                     next["trigger"] = value["trigger"].clone();
-                    next["content"] = value["content"].clone();
+                    next["content"] = value["content"].clone(); next["title"] = value["title"].clone();
                 }
                 self.put_record(id, &next)?;
             } else {
@@ -233,7 +233,7 @@ impl Database {
             }
             if library["state"] != "active" || library["permissions"]["edit"] != true { continue; }
             for record in self.records(id)? {
-                if record["state"] == "trashed" && !Self::expired(&record) { result.push(json!({"type":"snippet","id":record["id"],"library":id,"name":record["trigger"],"revision":record["revision"],"can_purge":can_manage,"expires_at":record["expires_at"]})); }
+                if record["state"] == "trashed" && !Self::expired(&record) { result.push(json!({"type":"snippet","id":record["id"],"library":id,"name":record["title"].as_str().filter(|v|!v.is_empty()).or(record["trigger"].as_str()).unwrap_or("Untitled snippet"),"revision":record["revision"],"can_purge":can_manage,"expires_at":record["expires_at"]})); }
             }
         }
         Ok(result)
@@ -312,7 +312,7 @@ impl Database {
         let transaction = self.connection.unchecked_transaction()?;
         let id = Uuid::new_v4().to_string();
         self.put_library(&json!({"_id":id,"name":name,"state":"active","revision":1,"permissions":{"read":true,"edit":true,"manage":true}}), &name, false)?;
-        for (position, entry) in parsed.matches.iter().enumerate() { self.put_record(&id, &json!({"id":Uuid::new_v4().to_string(),"trigger":entry.trigger,"content":{"version":1,"type":"plain_text","text":entry.replace},"position":position,"revision":1,"state":"active"}))?; }
+        for (position, entry) in parsed.matches.iter().enumerate() { self.put_record(&id, &json!({"id":Uuid::new_v4().to_string(),"trigger":entry.value()["trigger"],"title":entry.title,"content":entry.value()["content"],"position":position,"revision":1,"state":"active"}))?; }
         self.validate_transaction()?;
         transaction.commit()?;
         self.editor(&name)
@@ -471,7 +471,7 @@ impl Database {
                     let mut record = old.unwrap_or(json!({"id":change["id"],"position":self.records(id)?.iter().filter_map(|entry|entry["position"].as_i64()).max().unwrap_or(-1)+1}));
                     record["revision"] = json!(change["base_revision"].as_i64().unwrap_or(0)+1);
                     if change["value"].is_null() { Self::mark_trash(&mut record, false); }
-                    else { record["state"] = json!("active"); record["trigger"] = change["value"]["trigger"].clone(); record["content"] = change["value"]["content"].clone(); }
+                    else { record["state"] = json!("active"); record["trigger"] = change["value"]["trigger"].clone(); record["content"] = change["value"]["content"].clone(); record["title"] = change["value"]["title"].clone(); }
                     self.put_record(id, &record)?;
                 }
                 library["revision"] = json!(library["revision"].as_i64().unwrap_or(1)+1);
@@ -682,7 +682,33 @@ mod tests {
     impl Fixture {
         fn new() -> Self { let temp = tempfile::tempdir().unwrap(); let directory = temp.path().join("snippets"); fs::create_dir_all(&directory).unwrap(); Self { _temp: temp, directory } }
         fn db(&self) -> Database { Database::open(&self.directory).unwrap() }
-        fn entry(trigger: &str, text: &str) -> Match { Match { trigger: trigger.into(), replace: text.into() } }
+        fn entry(trigger: &str, text: &str) -> Match { Match { trigger: trigger.into(), replace: text.into(), ..Match::default() } }
+    }
+    #[test]
+    fn code_optional_trigger_roundtrip_move_and_trash() {
+        let fixture = Fixture::new(); let db = fixture.db();
+        let file = db.create("Code").unwrap();
+        let entry = Match { trigger: String::new(), title: "Example".into(), kind: "code".into(), language: "RustLexer".into(), replace: "\t  {{ λ }}  \n$|$\n\n".into() };
+        let file = db.edit(&file, None, Some(entry.clone())).unwrap();
+        let file = db.edit(&file, None, Some(entry.clone())).unwrap();
+        assert!(db.snapshot().unwrap().is_empty());
+        assert_eq!(file.search("example").len(), 2);
+        let yaml = Bridge::export(&file.entries).unwrap();
+        let decoded: Document = serde_saphyr::from_str(&yaml).unwrap();
+        assert_eq!(decoded.matches, file.entries);
+        let mut activated = entry.clone(); activated.trigger = "code".into();
+        let file = db.edit(&file, Some(0), Some(activated.clone())).unwrap();
+        let mut engine = typerelay_core::Engine::new(db.snapshot().unwrap());
+        for c in ",code".chars() { engine.feed(typerelay_core::Input::Character(c)); }
+        assert_eq!(engine.feed(typerelay_core::Input::Space).unwrap().text, entry.replace);
+        let destination = db.create("Destination").unwrap();
+        db.edit_move(&file, 0, activated.clone(), &destination.id).unwrap();
+        let destination = db.editor("Destination").unwrap();
+        assert_eq!(destination.entries[0], activated);
+        db.edit(&destination, Some(0), None).unwrap();
+        let target = db.trash().unwrap().into_iter().find(|row|row["type"] == "snippet").unwrap();
+        db.trash_action(&target, "restore").unwrap();
+        assert_eq!(db.editor("Destination").unwrap().entries[0], activated);
     }
     #[test]
     fn yaml_import_is_once_export_is_derived_and_multiline_is_exact() {

@@ -1,6 +1,17 @@
 import { mongoose, Library, Snippet, Migration, MigrationBackup, Operation } from '../model/index.js';
 import { Yaml } from './support.js';
 export class StorageMigration {
+	static async code() {
+		if ((await Migration.findOne({ key: 'code-v4' }).lean())?.completed) return;
+		for (const name of ['libraries', 'snippets', 'operations', 'conflicts', 'accounts', 'changes']) {
+			for await (const record of mongoose.connection.collection(name).find({})) await MigrationBackup.updateOne({ key: 'code-v4:' + name + ':' + record._id }, { $setOnInsert: { source_collection: name, payload: record } }, { upsert: true });
+		}
+		const indexes = await Snippet.collection.indexes().catch(error => { if (error.code === 26) return []; throw error; });
+		const old = indexes.find(index => index.name === 'library_1_trigger_1');
+		if (old && !old.partialFilterExpression?.trigger) await Snippet.collection.dropIndex(old.name);
+		await Snippet.createIndexes();
+		await Migration.updateOne({ key: 'code-v4' }, { $set: { completed: true } }, { upsert: true });
+	}
 	static async run() {
 		if ((await Migration.findOne({ key: 'records-v2' }).lean())?.completed) return;
 		for (const name of ['libraries', 'operations', 'conflicts', 'accounts', 'changes']) {

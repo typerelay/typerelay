@@ -12,10 +12,10 @@ const Group = mongoose.model('Group', new mongoose.Schema({ account: objectid, n
 const Ticket = mongoose.model('Ticket', new mongoose.Schema({ hash: { type: String, unique: true }, kind: String, email: String, account: objectid, data: mixed, expires: Date }));
 const lifecycle = { state: { type: String, enum: ['active', 'trashed', 'purged'], default: 'active' }, trashed_at: Date, trashed_by: String, expires_at: Date };
 const Library = mongoose.model('Library', new mongoose.Schema({ account: objectid, creator: objectid, name: String, shared: Boolean, editable: Boolean, members: [objectid], groups: [objectid], purge_readers: [objectid], revision: Number, ...lifecycle }));
-const snippetSchema = new mongoose.Schema({ account: objectid, library: objectid, id: String, trigger: String, content: mixed, position: Number, revision: Number, ...lifecycle });
+const snippetSchema = new mongoose.Schema({ account: objectid, library: objectid, id: String, title: String, trigger: String, content: mixed, position: Number, revision: Number, ...lifecycle });
 snippetSchema.index({ library: 1, id: 1 }, { unique: true });
 snippetSchema.index({ account: 1, id: 1 }, { unique: true });
-snippetSchema.index({ library: 1, trigger: 1 }, { unique: true, partialFilterExpression: { state: 'active' } });
+snippetSchema.index({ library: 1, trigger: 1 }, { unique: true, partialFilterExpression: { state: 'active', trigger: { $type: 'string', $gt: '' } } });
 const Snippet = mongoose.model('Snippet', snippetSchema);
 const Migration = mongoose.model('Migration', new mongoose.Schema({ key: { type: String, unique: true }, completed: Boolean }));
 const MigrationBackup = mongoose.model('MigrationBackup', new mongoose.Schema({ key: { type: String, unique: true }, source_collection: String, payload: mixed }));

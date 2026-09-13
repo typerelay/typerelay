@@ -38,10 +38,12 @@ class TypeRelay {
 		document.querySelector('#account-switch')?.addEventListener('change', event => { location.href = '/?account=' + event.target.value; });
 		document.addEventListener('change', async event => {
 			if (event.target.id === 'trigger') Abbreviation.field(event.target);
+			if (['snippet-type', 'code-language', 'code-indent', 'code-width'].includes(event.target.id)) await this.codeEditor().catch(error => this.toast(error.message, 'error'));
 			if (event.target.id === 'shared') document.querySelectorAll('#members-select,#groups-select').forEach(field => { field.disabled = !event.target.checked; });
 			if (event.target.id === 'yaml-file' && event.target.files[0]) document.querySelector('#yaml').value = await event.target.files[0].text();
 		});
 		document.querySelector('#form-modal')?.addEventListener('hidden.bs.modal', () => {
+			this.codeVersion = (this.codeVersion || 0) + 1; this.codeView?.destroy(); this.codeView = null;
 			if (this.returnSettings) { this.returnSettings = false; bootstrap.Modal.getOrCreateInstance(document.querySelector('#settings')).show(); }
 		});
 		document.querySelector('#trash')?.addEventListener('show.bs.modal', () => this.loadTrash().catch(error => this.toast(error.message, 'error')));
@@ -197,9 +199,28 @@ class TypeRelay {
 		});
 
 	}
+	snippetValue(fields) { return { trigger: fields.get('trigger') || null, title: fields.get('title') || '', content: { version: 1, type: fields.get('type') || 'plain_text', text: fields.get('replace'), ...(fields.get('type') === 'code' ? { language: fields.get('language') || 'plain_text' } : {}) } }; }
+	async codeEditor() {
+		const version = this.codeVersion = (this.codeVersion || 0) + 1;
+		if (!document.querySelector('#snippet-type')) return;
+		const code = document.querySelector('#snippet-type').value === 'code';
+		document.querySelector('#code-options').hidden = !code;
+		if (!code) { this.codeView?.destroy(); this.codeView = null; return; }
+		const { CodeEditor } = await import('./generated/code-editor.js');
+		if (version !== this.codeVersion || !document.querySelector('#snippet-type')) return;
+		const selector = document.querySelector('#code-language');
+		if (!selector.dataset.loaded) {
+			for (const language of CodeEditor.languages) selector.add(new Option(language.name, language.name));
+			const original = selector.dataset.language;
+			if (![...selector.options].some(option => option.value === original)) selector.add(new Option(original, original));
+			selector.value = original; selector.dataset.loaded = 'true';
+		}
+		if (!this.codeView) this.codeView = new CodeEditor(document.querySelector('#replace'), document.querySelector('#code-editor'), !!this.codeReadonly);
+		await this.codeView.configure(selector.value, document.querySelector('#code-indent').value === 'spaces', document.querySelector('#code-width').value);
+	}
 	async editSnippet(library, id) {
 		await this.form('snippet', { library: library._id, snippet: id || '' }, async fields => {
-			const value = { trigger: fields.get('trigger'), replace: fields.get('replace') };
+			const value = this.snippetValue(fields);
 			const destination = fields.get('destination_library');
 			if (id && destination && destination !== library._id) {
 				const item = library.snippets.find(entry => entry.id === id);
@@ -207,19 +228,23 @@ class TypeRelay {
 			} else await this.snippet(id, value, library);
 		});
 		if (!library.permissions.edit) {
+			this.codeReadonly = true; this.codeView?.setReadonly(true);
+			document.querySelectorAll('#form-fields select').forEach(field => { field.disabled = true; });
 			document.querySelector('#form-title').textContent = 'Snippet · Read-only';
 			document.querySelectorAll('#form-fields input,#form-fields textarea').forEach(field => { field.readOnly = true; });
 			document.querySelector('#record-form button[type="submit"]').disabled = true;
 		}
 	}
 	async form(kind, params, submit) {
-		document.querySelector('#form-title').textContent = ({ library: 'Library', snippet: 'Snippet', group: 'Group', conflict: 'Resolve conflict', move: 'Move snippets' })[kind];
+		this.codeView?.destroy(); this.codeView = null; this.codeReadonly = false;
+		document.querySelector('#form-title').textContent = ({ library: 'Library', snippet: 'Snippet', group: 'Group', conflict: 'Resolve conflict', move: 'Move snippets', snippetslab: 'Import SnippetsLab' })[kind];
 		document.querySelector('#form-fields').replaceChildren();
 		const template = document.createElement('template');
 		template.innerHTML = await this.request('forms/' + kind + '?' + new URLSearchParams(params), 'GET', null, true);
 		document.querySelector('#form-fields').replaceChildren(template.content);
-		document.querySelector('#record-form button[type="submit"]').disabled = kind === 'move' && !document.querySelector('#destination-library option');
+		document.querySelector('#record-form button[type="submit"]').disabled = kind === 'snippetslab' || (kind === 'move' && !document.querySelector('#destination-library option'));
 		document.querySelector('#record-form button[type="submit"]').textContent = kind === 'move' ? 'Move' : 'Save';
+		await this.codeEditor();
 		this.submit = submit;
 		this.formOperation = crypto.randomUUID();
 		const settings = document.querySelector('#settings');
@@ -367,6 +392,24 @@ class TypeRelay {
 		}
 		const data = button.dataset;
 		const library = this.libraries.get(this.selected);
+		if (button.dataset.copySnippet) { await navigator.clipboard.writeText(this.libraries.get(this.selected).snippets.find(item => item.id === button.dataset.copySnippet).replace); return this.toast('Copied'); }
+		if (button.id === 'copy-code') { await navigator.clipboard.writeText(document.querySelector('#replace').value); return this.toast('Copied'); }
+		if (button.id === 'import-snippetslab') { this.importSource = null; return this.form('snippetslab', {}, async () => {
+			const selected = [...document.querySelectorAll('[data-import-key]:checked')].map(input => ({ key: input.dataset.importKey, trigger: Abbreviation.normalize(document.querySelector('[data-import-trigger="' + input.dataset.importKey + '"]').value) }));
+			await this.applyBatch(await this.request('import/snippetslab', 'POST', { source: this.importSource, selected }), false);
+		}); }
+		if (button.id === 'preview-snippetslab') {
+			const file = document.querySelector('#snippetslab-file').files[0];
+			if (!file || file.size > 8 * 1048576) throw new Error('Choose a JSON export up to 8 MiB');
+			button.disabled = true;
+			try {
+				this.importSource = JSON.parse(await file.text());
+				const preview = await this.request('import/snippetslab/preview', 'POST', { source: this.importSource });
+				document.querySelector('#snippetslab-preview').replaceChildren(this.fragment(preview.html));
+				document.querySelector('#record-form button[type="submit"]').disabled = !preview.entries.some(entry => !entry.error);
+			} finally { button.disabled = false; }
+			return;
+		}
 		if (button.id === 'new-library') return this.form('library', {}, async fields => this.apply(await this.request('libraries', 'POST', { name: fields.get('name'), yaml: fields.get('yaml') })));
 		if ('librarySettings' in data) return this.form('library', { library: library._id }, async fields => this.apply(await this.request('libraries/' + library._id, 'PATCH', { base_revision: library.revision, name: fields.get('name'), shared: fields.has('shared'), editable: fields.get('editable') === 'true', members: fields.getAll('members'), groups: fields.getAll('groups') })));
 		if ('addSnippet' in data || data.editSnippet) return this.editSnippet(library, data.editSnippet);
@@ -402,7 +445,7 @@ class TypeRelay {
 		if (data.revokeDevice && await this.confirm('Revoke this device?')) { await this.request('devices/' + data.revokeDevice, 'DELETE'); document.querySelector('[data-device="' + data.revokeDevice + '"]').remove(); }
 		if (data.resolve) return this.form('conflict', { library: data.library, conflict: data.resolve }, async fields => {
 			const current = (await this.request('library-view/' + data.library)).library;
-			const result = await this.request('conflicts/' + data.resolve, 'POST', { base_revision: current.revision, choice: fields.get('choice'), value: { trigger: fields.get('trigger'), replace: fields.get('replace') } });
+			const result = await this.request('conflicts/' + data.resolve, 'POST', { base_revision: current.revision, choice: fields.get('choice'), value: this.snippetValue(fields) });
 			await this.apply(result);
 			document.querySelector('[data-conflict="' + data.resolve + '"]').remove();
 		});

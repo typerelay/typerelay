@@ -68,3 +68,5 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .bulk-actions[hidden] { display: none !important; }
 .snippet-controls { min-height: 3.5rem; border-bottom: .0625rem solid #e7dfd2; flex-wrap: wrap; }
 .snippet-selection { min-width: 0; }
+
+.snippet-expansion { tab-size: 4; }

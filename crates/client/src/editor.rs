@@ -30,7 +30,7 @@ pub struct OpenFile { pub name: String, pub entries: Vec<Match>, pub id: String,
 impl OpenFile {
     pub fn search(&self, query: &str) -> Vec<usize> {
         let query = query.to_lowercase();
-        self.entries.iter().enumerate().filter(|(_, entry)| entry.trigger.to_lowercase().contains(&query) || entry.replace.to_lowercase().contains(&query)).map(|(index, _)| index).collect()
+        self.entries.iter().enumerate().filter(|(_, entry)| entry.title.to_lowercase().contains(&query) || entry.trigger.to_lowercase().contains(&query) || entry.replace.to_lowercase().contains(&query)).map(|(index, _)| index).collect()
     }
 }
 pub struct EditorStore { pub directory: PathBuf }

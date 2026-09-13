@@ -7,3 +7,5 @@
 __pycache__/
 *.pyc
 node_modules/
+
+/apps/server/public/generated/

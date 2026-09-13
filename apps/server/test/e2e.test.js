@@ -451,6 +451,31 @@ test('web AJAX updates only affected snippets; preserves panel, filter and multi
 	assert.equal(dom.window.document.querySelector('#editor'), panel);
 	dom.window.close();
 });
+test('code imports sync to two desktops, preserve metadata offline and reject protocol 3', async () => {
+	const text = '\t  {{ test }}\n $|$  \n\n';
+	const source = { contents: { snippets: [{ title: 'Code sample', fragments: [{ content: text, language: 'RustLexer' }, { content: 'copy only\n', language: 'UnknownLexer' }] }] } };
+	const preview = await Fixture.json('import/snippetslab/preview', 'POST', { source });
+	assert.equal(preview.entries.length, 2);
+	const body = { operation_id: randomUUID(), source, selected: [{ key: '0:0', trigger: 'codesample' }, { key: '0:1' }] };
+	const imported = await Fixture.json('import/snippetslab', 'POST', body);
+	assert.equal((await Fixture.json('import/snippetslab', 'POST', body)).libraries[0]._id, imported.libraries[0]._id);
+	const library = imported.libraries[0];
+	const one = await Fixture.device('code-one'); const two = await Fixture.device('code-two');
+	await Fixture.cli(one, 'sync'); await Fixture.cli(two, 'sync');
+	const first = (await Fixture.state(one)).libraries.find(item => item._id === library._id).records;
+	assert.equal(first[0].content.text, text);
+	assert.equal(first[1].trigger, null);
+	await Fixture.edit(one, library.name, 'codesample', text + '\tupdated\n');
+	await Fixture.cli(one, 'sync'); await Fixture.cli(two, 'sync');
+	const records = (await Fixture.state(two)).libraries.find(item => item._id === library._id).records;
+	assert.equal(records[0].content.language, 'RustLexer');
+	assert.equal(records[0].title, 'Code sample — Fragment 1');
+	assert.equal(records[0].content.text, text + '\tupdated\n');
+	const credential = JSON.parse(await readFile(join(one.config, 'sync/credentials.json'), 'utf8'));
+	const rejected = await fetch(Fixture.origin + '/api/v2/sync', { headers: { Authorization: 'Bearer ' + credential.access_token, 'X-TypeRelay-Sync-Protocol': '3' } });
+	assert.equal(rejected.status, 426);
+});
+
 test('CSRF rejects writes, logout invalidates session', async () => {
 	const response = await fetch(Fixture.origin + '/api/v2/libraries', { method: 'POST', headers: { Cookie: Fixture.cookie, 'Content-Type': 'application/json', 'X-Account-Id': Fixture.account }, body: JSON.stringify({ name: 'Blocked' }) });
 	assert.equal(response.status, 403);

@@ -7,10 +7,17 @@ export class Libraries {
 	static retention = 30 * 86400000;
 	static trashFields(actor, now = new Date()) { return { state: 'trashed', trashed_at: now, expires_at: new Date(+now + Libraries.retention), trashed_by: actor }; }
 	static content(value) {
-		const content = value?.content || { version: 1, type: 'plain_text', text: value?.replace };
-		Support.assert(content.version === 1 && content.type === 'plain_text' && typeof content.text === 'string', 'Unsupported snippet content');
-		return { version: 1, type: 'plain_text', text: content.text };
+		const content = value?.content || { version: 1, type: value?.type || 'plain_text', language: value?.language || 'plain_text', text: value?.replace };
+		Support.assert(content.version === 1 && ['plain_text', 'code'].includes(content.type) && typeof content.text === 'string', 'Unsupported snippet content');
+		Support.assert(content.type !== 'code' || (typeof content.language === 'string' && content.language.length > 0 && content.language.length <= 100 && !/[\x00-\x1f\x7f]/.test(content.language)), 'Invalid language');
+		return { version: 1, type: content.type, text: content.text.replaceAll('\r\n', '\n'), ...(content.type === 'code' ? { language: content.language } : {}) };
 	}
+	static value(entry) {
+		Support.assert(entry?.title == null || (typeof entry.title === 'string' && Buffer.byteLength(entry.title) <= 500 && !/[\x00-\x1f\x7f]/.test(entry.title)), 'Invalid title');
+		Support.assert(entry?.trigger == null || typeof entry.trigger === 'string', 'Invalid abbreviation');
+		return { trigger: Abbreviation.normalize(entry?.trigger) || null, title: entry?.title || '', content: Libraries.content(entry) };
+	}
+	static yaml(entry) { const value = Libraries.value(entry); return { trigger: value.trigger, title: value.title, replace: value.content.text, type: value.content.type, language: value.content.language || 'plain_text' }; }
 	static entry(snippet) { return { ...snippet, replace: snippet.content?.text }; }
 	static view(ctx, library) { return { ...library, _id: String(library._id), deleted: library.state !== 'active', permissions: Support.access(ctx, library) }; }
 	static async hydrate(library, session) {
@@ -27,14 +34,71 @@ export class Libraries {
 		return Promise.all(libraries.filter(library => Support.access(ctx, library).read).map(async library => Libraries.view(ctx, await Libraries.hydrate(library, session))));
 	}
 	static async validate(entries) {
-		return Yaml.validate(entries.map(entry => ({ trigger: entry.trigger, replace: Libraries.content(entry).text })));
+		return Yaml.validate(entries.map(Libraries.yaml));
+	}
+	static async snippetsLab(source) {
+		Support.assert(source && typeof source === 'object' && source.contents && Array.isArray(source.contents.snippets), 'Choose a SnippetsLab JSON library export');
+		Support.assert(Buffer.byteLength(JSON.stringify(source)) <= 8 * 1048576, 'Import exceeds 8 MiB');
+		Support.assert(!source.contents.folders || Array.isArray(source.contents.folders), 'Invalid folder list');
+		const folders = new Map();
+		const queue = (source.contents.folders || []).map(folder => ({ folder, path: [], depth: 0 }));
+		while (queue.length) {
+			const { folder, path, depth } = queue.shift();
+			Support.assert(depth < 20 && folders.size < 256 && typeof folder.uuid === 'string' && !folders.has(folder.uuid), 'Invalid or excessive folder hierarchy');
+			const next = [...path, typeof folder.title === 'string' && folder.title ? folder.title : 'Untitled'];
+			folders.set(folder.uuid, next.join(' › ').replaceAll('/', '∕').replaceAll('\\', '∖').slice(0, 100));
+			Support.assert(!folder.children || Array.isArray(folder.children), 'Invalid folder children');
+			queue.push(...(folder.children || []).map(child => ({ folder: child, path: next, depth: depth + 1 })));
+		}
+		const entries = [];
+		const warnings = new Set();
+		if (source.contents.tags?.length) warnings.add('Tags are not imported.');
+		if (source.contents.smartGroups?.length) warnings.add('Smart groups are not imported.');
+		if (source.contents.shortcuts?.length) warnings.add('Shortcuts are not imported.');
+		for (const [index, snippet] of source.contents.snippets.entries()) {
+			Support.assert(Array.isArray(snippet.fragments) && snippet.fragments.length, 'Snippet ' + (index + 1) + ' has no fragments');
+			if (snippet.pinned) warnings.add('Pinned status is not imported.');
+			if (snippet.tags?.length) warnings.add('Tags are not imported.');
+			for (const [fragmentIndex, fragment] of snippet.fragments.entries()) {
+				Support.assert(entries.length < 1000, 'Import at most 1000 fragments at a time');
+				if (fragment.note || fragment.noteAttributes?.length) warnings.add('Fragment notes and note formatting are not imported.');
+				const title = [snippet.title || 'Untitled', snippet.fragments.length > 1 ? fragment.title || 'Fragment ' + (fragmentIndex + 1) : null].filter(Boolean).join(' — ');
+				if (snippet.folder && !folders.has(snippet.folder)) warnings.add('Missing folder references are placed in SnippetsLab.');
+				const entry = { key: index + ':' + fragmentIndex, folder: snippet.folder || '', name: folders.get(snippet.folder) || 'SnippetsLab', title, trigger: null, content: { version: 1, type: 'code', text: fragment.content, language: fragment.language || 'plain_text' } };
+				try { await Libraries.validate([entry]); } catch (error) { entry.error = error.message; }
+				entries.push(entry);
+			}
+		}
+		return { entries, warnings: [...warnings] };
+	}
+	static async importSnippetsLab(ctx, body, session) {
+		const preview = await Libraries.snippetsLab(body.source);
+		Support.assert(Array.isArray(body.selected) && body.selected.length > 0 && new Set(body.selected.map(item => item.key)).size === body.selected.length, 'Select valid fragments first');
+		const groups = new Map();
+		for (const selected of body.selected) {
+			const entry = preview.entries.find(entry => entry.key === selected.key);
+			Support.assert(entry && !entry.error, 'Selected fragment is invalid');
+			const key = entry.folder;
+			if (!groups.has(key)) groups.set(key, { name: entry.name, snippets: [] });
+			groups.get(key).snippets.push({ ...Libraries.value(entry), trigger: Abbreviation.normalize(selected.trigger) || null });
+		}
+		const libraries = [];
+		const used = new Set((await Library.find({ account: ctx.account, creator: ctx.user }).session(session).select('name').lean()).map(item => item.name));
+		for (const group of groups.values()) {
+			const base = group.name.slice(0, 85); let name = base; let suffix = 2;
+			while (used.has(name)) name = base + ' (' + suffix++ + ')';
+			used.add(name);
+			libraries.push(await Libraries.create(ctx, { name, snippets: group.snippets }, session));
+		}
+		await Libraries.validateVisible(ctx, session);
+		return { libraries };
 	}
 	static async create(ctx, body, session) {
 		const entries = body.yaml !== undefined ? (await Yaml.run(body.yaml)).matches : (body.snippets || []);
 		await Libraries.validate(entries);
 		const [library] = await Library.create([{ account: ctx.account, creator: ctx.user, name: Support.text(body.name), shared: false, editable: false, members: [], groups: [], revision: 1, state: 'active' }], { session });
 		for (const entry of entries) if (entry.id !== undefined) Support.assert(typeof entry.id === 'string' && /^[a-zA-Z0-9_-]{16,128}$/.test(entry.id), 'Invalid snippet ID');
-		for (const [position, entry] of entries.entries()) await Snippet.create([{ account: ctx.account, library: library._id, id: entry.id || randomUUID(), trigger: entry.trigger, content: Libraries.content(entry), position, revision: 1, state: 'active' }], { session });
+		for (const [position, entry] of entries.entries()) await Snippet.create([{ account: ctx.account, library: library._id, id: entry.id || randomUUID(), ...Libraries.value(entry), position, revision: 1, state: 'active' }], { session });
 		await Support.change(ctx.account, library._id, 'library', session);
 		return Libraries.view(ctx, await Libraries.hydrate(library.toObject(), session));
 	}
@@ -92,7 +156,7 @@ export class Libraries {
 		await Support.change(ctx.account, library._id, 'permissions', session);
 		return { library: Libraries.view(ctx, await Libraries.get(ctx, id, session)) };
 	}
-	static same(a, b) { return (a?.trigger ?? null) === (b?.trigger ?? null) && (a?.content?.text ?? a?.replace ?? null) === (b?.content?.text ?? b?.replace ?? null); }
+	static same(a, b) { return a === b || (!!a && !!b && JSON.stringify(Libraries.value(a)) === JSON.stringify(Libraries.value(b))); }
 	static async upload(ctx, id, body, session) {
 		const library = await Libraries.get(ctx, id, session, true);
 		Support.assert(Support.access(ctx, library).edit, 'Library is read-only', 403);
@@ -106,7 +170,7 @@ export class Libraries {
 			const server = await Snippet.findOne({ account: ctx.account, id: change.id }).session(session).lean();
 			Support.assert(!server || Support.equal(server.library, library._id), 'Snippet moved to another library; review your changes', 409);
 			Support.assert(server?.state !== 'purged', 'Snippet was permanently purged; it cannot be restored', 410);
-			const local = change.value === null ? null : { trigger: Abbreviation.normalize(change.value?.trigger), content: Libraries.content(change.value) };
+			const local = change.value === null ? null : Libraries.value(change.value);
 			if (local) await Libraries.validate([local]);
 			if (server?.state === 'active' && library.state === 'active' && Libraries.same(server, local)) continue;
 			if (server?.state === 'trashed' && local === null) continue;
@@ -117,7 +181,7 @@ export class Libraries {
 			}
 			if (!server && !local) continue;
 			if (local) {
-				await Snippet.updateOne({ library: library._id, id: change.id }, { $set: { account: ctx.account, trigger: local.trigger, content: local.content, state: 'active', revision: (server?.revision || 0) + 1 }, ...(!server ? { $setOnInsert: { position: library.records.reduce((maximum, entry) => Math.max(maximum, entry.position ?? -1), -1) + seen.size } } : {}) }, { upsert: !server, session });
+				await Snippet.updateOne({ library: library._id, id: change.id }, { $set: { account: ctx.account, ...local, state: 'active', revision: (server?.revision || 0) + 1 }, ...(!server ? { $setOnInsert: { position: library.records.reduce((maximum, entry) => Math.max(maximum, entry.position ?? -1), -1) + seen.size } } : {}) }, { upsert: !server, session });
 			} else {
 				const now = new Date();
 				await Snippet.updateOne({ _id: server._id }, { $set: Libraries.trashFields(ctx.user, now), $inc: { revision: 1 } }, { session });
@@ -153,7 +217,7 @@ export class Libraries {
 			let position = (last?.position ?? -1) + 1;
 			for (const record of selected) {
 				const item = body.items.find(item => item.id === record.id);
-				const change = item.value === undefined ? {} : { trigger: Abbreviation.normalize(item.value.trigger), content: Libraries.content(item.value) };
+				const change = item.value === undefined ? {} : Libraries.value(item.value);
 				await Snippet.updateOne({ _id: record._id }, { $set: { library: destination._id, position: position++, ...change }, $inc: { revision: 1 } }, { session });
 				await Conflict.updateMany({ account: ctx.account, library: source._id, snippet: record.id }, { $set: { library: destination._id } }, { session });
 			}
@@ -178,7 +242,7 @@ export class Libraries {
 			if (!access.read) continue;
 			if (library.state === 'trashed' && library.expires_at > now && access.manage) rows.push({ type: 'library', id: String(library._id), library: String(library._id), name: library.name, revision: library.revision, expires_at: library.expires_at, can_restore: true, can_purge: true });
 			if (library.state !== 'active' || !access.edit) continue;
-			for (const entry of await Snippet.find({ library: library._id, state: 'trashed', expires_at: { $gt: now } }).session(session || null).lean()) rows.push({ type: 'snippet', id: entry.id, library: String(library._id), name: entry.trigger, library_name: library.name, revision: entry.revision, expires_at: entry.expires_at, can_restore: true, can_purge: access.manage });
+			for (const entry of await Snippet.find({ library: library._id, state: 'trashed', expires_at: { $gt: now } }).session(session || null).lean()) rows.push({ type: 'snippet', id: entry.id, library: String(library._id), name: entry.title || entry.trigger || 'Untitled snippet', library_name: library.name, revision: entry.revision, expires_at: entry.expires_at, can_restore: true, can_purge: access.manage });
 		}
 		return rows;
 	}
@@ -193,7 +257,7 @@ export class Libraries {
 	static async purge(library, entry, session) {
 		const filter = entry ? { library: library._id, id: entry.id } : { library: library._id };
 		const ids = (await Snippet.find(filter).select('id').session(session).lean()).map(row => row.id);
-		await Snippet.updateMany(filter, { $set: { state: 'purged' }, $inc: { revision: 1 }, $unset: { trigger: 1, content: 1, position: 1, trashed_by: 1, trashed_at: 1, expires_at: 1 } }, { session });
+		await Snippet.updateMany(filter, { $set: { state: 'purged' }, $inc: { revision: 1 }, $unset: { title: 1, trigger: 1, content: 1, position: 1, trashed_by: 1, trashed_at: 1, expires_at: 1 } }, { session });
 		await Conflict.deleteMany({ library: library._id, ...(entry ? { snippet: { $in: ids } } : {}) }, { session });
 		if (!entry) {
 			const readers = [];
@@ -270,7 +334,7 @@ export class Libraries {
 			const candidates = changes.filter(change => visibleIds.has(String(change.library))).flatMap(change => (change.departures || []).map(id => ({ library: String(change.library), id })));
 			const locations = new Map((await Snippet.find({ account: ctx.account, id: { $in: [...new Set(candidates.map(item => item.id))] } }).select('id library').session(session).lean()).map(record => [record.id, String(record.library)]));
 			const departures = [...new Map(candidates.filter(item => locations.has(item.id) && locations.get(item.id) !== item.library).map(item => [item.library + ':' + item.id, item])).values()];
-			result = { protocol: 3, departures, purged, cursor: account.sequence, accessible: visible.map(library => String(library._id)), libraries, tombstones, conflicts, trash: await Libraries.trash(ctx, session) };
+			result = { protocol: 4, departures, purged, cursor: account.sequence, accessible: visible.map(library => String(library._id)), libraries, tombstones, conflicts, trash: await Libraries.trash(ctx, session) };
 		}, { readConcern: { level: 'snapshot' } });
 		return result;
 	}
