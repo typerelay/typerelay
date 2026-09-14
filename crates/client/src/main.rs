@@ -58,8 +58,11 @@ enum Commands {
     Run { #[command(flatten)] source: ConfigSource, #[arg(long, default_value = "keyd virtual keyboard")] device_name: String },
     #[cfg(target_os = "linux")]
     Install { #[arg(long)] dry_run: bool },
-    #[cfg(target_os = "linux")]
-    Uninstall { #[arg(long)] dry_run: bool },
+	#[cfg(target_os = "linux")]
+	Uninstall { #[arg(long)] dry_run: bool },
+	#[cfg(target_os = "linux")]
+	#[command(hide = true)]
+	Update,
 }
 
 impl Cli {
@@ -110,8 +113,10 @@ impl Cli {
             },
             #[cfg(target_os = "linux")]
             Commands::Install { dry_run } => installation::Installer::run("install", dry_run)?,
-            #[cfg(target_os = "linux")]
-            Commands::Uninstall { dry_run } => installation::Installer::run("uninstall", dry_run)?,
+			#[cfg(target_os = "linux")]
+			Commands::Uninstall { dry_run } => installation::Installer::run("uninstall", dry_run)?,
+			#[cfg(target_os = "linux")]
+			Commands::Update => installation::Installer::run("update", false)?,
         }
         Ok(())
     }

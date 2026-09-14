@@ -202,23 +202,31 @@ WantedBy=graphical-session.target
             print("Snippet/settings backups: " + report["backup"])
         return report.get("backup")
 
-    def preflight(self):
+    def preflight(self, automatic=False):
         if self.command("pgrep", "-u", str(os.getuid()), "-x", "typerelay-tui", check=False).returncode == 0:
             raise RuntimeError("Save and close typerelay-tui before installing so its database can be backed up safely.")
         if os.getuid() == 0:
             raise RuntimeError("Run as your desktop user; the installer requests administrator access only for device rules")
-        required = ["systemctl", "udevadm", "setfacl", "getfacl", "modprobe", "notify-send"]
+        required = ["systemctl", "notify-send"] if automatic else ["systemctl", "udevadm", "setfacl", "getfacl", "modprobe", "notify-send"]
         missing = [name for name in required if not shutil.which(name)]
         if missing:
             raise RuntimeError("Missing dependencies: " + ", ".join(missing))
-        if self.command("systemctl", "is-active", "keyd", check=False).returncode:
+        if not automatic and self.command("systemctl", "is-active", "keyd", check=False).returncode:
             raise RuntimeError("This Omarchy client requires keyd to be running")
         if self.unit.exists() and not self.unit.read_text().startswith(self.marker):
             raise RuntimeError("Existing typerelay.service is unmanaged; preserve/move it before installing")
         self.validate_bundle()
+        if automatic:
+            if not self.manifest.exists():
+                raise RuntimeError("Automatic update requires a managed TypeRelay installation")
+            state = json.loads(self.manifest.read_text())
+            for name, _, destination in self.artifacts():
+                expected = state.get("binaries", {}).get(name)
+                if not expected or not destination.is_file() or hashlib.sha256(destination.read_bytes()).hexdigest() != expected:
+                    raise RuntimeError(f"Installed {name} changed outside TypeRelay; refusing automatic replacement")
 
-    def install(self, dry_run):
-        self.preflight()
+    def install(self, dry_run, automatic=False):
+        self.preflight(automatic)
         conflicts = self.conflicts()
         print("Binaries: " + ", ".join(str(destination) for _, _, destination in self.artifacts()) + f"\nService: {self.unit}\nSnippets: {self.snippets}")
         print("Starts with your graphical login, runs as your user, restarts after failures.")
@@ -233,14 +241,14 @@ WantedBy=graphical-session.target
             self.migrate_snippets(check=True)
             print("Dry run: nothing changed.\n\n" + self.service_text())
             return
-        if not self.prompt("Install TypeRelay with this configuration?"):
+        if not automatic and not self.prompt("Install TypeRelay with this configuration?"):
             print("Cancelled. Nothing changed.")
             return
-        if conflicts["manual"] or conflicts["espanso_process"] or conflicts["espanso_enabled"] or conflicts["espanso_active"]:
+        if not automatic and (conflicts["manual"] or conflicts["espanso_process"] or conflicts["espanso_enabled"] or conflicts["espanso_active"]):
             if not self.prompt("Stop manual TypeRelay clients and stop/disable Espanso to use the service?"):
                 print("Cancelled. Nothing changed.")
                 return
-        if conflicts["possible"] and not self.prompt("Continue despite these possible conflicts?", default=False):
+        if not automatic and conflicts["possible"] and not self.prompt("Continue despite these possible conflicts?", default=False):
             print("Cancelled. Nothing changed.")
             return
         old_manifest = self.manifest.read_bytes() if self.manifest.exists() else None
@@ -253,7 +261,8 @@ WantedBy=graphical-session.target
         previous["binaries"] = {**previous.get("binaries", {}), **{name: hashlib.sha256(source.read_bytes()).hexdigest() for name, source, _ in self.artifacts()}}
         previous["binary_sha256"] = previous["binaries"]["typerelay"]
         self.write_private(self.manifest, json.dumps(previous, indent=2) + "\n")
-        self.privileged("install")
+        if not automatic:
+            self.privileged("install")
         rollback = tempfile.TemporaryDirectory(prefix="upgrade-", dir=self.data)
         old_binaries = []
         for name, _, destination in self.artifacts():
@@ -267,11 +276,11 @@ WantedBy=graphical-session.target
         storage_backup = None
         old_service_active = self.systemctl("is-active", "typerelay.service", check=False).returncode == 0
         try:
-            if conflicts["espanso_enabled"]:
+            if not automatic and conflicts["espanso_enabled"]:
                 self.systemctl("disable", "espanso.service")
-            if conflicts["espanso_active"]:
+            if not automatic and conflicts["espanso_active"]:
                 self.systemctl("stop", "espanso.service")
-            if conflicts["espanso_process"] and shutil.which("espanso"):
+            if not automatic and conflicts["espanso_process"] and shutil.which("espanso"):
                 self.command("espanso", "stop", check=False)
             self.systemctl("stop", "typerelay.service", check=False)
             self.stop_manual(conflicts["manual"])
@@ -340,16 +349,18 @@ WantedBy=graphical-session.target
             if old_service_active:
                 self.systemctl("enable", "typerelay.service", check=False)
                 self.systemctl("start", "typerelay.service", check=False)
-            if conflicts["espanso_enabled"]:
+            if not automatic and conflicts["espanso_enabled"]:
                 self.systemctl("enable", "espanso.service", check=False)
-            if conflicts["espanso_active"]:
+            if not automatic and conflicts["espanso_active"]:
                 self.systemctl("start", "espanso.service", check=False)
-            elif conflicts["espanso_process"] and shutil.which("espanso"):
+            elif not automatic and conflicts["espanso_process"] and shutil.which("espanso"):
                 self.command("espanso", "start", check=False)
             print("Installation incomplete. Snippets are preserved; rerun install or uninstall to recover.", file=sys.stderr)
             raise
         finally:
             rollback.cleanup()
+            if automatic:
+                shutil.rmtree(self.binary.parent, ignore_errors=True)
 
     def uninstall(self, dry_run):
         if not self.manifest.exists():
@@ -402,17 +413,20 @@ WantedBy=graphical-session.target
     @classmethod
     def run(cls):
         parser = argparse.ArgumentParser()
-        parser.add_argument("action", choices=["install", "uninstall"])
+        parser.add_argument("action", choices=["install", "uninstall", "update"])
         parser.add_argument("binary")
         parser.add_argument("permission_source")
         parser.add_argument("--dry-run", action="store_true")
         args = parser.parse_args()
         if os.getuid() == 0:
             raise RuntimeError("Run the installer as your desktop user, not root")
-        if not args.dry_run and not sys.stdin.isatty():
+        if args.action != "update" and not args.dry_run and not sys.stdin.isatty():
             raise RuntimeError("Run typerelay install/uninstall from an interactive terminal")
         installer = cls(args.binary, args.permission_source)
-        getattr(installer, args.action)(args.dry_run)
+        if args.action == "update":
+            installer.install(False, automatic=True)
+        else:
+            getattr(installer, args.action)(args.dry_run)
 
 
 if __name__ == "__main__":
@@ -420,4 +434,8 @@ if __name__ == "__main__":
         Installer.run()
     except (RuntimeError, OSError, subprocess.CalledProcessError, EOFError, KeyboardInterrupt, ValueError) as error:
         print("Installer: " + str(error), file=sys.stderr)
+        if len(sys.argv) > 1 and sys.argv[1] == "update" and shutil.which("notify-send"):
+            subprocess.run(["notify-send", "TypeRelay update failed", str(error)], check=False)
+        if len(sys.argv) > 2 and sys.argv[1] == "update":
+            shutil.rmtree(pathlib.Path(sys.argv[2]).parent, ignore_errors=True)
         sys.exit(1)

@@ -22,6 +22,7 @@ services:
     build:
       context: .
       dockerfile: apps/server/Dockerfile
+      target: production
     ports:
       - "127.0.0.1:3040:3040"
     environment:
@@ -35,8 +36,8 @@ services:
       - typerelay-server:/data
       - typerelay-integrations:/integrations
       - ./docs:/documentation:ro
-      - ./apps/server:/app
-      - typerelay-node-modules:/app/node_modules
+      - ./apps/server:/opt/typerelay/apps/server
+      - typerelay-node-modules:/opt/typerelay/apps/server/node_modules
     healthcheck:
       test: [CMD, node, -e, "fetch('http://127.0.0.1:3040/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 5s
@@ -52,13 +53,16 @@ services:
     build:
       context: .
       dockerfile: apps/server/Dockerfile
+      target: production
     command: [node, scripts/start.js]
+    healthcheck:
+      disable: true
     environment:
       MONGODB_URI: mongodb://mongo:27017/typerelay?replicaSet=typerelay
       SERVER_MODE: scheduler
     volumes:
-      - ./apps/server:/app
-      - typerelay-node-modules:/app/node_modules
+      - ./apps/server:/opt/typerelay/apps/server
+      - typerelay-node-modules:/opt/typerelay/apps/server/node_modules
     restart: unless-stopped
     deploy:
       replicas: 1
@@ -126,8 +130,8 @@ services:
       timeout: 3s
       retries: 30
     volumes:
-      - ./apps/server:/app
-      - typerelay-node-modules:/app/node_modules
+      - ./apps/server:/opt/typerelay/apps/server
+      - typerelay-node-modules:/opt/typerelay/apps/server/node_modules
       - /tmp/typerelay-template-fixture:/fixtures
     depends_on:
       mongo:

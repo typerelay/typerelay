@@ -29,7 +29,7 @@ git push -u origin feature/snippet-preview
 gh pr create --base develop
 ```
 
-Release: create `release/x.y.z` from current develop, stabilize/version it, and open a PR to main. After that PR merges, tag its main merge commit, push the tag, then open main → develop to bring the release fixes back. Hotfixes follow the same sequence, starting from main. Never rewrite shared branches to simulate this history.
+Server releases run `./release.sh --build local` or `./release.sh --build dbh` from a clean checkout. The script pushes develop, merges it into main in an isolated worktree, creates the next `YYYYMMDDn` tag, atomically advances main/develop/tag, and builds and pushes the matching GHCR image plus `latest`. Desktop application versions remain SemVer and are published separately through the shared release toolkit. Hotfixes still start from main and return to develop. Never rewrite shared branches. GitHub workflows are manual-only while hosted build minutes are unavailable.
 
 ## Checks and GitHub limitation
 

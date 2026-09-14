@@ -1,4 +1,5 @@
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -70,6 +71,24 @@ class InstallerTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "Missing typerelay-tui"):
             self.subject.validate_bundle()
         self.subject.privileged.assert_not_called()
+
+    def test_automatic_update_requires_owned_managed_binaries(self):
+        self.subject.destination.parent.mkdir(parents=True)
+        self.subject.destination.write_bytes(b"installed engine")
+        self.subject.destination.with_name("typerelay-tui").write_bytes(b"installed tui")
+        self.subject.data.mkdir(parents=True)
+        self.subject.manifest.write_text(json.dumps({"binaries": {"typerelay": hashlib.sha256(b"installed engine").hexdigest(), "typerelay-tui": hashlib.sha256(b"installed tui").hexdigest()}}))
+        def command(path, *args, **kwargs):
+            if path == "pgrep":
+                return subprocess.CompletedProcess([], 1, "", "")
+            name = "typerelay" if pathlib.Path(path) == self.subject.binary else pathlib.Path(path).name
+            return subprocess.CompletedProcess([], 0, f"{name} 0.11.0\n", "")
+        self.subject.command.side_effect = command
+        with patch.object(self.installer.shutil, "which", return_value="/usr/bin/tool"):
+            self.installer.Installer.preflight(self.subject, True)
+            self.subject.destination.write_bytes(b"external replacement")
+            with self.assertRaisesRegex(RuntimeError, "changed outside TypeRelay"):
+                self.installer.Installer.preflight(self.subject, True)
 
     def test_uninstall_reads_legacy_manifest_without_removing_unowned_tui(self):
         self.subject.install(False)

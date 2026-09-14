@@ -9,8 +9,11 @@ test('release mode requires the right host and rejects publishing/unsupported ta
 	assert.equal(PanelRelease.options(['windows', '--dry-run'], 'darwin').target, 'x86_64-pc-windows-msvc');
 	assert.throws(() => PanelRelease.options(['windows'], 'darwin'), /Omarchy/);
 	assert.throws(() => PanelRelease.options(['macos'], 'linux'), /Mac/);
+	assert.equal(PanelRelease.options(['linux', '--dry-run'], 'darwin').target, 'x86_64-unknown-linux-gnu');
+	assert.throws(() => PanelRelease.options(['linux'], 'darwin'), /Linux packaging/);
 	assert.throws(() => PanelRelease.options(['windows', '--publish'], 'linux'), /publication/);
 	assert.throws(() => PanelRelease.options(['windows', '--target', 'aarch64-pc-windows-msvc'], 'linux'), /Unsupported target/);
+	assert.throws(() => PanelRelease.options(['linux', '--report', 'relative.json'], 'linux'), /absolute/);
 });
 test('build children never receive the hardware PIN or publishing credentials', () => {
 	const env = PanelRelease.buildEnvironment({ PATH: '/bin', WINDOWS_SIGNING_PIN: 'fixture-pin', BUNNY_STORAGE_PASSWORD_TEST: 'fixture-storage', APPLE_PASSWORD: 'fixture-apple' });
@@ -43,4 +46,16 @@ test('failed signer never reports a verified artifact', { skip: process.platform
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), 'typerelay-sign-fail-')); const file = path.join(root, 'app.exe'); await fs.writeFile(file, 'MZ fixture');
 	const bridge = new SigningBridge(path.join(root, 'sign.sock'), [root], async () => { throw new Error('Fixture failure'); });
 	try { await bridge.start(); await assert.rejects(SigningBridge.request(bridge.path, file), /failed/); assert.equal(bridge.signed.size, 0); } finally { await bridge.close(); await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test('release tooling creates signed updater artifacts for every supported platform', async () => {
+	const source = await fs.readFile(path.join(PanelRelease.root, 'scripts/release-panel.mjs'), 'utf8');
+	const config = JSON.parse(await fs.readFile(path.join(PanelRelease.root, 'apps/desktop/src-tauri/tauri.conf.json'), 'utf8'));
+	assert.match(source, /createUpdaterArtifacts: true/);
+	assert.match(source, /TypeRelay-Omarchy-\$\{config\.version\}-x86_64\.tar\.gz/);
+	assert.match(source, /windows-x86_64/);
+	assert.match(source, /darwin-aarch64/);
+	assert.match(source, /linux-x86_64/);
+	assert.equal(config.plugins.updater.endpoints[0], 'https://transfer.typerelay.com/apps/latest.json');
+	assert.match(config.plugins.updater.pubkey, /^[A-Za-z0-9+/=]+$/);
 });
