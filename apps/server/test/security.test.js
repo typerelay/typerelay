@@ -70,6 +70,7 @@ before(async () => {
 	process.env.MONGO_URI = process.env.MONGO_URI.replace('/typerelay?', '/typerelay_security?');
 	process.env.SESSION_SECRET = Support.token();
 	process.env.JWT_SECRET = Support.token();
+	process.env.ENABLE_SIGNUP = 'true';
 	Auth.origin = Fixture.origin;
 	Auth.mail.sendMail = async mail => { Fixture.mails.push(mail); return { accepted: [mail.to] }; };
 	const { Server } = await import('../app.js');
@@ -211,6 +212,24 @@ test('login exposes all requested methods and native OAuth form remains unaffect
 	assert.ok(page.querySelector('a[href="/forgot-password"]'));
 	assert.ok(page.querySelector('a[href="/signup"]'));
 	dom.window.close();
+});
+
+test('ENABLE_SIGNUP=false removes signup controls and blocks signup', async () => {
+	process.env.ENABLE_SIGNUP = 'false';
+	try {
+		const browser = new Browser();
+		await browser.page('/login');
+		const login = await browser.call('/login');
+		const loginDom = new JSDOM(await login.text());
+		assert.equal(loginDom.window.document.querySelector('a[href="/signup"]'), null);
+		loginDom.window.close();
+		const signup = await browser.call('/signup');
+		const signupDom = new JSDOM(await signup.text());
+		assert.equal(signupDom.window.document.querySelector('#signup-form'), null);
+		assert.match(signupDom.window.document.body.textContent, /Sign up disabled/);
+		signupDom.window.close();
+		await browser.json('/auth/signup', 'POST', { name: 'Disabled', email: randomUUID() + '@example.test' }, 403);
+	} finally { process.env.ENABLE_SIGNUP = 'true'; }
 });
 
 test('login waits for persistence before returning its redirect, including pending 2FA', async () => {

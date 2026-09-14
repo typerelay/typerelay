@@ -10,6 +10,7 @@ x-env: &env
   SMTP_FROM: ${SMTP_FROM}
   SESSION_SECRET: ${SESSION_SECRET}
   JWT_SECRET: ${JWT_SECRET}
+  ENABLE_SIGNUP: "${ENABLE_SIGNUP:-true}"
   IS_DOCKER: "true"
   DOCS_DIR: /documentation/.vitepress/dist
 

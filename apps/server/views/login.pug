@@ -21,7 +21,7 @@ block content
 				input#password.form-control.form-control-sm.mb-3(type="password" name="password" autocomplete="current-password" required)
 				.d-flex.justify-content-end
 					button.btn.btn-primary.btn-sm(type="submit") Sign in
-			if !whiteLabel
+			if !whiteLabel && signupEnabled
 				p.mt-3.mb-0
 					span No account yet?
 						a.ms-1(href="/signup") Create one

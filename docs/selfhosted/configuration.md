@@ -11,10 +11,11 @@ set -x SESSION_SECRET (openssl rand -hex 64)
 set -x JWT_SECRET (openssl rand -hex 64)
 set -x SMTP_FROM noreply@example.com
 set -x SMTP_SERVERS '[{"name":"primary","host":"smtp.example.com","port":587,"secure":false,"user":"user","pass":"password","from":"noreply@example.com"}]'
+set -x ENABLE_SIGNUP true
 docker compose -f compose.prod.yml up -d
 ```
 
-`MCP_BASE_URL` is the public MCP host without `/mcp`; TypeRelay appends the resource path. `SMTP_SERVERS` accepts `name`, `host`, `port`, `secure`, `user`, `pass`, and `from`. Optional `APP_PORT` and `MCP_PORT` change the published ports from `3000` and `3002`. `API_BASE_URL` and `MONGO_URI` are wired internally by the production Compose file. Keep credentials outside Git and put both public services behind HTTPS.
+`MCP_BASE_URL` is the public MCP host without `/mcp`; TypeRelay appends the resource path. `SMTP_SERVERS` accepts `name`, `host`, `port`, `secure`, `user`, `pass`, and `from`. Set `ENABLE_SIGNUP=false` to remove the signup form and block signup requests. Optional `APP_PORT` and `MCP_PORT` change the published ports from `3000` and `3002`. `API_BASE_URL` and `MONGO_URI` are wired internally by the production Compose file. Keep credentials outside Git and put both public services behind HTTPS.
 
 Self-hosted installations remain unrestricted. Do not set `TYPERELAY_HOSTED_EDITION=true` or `BILLING_ENABLED=true`; Stripe plans and hosted Cloudflare white-label provisioning are SaaS-only.
 

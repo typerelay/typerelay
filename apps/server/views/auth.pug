@@ -2,14 +2,18 @@ extends layout
 block content
 	section.auth.card.p-4
 		if kind === 'signup'
-			h1.h2.mb-3.fw-bold Create your account
-			form#signup-form
-				label.form-label(for="name") Name
-				input#name.form-control.form-control-sm.mb-3(name="name" autocomplete="name" required)
-				label.form-label(for="email") Email address
-				input#email.form-control.form-control-sm.mb-3(type="email" name="email" autocomplete="email" required)
-				.d-flex.justify-content-end
-					button.btn.btn-primary.btn-sm Sign up
+			if signupEnabled
+				h1.h2.mb-3.fw-bold Create your account
+				form#signup-form
+					label.form-label(for="name") Name
+					input#name.form-control.form-control-sm.mb-3(name="name" autocomplete="name" required)
+					label.form-label(for="email") Email address
+					input#email.form-control.form-control-sm.mb-3(type="email" name="email" autocomplete="email" required)
+					.d-flex.justify-content-end
+						button.btn.btn-primary.btn-sm Sign up
+			else
+				h1.h2.mb-3.fw-bold Sign up disabled
+				p.mb-0 Sign up is currently disabled.
 		if kind === 'forgot'
 			h1.h2.mb-3.fw-bold Reset password
 			p Enter your email to receive a password reset link.

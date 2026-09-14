@@ -9,6 +9,7 @@ import { Support, Fault } from './support.js';
 
 export class Security {
 	static dummy = bcrypt.hashSync(Support.token(), 12);
+	static signupEnabled() { return process.env.ENABLE_SIGNUP === 'true'; }
 	static email(value) { const email = Support.text(value, 254).toLowerCase(); Support.assert(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email), 'Enter a valid email address'); return email; }
 	static fresh(req) { Support.assert((!req.ctx || (!req.ctx.device && req.ctx.user === req.session.user)) && req.session.user && req.session.auth_at > Date.now() - 15 * 60000, 'Please sign out and sign in again before changing security settings', 401); }
 	static async establish(req, id, verifiedFactor = false) {
@@ -158,7 +159,7 @@ export class Security {
 		app.use('/auth', (req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
 		app.get('/login', (req, res) => res.render('login'));
 		app.get('/signup', (req, res) => req.boundAccount ? res.redirect(new URL('/signup', Auth.origin).toString()) : res.render('auth', { kind: 'signup' }));
-		app.post('/auth/signup', limit, async (req, res) => { Support.assert(!req.boundAccount, 'Create accounts at app.typerelay.com', 403); await Auth.login(Security.email(req.body.email), req.body.name); res.json({ message: 'Check your email to finish creating your account.' }); });
+		app.post('/auth/signup', limit, async (req, res) => { Support.assert(Security.signupEnabled(), 'Signup is disabled', 403); Support.assert(!req.boundAccount, 'Create accounts at app.typerelay.com', 403); await Auth.login(Security.email(req.body.email), req.body.name); res.json({ message: 'Check your email to finish creating your account.' }); });
 		app.post('/auth/password', limit, async (req, res) => res.json(await Security.passwordLogin(req)));
 		app.get('/auth/two-factor', (req, res) => res.render('auth', { kind: 'factor' }));
 		app.post('/auth/two-factor', limit, async (req, res) => res.json(await Security.factor(req)));

@@ -1,6 +1,6 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { Account, Device, Library, Member, Snippet, User, mongoose } from '../model/index.js';
 import { Billing } from '../services/billing.js';
@@ -46,6 +46,14 @@ test('catalog exposes the approved Free, Pro and Team limits', () => {
 	assert.throws(() => Billing.assertApi(Fixture.ctx), error => error.status === 403 && error.code === 'plan_required');
 });
 
+test('Free blocks API token creation and MCP authorization', async () => {
+	await assert.rejects(Auth.createIntegration(Fixture.ctx, { name: 'Free API', days: 1, scopes: ['content:read'] }), error => error.status === 403 && error.code === 'plan_required');
+	const client = await Auth.registerIntegration({ client_name: 'Free MCP', redirect_uris: ['https://example.test/callback'], token_endpoint_auth_method: 'none' });
+	const verifier = Support.token();
+	const request = { client_id: client.client_id, redirect_uri: client.redirect_uris[0], response_type: 'code', state: Support.token(), code_challenge_method: 'S256', code_challenge: createHash('sha256').update(verifier).digest('base64url'), resource: Auth.mcpResource(), scope: 'content:read', account: String(Fixture.account._id) };
+	await assert.rejects(Auth.approveIntegration(String(Fixture.owner._id), request), error => error.status === 403 && error.code === 'plan_required');
+});
+
 test('Free resource gates reject a second library and second machine', async () => {
 	await Libraries.mutate(Fixture.ctx, randomUUID(), {}, async (ctx, session) => ({ library: await Libraries.create(ctx, { name: 'First', snippets: [] }, session) }));
 	await assert.rejects(Libraries.mutate(Fixture.ctx, randomUUID(), {}, async (ctx, session) => ({ library: await Libraries.create(ctx, { name: 'Second', snippets: [] }, session) })), error => error.status === 409 && error.code === 'plan_limit');
@@ -72,6 +80,7 @@ test('one-time Pro trial unlocks API and machines, then expires to Free', async 
 	const expired = await Account.findById(Fixture.account._id).lean();
 	assert.equal(Billing.entitlements(expired).plan, 'free');
 	await assert.rejects(Auth.integration(`Token ${integration.token}`), error => error.code === 'plan_required');
+	await assert.rejects(Auth.integration(`Token ${integration.token}`, Auth.mcpResource()), error => error.code === 'plan_required');
 	await assert.rejects(Billing.assertDevice(await Fixture.context(), secondary), error => error.code === 'plan_limit');
 	await assert.rejects(Billing.startTrial(Fixture.account._id), error => error.code === 'trial_unavailable');
 });

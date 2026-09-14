@@ -54,6 +54,7 @@ export class Server {
 			}
 			res.locals.serverOrigin = Auth.origin;
 			res.locals.passkeysAvailable = !req.boundAccount;
+			res.locals.signupEnabled = Security.signupEnabled();
 			res.locals.csrf = req.session.csrf ||= Support.token();
 			if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !['/oauth/token', '/integrations/token', '/integrations/register'].includes(req.path) && !req.headers.authorization) Support.assert((req.headers['x-csrf-token'] || req.body?._csrf) === req.session.csrf, 'Session expired; reload and retry', 403);
 			next();
