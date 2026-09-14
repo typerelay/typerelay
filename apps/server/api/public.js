@@ -1,5 +1,4 @@
 import { rateLimit } from 'express-rate-limit';
-import { readFileSync } from 'node:fs';
 import { timingSafeEqual } from 'node:crypto';
 import pug from 'pug';
 import Ajv from 'ajv/dist/2020.js';
@@ -52,7 +51,7 @@ export class PublicApi {
 		});
 		app.post('/integrations/authorize', async (req, res) => { Support.assert(req.session.user, 'Sign in required', 401); res.redirect(await Auth.approveIntegration(req.session.user, req.body)); });
 		app.post('/integrations/delegate', authLimit, async (req, res) => {
-			const expected = Buffer.from(readFileSync(process.env.MCP_SECRET_FILE || '/data/mcp-secret', 'utf8').trim());
+			const expected = Buffer.from(process.env.JWT_SECRET || 'change-me');
 			const supplied = Buffer.from(String(req.headers['x-mcp-secret'] || ''));
 			Support.assert(expected.length === supplied.length && timingSafeEqual(expected, supplied), 'Invalid MCP client', 401);
 			const ctx = await Auth.integration(req.headers.authorization, Auth.mcpResource());

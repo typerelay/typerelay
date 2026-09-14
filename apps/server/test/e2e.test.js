@@ -38,10 +38,10 @@ class Fixture {
 before(async () => {
 	process.env.NODE_ENV = 'test';
 	process.env.PORT = '3140';
-	process.env.MONGODB_URI = process.env.MONGODB_URI.replace('/typerelay?', '/typerelay_e2e?');
+	process.env.MONGO_URI = process.env.MONGO_URI.replace('/typerelay?', '/typerelay_e2e?');
 	Fixture.root = await mkdtemp(join(tmpdir(), 'typerelay-e2e-'));
-	process.env.SESSION_SECRET_FILE = join(Fixture.root, 'session');
-	process.env.MCP_SECRET_FILE = join(Fixture.root, 'mcp-secret');
+	process.env.SESSION_SECRET = Support.token();
+	process.env.JWT_SECRET = Support.token();
 	const { Server } = await import('../app.js');
 	Fixture.server = await Server.start();
 	const user = await User.create({ email: randomUUID() + '@example.test', name: 'Test owner' });

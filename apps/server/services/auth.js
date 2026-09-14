@@ -6,14 +6,41 @@ import { mongoose, User, Account, Member, Ticket, Device, Integration, Integrati
 import { Support } from './support.js';
 
 export class Auth {
-	static origin = process.env.ORIGIN || 'http://localhost:3040';
-	static mail = nodemailer.createTransport({ host: process.env.SMTP_HOST || 'mail', port: 1025 });
+	static origin = process.env.APP_URL || 'http://localhost:3040';
+	static smtpIndex = 0;
+	static smtpTransports = new Map();
+	static mail = { sendMail: message => Auth.sendMail(message) };
+	static smtpServers(env = process.env) {
+		const configured = String(env.SMTP_SERVERS || '').trim();
+		if (!configured) return [{ name: 'mail', host: 'mail', port: 1025, secure: false, user: '', pass: '', from: env.SMTP_FROM || 'TypeRelay <noreply@localhost>' }];
+		let servers;
+		try { servers = JSON.parse(configured); } catch { Support.assert(false, 'SMTP_SERVERS must be valid JSON', 500); }
+		Support.assert(Array.isArray(servers) && servers.length, 'SMTP_SERVERS must be a non-empty JSON array', 500);
+		return servers.map((server, index) => {
+			Support.assert(server && typeof server === 'object' && server.host, `SMTP_SERVERS[${index}].host is required`, 500);
+			const port = Number(server.port || 587);
+			Support.assert(Number.isInteger(port) && port > 0 && port <= 65535, `SMTP_SERVERS[${index}].port is invalid`, 500);
+			return { name: server.name || `smtp-${index + 1}`, host: String(server.host), port, secure: server.secure === undefined ? port === 465 : Boolean(server.secure), user: String(server.user || ''), pass: String(server.pass || ''), from: String(server.from || env.SMTP_FROM || 'TypeRelay <noreply@localhost>') };
+		});
+	}
+	static nextSmtpServer(servers) {
+		const server = servers[Auth.smtpIndex % servers.length];
+		Auth.smtpIndex = (Auth.smtpIndex + 1) % servers.length;
+		return server;
+	}
+	static async sendMail(message) {
+		const servers = Auth.smtpServers();
+		const server = Auth.nextSmtpServer(servers);
+		const key = `${server.name}:${server.host}:${server.port}:${server.user}`;
+		if (!Auth.smtpTransports.has(key)) Auth.smtpTransports.set(key, nodemailer.createTransport({ host: server.host, port: server.port, secure: server.secure, auth: server.user ? { user: server.user, pass: server.pass } : undefined }));
+		return Auth.smtpTransports.get(key).sendMail({ ...message, from: server.from });
+	}
 	static async login(email, name) {
 		email = Support.text(email, 254).toLowerCase();
 		Support.assert(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email), 'Enter a valid email');
 		const token = Support.token();
 		await Ticket.create({ hash: Support.hash(token), kind: 'login', email, data: name ? { name: Support.text(name) } : undefined, expires: new Date(Date.now() + 900000) });
-		await Auth.mail.sendMail({ from: 'TypeRelay <login@typerelay.local>', to: email, subject: 'Sign in to TypeRelay', text: Auth.origin + '/auth/callback?token=' + token });
+		await Auth.mail.sendMail({ to: email, subject: 'Sign in to TypeRelay', text: Auth.origin + '/auth/callback?token=' + token });
 	}
 	static async consume(token) {
 		let user;
@@ -75,7 +102,7 @@ export class Auth {
 	}
 	static scopes = scopes;
 	static apiResource() { return Auth.origin + '/api/v3'; }
-	static mcpResource() { return process.env.MCP_ORIGIN || 'http://localhost:3041/mcp'; }
+	static mcpResource() { return (process.env.MCP_BASE_URL || 'http://localhost:3041').replace(/\/$/, '') + '/mcp'; }
 	static integrationScopes(scopes) {
 		Support.assert(Array.isArray(scopes) && scopes.length && scopes.every(scope => Auth.scopes.includes(scope)), 'Select valid scopes');
 		return [...new Set(scopes)].sort();

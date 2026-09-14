@@ -29,7 +29,7 @@ class Fixture {
 	static change(snippet, replace) { return { id: snippet.id, base_revision: snippet.revision, base: snippet, value: replace === null ? null : { trigger: snippet.trigger, replace } }; }
 }
 before(async () => {
-	await mongoose.connect(process.env.MONGODB_URI.replace('/typerelay?', '/typerelay_test?'));
+	await mongoose.connect(process.env.MONGO_URI.replace('/typerelay?', '/typerelay_test?'));
 	await mongoose.connection.dropDatabase();
 	await Promise.all(Object.values(mongoose.models).map(model => model.init()));
 	const account = await Account.create({ name: 'One' });

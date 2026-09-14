@@ -1,7 +1,6 @@
 // Streamable HTTP and API adapter pattern adapted from Mailtwine (AGPL-3.0).
 import express from 'express';
 import { rateLimit } from 'express-rate-limit';
-import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -37,9 +36,9 @@ export class TypeRelayMcp {
 		const query = operation.method === 'get' ? new URLSearchParams(Object.entries(body).map(([key, value]) => [key, String(value)])) : null;
 		return api.request('/api/v3' + path + (query?.size ? '?' + query : ''), operation.method.toUpperCase(), operation.method === 'get' ? undefined : body);
 	}
-	static app({ apiBase = process.env.API_BASE || 'http://server:3040', resource = process.env.MCP_ORIGIN || 'http://localhost:3041/mcp', issuer = process.env.APP_ORIGIN || 'http://localhost:3040', secret = () => readFileSync(process.env.MCP_SECRET_FILE || '/run/typerelay/mcp-secret', 'utf8').trim() } = {}) {
+	static app({ apiBase = process.env.API_BASE_URL || 'http://server:3040', resource = (process.env.MCP_BASE_URL || 'http://localhost:3041').replace(/\/$/, '') + '/mcp', issuer = process.env.APP_URL || 'http://localhost:3040', secret = () => process.env.JWT_SECRET || 'change-me' } = {}) {
 		const app = express();
-		if (process.env.TRUST_PROXY === '1') app.set('trust proxy', 1);
+		if (process.env.IS_DOCKER === 'true') app.set('trust proxy', 1);
 		app.disable('x-powered-by');
 		const origin = new URL(resource).origin;
 		const metadata = origin + '/.well-known/oauth-protected-resource' + new URL(resource).pathname;

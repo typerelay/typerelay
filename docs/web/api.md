@@ -75,7 +75,7 @@ Login follows Streamient/Mailtwine: password, Magic Link, Passkey, forgot-passwo
 - `GET/DELETE /api/v2/security/passkeys/:id`: render/remove an owned passkey.
 
 Security mutations and email-change requests require a browser sign-in within the last 15 minutes. Desktop tokens cannot authorize these mutations. Existing sessions without a recent authentication timestamp must sign out and back in.
-WebAuthn binds credentials to the configured `ORIGIN` and its hostname; remote sites require HTTPS. The local browser preview uses `http://localhost:3040`.
+WebAuthn binds credentials to the configured `APP_URL` and its hostname; remote sites require HTTPS. The local browser preview uses `http://localhost:3040`.
 
 The top-right initials avatar opens Settings, Help and Sign out. Profile saves preserve the settings panel, update only the avatar and current member row, and retain input focus.
 

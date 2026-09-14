@@ -2,7 +2,6 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID, createHash } from 'node:crypto';
 import express from 'express';
-import { readFileSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { mongoose, Account, User, Member, Integration, ApiAudit, OAuthClient } from '../model/index.js';
 import { Support } from '../services/support.js';
 import { Auth } from '../services/auth.js';
@@ -12,7 +11,7 @@ import { operations } from '../api/catalog.js';
 import spec, { ApiSchema } from '../api/openapi.js';
 
 class ApiFixture {
-	static root; static server; static base; static owner; static outsider; static token; static reader; static library;
+	static server; static base; static owner; static outsider; static token; static reader; static library;
 	static async request(path, method = 'GET', body, token = ApiFixture.token) {
 		const response = await fetch(ApiFixture.base + '/api/v3' + path, { method, headers: { Authorization: 'Token ' + token, 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) });
 		return { status: response.status, value: await response.json() };
@@ -20,10 +19,8 @@ class ApiFixture {
 	static async user(account, role = 'owner') { const user = await User.create({ email: randomUUID() + '@example.test' }); await Member.create({ user: user._id, account, role }); return Support.context(String(user._id), String(account)); }
 }
 before(async () => {
-	ApiFixture.root = mkdtempSync('/tmp/typerelay-api-');
-	process.env.MCP_SECRET_FILE = ApiFixture.root + '/mcp-secret';
-	writeFileSync(process.env.MCP_SECRET_FILE, Support.token(), { mode: 0o600 });
-	await mongoose.connect(process.env.MONGODB_URI.replace('/typerelay?', '/typerelay_api_test?'));
+	process.env.JWT_SECRET = Support.token();
+	await mongoose.connect(process.env.MONGO_URI.replace('/typerelay?', '/typerelay_api_test?'));
 	await mongoose.connection.dropDatabase(); await Promise.all(Object.values(mongoose.models).map(model => model.init()));
 	const account = await Account.create({ name: 'API test' });
 	ApiFixture.owner = await ApiFixture.user(account._id);
@@ -34,7 +31,7 @@ before(async () => {
 	app.use((error, req, res, next) => res.status(error.status || 500).json({ error: error.message }));
 	ApiFixture.server = app.listen(0, '127.0.0.1'); await new Promise(resolve => ApiFixture.server.once('listening', resolve)); ApiFixture.base = 'http://127.0.0.1:' + ApiFixture.server.address().port;
 });
-after(async () => { await new Promise(resolve => ApiFixture.server.close(resolve)); await mongoose.connection.dropDatabase(); await mongoose.disconnect(); rmSync(ApiFixture.root, { recursive: true, force: true }); });
+after(async () => { await new Promise(resolve => ApiFixture.server.close(resolve)); await mongoose.connection.dropDatabase(); await mongoose.disconnect(); });
 
 test('public authentication is separate from desktop and scope-limited; no token hashes returned', async () => {
 	assert.equal((await ApiFixture.request('/me')).status, 200);
@@ -114,7 +111,7 @@ test('MCP delegation enforces its secret and audience and follows grant revocati
 	await assert.rejects(Auth.integration('Bearer ' + access.access_token), /invalid/);
 	const url = ApiFixture.base + '/integrations/delegate';
 	assert.equal((await fetch(url, { method: 'POST', headers: { Authorization: 'Bearer ' + access.access_token, 'X-MCP-Secret': 'wrong' } })).status, 401);
-	const delegated = await fetch(url, { method: 'POST', headers: { Authorization: 'Bearer ' + access.access_token, 'X-MCP-Secret': readFileSync(process.env.MCP_SECRET_FILE || '/data/mcp-secret', 'utf8').trim() } });
+	const delegated = await fetch(url, { method: 'POST', headers: { Authorization: 'Bearer ' + access.access_token, 'X-MCP-Secret': process.env.JWT_SECRET } });
 	assert.equal(delegated.status, 200);
 	const bridge = await delegated.json(); const ctx = await Auth.integration('Bearer ' + bridge.access_token); assert.deepEqual(ctx.scopes, ['content:read']);
 	assert.equal(bridge.expires_in, 60);

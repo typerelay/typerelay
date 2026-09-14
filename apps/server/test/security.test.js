@@ -2,9 +2,6 @@ import { BrowserSource } from './browser-source.js';
 import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID, randomBytes, createHash, generateKeyPairSync, sign } from 'node:crypto';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { Encoder } from 'cbor-x';
 const cbor = new Encoder({ useRecords: false, useTag259ForMaps: false, tagUint8Array: false });
 import { generateSync } from 'otplib';
@@ -37,7 +34,7 @@ class Browser {
 	}
 }
 class Fixture {
-	static origin = 'http://127.0.0.1:3150'; static server; static root; static mails = [];
+	static origin = 'http://127.0.0.1:3150'; static server; static mails = [];
 	static async account() {
 		const browser = new Browser();
 		await browser.page();
@@ -70,9 +67,9 @@ class Fixture {
 before(async () => {
 	process.env.NODE_ENV = 'test';
 	process.env.PORT = '3150';
-	process.env.MONGODB_URI = process.env.MONGODB_URI.replace('/typerelay?', '/typerelay_security?');
-	Fixture.root = await mkdtemp(join(tmpdir(), 'typerelay-security-'));
-	process.env.SESSION_SECRET_FILE = join(Fixture.root, 'session');
+	process.env.MONGO_URI = process.env.MONGO_URI.replace('/typerelay?', '/typerelay_security?');
+	process.env.SESSION_SECRET = Support.token();
+	process.env.JWT_SECRET = Support.token();
 	Auth.origin = Fixture.origin;
 	Auth.mail.sendMail = async mail => { Fixture.mails.push(mail); return { accepted: [mail.to] }; };
 	const { Server } = await import('../app.js');
@@ -82,7 +79,15 @@ after(async () => {
 	await new Promise(resolve => Fixture.server.close(resolve));
 	await mongoose.connection.dropDatabase();
 	await mongoose.disconnect();
-	await rm(Fixture.root, { recursive: true, force: true });
+});
+test('SMTP_SERVERS uses the shared authenticated multi-server format', () => {
+	const servers = Auth.smtpServers({ SMTP_FROM: 'fallback@example.test', SMTP_SERVERS: JSON.stringify([{ name: 'one', host: 'smtp1.example.test', port: 587, user: 'user', pass: 'pass' }, { host: 'smtp2.example.test', port: 465, secure: true, from: 'two@example.test' }]) });
+	assert.deepEqual(servers, [{ name: 'one', host: 'smtp1.example.test', port: 587, secure: false, user: 'user', pass: 'pass', from: 'fallback@example.test' }, { name: 'smtp-2', host: 'smtp2.example.test', port: 465, secure: true, user: '', pass: '', from: 'two@example.test' }]);
+	Auth.smtpIndex = 0;
+	assert.equal(Auth.nextSmtpServer(servers).name, 'one');
+	assert.equal(Auth.nextSmtpServer(servers).name, 'smtp-2');
+	assert.equal(Auth.nextSmtpServer(servers).name, 'one');
+	assert.throws(() => Auth.smtpServers({ SMTP_SERVERS: '{}' }), /non-empty JSON array/);
 });
 test('signup, generated password, password login, OAuth continuation and recovery', async () => {
 	const { browser, email, user } = await Fixture.account();

@@ -14,7 +14,7 @@ export class Team {
 		Support.assert(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email), 'Invalid email');
 		const token = Support.token();
 		const invitation = await Ticket.create({ hash: Support.hash(token), kind: 'invite', email, account: ctx.account, expires: new Date(Date.now() + 7 * 86400000) });
-		await Auth.mail.sendMail({ from: 'TypeRelay <team@typerelay.local>', to: email, subject: 'Join your TypeRelay team', text: Auth.origin + '/?invite=' + token });
+		await Auth.mail.sendMail({ to: email, subject: 'Join your TypeRelay team', text: Auth.origin + '/?invite=' + token });
 		return { invited: email, invitation: String(invitation._id) };
 	}
 	static async accept(ctx, token, session) {

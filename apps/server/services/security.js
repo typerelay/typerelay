@@ -60,7 +60,7 @@ export class Security {
 	static async issue(email, kind, data, path, subject) {
 		const token = Support.token();
 		await Ticket.create({ hash: Support.hash(token), kind, email, data, expires: new Date(Date.now() + 900000) });
-		await Auth.mail.sendMail({ from: 'TypeRelay <security@typerelay.local>', to: email, subject, text: Auth.origin + path + '?token=' + token });
+		await Auth.mail.sendMail({ to: email, subject, text: Auth.origin + path + '?token=' + token });
 	}
 	static async profile(req) {
 		const name = Support.text(req.body.name);

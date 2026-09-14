@@ -26,15 +26,17 @@ services:
     ports:
       - "127.0.0.1:3040:3040"
     environment:
-      MONGODB_URI: mongodb://mongo:27017/typerelay?replicaSet=typerelay
-      ORIGIN: http://localhost:3040
-      SMTP_HOST: mail
-      SESSION_SECRET_FILE: /data/session-secret
+      MONGO_URI: mongodb://mongo:27017/typerelay?replicaSet=typerelay
+      APP_URL: ${APP_URL:-http://localhost:3040}
+      MCP_BASE_URL: ${MCP_BASE_URL:-http://localhost:3041}
+      SMTP_SERVERS: ${SMTP_SERVERS:-}
+      SMTP_FROM: ${SMTP_FROM:-TypeRelay <noreply@localhost>}
+      SESSION_SECRET: ${SESSION_SECRET:-change-me}
+      JWT_SECRET: ${JWT_SECRET:-change-me}
+      IS_DOCKER: "true"
       DOCS_DIR: /documentation/.vitepress/dist
-      MCP_SECRET_FILE: /integrations/mcp-secret
     volumes:
       - typerelay-server:/data
-      - typerelay-integrations:/integrations
       - ./docs:/documentation:ro
       - ./apps/server:/opt/typerelay/apps/server
       - typerelay-node-modules:/opt/typerelay/apps/server/node_modules
@@ -58,7 +60,7 @@ services:
     healthcheck:
       disable: true
     environment:
-      MONGODB_URI: mongodb://mongo:27017/typerelay?replicaSet=typerelay
+      MONGO_URI: mongodb://mongo:27017/typerelay?replicaSet=typerelay
       SERVER_MODE: scheduler
     volumes:
       - ./apps/server:/opt/typerelay/apps/server
@@ -89,12 +91,11 @@ services:
     ports:
       - "127.0.0.1:3041:3041"
     environment:
-      API_BASE: http://server:3040
-      APP_ORIGIN: http://localhost:3040
-      MCP_ORIGIN: http://localhost:3041/mcp
-      MCP_SECRET_FILE: /run/typerelay/mcp-secret
-    volumes:
-      - typerelay-integrations:/run/typerelay:ro
+      API_BASE_URL: http://server:3040
+      APP_URL: ${APP_URL:-http://localhost:3040}
+      MCP_BASE_URL: ${MCP_BASE_URL:-http://localhost:3041}
+      JWT_SECRET: ${JWT_SECRET:-change-me}
+      IS_DOCKER: "true"
     depends_on:
       server:
         condition: service_healthy
@@ -169,4 +170,3 @@ volumes:
   typerelay-mongo:
   typerelay-server:
   typerelay-node-modules:
-  typerelay-integrations:

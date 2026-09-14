@@ -29,7 +29,7 @@ COPY apps/mcp ../mcp
 COPY docs/web/Streamient-LICENSE docs/web/Mailtwine-LICENSE docs/web/attribution.md /opt/typerelay/notices/
 COPY --from=rust /src/target/release/typerelay-yaml /src/target/release/typerelay /usr/local/bin/
 COPY --from=rust /src/target/wasm32-unknown-unknown/release/typerelay_template_wasm.wasm /usr/local/share/typerelay/template.wasm
-RUN mkdir -p /data/editor /integrations && chown -R node:node /data /integrations
+RUN mkdir -p /data/editor && chown -R node:node /data
 USER node
 HEALTHCHECK --interval=30s --timeout=3s --retries=3 CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3040)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 CMD ["npm", "run", "start"]

@@ -2,8 +2,8 @@ repo = "typerelay"
 default_files = ["compose.yml", "compose.dbh.yml"]
 
 [environment]
-TYPERELAY_ORIGIN = "https://tr.{profile}.lan"
-TYPERELAY_MCP_ORIGIN = "https://mcp.tr.{profile}.lan/mcp"
+APP_URL = "https://tr.{profile}.lan"
+MCP_BASE_URL = "https://mcp.tr.{profile}.lan"
 
 [urls]
 app = "https://tr.{profile}.lan"

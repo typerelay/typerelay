@@ -4,7 +4,6 @@ import session from 'express-session';
 import MongoStore from 'connect-mongo';
 import helmet from 'helmet';
 import { rateLimit } from 'express-rate-limit';
-import { readFileSync, writeFileSync } from 'node:fs';
 import { mongoose, User, Account, Member, Device, Conflict, Group, Ticket, Operation } from './model/index.js';
 import { Auth } from './services/auth.js';
 import { Support, Yaml } from './services/support.js';
@@ -17,7 +16,7 @@ import { Scheduler } from './services/scheduler.js';
 
 export class Server {
 	static async start() {
-		await mongoose.connect(process.env.MONGODB_URI, { autoIndex: false });
+		await mongoose.connect(process.env.MONGO_URI, { autoIndex: false });
 		if (process.env.SERVER_MODE === 'scheduler') {
 			Scheduler.start();
 			console.log('TypeRelay scheduler running: Trash cleanup daily at 02:30');
@@ -26,25 +25,21 @@ export class Server {
 		await StorageMigration.code();
 		await Promise.all(Object.values(mongoose.models).map(model => model.createIndexes()));
 		await StorageMigration.run();
-		const secretPath = process.env.SESSION_SECRET_FILE || '/data/session-secret';
-		try { writeFileSync(secretPath, Support.token(), { flag: 'wx', mode: 0o600 }); } catch (error) { if (error.code !== 'EEXIST') throw error; }
-		const mcpSecretPath = process.env.MCP_SECRET_FILE || '/data/mcp-secret';
-		try { writeFileSync(mcpSecretPath, Support.token(), { flag: 'wx', mode: 0o600 }); } catch (error) { if (error.code !== 'EEXIST') throw error; }
 		const app = express();
-		if (process.env.TRUST_PROXY === '1') app.set('trust proxy', 1);
+		if (process.env.IS_DOCKER === 'true') app.set('trust proxy', 1);
 		app.set('view engine', 'pug');
 		app.set('views', './views');
 		app.use((req, res, next) => { res.locals.styleNonce = Support.token(); next(); });
 		app.use('/docs', helmet({ contentSecurityPolicy: false }), express.static(process.env.DOCS_DIR || '/docs', { extensions: ['html'] }));
 		app.use(helmet({ contentSecurityPolicy: { directives: { 'upgrade-insecure-requests': Auth.origin.startsWith('https:') ? [] : null, 'script-src': ["'self'", "'wasm-unsafe-eval'"], 'style-src': ["'self'", (req, res) => "'nonce-" + res.locals.styleNonce + "'"], 'img-src': ["'self'", 'data:'] } } }));
 		app.use(express.json({ limit: '12mb' }), express.urlencoded({ extended: false, limit: '32kb' }));
-		app.use('/assets/generated', express.static(process.env.CODE_EDITOR_DIR || '/data/editor'));
+		app.use('/assets/generated', express.static('/data/editor'));
 		app.use('/assets', express.static('public'));
 		app.use('/vendor/webauthn', express.static('node_modules/@simplewebauthn/browser/dist/bundle'));
 		app.use('/vendor/bootstrap', express.static('node_modules/bootstrap/dist'));
 		app.use('/vendor/sweetalert2', express.static('node_modules/sweetalert2/dist'));
-		const sessionStore = MongoStore.create({ mongoUrl: process.env.MONGODB_URI, collectionName: 'web_sessions' });
-		app.use(session({ name: 'typerelay.sid', secret: readFileSync(secretPath, 'utf8'), store: sessionStore, resave: false, saveUninitialized: false, cookie: { httpOnly: true, sameSite: 'lax', secure: Auth.origin.startsWith('https:'), maxAge: 7 * 86400000 } }));
+		const sessionStore = MongoStore.create({ mongoUrl: process.env.MONGO_URI, collectionName: 'web_sessions' });
+		app.use(session({ name: 'typerelay.sid', secret: process.env.SESSION_SECRET || 'change-me', store: sessionStore, resave: false, saveUninitialized: false, cookie: { httpOnly: true, sameSite: 'lax', secure: Auth.origin.startsWith('https:'), maxAge: 7 * 86400000 } }));
 		app.use(async (req, res, next) => {
 			if (req.session.user) {
 				const user = await User.findById(req.session.user).select('auth_version').lean();
