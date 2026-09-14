@@ -6,6 +6,7 @@ services:
       dbh_proxy:
         aliases:
           - "${DBH_PROFILE}-typerelay-app"
+          - "${DBH_PROFILE}-typerelay-server"
 
   mcp:
     ports: !override []
