@@ -105,6 +105,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  hashery: 3.0.1
+
 importers:
 
   .:
@@ -124,6 +127,9 @@ importers:
       '@codemirror/view':
         specifier: ^6.43.11
         version: 6.43.11
+      '@managani/cache':
+        specifier: 0.1.5
+        version: 0.1.5
       '@simplewebauthn/browser':
         specifier: ^13.3.0
         version: 13.3.0
@@ -755,6 +761,10 @@ packages:
   '@lezer/yaml@1.0.4':
     resolution: {integrity: sha512-2lrrHqxalACEbxIbsjhqGpSW8kWpUKuY6RHgnSAFZa6qK62wvnPxA8hGOwOoDbwHcOFs5M4o27mjGu+P7TvBmw==}
 
+  '@managani/cache@0.1.5':
+    resolution: {integrity: sha512-B+Px97XgB/NbxX3bEVOdCjZCF0v46mZ0AJoDRlrOxku67q4PdsV7m9ZHiiL4Ltp7XANOO0NPJPqDwXSdyZfPUQ==}
+    engines: {node: '>=24'}
+
   '@marijn/find-cluster-break@1.0.4':
     resolution: {integrity: sha512-Wy0V7+SGUjnF9/TkiM1hKVDPj7jKXduPNboMVtHTA8dySMURWqfg/JZ9E2Sq8JgSJmkl7k7Qe9FLeMSrSraWmQ==}
 
@@ -1204,6 +1214,10 @@ packages:
     resolution: {integrity: sha512-NqADB8VjPFLM2V0VvHUewwwsw0ZWBaIdgo+ieHtK3hasLz4qeCRjYcqfB6AQrBggRKppKF8L52/VqdVsO47Dlw==}
     engines: {node: '>= 0.4'}
 
+  hashery@3.0.1:
+    resolution: {integrity: sha512-jfLVt3/SEkJzW/OCSK7Bxdl+FpXYDpEE84QOU4wzKRpO7rNoafNK718Z71GPQR/ozfQmKxXS++MhbrL/eKaTow==}
+    engines: {node: '>=22.18'}
+
   hasown@2.0.4:
     resolution: {integrity: sha512-T2UbfbBEF32wiepXIsMlTW9+dDYC6wMh/t/vYA4tuOMKqWz/n3vr1NFSxQiyP+zk2mXsoMA/i/7qV6LKut1t1A==}
     engines: {node: '>= 0.4'}
@@ -1211,6 +1225,10 @@ packages:
   helmet@8.3.0:
     resolution: {integrity: sha512-Qgpiaws3Sm30Av8Eah6sjMCZZwjlBu+E68rhpCWBshY1lb09HtLwj5GviX0OyQIn+ulUS0iX0AxN5n3tLZzz1w==}
     engines: {node: '>=18.0.0'}
+
+  hookified@3.0.3:
+    resolution: {integrity: sha512-ZcbRytYgERoKtosiaXolUIPIWMgUCrSiWQEzFZ0kc8etD/LPgpy4/KOrtssFdK7ZXlTTyb4cob2veqj7osv8yA==}
+    engines: {node: '>=22.18.0'}
 
   html-encoding-sniffer@4.0.0:
     resolution: {integrity: sha512-Y22oTqIU4uuPgEemfz7NDJz6OeKf12Lsu+QC+s3BVpda64lTiMYCyGwg5ki4vFxkMwQdeZDl2adZoqUgdFuTgQ==}
@@ -1318,6 +1336,10 @@ packages:
   media-typer@1.1.1:
     resolution: {integrity: sha512-yz3xRaG20c6/BOzvYoDaGtPmGscs7YivItZEEqe6GbwNfHuxu9YNmvnEkMzKldAGY4/80pRcQRZSEnhquk9XuQ==}
     engines: {node: '>= 0.8'}
+
+  memcache@1.10.0:
+    resolution: {integrity: sha512-USVidZugkSeQuWK8qoI2UUVvTzs1i4tgZ0RhD1Jlw0Ep/02depgMLBoZRIae0YgnRbV4qOVW+QJlijmcoe6DzQ==}
+    engines: {node: '>=22.19.0', pnpm: '>=11'}
 
   memory-pager@1.5.0:
     resolution: {integrity: sha512-ZS4Bp4r/Zoeq6+NLJpP+0Zzm0pR8whtGPf1XExKLJBAczGMnSi3It14OiNCStjQjM6NU1okjQGSxgEZN8eBYKg==}
@@ -2377,6 +2399,10 @@ snapshots:
       '@lezer/highlight': 1.2.3
       '@lezer/lr': 1.4.10
 
+  '@managani/cache@0.1.5':
+    dependencies:
+      memcache: 1.10.0
+
   '@marijn/find-cluster-break@1.0.4': {}
 
   '@mongodb-js/saslprep@1.5.4':
@@ -2950,11 +2976,17 @@ snapshots:
     dependencies:
       has-symbols: 1.1.0
 
+  hashery@3.0.1:
+    dependencies:
+      hookified: 3.0.3
+
   hasown@2.0.4:
     dependencies:
       function-bind: 1.1.2
 
   helmet@8.3.0: {}
+
+  hookified@3.0.3: {}
 
   html-encoding-sniffer@4.0.0:
     dependencies:
@@ -3080,6 +3112,11 @@ snapshots:
   math-intrinsics@1.1.0: {}
 
   media-typer@1.1.1: {}
+
+  memcache@1.10.0:
+    dependencies:
+      hashery: 3.0.1
+      hookified: 3.0.3
 
   memory-pager@1.5.0: {}
 
