@@ -14,7 +14,7 @@ test('Windows CLI and TUI use one native staging plan', () => {
 	assert.equal(cross.command, 'cargo-xwin');
 	assert.deepEqual(native.args.slice(-4), ['--bin', 'typerelay', '--bin', 'typerelay-tui']);
 	assert.deepEqual(native.files.map(file => path.basename(file.destination)), ['typerelay-x86_64-pc-windows-msvc.exe', 'typerelay-tui-x86_64-pc-windows-msvc.exe']);
-	assert.ok(cross.files.every(file => file.source.startsWith('/tmp/typerelay-release/')));
+	assert.ok(cross.files.every(file => file.source.startsWith(path.resolve(root, '/tmp/typerelay-release') + path.sep)));
 	assert.throws(() => NativeTools.plan('aarch64-pc-windows-msvc'), /Unsupported/);
 });
 
