@@ -1,4 +1,3 @@
-import { rateLimit } from 'express-rate-limit';
 import { timingSafeEqual } from 'node:crypto';
 import pug from 'pug';
 import Ajv from 'ajv/dist/2020.js';
@@ -10,6 +9,7 @@ import { Team } from '../services/team.js';
 import { Integration, IntegrationToken, ApiAudit, Member, Account, Device, Conflict, Operation } from '../model/index.js';
 import { operations } from './catalog.js';
 import { Billing } from '../services/billing.js';
+import { ApiRateLimit } from '../rate_limit.js';
 
 export class PublicApi {
 	static clean(value) {
@@ -63,13 +63,12 @@ export class PublicApi {
 			await IntegrationToken.create({ hash: Support.hash(token), grant: ctx.credential, resource: Auth.apiResource(), expires: new Date(Date.now() + 60000) });
 			res.set('Cache-Control', 'no-store').json({ access_token: token, expires_in: 60 });
 		});
-		app.use('/api/v3', rateLimit({ windowMs: 60000, limit: 600, standardHeaders: 'draft-8', legacyHeaders: false }), async (req, res, next) => {
+		app.use('/api/v3', ...ApiRateLimit.createApiLimiters(), async (req, res, next) => {
 			res.set('Cache-Control', 'no-store');
 			try { req.ctx = await Auth.integration(req.headers.authorization); } catch (error) { if (error.status === 401) res.set('WWW-Authenticate', 'Bearer resource_metadata="' + Auth.origin + '/.well-known/oauth-protected-resource/api/v3"'); throw error; }
 			if (req.boundAccount) Support.assert(req.ctx.account === req.boundAccount, 'Custom domain account mismatch', 403);
 			next();
 		});
-		app.use('/api/v3', rateLimit({ windowMs: 60000, limit: 300, standardHeaders: 'draft-8', legacyHeaders: false, keyGenerator: req => req.ctx.credential }));
 		for (const operation of operations) app[operation.method]('/api/v3' + operation.path, async (req, res) => {
 			res.on('finish', () => ApiAudit.create({ account: req.ctx.account, user: req.ctx.user, credential: req.ctx.credential, operation: operation.id, status: res.statusCode, expires: new Date(Date.now() + 90 * 86400000) }).catch(() => console.error('API audit write failed')));
 			Auth.requireScope(req.ctx, operation.scope);
