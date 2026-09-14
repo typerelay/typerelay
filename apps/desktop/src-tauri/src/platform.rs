@@ -30,6 +30,8 @@ pub fn paste(target: &Target, erase: usize, text: Option<String>) -> Result<()> 
     let deadline = Instant::now() + Duration::from_secs(2);
     while native::keys_down() { ensure!(Instant::now() < deadline, "Release shortcut keys before inserting"); std::thread::sleep(Duration::from_millis(10)); }
     ensure!(target.focused()?, "Original window lost focus; nothing inserted");
+    #[cfg(target_os="windows")]
+    if target.replace_text(erase,text.as_deref().unwrap_or("\n"))?{return Ok(());}
     let mut clipboard=None;let has_text=text.is_some();
     if let Some(text)=text {
         #[cfg(target_os="windows")]
