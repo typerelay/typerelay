@@ -1,5 +1,7 @@
 use anyhow::Result;
-use ratatui::crossterm::{event::{EnableMouseCapture, DisableMouseCapture, EnableBracketedPaste, DisableBracketedPaste, PushKeyboardEnhancementFlags, PopKeyboardEnhancementFlags, KeyboardEnhancementFlags}, execute};
+use ratatui::crossterm::{event::{EnableMouseCapture, DisableMouseCapture, EnableBracketedPaste, DisableBracketedPaste}, execute};
+#[cfg(not(target_os = "windows"))]
+use ratatui::crossterm::event::{PushKeyboardEnhancementFlags, PopKeyboardEnhancementFlags, KeyboardEnhancementFlags};
 use std::io::{IsTerminal, Write};
 use ratatui::crossterm::terminal::{enable_raw_mode, EnterAlternateScreen};
 
@@ -17,7 +19,10 @@ impl TerminalSession {
         let guard = Self;
         execute!(TerminalOutput, EnterAlternateScreen)?;
         let terminal = Terminal::new(ratatui::backend::CrosstermBackend::new(TerminalOutput))?;
+        #[cfg(not(target_os = "windows"))]
         execute!(TerminalOutput, PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES), EnableMouseCapture, EnableBracketedPaste)?;
+        #[cfg(target_os = "windows")]
+        execute!(TerminalOutput, EnableMouseCapture, EnableBracketedPaste)?;
         Ok((guard, terminal))
     }
     pub fn connected() -> bool {
@@ -32,7 +37,10 @@ impl TerminalSession {
 }
 impl Drop for TerminalSession {
     fn drop(&mut self) {
+        #[cfg(not(target_os = "windows"))]
         let _ = execute!(TerminalOutput, DisableMouseCapture, DisableBracketedPaste, PopKeyboardEnhancementFlags);
+        #[cfg(target_os = "windows")]
+        let _ = execute!(TerminalOutput, DisableMouseCapture, DisableBracketedPaste);
         let _ = ratatui::try_restore();
     }
 }
