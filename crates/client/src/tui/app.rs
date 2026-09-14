@@ -24,6 +24,10 @@ pub struct App {
     title: TextArea<'static>,
     language: String,
     code: bool,
+    template: bool,
+    variables: std::collections::BTreeMap<String,typerelay_core::template::Variable>,
+    template_dialog: Option<crate::template_dialog::Dialog>,
+    fill_base: Option<(String,i64)>,
     preview_x: u16,
     expansion: TextArea<'static>,
     name: TextArea<'static>,
@@ -66,11 +70,11 @@ impl App {
         let files = store.files()?;
         let mut file_state = ListState::default();
         file_state.select(Some(0));
-        Ok(Self { store, settings, screen: Screen::Files, files, file_state, snippets_state: ListState::default(), file: None, search: TextArea::default(), search_focused: false, trigger: TextArea::default(), title: TextArea::default(), language: "plain_text".into(), code: false, preview_x: 0, expansion: TextArea::default(), name: TextArea::default(), url: TextArea::default(), editor_focus: 0, editing: None, original_entry: None, original_url: String::new(), prefix: TextArea::default(), original_prefix: String::new(), pending: None, pending_delete: None, selected_ids: std::collections::BTreeSet::new(), selection_anchor: None, move_destination: None, move_choices: Vec::new(), move_state: ListState::default(), move_from: Screen::Browse, move_items: Vec::new(), pending_batch: None, bulk_buttons: Vec::new(), pending_trash: None, trash_rows: Vec::new(), trash_state: ListState::default(), trash_buttons: Vec::new(), confirm_from: Screen::Files, status: "Choose a file, or create a new one".into(), error: false, quit: false, toolbar: Vec::new(), list_area: Rect::default(), field_areas: Vec::new(), save_area: Rect::default(), cancel_area: Rect::default(), confirm_buttons: Vec::new() })
+        Ok(Self { store, settings, screen: Screen::Files, files, file_state, snippets_state: ListState::default(), file: None, search: TextArea::default(), search_focused: false, trigger: TextArea::default(), title: TextArea::default(), language: "plain_text".into(), code: false, template:false, variables:Default::default(), template_dialog:None, fill_base:None, preview_x: 0, expansion: TextArea::default(), name: TextArea::default(), url: TextArea::default(), editor_focus: 0, editing: None, original_entry: None, original_url: String::new(), prefix: TextArea::default(), original_prefix: String::new(), pending: None, pending_delete: None, selected_ids: std::collections::BTreeSet::new(), selection_anchor: None, move_destination: None, move_choices: Vec::new(), move_state: ListState::default(), move_from: Screen::Browse, move_items: Vec::new(), pending_batch: None, bulk_buttons: Vec::new(), pending_trash: None, trash_rows: Vec::new(), trash_state: ListState::default(), trash_buttons: Vec::new(), confirm_from: Screen::Files, status: "Choose a file, or create a new one".into(), error: false, quit: false, toolbar: Vec::new(), list_area: Rect::default(), field_areas: Vec::new(), save_area: Rect::default(), cancel_area: Rect::default(), confirm_buttons: Vec::new() })
     }
     fn text(value: &str) -> TextArea<'static> { TextArea::new(value.split('\n').map(str::to_owned).collect()) }
     fn value(field: &TextArea<'_>) -> String { field.lines().join("\n") }
-    fn draft(&self) -> Match { Match { trigger: Self::value(&self.trigger), replace: Self::value(&self.expansion), title: Self::value(&self.title), kind: if self.code { "code" } else { "plain_text" }.into(), language: self.language.clone() } }
+    fn draft(&self) -> Match { Match { variables: self.variables.clone(), trigger: Self::value(&self.trigger), replace: Self::value(&self.expansion), title: Self::value(&self.title), kind: if self.template { "template" } else if self.code { "code" } else { "plain_text" }.into(), language: self.language.clone() } }
     fn next_editor_field(&mut self, backwards: bool) {
         let order = [2, 0, 1];
         let index = order.iter().position(|field| *field == self.editor_focus).unwrap_or(0);
@@ -134,15 +138,15 @@ impl App {
         let file = self.file.as_ref().context("Choose a file first")?;
         typerelay_client::sync::Sync::editable(self.settings.config_dir(), &self.store.directory, &file.name)?;
         self.editing = if new { None } else { Some(self.selected().context("Select a snippet")?) };
-        let entry = self.editing.map(|index| file.entries[index].clone()).unwrap_or(Match { trigger: String::new(), replace: String::new(), ..Match::default() });
-        self.title = Self::text(&entry.title); self.language = entry.language.clone(); self.code = entry.kind == "code";
+        let entry = self.editing.map(|index| file.entries[index].clone()).unwrap_or(Match { variables: Default::default(), trigger: String::new(), replace: String::new(), ..Match::default() });
+        self.title = Self::text(&entry.title); self.language = entry.language.clone(); self.code = entry.kind == "code"; self.template=entry.kind=="template"; self.variables=entry.variables.clone();
         self.trigger = Self::text(&entry.trigger);
         self.trigger.move_cursor(ratatui_textarea::CursorMove::End);
         self.expansion = Self::text(&entry.replace); self.expansion.set_hard_tab_indent(true);
         self.original_entry = Some(entry);
         self.editor_focus = 0;
         self.screen = Screen::Edit;
-        self.message("Tab / Shift+Tab switch fields · Code: F2 leaves editor · F9 Text/Code · Ctrl+S saves", false);
+        self.message("Tab / Shift+Tab switch fields · Code: F2 leaves editor · F9 Type · Ctrl+S saves", false);
         Ok(())
     }
     fn save(&mut self) -> Result<()> {
@@ -351,6 +355,14 @@ impl App {
         if let Err(error) = self.handle_inner(event) { self.message(format!("{error:#}"), true); }
     }
     fn handle_inner(&mut self, event: Event) -> Result<()> {
+        if let Some(dialog)=&mut self.template_dialog {
+            if let Some(outcome)=dialog.event(event) { match outcome {
+                crate::template_dialog::Outcome::Cancel=>(),
+                crate::template_dialog::Outcome::Definition{name,variable,insert}=>{if let Some(variable)=variable{self.variables.insert(name.clone(),variable);}
+                    if insert{self.expansion.insert_str(format!("{{{{{name}}}}}"));}},
+                crate::template_dialog::Outcome::Copy(rendered)=>{if let Some((name,revision))=&self.fill_base{let current=self.store.open(name)?;anyhow::ensure!(current.revision==*revision,"Library changed; reopen the template before copying");}typerelay_client::clipboard::PasteJob::copy_text(rendered.text)?;self.message(if rendered.enter_actions>0{"Copied text; Enter key actions omitted"}else{"Copied"},false);}
+            } self.template_dialog=None; self.fill_base=None; } return Ok(());
+        }
         if let Event::Key(key) = event {
             if key.kind == KeyEventKind::Release { return Ok(()); }
             if self.screen == Screen::Move {
@@ -392,11 +404,11 @@ impl App {
             match key.code {
                 KeyCode::F(1) => return self.toolbar_action(0),
                 KeyCode::F(2) if self.screen == Screen::Edit => { self.next_editor_field(key.modifiers.contains(KeyModifiers::SHIFT)); return Ok(()); }
-                KeyCode::F(9) if self.screen == Screen::Edit => { self.code = !self.code; self.message(if self.code { "Type: Code · Tab indents; F2 moves to the next field" } else { "Type: Text · Tab moves to the next field" }, false); return Ok(()); }
+                KeyCode::F(9) if self.screen == Screen::Edit => { if self.template {self.template=false;self.code=false;}else if self.code{self.code=false;self.template=true;}else{self.code=true;} self.message(if self.template { "Type: Template · F11 variables · F10 fill and copy" } else if self.code { "Type: Code · Tab indents; F2 moves to the next field" } else { "Type: Text · Tab moves to the next field" }, false); return Ok(()); }
+                KeyCode::F(11) if self.screen == Screen::Edit && self.template => { self.template_dialog=Some(crate::template_dialog::Dialog::variables(typerelay_core::template::Template{text:Self::value(&self.expansion),variables:self.variables.clone()})?);return Ok(()); }
                 KeyCode::F(10) if matches!(self.screen, Screen::Edit | Screen::Browse) => {
-                    let text = if self.screen == Screen::Edit { Self::value(&self.expansion) } else { self.selected().map(|i|self.file.as_ref().unwrap().entries[i].replace.clone()).unwrap_or_default() };
-                    typerelay_client::clipboard::PasteJob::copy_text(text)?;
-                    self.message("Copied", false); return Ok(());
+                    let entry=if self.screen==Screen::Edit {self.draft()}else{self.selected().map(|i|self.file.as_ref().unwrap().entries[i].clone()).unwrap_or_default()};
+                    if entry.kind=="template"{let template=typerelay_core::template::Template{text:entry.replace.clone(),variables:entry.variables.clone()};if template.fields().map_err(anyhow::Error::msg)?.is_empty(){let rendered=typerelay_client::templates::Templates::render(&entry.value()["content"],Default::default(),false)?;typerelay_client::clipboard::PasteJob::copy_text(rendered.text)?;self.message(if rendered.enter_actions>0{"Copied text; Enter key actions omitted"}else{"Copied"},false);}else{self.fill_base=self.file.as_ref().map(|file|(file.name.clone(),file.revision));self.template_dialog=Some(crate::template_dialog::Dialog::fill(template)?);}}else{typerelay_client::clipboard::PasteJob::copy_text(entry.replace)?;self.message("Copied",false);}return Ok(());
                 }
                 KeyCode::F(2) => return self.toolbar_action(1),
                 KeyCode::F(5) => return self.toolbar_action(2),
@@ -537,6 +549,7 @@ impl App {
     pub fn draw(&mut self, frame: &mut Frame) {
         self.toolbar.clear(); self.trash_buttons.clear(); self.bulk_buttons.clear(); self.field_areas.clear(); self.list_area = Rect::default(); self.save_area = Rect::default(); self.cancel_area = Rect::default();
         let area = frame.area();
+        if let Some(dialog)=&mut self.template_dialog {dialog.draw(frame,area);return;}
         if area.width < 60 || area.height < 20 { frame.render_widget(Paragraph::new("TypeRelay — resize terminal to at least 60 × 20. Ctrl+Q exits."), area); return; }
         let rows = Layout::vertical([Constraint::Length(2), Constraint::Length(if area.width < 75 { 6 } else { 3 }), Constraint::Min(8), Constraint::Length(3)]).split(area);
         let title = self.file.as_ref().map(|file| format!("TypeRelay  /  {}", file.name)).unwrap_or("TypeRelay  /  Snippet editor".into());
@@ -586,23 +599,23 @@ impl App {
                 let items = filtered.iter().map(|index| ListItem::new(format!("[{}] {}", if self.selected_ids.contains(&self.file.as_ref().unwrap().ids[*index]) { "x" } else { " " }, entries[*index].label()))).collect::<Vec<_>>();
                 frame.render_stateful_widget(List::new(items).block(Self::border(format!("{} snippets — Enter to edit", filtered.len()), !self.search_focused)).highlight_style(Style::default().bg(Color::DarkGray)).highlight_symbol("› "), columns[0], &mut self.snippets_state);
                 let preview = self.selected().map(|index| self.file.as_ref().unwrap().entries[index].replace.clone()).unwrap_or("No matching snippets. F2 adds a snippet.".into());
-                frame.render_widget(Paragraph::new(preview).scroll((0, self.preview_x)).block(Self::border("Preview · ←/→ scroll · F10 Copy", false)), columns[1]);
+                frame.render_widget(Paragraph::new(preview).scroll((0, self.preview_x)).block(Self::border("Preview · ←/→ scroll · F10 Fill/Copy · F11 Variables", false)), columns[1]);
             }
             Screen::Edit => {
                 let parts = Layout::vertical([Constraint::Length(3), Constraint::Length(3), Constraint::Min(3), Constraint::Length(0), Constraint::Length(2), Constraint::Length(3)]).split(body);
                 let metadata = Layout::horizontal([Constraint::Percentage(80), Constraint::Percentage(20)]).split(parts[0]);
                 let title_area = metadata[0];
-                frame.render_widget(Paragraph::new(if self.code { "Code · F9 toggles" } else { "Text · F9 toggles" }).style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)).block(Self::border("Type", false)), metadata[1]);
+                frame.render_widget(Paragraph::new(if self.template { "Template · F9" } else if self.code { "Code · F9 toggles" } else { "Text · F9 toggles" }).style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)).block(Self::border("Type", false)), metadata[1]);
                 let trigger_row = Layout::horizontal([Constraint::Length(5), Constraint::Length(1), Constraint::Min(1)]).split(parts[1]);
                 frame.render_widget(Paragraph::new(self.settings.settings.trigger_prefix.clone()).centered().block(Self::border("", false)).style(Style::default().fg(Color::Gray)), trigger_row[0]);
                 self.trigger.set_block(Self::border("Abbreviation (optional)", self.editor_focus == 0));
-                self.expansion.set_block(Self::border(if self.code { "Code · Tab inserts tab · F2 / Ctrl+Tab exit · Shift+Tab back" } else { "Text · Tab next field · Shift+Tab previous · F9 Code" }, self.editor_focus == 1));
+                self.expansion.set_block(Self::border(if self.template { "Template · F11 Insert/edit variable · F10 Fill and copy" } else if self.code { "Code · Tab inserts tab · F2 / Ctrl+Tab exit · Shift+Tab back" } else { "Text · Tab next field · Shift+Tab previous · F9 Code" }, self.editor_focus == 1));
                 self.title.set_block(Self::border("Title (optional)", self.editor_focus == 2));
                 frame.render_widget(&self.title, title_area);
                 frame.render_widget(&self.trigger, trigger_row[2]); frame.render_widget(&self.expansion, parts[2]);
                 self.field_areas.extend([trigger_row[2], parts[2], title_area]);
                 let destination = self.move_destination.as_ref().and_then(|id| self.move_choices.iter().find(|library|library["_id"] == *id)).and_then(|library|library["name"].as_str()).unwrap_or("Current library");
-                frame.render_widget(Paragraph::new(format!("Library: {destination} · Ctrl+M / F8 changes destination · F9 Text/Code · F10 Copy")), parts[4]);
+                frame.render_widget(Paragraph::new(format!("Library: {destination} · Ctrl+M / F8 changes destination · F9 Type · F10 Fill/Copy · F11 Variables")), parts[4]);
                 self.form_buttons(frame, parts[5]);
             }
             Screen::NewFile => {
@@ -746,8 +759,8 @@ mod tests {
     fn delete_selected_filtered_snippet_requires_confirmation_and_keeps_file() {
         let temp = tempfile::tempdir().unwrap(); let mut app = Fixture::app(temp.path());
         let file = app.store.create("mine").unwrap();
-        let file = app.store.save(&file, None, Match { trigger: "first".into(), replace: "Keep\nthis".into(), ..Match::default() }).unwrap();
-        app.file = Some(app.store.save(&file, None, Match { trigger: "second".into(), replace: "Remove".into(), ..Match::default() }).unwrap());
+        let file = app.store.save(&file, None, Match { variables: Default::default(), trigger: "first".into(), replace: "Keep\nthis".into(), ..Match::default() }).unwrap();
+        app.file = Some(app.store.save(&file, None, Match { variables: Default::default(), trigger: "second".into(), replace: "Remove".into(), ..Match::default() }).unwrap());
         app.screen = Screen::Browse;
         app.search = App::text("second");
         app.snippets_state.select(Some(0));
@@ -770,7 +783,7 @@ mod tests {
     fn delete_conflict_keeps_confirmation_and_search_delete_edits_query() {
         let temp = tempfile::tempdir().unwrap(); let mut app = Fixture::app(temp.path());
         let file = app.store.create("mine").unwrap();
-        app.file = Some(app.store.save(&file, None, Match { trigger: "first".into(), replace: "Keep".into(), ..Match::default() }).unwrap());
+        app.file = Some(app.store.save(&file, None, Match { variables: Default::default(), trigger: "first".into(), replace: "Keep".into(), ..Match::default() }).unwrap());
         app.screen = Screen::Browse; app.search_focused = true;
         Fixture::key(&mut app, KeyCode::Delete, KeyModifiers::NONE);
         assert_eq!(app.screen, Screen::Browse);
@@ -787,7 +800,7 @@ mod tests {
     fn mouse_delete_and_readonly_permissions() {
         let temp = tempfile::tempdir().unwrap(); let mut app = Fixture::app(temp.path());
         let file = app.store.create("mine").unwrap();
-        app.file = Some(app.store.save(&file, None, Match { trigger: "first".into(), replace: "Keep".into(), ..Match::default() }).unwrap());
+        app.file = Some(app.store.save(&file, None, Match { variables: Default::default(), trigger: "first".into(), replace: "Keep".into(), ..Match::default() }).unwrap());
         app.screen = Screen::Browse;
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
         terminal.draw(|frame| app.draw(frame)).unwrap();
@@ -798,7 +811,7 @@ mod tests {
         let button = app.confirm_buttons[0];
         app.handle(Event::Mouse(ratatui::crossterm::event::MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: button.x + 1, row: button.y + 1, modifiers: KeyModifiers::NONE }));
         assert!(app.file.as_ref().unwrap().entries.is_empty());
-        app.file = Some(app.store.save(app.file.as_ref().unwrap(), None, Match { trigger: "shared".into(), replace: "Read only".into(), ..Match::default() }).unwrap());
+        app.file = Some(app.store.save(app.file.as_ref().unwrap(), None, Match { variables: Default::default(), trigger: "shared".into(), replace: "Read only".into(), ..Match::default() }).unwrap());
         let db = typerelay_client::database::Database::open(&app.store.directory).unwrap();
         db.connection.execute("UPDATE libraries SET data=json_set(data,'$.permissions.edit',json('false'))", []).unwrap();
         Fixture::key(&mut app, KeyCode::F(3), KeyModifiers::NONE);
@@ -810,7 +823,7 @@ mod tests {
     fn trash_page_restores_and_empties_with_confirmation() {
         let temp = tempfile::tempdir().unwrap(); let mut app = Fixture::app(temp.path());
         let file = app.store.create("Local").unwrap();
-        app.file = Some(app.store.save(&file, None, Match { trigger: "hello".into(), replace: "Hello".into(), ..Match::default() }).unwrap());
+        app.file = Some(app.store.save(&file, None, Match { variables: Default::default(), trigger: "hello".into(), replace: "Hello".into(), ..Match::default() }).unwrap());
         app.screen = Screen::Browse;
         Fixture::key(&mut app, KeyCode::F(3), KeyModifiers::NONE);
         Fixture::key(&mut app, KeyCode::Char('d'), KeyModifiers::NONE);

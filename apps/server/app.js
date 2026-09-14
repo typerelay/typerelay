@@ -30,7 +30,7 @@ export class Server {
 		app.set('views', './views');
 		app.use((req, res, next) => { res.locals.styleNonce = Support.token(); next(); });
 		app.use('/docs', helmet({ contentSecurityPolicy: false }), express.static(process.env.DOCS_DIR || '/docs', { extensions: ['html'] }));
-		app.use(helmet({ contentSecurityPolicy: { directives: { 'script-src': ["'self'"], 'style-src': ["'self'", (req, res) => "'nonce-" + res.locals.styleNonce + "'"], 'img-src': ["'self'", 'data:'] } } }));
+		app.use(helmet({ contentSecurityPolicy: { directives: { 'upgrade-insecure-requests': Auth.origin.startsWith('https:') ? [] : null, 'script-src': ["'self'", "'wasm-unsafe-eval'"], 'style-src': ["'self'", (req, res) => "'nonce-" + res.locals.styleNonce + "'"], 'img-src': ["'self'", 'data:'] } } }));
 		app.use(express.json({ limit: '12mb' }), express.urlencoded({ extended: false, limit: '32kb' }));
 		app.use('/assets/generated', express.static(process.env.CODE_EDITOR_DIR || '/data/editor'));
 		app.use('/assets', express.static('public'));
@@ -78,9 +78,9 @@ export class Server {
 			const ctx = await Support.context(req.session.user, String(account._id));
 			res.render('app', { integrationScopes: Auth.scopes, importFormats: Libraries.importFormats, accounts, account, ctx, libraries: await Libraries.list(ctx), team: await Team.list(ctx), profile: await User.findById(ctx.user).lean() });
 		});
-		app.use('/api/v1', (req, res) => res.status(426).json({ error: 'Upgrade TypeRelay: snippet moves require sync protocol 4', protocol: 4 }));
+		app.use('/api/v1', (req, res) => res.status(426).json({ error: 'Upgrade TypeRelay: template variables require sync protocol 5', protocol: 5 }));
 		app.use('/api/v2', async (req, res, next) => {
-			Support.assert(!req.headers.authorization || req.headers['x-typerelay-sync-protocol'] === '4', 'Upgrade TypeRelay: snippet moves require sync protocol 4', 426);
+			if (req.headers.authorization && req.headers['x-typerelay-sync-protocol'] !== '5') return res.status(426).json({ error: 'Upgrade TypeRelay: template variables require sync protocol 5', protocol: 5 });
 			req.ctx = req.headers.authorization ? await Auth.bearer(req.headers.authorization.replace(/^Bearer /, '')) : await Support.context(req.session.user, req.headers['x-account-id']);
 			next();
 		});

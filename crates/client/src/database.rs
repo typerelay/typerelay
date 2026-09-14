@@ -55,8 +55,8 @@ impl Database {
     pub fn entries(records: &[Value]) -> Result<Vec<Match>> {
         records.iter().filter(|entry| entry["state"] == "active").map(|entry| {
             let content = &entry["content"];
-            ensure!(content["version"] == 1 && (content["type"] == "plain_text" || content["type"] == "code"), "Unsupported snippet content");
-            Ok(Match { trigger: entry["trigger"].as_str().unwrap_or_default().into(), replace: content["text"].as_str().context("Missing text")?.into(), title: entry["title"].as_str().unwrap_or_default().into(), kind: content["type"].as_str().unwrap().into(), language: content["language"].as_str().unwrap_or("plain_text").into() })
+            ensure!(content["version"] == 1 && (content["type"] == "plain_text" || content["type"] == "code" || content["type"] == "template"), "Unsupported snippet content");
+            Ok(Match { variables: serde_json::from_value(content.get("variables").cloned().unwrap_or_else(||json!({})))?, trigger: entry["trigger"].as_str().unwrap_or_default().into(), replace: content["text"].as_str().context("Missing text")?.into(), title: entry["title"].as_str().unwrap_or_default().into(), kind: content["type"].as_str().unwrap().into(), language: content["language"].as_str().unwrap_or("plain_text").into() })
         }).collect()
     }
     pub fn snapshot(&self) -> Result<Snapshot> {
@@ -78,7 +78,13 @@ impl Database {
             total += bytes.len(); entries.extend(next);
         }
         ensure!(count <= 256 && total <= 8 * 1048576, "Active library limits exceeded");
-        Bridge::validate(&entries)
+        let mut snapshot = Bridge::validate(&entries)?;
+        for library in self.libraries()?.iter().filter(|library| library["state"] == "active") {
+            for record in self.records(library["_id"].as_str().unwrap())?.iter().filter(|record|record["state"] == "active" && record["content"]["type"] == "template") {
+                snapshot.identify(record["trigger"].as_str().unwrap_or_default(), typerelay_core::Identity { id: record["id"].as_str().context("Missing ID")?.into(), library: library["_id"].as_str().unwrap().into(), revision: record["revision"].as_i64().context("Missing revision")? });
+            }
+        }
+        Ok(snapshot)
     }
     fn validate_transaction(&self) -> Result<()> { self.validated_snapshot().map(|_| ()) }
     pub fn names(&self) -> Result<Vec<String>> {
@@ -682,13 +688,13 @@ mod tests {
     impl Fixture {
         fn new() -> Self { let temp = tempfile::tempdir().unwrap(); let directory = temp.path().join("snippets"); fs::create_dir_all(&directory).unwrap(); Self { _temp: temp, directory } }
         fn db(&self) -> Database { Database::open(&self.directory).unwrap() }
-        fn entry(trigger: &str, text: &str) -> Match { Match { trigger: trigger.into(), replace: text.into(), ..Match::default() } }
+        fn entry(trigger: &str, text: &str) -> Match { Match { variables: Default::default(), trigger: trigger.into(), replace: text.into(), ..Match::default() } }
     }
     #[test]
     fn code_optional_trigger_roundtrip_move_and_trash() {
         let fixture = Fixture::new(); let db = fixture.db();
         let file = db.create("Code").unwrap();
-        let entry = Match { trigger: String::new(), title: "Example".into(), kind: "code".into(), language: "RustLexer".into(), replace: "\t  {{ λ }}  \n$|$\n\n".into() };
+        let entry = Match { variables: Default::default(), trigger: String::new(), title: "Example".into(), kind: "code".into(), language: "RustLexer".into(), replace: "\t  {{ λ }}  \n$|$\n\n".into() };
         let file = db.edit(&file, None, Some(entry.clone())).unwrap();
         let file = db.edit(&file, None, Some(entry.clone())).unwrap();
         assert!(db.snapshot().unwrap().is_empty());

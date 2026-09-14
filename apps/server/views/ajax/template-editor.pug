@@ -1,0 +1,48 @@
+#template-options.mb-4(hidden data-variables=JSON.stringify((snippet && snippet.content && snippet.content.variables) || {}))
+	.row.align-items-end.mb-3(data-template-mutation)
+		.col
+			label.form-label(for="variable-kind") Insert variable
+			select#variable-kind.form-select.form-select-sm
+				option(value="custom") Text field
+				option(value="date") Date
+				option(value="time") Time
+				option(value="timestamp") Timestamp
+				option(value="key:enter") Enter keypress
+		.col
+			label.form-label(for="variable-name") Field name
+			input#variable-name.form-control.form-control-sm(autocomplete="off")
+		.col-auto
+			button#insert-variable.btn.btn-outline-secondary.btn-sm(type="button") Insert
+	p.small.text-muted Repeated field names share one answer. Enter keypress submits Enter to the target application.
+	#variable-definitions
+	p#template-error.text-danger(role="status")
+	label.form-label Preview
+	pre#template-preview.small
+	template#variable-definition
+		fieldset.mb-3(data-variable)
+			legend.h6
+			.row
+				.col-md-6
+					label.form-label Label
+					input.form-control.form-control-sm.mb-2(data-vfield="label")
+				.col-md-6(data-input-options)
+					label.form-label Default value
+					textarea.form-control.form-control-sm.mb-2(data-vfield="default")
+			div(data-input-options)
+				label.form-check
+					input.form-check-input(type="checkbox" data-vfield="required")
+					span.form-check-label Required
+				label.form-check
+					input.form-check-input(type="checkbox" data-vfield="multiline")
+					span.form-check-label Multiline
+			.row(data-time-options)
+				.col
+					label.form-label Format
+					select.form-select.form-select-sm(data-vfield="format")
+						each format in ['', 'YYYY-MM-DD', 'DD/MM/YYYY', 'MM/DD/YYYY', 'HH:mm', 'HH:mm:ss', 'YYYY-MM-DD HH:mm', 'ISO']
+							option(value=format)= format || 'Default'
+				.col
+					label.form-label Timezone
+					select.form-select.form-select-sm(data-vfield="timezone")
+						option(value="local") Local
+						option(value="utc") UTC

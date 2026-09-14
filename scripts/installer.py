@@ -220,7 +220,7 @@ WantedBy=graphical-session.target
     def install(self, dry_run):
         self.preflight()
         conflicts = self.conflicts()
-        print(f"Binaries: {self.destination}, {self.destination.with_name('typerelay-tui')}\nService: {self.unit}\nSnippets: {self.snippets}")
+        print("Binaries: " + ", ".join(str(destination) for _, _, destination in self.artifacts()) + f"\nService: {self.unit}\nSnippets: {self.snippets}")
         print("Starts with your graphical login, runs as your user, restarts after failures.")
         print("Administrator access installs scoped udev rules and loads uinput at boot.")
         if conflicts["manual"]:

@@ -96,6 +96,45 @@ services:
     volumes:
       - .:/repo:ro
       - /tmp/typerelay-docs-artifacts:/artifacts
+  template-server:
+    profiles: [tools]
+    image: typerelay-server
+    user: "0:0"
+    command: [node, test/template-browser-server.js]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3142/fixture-ready').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - ./apps/server:/app
+      - typerelay-node-modules:/app/node_modules
+      - /tmp/typerelay-template-fixture:/fixtures
+    depends_on:
+      mongo:
+        condition: service_healthy
+  template-browser:
+    profiles: [tools]
+    build:
+      context: .
+      dockerfile: docs/Dockerfile.test
+    command: [node, scripts/check-templates.mjs]
+    volumes:
+      - .:/repo:ro
+      - /tmp/typerelay-template-fixture:/fixtures:ro
+      - /tmp/typerelay-docs-artifacts:/artifacts
+  rust-tools:
+    profiles: [tools]
+    build:
+      context: .
+      dockerfile: scripts/Dockerfile.rust-tools
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    environment:
+      CARGO_HOME: /tmp/typerelay-cargo
+      CARGO_TARGET_DIR: /repo/target/templates
+    volumes:
+      - .:/repo
+    command: [cargo, test, --workspace]
   secrets:
     profiles: [tools]
     image: ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f

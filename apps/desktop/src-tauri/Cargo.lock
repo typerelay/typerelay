@@ -5401,7 +5401,7 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
 name = "typerelay-client"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -5430,11 +5430,16 @@ dependencies = [
 
 [[package]]
 name = "typerelay-core"
-version = "0.10.0"
+version = "0.11.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "typerelay-panel"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "clipboard-rs",
@@ -5455,6 +5460,7 @@ dependencies = [
  "tauri-plugin-global-shortcut",
  "tauri-plugin-single-instance",
  "typerelay-client",
+ "typerelay-core",
  "uuid",
  "windows 0.61.3",
 ]

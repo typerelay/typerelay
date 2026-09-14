@@ -1,4 +1,5 @@
 mod app;
+mod template_dialog;
 mod terminal;
 use anyhow::{Result, ensure};
 use clap::Parser;

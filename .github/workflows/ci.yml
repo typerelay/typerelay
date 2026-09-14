@@ -36,6 +36,8 @@ jobs:
           echo "LOCAL_GID=$(id -g)" >> "$GITHUB_ENV"
       - run: docker compose up -d --build
       - run: docker compose run --rm --no-deps server node --test --test-force-exit test/*.test.js
+      - run: docker compose up -d --wait template-server
+      - run: docker compose run --rm --build template-browser
       - run: docker compose run --rm docs
       - run: docker compose run --rm --build browser-check
       - run: docker compose run --rm -e TYPERELAY_DOCS_BASE=/ docs

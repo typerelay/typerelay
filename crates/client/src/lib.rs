@@ -16,3 +16,5 @@ pub mod panel;
 
 #[cfg(target_os = "linux")]
 pub mod panel_ipc;
+
+pub mod templates;

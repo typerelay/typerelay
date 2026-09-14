@@ -15,15 +15,17 @@ impl Bridge {
     pub fn validate(entries: &[Match]) -> Result<Snapshot> {
         let mut snippets = Vec::new();
         for entry in entries {
-            ensure!(matches!(entry.kind.as_str(), "plain_text" | "code"), "Unsupported snippet type");
+            ensure!(matches!(entry.kind.as_str(), "plain_text" | "code" | "template"), "Unsupported snippet type");
             ensure!(entry.title.len() <= 500 && !entry.title.chars().any(char::is_control), "Title must be at most 500 bytes without control characters");
             ensure!(!entry.language.is_empty() && entry.language.len() <= 100 && !entry.language.chars().any(char::is_control), "Invalid language");
-            ensure!(entry.kind == "code" || (!entry.replace.contains("{{") && !entry.replace.contains("$|$")), "Templates require literal Code mode");
+            if entry.kind == "template" { typerelay_core::template::Template { text: entry.replace.clone(), variables: entry.variables.clone() }.normalize().map_err(anyhow::Error::msg)?; }
             let snippet = Snippet { trigger: if entry.trigger.is_empty() { "validation".into() } else { entry.trigger.clone() }, replacement: entry.replace.clone() };
             Snapshot::new(vec![snippet.clone()]).map_err(anyhow::Error::msg)?;
             if !entry.trigger.is_empty() { snippets.push(snippet); }
         }
-        Snapshot::new(snippets).map_err(anyhow::Error::msg)
+        let mut snapshot = Snapshot::new(snippets).map_err(anyhow::Error::msg)?;
+        for entry in entries.iter().filter(|entry| entry.kind == "template" && !entry.trigger.is_empty()) { snapshot.set_template(&entry.trigger, typerelay_core::template::Template { text: entry.replace.clone(), variables: entry.variables.clone() }).map_err(anyhow::Error::msg)?; }
+        Ok(snapshot)
     }
     pub fn export(entries: &[Match]) -> Result<String> {
         Self::validate(entries)?;
