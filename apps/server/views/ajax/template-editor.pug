@@ -1,7 +1,8 @@
 #template-options.mb-4(hidden data-variables=JSON.stringify((snippet && snippet.content && snippet.content.variables) || {}))
-	.row.align-items-end.mb-3(data-template-mutation)
+	p.small.text-muted.mb-3 Write a field such as {{my_name}} in the expansion, then save. You’ll be asked for its value when you use the snippet. No setup below is required.
+	.row.align-items-center.mb-3(data-template-mutation)
 		.col
-			label.form-label(for="variable-kind") Insert variable
+			label.form-label(for="variable-kind") Add variable (optional)
 			select#variable-kind.form-select.form-select-sm
 				option(value="custom") Text field
 				option(value="date") Date
@@ -9,11 +10,13 @@
 				option(value="timestamp") Timestamp
 				option(value="key:enter") Enter keypress
 		.col
-			label.form-label(for="variable-name") Field name
+			label.form-label(for="variable-name") New field name
 			input#variable-name.form-control.form-control-sm(autocomplete="off")
 		.col-auto
 			button#insert-variable.btn.btn-outline-secondary.btn-sm(type="button") Insert
-	p.small.text-muted Repeated field names share one answer. Enter keypress submits Enter to the target application.
+	p.small.text-muted.mb-3 Use Insert to add another variable, or type it directly above. Repeated names reuse one answer. Enter keypress sends an actual Enter to the target app.
+	h6.small.fw-bold.mb-2 Field options (optional)
+	p.small.text-muted.mb-3 Defaults work as-is. These settings control the prompt; enter the actual answer when using the snippet.
 	#variable-definitions
 	p#template-error.text-danger(role="status")
 	label.form-label Preview
@@ -23,18 +26,18 @@
 			legend.h6
 			.row
 				.col-md-6
-					label.form-label Label
+					label.form-label Prompt label (optional)
 					input.form-control.form-control-sm.mb-2(data-vfield="label")
 				.col-md-6(data-input-options)
-					label.form-label Default value
-					textarea.form-control.form-control-sm.mb-2(data-vfield="default")
+					label.form-label Prefilled answer (optional)
+					textarea.form-control.form-control-sm.mb-2(data-vfield="default" rows="1")
 			div(data-input-options)
-				label.form-check
+				label.form-check.form-check-inline
 					input.form-check-input(type="checkbox" data-vfield="required")
-					span.form-check-label Required
-				label.form-check
+					span.form-check-label Require an answer when used
+				label.form-check.form-check-inline
 					input.form-check-input(type="checkbox" data-vfield="multiline")
-					span.form-check-label Multiline
+					span.form-check-label Allow multiple lines
 			.row(data-time-options)
 				.col
 					label.form-label Format

@@ -49,7 +49,7 @@ if kind === 'snippet' || kind === 'conflict'
 		span.input-group-text(aria-hidden="true") ,
 		input#trigger.form-control.form-control-sm(name="trigger" value=snippet ? snippet.trigger : '' pattern="[a-z0-9\\-]{1,63}" autocapitalize="off" spellcheck="false")
 	label.form-label.fw-bold(for="replace") Expansion
-	textarea#replace.form-control.form-control-sm.mb-4(name="replace")= '\n' + (snippet ? snippet.replace : '')
+	textarea#replace.form-control.form-control-sm.mb-4(name="replace" rows="8")= '\n' + (snippet ? snippet.replace : '')
 	include template-editor
 	#code-editor.mb-3
 	#code-options.mb-3(hidden=!snippet || (snippet.content && snippet.content.type) !== 'code')
@@ -71,12 +71,14 @@ if kind === 'snippet' || kind === 'conflict'
 		p.small.text-muted Tab indents; Shift+Tab outdents. Press Escape then Tab to leave the editor. Existing whitespace stays unchanged.
 	button#copy-code.btn.btn-outline-secondary.btn-sm.mb-3(type="button") Copy
 	if kind === 'snippet' && snippet
-		label.form-label.fw-bold(for="destination-library") Library
-		select#destination-library.form-select.form-select-sm.mb-4(name="destination_library" disabled=!library.permissions.edit)
-			option(value=library._id selected)= library.name + (library.shared ? ' · Shared' : ' · Personal')
-			each destination in destinations
-				option(value=destination._id)= destination.name + (destination.shared ? ' · Shared' : ' · Personal')
-		p.text-muted Changing the library moves this snippet when you save. Destination sharing permissions apply.
+		details.snippet-advanced.mb-3
+			summary.small.mb-3 Advanced
+			label.form-label.fw-bold(for="destination-library") Move to library
+			select#destination-library.form-select.form-select-sm.mb-3(name="destination_library" disabled=!library.permissions.edit)
+				option(value=library._id selected)= library.name + (library.shared ? ' · Shared' : ' · Personal')
+				each destination in destinations
+					option(value=destination._id)= destination.name + (destination.shared ? ' · Shared' : ' · Personal')
+			p.small.text-muted.mb-0 Changing the library moves this snippet when you save. Destination sharing permissions apply.
 	if kind === 'conflict'
 		label.form-label.fw-bold(for="choice") Resolution
 		select#choice.form-select.form-select-sm(name="choice")
