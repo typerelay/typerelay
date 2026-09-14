@@ -32,12 +32,12 @@ test('macOS startup requests Accessibility and offers settings and TUI launchers
 	assert.match(tray, /Open TypeRelay TUI/);
 });
 
-test('local macOS build uses a stable Apple Development identity', async () => {
+test('local macOS build uses the configured Developer ID identity', async () => {
 	assert.deepEqual(LocalMacBuild.target('arm64'), { triple: 'aarch64-apple-darwin', artifact: 'aarch64' });
 	assert.deepEqual(LocalMacBuild.target('x64'), { triple: 'x86_64-apple-darwin', artifact: 'x64' });
 	assert.throws(() => LocalMacBuild.target('unsupported'), /Apple Silicon or Intel/);
 	const source = await fs.readFile(path.join(root, 'apps/desktop/scripts/build-macos-local.mjs'), 'utf8');
-	assert.match(source, /Apple Development/);
-	assert.match(source, /APPLE_DEVELOPMENT_SIGNING_IDENTITY/);
-	assert.doesNotMatch(source, /Developer ID/);
+	assert.match(source, /Developer ID Application/);
+	assert.match(source, /APPLE_SIGNING_IDENTITY/);
+	assert.match(source, /'--options', 'runtime'/);
 });

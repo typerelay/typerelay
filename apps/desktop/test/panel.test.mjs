@@ -71,9 +71,13 @@ test('macOS settings expose Accessibility and bundled TUI actions',async()=>{
   f.dom.window.document.querySelector('#open-tui').click();await new Promise(resolve=>setTimeout(resolve,0));
   assert.ok(f.calls.some(call=>call.name==='open_accessibility_settings'));
   assert.ok(f.calls.some(call=>call.name==='open_tui'));
-  assert.equal(f.dom.window.document.querySelector('#accessibility-state').textContent,'Required');
+	assert.equal(f.dom.window.document.querySelector('#accessibility-state').textContent,'Required');
 	assert.equal(f.dom.window.document.body.dataset.os,'macos');
-	assert.equal(f.dom.window.document.querySelector('#connect-form').parentElement.id,'sync-settings');
+	assert.equal(f.dom.window.document.body.dataset.view,'settings');
+	f.dom.window.document.querySelector('[data-settings-tab="sync"]').click();
+	assert.equal(f.dom.window.document.querySelector('#settings-general').hidden,true);
+	assert.equal(f.dom.window.document.querySelector('#settings-sync').hidden,false);
+	assert.equal(f.dom.window.document.querySelector('#connect-form').closest('.settings-page').id,'settings-sync');
  }finally{f.dom.window.close();}
 });
 

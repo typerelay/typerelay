@@ -44,46 +44,58 @@ html(lang="en")
 							button#fill-submit.primary(type="submit") Insert
 			section#settings-view(hidden)
 				.settings-heading
-					button#settings-cancel.back-button(type="button") ‹ Back
-					div
-						h2 Settings
-						p Configure TypeRelay.
-				form#settings-form
-					.settings-group
-						label(for="shortcut") Search shortcut
-						input#shortcut(required)
-						small Ctrl, Shift, Alt or Super + Comma, A–Z, 0–9 or F1–F12
-						label.check
-							input#autostart(type="checkbox")
-							span Start TypeRelay at login
-						.form-actions
-							span
-							button.primary(type="submit") Save
-				section#accessibility-card.mac-only.settings-group
-					.setting-copy
-						h3 Accessibility
-						p Required to return focus and insert snippets into other apps.
-					.setting-control
-						span#accessibility-state.status-pill
-						button#open-accessibility.secondary(type="button") Open System Settings
-				section#tui-card.mac-only.settings-group
-					.setting-copy
-						h3 TypeRelay TUI
-						p Edit local libraries and snippets in Terminal.
-					button#open-tui.secondary(type="button") Open in Terminal
-				section#sync-settings.settings-group
-					form#connect-form
-						label(for="server") Sync server URL
-						input#server(type="url" required)
-						.form-actions
-							button#sync.secondary(type="button") Sync now
-							button.primary(type="submit") Authenticate in browser
-					form#enroll-form
-						p Upload selected local libraries as private libraries
-						div#local-libraries
-						.form-actions
-							span
-							button.primary(type="submit") Upload selected
+					button#settings-cancel.back-button(type="button") ‹ Search
+					h2 Settings
+				nav.settings-tabs(aria-label="Settings sections")
+					button(type="button" data-settings-tab="general" aria-selected="true") General
+					button(type="button" data-settings-tab="sync" aria-selected="false") Sync
+				section#settings-general.settings-page
+					form#settings-form.settings-list
+						.setting-row
+							.setting-copy
+								h3 Search shortcut
+								p Open TypeRelay from any app.
+							.setting-control.shortcut-control
+								label.visually-hidden(for="shortcut") Search shortcut
+								input#shortcut(required)
+								small Ctrl, Shift, Alt or Super + key
+						.setting-row
+							.setting-copy
+								h3 Start at login
+								p Keep TypeRelay ready in the menu bar.
+							label.switch
+								input#autostart(type="checkbox")
+								span.switch-track(aria-hidden="true")
+						.settings-actions
+							button.primary(type="submit") Save changes
+					.settings-list.mac-only
+						.setting-row#accessibility-card
+							.setting-copy
+								h3 Accessibility
+								p Return focus and insert snippets into other apps.
+							.setting-control
+								span#accessibility-state.status-pill
+								button#open-accessibility.secondary(type="button") Open Settings
+						.setting-row#tui-card
+							.setting-copy
+								h3 TypeRelay TUI
+								p Edit local libraries and snippets in Terminal.
+							button#open-tui.secondary(type="button") Open
+				section#settings-sync.settings-page(hidden)
+					.settings-list
+						form#connect-form.setting-section
+							label(for="server") Sync server URL
+							input#server(type="url" required)
+							.form-actions
+								button#sync.secondary(type="button") Sync now
+								button.primary(type="submit") Authenticate
+						form#enroll-form.setting-section
+							h3 Local libraries
+							p Upload selected local libraries as private libraries.
+							div#local-libraries
+							.form-actions
+								span
+								button.primary(type="submit") Upload selected
 			p#status(role="status" aria-live="polite")
 		template#result-template
 			li(role="option" aria-selected="false")
