@@ -15,6 +15,7 @@ use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 struct Runtime { root:PathBuf, target:Mutex<Option<platform::Target>>, last:Mutex<Option<platform::Target>>, erase:Mutex<usize>, busy:AtomicBool, syncing:AtomicBool, prompting:AtomicBool, prompt_hit:Mutex<Option<Hit>>, settings:AtomicBool, status:Mutex<String>, #[cfg(target_os="linux")] registration:Mutex<Option<typerelay_client::desktop::Registration>> }
 impl Runtime {
+    fn hide_on_focus_loss()->bool { cfg!(not(target_os="linux")) }
     fn sync_notice(app:&tauri::AppHandle,message:&str) {
         *app.state::<Runtime>().status.lock().unwrap()=message.into();
         let _=app.emit("sync-status",message);
@@ -266,7 +267,14 @@ fn main() {
         Ok(())
     }).on_window_event(|window,event|match event {
         tauri::WindowEvent::CloseRequested{api,..}=>{api.prevent_close();set_prompt_view(window.app_handle().clone(),false);Runtime::hide(window.app_handle());},
-        tauri::WindowEvent::Focused(false)if !window.app_handle().state::<Runtime>().busy.load(Ordering::SeqCst) && !window.app_handle().state::<Runtime>().settings.load(Ordering::SeqCst) && !window.app_handle().state::<Runtime>().prompting.load(Ordering::SeqCst)=> {Runtime::hide(window.app_handle());},_=>()
+        tauri::WindowEvent::Focused(false)if Runtime::hide_on_focus_loss() && !window.app_handle().state::<Runtime>().busy.load(Ordering::SeqCst) && !window.app_handle().state::<Runtime>().settings.load(Ordering::SeqCst) && !window.app_handle().state::<Runtime>().prompting.load(Ordering::SeqCst)=> {Runtime::hide(window.app_handle());},_=>()
     }).invoke_handler(tauri::generate_handler![initialize,search,insert,copy_snippet,prepare_template,set_prompt_view,set_settings_view,dismiss,sync_now,save_settings,connect,libraries,enroll]).run(tauri::generate_context!());
     if let Err(error)=result {eprintln!("TypeRelay panel: {error}");std::process::exit(1);}
+}
+
+#[cfg(all(test,target_os="linux"))]
+mod tests {
+    use super::*;
+    #[test]
+    fn search_panel_ignores_compositor_focus_loss() { assert!(!Runtime::hide_on_focus_loss()); }
 }
