@@ -1,6 +1,8 @@
 use anyhow::Result;
 #[cfg(not(target_os="linux"))]
-use anyhow::{Context, ensure};
+use anyhow::ensure;
+#[cfg(target_os="macos")]
+use anyhow::Context;
 #[cfg(target_os = "linux")]
 #[path = "platform_linux.rs"] mod native;
 #[cfg(target_os = "macos")]
@@ -20,33 +22,41 @@ pub fn copy(text: String) -> Result<()> {
 
 #[cfg(not(target_os = "linux"))]
 pub fn paste(target: &Target, erase: usize, text: Option<String>) -> Result<()> {
+    #[cfg(target_os="macos")]
     use enigo::{Enigo, Keyboard, Key, Direction};
     use std::time::{Duration, Instant};
+    #[cfg(target_os="macos")]
     let mut enigo = Enigo::new(&enigo::Settings::default()).context("Allow TypeRelay accessibility/input permission")?;
     let deadline = Instant::now() + Duration::from_secs(2);
     while native::keys_down() { ensure!(Instant::now() < deadline, "Release shortcut keys before inserting"); std::thread::sleep(Duration::from_millis(10)); }
     ensure!(target.focused()?, "Original window lost focus; nothing inserted");
     let mut clipboard=None;let has_text=text.is_some();
-    if let Some(text)=text {match native::ClipboardLease::publish(text.clone()){Ok(lease)=>clipboard=Some(lease),Err(_error)=>{
+    if let Some(text)=text {
+        #[cfg(target_os="windows")]
+        let preserve=!native::remote_session();
+        #[cfg(target_os="macos")]
+        let preserve=true;
+        if !preserve{copy(text)?;}else{match native::ClipboardLease::publish(text.clone()){Ok(lease)=>clipboard=Some(lease),Err(_error)=>{
         #[cfg(target_os="windows")]
         {copy(text)?;}
         #[cfg(not(target_os="windows"))]
         {return Err(_error);}
     }}}
+    }
     let insertion: Result<()> = (|| {
         ensure!(target.focused()?, "Original window lost focus; nothing inserted");
+        #[cfg(target_os="windows")]
+        {native::insert(target,erase,has_text)?;std::thread::sleep(Duration::from_millis(if has_text{350}else{100}));Ok(())}
+        #[cfg(target_os="macos")]
+        {
         for _ in 0..erase { enigo.key(Key::Backspace,Direction::Click)?; }
         if !has_text { enigo.key(Key::Return,Direction::Click)?; std::thread::sleep(Duration::from_millis(100)); return Ok(()); }
-        let modifier = if cfg!(target_os = "macos") { Key::Meta } else { Key::Control };
-        #[cfg(target_os="windows")]
-        let paste_key=Key::V;
-        #[cfg(target_os="macos")]
-        let paste_key=Key::Unicode('v');
-        enigo.key(modifier,Direction::Press)?;
-        let result = enigo.key(paste_key,Direction::Click);
-        let released = enigo.key(modifier,Direction::Release);
+        enigo.key(Key::Meta,Direction::Press)?;
+        let result = enigo.key(Key::Unicode('v'),Direction::Click);
+        let released = enigo.key(Key::Meta,Direction::Release);
         result?; released?;
         std::thread::sleep(Duration::from_millis(350)); Ok(())
+        }
     })();
     if let Some(clipboard)=&mut clipboard { clipboard.restore()?; }
     insertion
