@@ -8,6 +8,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { NativeTools } from '../apps/desktop/scripts/stage-native-tools.mjs';
 
 export class SigningBridge {
 	constructor(socketPath, roots, sign) { this.path = socketPath; this.roots = roots; this.sign = sign; this.queue = Promise.resolve(); this.signed = new Set(); this.connections = new Set(); }
@@ -104,8 +105,8 @@ export class PanelRelease {
 		const working = path.join(PanelRelease.root, 'apps/desktop');
 		let target = path.join(PanelRelease.root, 'target/desktop-releases', options.mode);
 		const build = ['tauri', 'build', '--target', options.target, '--bundles', options.mode === 'windows' ? 'nsis' : 'app,dmg', '--', '--locked'];
-		if (options.mode === 'windows') build.splice(2, 0, '--runner', 'cargo-xwin');
-		if (options.dry) { console.log(JSON.stringify({ source: 'clean develop + git pull --ff-only', platform: options.mode, target: options.target, install: ['pnpm', 'install', '--frozen-lockfile'], build: ['pnpm', ...build], signing: options.mode === 'windows' ? 'Shared Helpmonks YubiKey signer via private socket; hidden PIN and touch in local terminal' : 'Local Developer ID + Apple notarization; verify signature, Gatekeeper and stapled app ticket', output: target, publish: false }, null, 2)); return; }
+		if (options.mode === 'windows') { build.splice(2, 0, '--runner', 'cargo-xwin'); build.splice(build.indexOf('--'), 0, '--config', 'src-tauri/tauri.windows.conf.json'); }
+		if (options.dry) { console.log(JSON.stringify({ source: 'clean develop + git pull --ff-only', platform: options.mode, target: options.target, install: ['pnpm', 'install', '--frozen-lockfile'], nativeTools: options.mode === 'windows' ? [NativeTools.plan(options.target).command, ...NativeTools.plan(options.target).args] : null, build: ['pnpm', ...build], signing: options.mode === 'windows' ? 'Shared Helpmonks YubiKey signer via private socket; hidden PIN and touch in local terminal' : 'Local Developer ID + Apple notarization; verify signature, Gatekeeper and stapled app ticket', output: target, publish: false }, null, 2)); return; }
 		if (Number(process.versions.node.split('.')[0]) < 24) throw new Error('Node.js 24 or newer is required');
 		await PanelRelease.requireCommands(['git', 'pnpm', 'cargo', 'rustup', ...(options.mode === 'windows' ? ['cargo-xwin', 'clang', 'lld-link', 'llvm-rc', 'makensis', 'wine'] : ['security', 'codesign', 'spctl', 'xcrun', 'lipo'])]);
 		const commit = await PanelRelease.repository();
@@ -120,6 +121,7 @@ export class PanelRelease {
 		let signer; let signingEnvironment; let bridge;
 		try {
 			await PanelRelease.run('pnpm', ['install', '--frozen-lockfile'], { cwd: working, environment });
+			if (options.mode === 'windows') await NativeTools.stage(options.target, { environment });
 			let overlay;
 			if (options.mode === 'windows') {
 				const tools = path.resolve(process.env.TYPERELAY_RELEASE_TOOLS || path.join(os.homedir(), 'repos/helpmonks-install-script/scripts/desktop-release'));
@@ -148,8 +150,8 @@ export class PanelRelease {
 			await PanelRelease.run('pnpm', build, { cwd: working, environment });
 			const release = path.join(target, options.target, 'release'); let artifacts;
 			if (options.mode === 'windows') {
-				artifacts = [path.join(release, 'typerelay-panel.exe'), ...await PanelRelease.files(path.join(release, 'bundle/nsis'), '.exe')];
-				if (artifacts.length < 2) throw new Error('Missing Windows installer');
+				artifacts = [path.join(release, 'typerelay-panel.exe'), path.join(release, 'typerelay.exe'), path.join(release, 'typerelay-tui.exe'), ...await PanelRelease.files(path.join(release, 'bundle/nsis'), '.exe')];
+				if (artifacts.length < 4) throw new Error('Missing Windows native tools or installer');
 				for (const file of artifacts) { if (!bridge.signed.has(await fs.realpath(file))) throw new Error('Tauri did not sign every release artifact'); await PanelRelease.run('osslsigncode', ['verify', '-CAfile', signingEnvironment.WINDOWS_SIGNING_CA_FILE, '-ignore-cdp', '-ignore-crl', '-in', file], { capture: true, environment }); }
 			} else {
 				const apps = await PanelRelease.files(path.join(release, 'bundle/macos'), '.app'); if (apps.length !== 1) throw new Error('Expected one macOS app');

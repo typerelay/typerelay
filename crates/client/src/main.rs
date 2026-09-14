@@ -34,6 +34,7 @@ enum Commands {
     Validate { #[command(flatten)] source: ConfigSource },
     ImportEspanso { source: PathBuf, destination: PathBuf },
     Migrate { #[command(flatten)] source: ConfigSource, #[arg(long)] check: bool, #[arg(long)] settings: Option<PathBuf>, #[arg(long)] json: bool },
+    #[cfg(target_os = "linux")]
     Doctor,
     Connect { #[arg(long)] server: Option<String>, #[arg(long)] no_browser: bool },
     Enroll { filename: String },
@@ -53,6 +54,7 @@ enum Commands {
     #[cfg(target_os = "linux")]
     #[command(hide = true)]
     ClipboardServe,
+    #[cfg(target_os = "linux")]
     Run { #[command(flatten)] source: ConfigSource, #[arg(long, default_value = "keyd virtual keyboard")] device_name: String },
     #[cfg(target_os = "linux")]
     Install { #[arg(long)] dry_run: bool },
@@ -110,8 +112,6 @@ impl Cli {
             Commands::Install { dry_run } => installation::Installer::run("install", dry_run)?,
             #[cfg(target_os = "linux")]
             Commands::Uninstall { dry_run } => installation::Installer::run("uninstall", dry_run)?,
-            #[cfg(not(target_os = "linux"))]
-            _ => anyhow::bail!("This POC adapter supports Omarchy/Hyprland only"),
         }
         Ok(())
     }

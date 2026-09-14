@@ -28,7 +28,7 @@ On Omarchy, build the ordinary release binaries, run `sh scripts/build-panel.sh`
 
 The installer validates matching binaries, tracks optional panel ownership, adds a launcher, starts the panel in the background and preserves snippets/settings on upgrade/uninstall. The panel manages its own login entry. `typerelay-panel --quit` stops the resident panel. On macOS, run the app executable with `--uninstall` before removing the app to unregister startup; data remains. The Windows NSIS uninstall hook performs this cleanup automatically.
 
-The Desktop panel builds workflow produces an Omarchy bundle containing engine, TUI and panel, plus Linux AppImage/deb, macOS Apple Silicon app/dmg and Windows x64 NSIS builds. The Linux GUI packages alone do not install the Omarchy input service. Beta artifacts are unsigned/not notarized; signing is needed before broad public distribution. No Intel Mac build or non-Hyprland Linux insertion support is claimed.
+The Desktop panel builds workflow produces an Omarchy bundle containing engine, TUI and panel, plus Linux AppImage/deb, macOS Apple Silicon app/dmg and a Windows x64 NSIS build containing the panel, CLI and TUI. A shared staging script prepares the Windows tools for both CI and signed releases. The Linux GUI packages alone do not install the Omarchy input service. Beta artifacts are unsigned/not notarized; signing is needed before broad public distribution. No Intel Mac build or non-Hyprland Linux insertion support is claimed.
 
 ## Verification status
 
@@ -45,3 +45,4 @@ macOS and Windows build success is not runtime verification. Their native behavi
 5. Test Escape, outside-click dismissal, closed target windows, permission denial and shortcut conflicts. No insertion into another app after a reported failure.
 6. Copy rich text before insertion and check restoration afterward. Copy something new while insertion finishes and verify that newer copy survives. Unsupported clipboard formats must produce an error before replacement.
 7. Change shortcut; confirm the old one stops working. Toggle launch at login; restart the session. Launch again while running: only one instance. Uninstall: startup entry gone, snippet data preserved.
+8. On Windows, launch **TypeRelay TUI** from Start, edit a snippet, sync, and confirm the panel and web app show the same revision. Uninstall must remove the TUI shortcut while preserving the local database.

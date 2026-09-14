@@ -12,7 +12,7 @@ jobs:
           - os: macos-latest
             scope: -p typerelay-core
           - os: windows-latest
-            scope: -p typerelay-core
+            scope: --workspace
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
