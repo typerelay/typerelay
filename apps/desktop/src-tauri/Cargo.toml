@@ -23,10 +23,12 @@ fs2 = "0.4"
 uuid = { version = "1", features = ["v4"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+notify-rust = "4"
 ksni = { version = "0.3", features = ["blocking"] }
 libc = "0.2"
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
+tauri-plugin-notification = "2"
 clipboard-rs = "0.3"
 enigo = "0.6"
 

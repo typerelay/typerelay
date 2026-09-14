@@ -15,3 +15,5 @@ A Template result with text fields opens a fill form. Repeated names share one a
 A lost original target leaves the filled draft available for Copy and never redirects insertion into another application. Runtime answers are not synchronized or saved. Templates require client/server sync protocol 5.
 
 For macOS/Windows pilot checks, test a date-only template, repeated and multiline fields, literal answers containing braces, text/Enter/text order, cancellation, a closed original target and clipboard ownership. Builds alone do not mark these platforms runtime-verified.
+
+Manual **Sync now** from the tray or panel sends a desktop notification when syncing starts and when it finishes. Failed syncs and changes needing attention are reported separately. Automatic background sync does not send these notifications. The panel also retains the latest manual-sync message; desktop notifications follow your operating system’s notification settings.

@@ -8,10 +8,20 @@ use tauri::{Manager,Emitter};
 use typerelay_client::{panel::{Panel,PanelSettings,Hit},editor::Paths,database::Database,sync::Sync};
 use tauri_plugin_autostart::ManagerExt as _;
 #[cfg(not(target_os="linux"))]
+use tauri_plugin_notification::NotificationExt;
+#[cfg(not(target_os="linux"))]
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
-struct Runtime { root:PathBuf, target:Mutex<Option<platform::Target>>, last:Mutex<Option<platform::Target>>, busy:AtomicBool, prompting:AtomicBool, prompt_hit:Mutex<Option<Hit>>, settings:AtomicBool, status:Mutex<String>, #[cfg(target_os="linux")] registration:Mutex<Option<typerelay_client::desktop::Registration>> }
+struct Runtime { root:PathBuf, target:Mutex<Option<platform::Target>>, last:Mutex<Option<platform::Target>>, busy:AtomicBool, syncing:AtomicBool, prompting:AtomicBool, prompt_hit:Mutex<Option<Hit>>, settings:AtomicBool, status:Mutex<String>, #[cfg(target_os="linux")] registration:Mutex<Option<typerelay_client::desktop::Registration>> }
 impl Runtime {
+    fn sync_notice(app:&tauri::AppHandle,message:&str) {
+        *app.state::<Runtime>().status.lock().unwrap()=message.into();
+        let _=app.emit("sync-status",message);
+        #[cfg(target_os="linux")]
+        if let Err(error)=notify_rust::Notification::new().appname("TypeRelay").summary("TypeRelay").body(message).show(){eprintln!("TypeRelay sync notification unavailable: {error}");}
+        #[cfg(not(target_os="linux"))]
+        if let Err(error)=app.notification().builder().title("TypeRelay").body(message).show(){eprintln!("TypeRelay sync notification unavailable: {error}");}
+    }
     fn quit(app:&tauri::AppHandle) {
         if app.state::<Runtime>().busy.load(Ordering::SeqCst) {let _=app.emit("panel-error","Insertion is finishing; try Quit again in a moment");return;}
         app.exit(0);
@@ -143,7 +153,32 @@ fn set_settings_view(app:tauri::AppHandle,enabled:bool){app.state::<Runtime>().s
 #[tauri::command]
 fn dismiss(app:tauri::AppHandle){set_prompt_view(app.clone(),false);Runtime::hide(&app);}
 #[tauri::command]
-fn sync_now(app:tauri::AppHandle)->std::result::Result<(),String>{Sync::trigger(&app.state::<Runtime>().root).map_err(|e|e.to_string())}
+fn sync_now(app:tauri::AppHandle)->std::result::Result<(),String>{
+    if app.state::<Runtime>().syncing.swap(true,Ordering::SeqCst) {return Ok(());}
+    std::thread::spawn(move||{
+        Runtime::sync_notice(&app,"Starting to sync…");
+        let root=app.state::<Runtime>().root.clone();
+        let result=(||->Result<String>{
+            anyhow::ensure!(root.join("sync/credentials.json").exists(),"Authenticate in TypeRelay settings first");
+            let sync=Sync::new(root.clone(),root.join("snippets"))?;
+            let waiting=std::time::Instant::now();
+            loop {
+                match sync.cycle() {
+                    Err(error) if error.to_string().contains("Sync already running") && waiting.elapsed()<std::time::Duration::from_secs(30)=>std::thread::sleep(std::time::Duration::from_millis(500)),
+                    outcome=>{outcome?;break;}
+                }
+            }
+            let db=Database::open(&root.join("snippets"))?;
+            let conflicts=db.meta("conflicts")?.and_then(|value|value.as_array().map(Vec::len)).unwrap_or(0);
+            let rejected=db.meta("last_failure")?.and_then(|value|value.as_str().map(|text|!text.is_empty())).unwrap_or(false);
+            Ok(if conflicts>0 || rejected {"Sync completed — some changes need attention. Review the web app or TUI for details.".into()}else{"Sync successful".into()})
+        })();
+        let message=match result {Ok(message)=>message,Err(error)=>{let _=Paths::atomic_write(&root.join("sync/status"),format!("Sync: {error:#}").as_bytes(),false);if !root.join("sync/credentials.json").exists(){"Sync failed — authenticate in TypeRelay settings first.".into()}else{"Sync failed. Check your connection and TypeRelay sync status.".into()}}};
+        Runtime::sync_notice(&app,&message);
+        app.state::<Runtime>().syncing.store(false,Ordering::SeqCst);
+    });
+    Ok(())
+}
 #[tauri::command]
 fn save_settings(app:tauri::AppHandle,config:PanelSettings)->std::result::Result<(),String> {
     let root=&app.state::<Runtime>().root;
@@ -174,14 +209,14 @@ fn main() {
     if std::env::args().any(|a|a=="clipboard-serve") {let _=typerelay_client::clipboard::PasteJob::serve_restored();return;}
     let builder=tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app,args,_|{if args.iter().any(|arg|arg=="--uninstall"){let _=app.autolaunch().disable();Runtime::quit(app);}else if args.iter().any(|arg|arg=="--quit"){Runtime::quit(app);}else if !args.iter().any(|arg|arg=="--background"){Runtime::open(app,false);}})).plugin(tauri_plugin_autostart::Builder::new().args(["--background"]).build());
     #[cfg(not(target_os="linux"))]
-    let builder=builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());
+    let builder=builder.plugin(tauri_plugin_notification::init()).plugin(tauri_plugin_global_shortcut::Builder::new().build());
     let result=builder.setup(|app| {
         #[cfg(target_os="macos")]
         app.set_activation_policy(tauri::ActivationPolicy::Accessory);
         let root=Paths::config_dir()?; Database::open(&root.join("snippets"))?;
         Sync::worker(root.clone(),root.join("snippets"));
         let config=Panel::settings(&root)?;
-        app.manage(Runtime{root,target:Mutex::new(None),last:Mutex::new(None),busy:AtomicBool::new(false),prompting:AtomicBool::new(false),prompt_hit:Mutex::new(None),settings:AtomicBool::new(false),status:Mutex::new(String::new()),#[cfg(target_os="linux")] registration:Mutex::new(None)});
+        app.manage(Runtime{root,target:Mutex::new(None),last:Mutex::new(None),busy:AtomicBool::new(false),syncing:AtomicBool::new(false),prompting:AtomicBool::new(false),prompt_hit:Mutex::new(None),settings:AtomicBool::new(false),status:Mutex::new(String::new()),#[cfg(target_os="linux")] registration:Mutex::new(None)});
         #[cfg(target_os="linux")]
         {let _=std::fs::remove_file(typerelay_client::panel_ipc::PanelIpc::directory()?.join("ready"));}
         if std::env::args().any(|arg|arg=="--quit"||arg=="--uninstall") {if std::env::args().any(|arg|arg=="--uninstall"){app.autolaunch().disable()?;}app.handle().exit(0);return Ok(());}

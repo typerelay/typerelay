@@ -68,3 +68,16 @@ test('template fields wait for confirmation, retain literal answers and clear on
   await f.panel.start(Fixture.hit('template'),'insert');f.panel.cancel();assert.equal(f.dom.window.document.querySelectorAll('[data-answer]').length,0);
  }finally{f.dom.window.close();}
 });
+
+test('manual sync displays progress and completion without opening or dismissing the panel',async()=>{
+ const f=await Fixture.create();try{
+  f.panel.invoke=async(name)=>{if(name==='sync_now')f.callbacks['sync-status']({payload:'Starting to sync…'});};
+  await f.dom.window.document.querySelector('#sync').onclick();
+  assert.equal(f.panel.status.textContent,'Starting to sync…');
+  f.callbacks['sync-status']({payload:'Sync successful'});
+  assert.equal(f.panel.status.textContent,'Sync successful');
+  f.callbacks['sync-status']({payload:'Sync failed. Check your connection and TypeRelay sync status.'});
+  assert.match(f.panel.status.textContent,/Sync failed/);
+  assert.ok(!f.calls.some(call=>call.name==='dismiss'));
+ }finally{f.dom.window.close();}
+});
