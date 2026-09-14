@@ -81,13 +81,14 @@ class Smoke:
     def gtk(self, output):
         import gi
         gi.require_version("Gtk", "4.0")
-        from gi.repository import Gtk
+        from gi.repository import Gtk, GLib
 
         class Window(Gtk.Application):
             def do_activate(self):
                 window = Gtk.ApplicationWindow(application=self, title="TypeRelay GTK Test")
                 entry = Gtk.TextView()
                 buffer = entry.get_buffer()
+                GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGUSR1, lambda: buffer.set_text("") or True)
                 buffer.connect("changed", lambda b: output.write_text(b.get_text(b.get_start_iter(), b.get_end_iter(), True)))
                 window.set_child(entry)
                 window.set_default_size(700, 100)

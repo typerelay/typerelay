@@ -1,3 +1,4 @@
+import { BrowserSource } from './browser-source.js';
 import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, readdir, rm } from 'node:fs/promises';
@@ -7,7 +8,7 @@ import { promisify } from 'node:util';
 import { execFile, spawn } from 'node:child_process';
 import { JSDOM } from 'jsdom';
 import { randomUUID, createHash } from 'node:crypto';
-import { mongoose, Account, Member, User, Device, Ticket, Library } from '../model/index.js';
+import { mongoose, Account, Member, User, Device, Ticket, Library, Conflict } from '../model/index.js';
 import { Support } from '../services/support.js';
 import { Auth } from '../services/auth.js';
 import { Libraries } from '../services/libraries.js';
@@ -78,7 +79,7 @@ test('actual desktop browser PKCE flow writes private credentials and settings',
 		const page = await Fixture.request(authorize.pathname + authorize.search);
 		assert.ok(page.headers.get('content-security-policy').includes("form-action 'self' " + new URL(authorize.searchParams.get('redirect_uri')).origin + ';'));
 		const dom = new JSDOM(await page.text(), { url: authorize.href, runScripts: 'outside-only' });
-		dom.window.eval((await readFile('./public/app.js', 'utf8')).replace("import { Abbreviation } from './abbreviation.js';", (await readFile('./public/abbreviation.js', 'utf8')).replace('export class', 'class')).replace('export { client };', ''));
+		dom.window.eval((await BrowserSource.script()).replace('export { client };', ''));
 		const form = dom.window.document.querySelector('form[action="/oauth/authorize"]');
 		form.elements.account.value = Fixture.account;
 		const submit = new dom.window.Event('submit', { bubbles: true, cancelable: true });
@@ -271,7 +272,7 @@ test('web AJAX updates only affected snippets; preserves panel, filter and multi
 		const response = await fetch(new URL(path, Fixture.origin), { ...options, headers: { ...options.headers, Cookie: Fixture.cookie } });
 		return response;
 	};
-	const source = (await readFile('./public/app.js', 'utf8')).replace("import { Abbreviation } from './abbreviation.js';", (await readFile('./public/abbreviation.js', 'utf8')).replace('export class', 'class')).replace('new TypeRelay();', 'window.client = new TypeRelay();').replace('export { client };', '');
+	const source = (await BrowserSource.script()).replace('new TypeRelay();', 'window.client = new TypeRelay();').replace('export { client };', '');
 	dom.window.eval(source);
 	const client = dom.window.client;
 	await client.open(library._id);
@@ -536,7 +537,7 @@ test('public API edits reach two SQLite clients and token settings update indivi
 	const dom = new JSDOM(await (await Fixture.request('/')).text(), { url: Fixture.origin, runScripts: 'outside-only' });
 	try {
 		const document = dom.window.document; const pane = document.querySelector('#settings-pane-tokens');
-		const script = (await readFile('./public/app.js', 'utf8')).replace("import { Abbreviation } from './abbreviation.js';", (await readFile('./public/abbreviation.js', 'utf8')).replace('export class', 'class')).replace('export { client };', 'window.testClient = client;');
+		const script = (await BrowserSource.script()).replace('export { client };', 'window.testClient = client;');
 		dom.window.eval(script); const client = dom.window.testClient;
 		client.request = async () => token; client.toast = () => {};
 		const form = document.querySelector('#access-token-form'); form.elements.name.value = 'Test';
@@ -563,6 +564,23 @@ test('integration approval uses native form submission and allows its approved r
 	const response = await Fixture.request('/integrations/token', 'POST', { grant_type: 'authorization_code', code, client_id: client.client_id, redirect_uri: request.redirect_uri, resource: request.resource, code_verifier: verifier }); assert.equal(response.status, 200);
 	assert.equal(response.headers.get('cache-control'), 'no-store');
 	const denial = await Fixture.request('/integrations/authorize', 'POST', { ...request, decision: 'deny' }); assert.equal(new URL(denial.headers.get('location')).searchParams.get('error'), 'access_denied');
+});
+test('two offline clients retain templates and conflicts; protocol 4 is rejected', async () => {
+	const account=await Account.create({name:'Template devices'});await Member.create({account:account._id,user:Fixture.actor.user,role:'owner'});
+	const ctx=await Support.context(Fixture.actor.user,String(account._id));
+	const content={version:1,type:'template',text:'Hi {{name}} {{timestamp}}{{key:enter}}',variables:{name:{label:'Customer',default:'Nitai',required:true,multiline:false},timestamp:{timezone:'utc'}}};
+	const body={name:'Template devices',snippets:[{id:randomUUID(),trigger:'templatedevice',content}]};
+	const {library}=await Libraries.mutate(ctx,randomUUID(),body,async(fresh,session)=>({library:await Libraries.create(fresh,body,session)}));
+	const one=await Fixture.device('template-one',ctx.user,ctx.account);const two=await Fixture.device('template-two',ctx.user,ctx.account);
+	await Fixture.cli(one,'sync');await Fixture.cli(two,'sync');
+	assert.equal((await Fixture.state(two)).libraries.find(row=>row._id===library._id).records[0].content.variables.name.label,'Customer');
+	await Fixture.edit(one,library.name,'templatedevice','Hello {{name}}{{key:enter}}');
+	await Fixture.edit(two,library.name,'templatedevice','Dear {{name}}');
+	await Fixture.cli(one,'sync');await Fixture.cli(two,'sync');
+	const conflict=await Conflict.findOne({library:library._id,resolved:false}).lean();assert.ok(conflict);assert.equal(conflict.local.content.type,'template');assert.equal(conflict.local.content.variables.name.label,'Customer');
+	assert.equal((await Libraries.get(ctx,library._id)).snippets[0].content.variables.name.default,'Nitai');
+	const credential=JSON.parse(await readFile(join(one.config,'sync/credentials.json'),'utf8'));
+	const rejected=await fetch(Fixture.origin+'/api/v2/sync',{headers:{Authorization:'Bearer '+credential.access_token,'X-TypeRelay-Sync-Protocol':'4'}});assert.equal(rejected.status,426);assert.equal((await rejected.json()).protocol,5);
 });
 test('CSRF rejects writes, logout invalidates session', async () => {
 	const response = await fetch(Fixture.origin + '/api/v2/libraries', { method: 'POST', headers: { Cookie: Fixture.cookie, 'Content-Type': 'application/json', 'X-Account-Id': Fixture.account }, body: JSON.stringify({ name: 'Blocked' }) });

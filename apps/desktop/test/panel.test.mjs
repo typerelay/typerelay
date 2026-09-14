@@ -9,7 +9,7 @@ class Fixture {
   const dom=new JSDOM(pug.renderFile('ui/index.pug'),{runScripts:'outside-only',pretendToBeVisual:true});
   const calls=[];const callbacks={};const pending=[];
   dom.window.HTMLElement.prototype.scrollIntoView=()=>{};
-  dom.window.__TAURI__={core:{invoke:async(name,args)=>{calls.push({name,args});if(name==='initialize')return{config:{shortcut:'Ctrl+Shift+Comma',launch_at_login:false},theme:{os:'linux'},settings:false};if(name==='search')return new Promise(resolve=>pending.push({query:args.query,resolve}));if(name==='libraries')return[];return null;}},event:{listen:(name,callback)=>{callbacks[name]=callback;}}};
+  dom.window.__TAURI__={core:{invoke:async(name,args)=>{calls.push({name,args});if(name==='initialize')return{config:{shortcut:'Ctrl+Shift+Comma',launch_at_login:false},theme:{os:'linux'},settings:false};if(name==='search')return new Promise(resolve=>pending.push({query:args.query,resolve}));if(name==='libraries')return[];if(name==='prepare_template')return{fields:[],steps:[{kind:'text',text:'Literal'}],text:'Literal',enter_actions:0,template:{text:'Literal',variables:{}}};return null;}},event:{listen:(name,callback)=>{callbacks[name]=callback;}}};
   dom.window.eval((await readFile('ui/panel.js','utf8')).replace('new Panel();','window.panel = new Panel();'));
   await new Promise(resolve=>setTimeout(resolve,0));
   return {dom,panel:dom.window.panel,calls,pending,callbacks};
@@ -44,6 +44,14 @@ test('late responses are ignored; keyboard selection, Copy and Escape use explic
  }finally{f.dom.window.close();}
 });
 
+test('one result click inserts the clicked snippet',async()=>{
+ const f=await Fixture.create();try{
+  const search=f.panel.search(f.panel.sequence);f.pending[0].resolve([Fixture.hit('one'),Fixture.hit('two')]);await search;
+  f.panel.list.children[1].click();await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(f.calls.find(call=>call.name==='insert').args.hit.id,'two');
+ }finally{f.dom.window.close();}
+});
+
 test('settings mode reaches native focus policy from tray and Back',async()=>{
  const f=await Fixture.create();try{
   await f.panel.settings(true);
@@ -53,5 +61,31 @@ test('settings mode reaches native focus policy from tray and Back',async()=>{
   assert.equal(f.calls.filter(call=>call.name==='set_settings_view').at(-1).args.enabled,false);
   await f.panel.open({settings:true,theme:{os:'linux'}});
   assert.equal(f.calls.filter(call=>call.name==='set_settings_view').at(-1).args.enabled,true);
+ }finally{f.dom.window.close();}
+});
+
+test('template fields wait for confirmation, retain literal answers and clear on cancellation',async()=>{
+ const f=await Fixture.create();try{
+  const original=f.panel.invoke;
+  f.panel.invoke=async(name,args={})=>name==='prepare_template'?{fields:['name'],enter_actions:1,template:{text:'Hi {{name}}{{key:enter}}',variables:{name:{label:'Name',default:'',required:true,multiline:false}}},steps:[{kind:'text',text:'Hi '+(args.values?.name||'[Name]')},{kind:'enter'}]}:original(name,args);
+  await f.panel.start(Fixture.hit('template'),'insert');
+  assert.ok(!f.calls.some(call=>call.name==='insert'));
+  const input=f.dom.window.document.querySelector('[data-answer]');input.value='{{key:enter}}';
+  await f.panel.previewFill();assert.ok(f.dom.window.document.querySelector('#fill-preview').textContent.includes('{{key:enter}}'));
+  await f.panel.commit();assert.equal(f.calls.find(call=>call.name==='insert').args.values.name,'{{key:enter}}');
+  await f.panel.start(Fixture.hit('template'),'insert');f.panel.cancel();assert.equal(f.dom.window.document.querySelectorAll('[data-answer]').length,0);
+ }finally{f.dom.window.close();}
+});
+
+test('manual sync displays progress and completion without opening or dismissing the panel',async()=>{
+ const f=await Fixture.create();try{
+  f.panel.invoke=async(name)=>{if(name==='sync_now')f.callbacks['sync-status']({payload:'Starting to sync…'});};
+  await f.dom.window.document.querySelector('#sync').onclick();
+  assert.equal(f.panel.status.textContent,'Starting to sync…');
+  f.callbacks['sync-status']({payload:'Sync successful'});
+  assert.equal(f.panel.status.textContent,'Sync successful');
+  f.callbacks['sync-status']({payload:'Sync failed. Check your connection and TypeRelay sync status.'});
+  assert.match(f.panel.status.textContent,/Sync failed/);
+  assert.ok(!f.calls.some(call=>call.name==='dismiss'));
  }finally{f.dom.window.close();}
 });

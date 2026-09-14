@@ -1,4 +1,5 @@
 //! Platform-independent matching. Neither keyboard devices nor snippet sources live here.
+pub mod template;
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -10,6 +11,7 @@ pub struct Snippet {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Snapshot {
     snippets: BTreeMap<String, Snippet>,
+    templates: BTreeMap<String, TemplateExpansion>,
 }
 
 impl Snapshot {
@@ -28,9 +30,11 @@ impl Snapshot {
                 return Err("Duplicate trigger".into());
             }
         }
-        Ok(Self { snippets: indexed })
+        Ok(Self { snippets: indexed, templates: BTreeMap::new() })
     }
 
+    pub fn set_template(&mut self, abbreviation: &str, template: template::Template) -> Result<(), String> { let template=template.normalize()?; let prompted=!template.fields()?.is_empty(); self.templates.insert(abbreviation.into(), TemplateExpansion { abbreviation: abbreviation.into(), identity: None, prompted }); Ok(()) }
+    pub fn identify(&mut self, abbreviation: &str, identity: Identity) { if let Some(template) = self.templates.get_mut(abbreviation) { template.identity = Some(identity); } }
     pub fn len(&self) -> usize { self.snippets.len() }
     pub fn is_empty(&self) -> bool { self.snippets.is_empty() }
 }
@@ -38,8 +42,13 @@ impl Snapshot {
 #[derive(Debug, Clone, Copy)]
 pub enum Input { Character(char), Backspace, Space, Cancel }
 
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Identity { pub id: String, pub library: String, pub revision: i64 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TemplateExpansion { pub prompted: bool, pub abbreviation: String, pub identity: Option<Identity> }
 #[derive(Debug, PartialEq, Eq)]
 pub struct Expansion {
+    pub template: Option<TemplateExpansion>,
     pub erase: usize,
     pub text: String,
 }
@@ -83,7 +92,7 @@ impl Engine {
             Input::Cancel => self.pending.clear(),
             Input::Backspace => { self.pending.pop(); }
             Input::Space => {
-                let expansion = self.pending.strip_prefix(self.prefix).and_then(|abbreviation| self.snapshot.snippets.get(abbreviation)).map(|s| Expansion { erase: self.pending.len(), text: s.replacement.clone() });
+                let expansion = self.pending.strip_prefix(self.prefix).and_then(|abbreviation| self.snapshot.snippets.get(abbreviation)).map(|s| Expansion { template: self.snapshot.templates.get(&s.trigger).cloned(), erase: self.pending.len(), text: s.replacement.clone() });
                 self.pending.clear();
                 return expansion;
             }
@@ -114,7 +123,9 @@ mod tests {
     fn waits_for_space_and_allows_overlap() {
         let mut engine = Engine::new(Fixture::snapshot());
         Fixture::type_text(&mut engine, ",brbmore");
-        assert_eq!(engine.feed(Input::Space), Some(Expansion { erase: 8, text: "Later".into() }));
+        assert_eq!(engine.feed(Input::Space), Some(Expansion { template: None, erase: 8, text: "Later".into() }));
+        Fixture::type_text(&mut engine, ",brb");
+        assert_eq!(engine.feed(Input::Space), Some(Expansion { template: None, erase: 4, text: "Be right back.".into() }));
         assert_eq!(engine.feed(Input::Space), None);
     }
     #[test]
@@ -149,7 +160,7 @@ mod tests {
         Fixture::type_text(&mut engine, ",brb");
         assert!(engine.feed(Input::Space).is_none());
         Fixture::type_text(&mut engine, ";brb");
-        assert_eq!(engine.feed(Input::Space).unwrap(), Expansion { erase: 4, text: "Be right back.".into() });
+        assert_eq!(engine.feed(Input::Space).unwrap(), Expansion { template: None, erase: 4, text: "Be right back.".into() });
         for prefix in ["", "::", "a", "-", " ", ":"] { assert!(engine.set_prefix(prefix).is_err()); }
         assert_eq!(engine.prefix(), ';');
     }
@@ -176,8 +187,8 @@ mod tests {
 
     #[test]
     fn long_paragraphs_use_paste_and_short_text_stays_native() {
-        assert!(Expansion { erase: 4, text: "a".repeat(600) }.requires_paste());
-        assert!(!Expansion { erase: 4, text: "Be right back.".into() }.requires_paste());
+        assert!(Expansion { template: None, erase: 4, text: "a".repeat(600) }.requires_paste());
+        assert!(!Expansion { template: None, erase: 4, text: "Be right back.".into() }.requires_paste());
         assert!(Snapshot::new(vec![Snippet { trigger: "long".into(), replacement: "a".repeat(65536) }]).is_ok());
         assert!(Snapshot::new(vec![Snippet { trigger: "long".into(), replacement: "a".repeat(65537) }]).is_err());
     }

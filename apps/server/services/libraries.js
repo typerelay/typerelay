@@ -10,17 +10,18 @@ export class Libraries {
 	static retention = 30 * 86400000;
 	static trashFields(actor, now = new Date()) { return { state: 'trashed', trashed_at: now, expires_at: new Date(+now + Libraries.retention), trashed_by: actor }; }
 	static content(value) {
-		const content = value?.content || { version: 1, type: value?.type || 'plain_text', language: value?.language || 'plain_text', text: value?.replace };
-		Support.assert(content.version === 1 && ['plain_text', 'code'].includes(content.type) && typeof content.text === 'string', 'Unsupported snippet content');
+		const content = value?.content || { version: 1, type: value?.type || 'plain_text', language: value?.language || 'plain_text', text: value?.replace, variables: value?.variables };
+		Support.assert(content.version === 1 && ['plain_text', 'code', 'template'].includes(content.type) && typeof content.text === 'string', 'Unsupported snippet content');
 		Support.assert(content.type !== 'code' || (typeof content.language === 'string' && content.language.length > 0 && content.language.length <= 100 && !/[\x00-\x1f\x7f]/.test(content.language)), 'Invalid language');
-		return { version: 1, type: content.type, text: content.text.replaceAll('\r\n', '\n'), ...(content.type === 'code' ? { language: content.language } : {}) };
+		return { version: 1, type: content.type, text: content.text.replaceAll('\r\n', '\n'), ...(content.type === 'code' ? { language: content.language } : {}), ...(content.type === 'template' ? { variables: content.variables || {} } : {}) };
 	}
-	static value(entry) {
+	static value(entry, previous = null) {
+		Support.assert(previous?.type !== 'template' || entry?.content?.type !== 'template' || Object.hasOwn(entry.content, 'variables'), 'Template variables are required when editing a template; update or reload your client.');
 		Support.assert(entry?.title == null || (typeof entry.title === 'string' && Buffer.byteLength(entry.title) <= 500 && !/[\x00-\x1f\x7f]/.test(entry.title)), 'Invalid title');
 		Support.assert(entry?.trigger == null || typeof entry.trigger === 'string', 'Invalid abbreviation');
 		return { trigger: Abbreviation.normalize(entry?.trigger) || null, title: entry?.title || '', content: Libraries.content(entry) };
 	}
-	static yaml(entry) { const value = Libraries.value(entry); return { trigger: value.trigger, title: value.title, replace: value.content.text, type: value.content.type, language: value.content.language || 'plain_text' }; }
+	static yaml(entry) { const value = Libraries.value(entry); return { trigger: value.trigger, title: value.title, replace: value.content.text, type: value.content.type, language: value.content.language || 'plain_text', variables: value.content.variables || {} }; }
 	static entry(snippet) { return { ...snippet, replace: snippet.content?.text }; }
 	static view(ctx, library) { return { ...library, _id: String(library._id), deleted: library.state !== 'active', permissions: Support.access(ctx, library) }; }
 	static async hydrate(library, session) {
@@ -294,7 +295,7 @@ export class Libraries {
 			const server = await Snippet.findOne({ account: ctx.account, id: change.id }).session(session).lean();
 			Support.assert(!server || Support.equal(server.library, library._id), 'Snippet moved to another library; review your changes', 409);
 			Support.assert(server?.state !== 'purged', 'Snippet was permanently purged; it cannot be restored', 410);
-			const local = change.value === null ? null : Libraries.value(change.value);
+			const local = change.value === null ? null : Libraries.value(change.value, server?.content);
 			if (local) await Libraries.validate([local]);
 			if (server?.state === 'active' && library.state === 'active' && Libraries.same(server, local)) continue;
 			if (server?.state === 'trashed' && local === null) continue;
@@ -341,7 +342,7 @@ export class Libraries {
 			let position = (last?.position ?? -1) + 1;
 			for (const record of selected) {
 				const item = body.items.find(item => item.id === record.id);
-				const change = item.value === undefined ? {} : Libraries.value(item.value);
+				const change = item.value === undefined ? {} : Libraries.value(item.value, record.content);
 				await Snippet.updateOne({ _id: record._id }, { $set: { library: destination._id, position: position++, ...change }, $inc: { revision: 1 } }, { session });
 				await Conflict.updateMany({ account: ctx.account, library: source._id, snippet: record.id }, { $set: { library: destination._id } }, { session });
 			}
@@ -458,7 +459,7 @@ export class Libraries {
 			const candidates = changes.filter(change => visibleIds.has(String(change.library))).flatMap(change => (change.departures || []).map(id => ({ library: String(change.library), id })));
 			const locations = new Map((await Snippet.find({ account: ctx.account, id: { $in: [...new Set(candidates.map(item => item.id))] } }).select('id library').session(session).lean()).map(record => [record.id, String(record.library)]));
 			const departures = [...new Map(candidates.filter(item => locations.has(item.id) && locations.get(item.id) !== item.library).map(item => [item.library + ':' + item.id, item])).values()];
-			result = { protocol: 4, departures, purged, cursor: account.sequence, accessible: visible.map(library => String(library._id)), libraries, tombstones, conflicts, trash: await Libraries.trash(ctx, session) };
+			result = { protocol: 5, departures, purged, cursor: account.sequence, accessible: visible.map(library => String(library._id)), libraries, tombstones, conflicts, trash: await Libraries.trash(ctx, session) };
 		}, { readConcern: { level: 'snapshot' } });
 		return result;
 	}

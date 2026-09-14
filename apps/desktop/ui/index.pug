@@ -20,6 +20,17 @@ html(lang="en")
 				footer
 					span ↑ ↓ Select · Enter Insert · Esc Close
 					button#copy(type="button" disabled) Copy
+			section#fill-view(hidden)
+				form#fill-form
+					h2 Fill template
+					#fill-fields
+					label Preview
+					pre#fill-preview
+					p#fill-actions
+					.row
+						button#fill-cancel(type="button") Cancel
+						button#fill-copy(type="button") Copy filled text
+						button#fill-submit(type="submit") Insert
 			section#settings-view(hidden)
 				form#settings-form
 					label(for="shortcut") Search shortcut
@@ -53,3 +64,9 @@ html(lang="en")
 			label.check
 				input(type="checkbox")
 				span
+
+		template#fill-field
+			div
+				label
+				input(autocomplete="off")
+				textarea(hidden)

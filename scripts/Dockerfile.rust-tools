@@ -1,0 +1,4 @@
+FROM rust:1.94-bookworm
+RUN rustup target add wasm32-unknown-unknown && rustup component add clippy
+RUN apt-get update && apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev patchelf && rm -rf /var/lib/apt/lists/*
+WORKDIR /repo

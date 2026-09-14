@@ -50,7 +50,7 @@ impl Panel {
         ranked.sort_by(|(a,x),(b,y)| a.cmp(b).then(x.abbreviation.cmp(&y.abbreviation)).then(x.library_name.cmp(&y.library_name)).then(x.id.cmp(&y.id)));
         Ok(ranked.into_iter().take(50).map(|(_, hit)|hit).collect())
     }
-    pub fn selected(directory: &Path, hit: &Hit) -> Result<String> {
+    pub fn content(directory: &Path, hit: &Hit) -> Result<serde_json::Value> {
         let db = Database::open(directory)?;
         let transaction = db.connection.unchecked_transaction()?;
         let library = db.library(&hit.library)?;
@@ -58,9 +58,14 @@ impl Panel {
         let records = db.records(&hit.library)?;
         let entry = records.iter().find(|entry|entry["id"] == hit.id && entry["state"] == "active").context("Snippet moved or was removed; search again")?;
         ensure!(entry["revision"] == hit.revision, "Snippet changed; search again");
-        let text = entry["content"]["text"].as_str().context("Missing content")?.to_owned();
-        transaction.commit()?; Ok(text)
+        let content = entry["content"].clone();
+        transaction.commit()?; Ok(content)
     }
+    pub fn selected(directory: &Path, hit: &Hit) -> Result<String> { let content = Self::content(directory, hit)?; ensure!(content["type"] != "template", "Fill this template before copying/inserting"); Ok(content["text"].as_str().context("Missing text")?.into()) }
+    pub fn render(directory: &Path, hit: &Hit, values: std::collections::BTreeMap<String,String>, preview: bool) -> Result<typerelay_core::template::Rendered> { Self::render_at(directory,hit,values,preview,crate::templates::Templates::clock()) }
+
+    pub fn render_at(directory:&Path,hit:&Hit,values:std::collections::BTreeMap<String,String>,preview:bool,clock:(i64,i32))->Result<typerelay_core::template::Rendered>{crate::templates::Templates::render_at(&Self::content(directory,hit)?,values,preview,clock)}
+
 }
 
 #[cfg(test)]

@@ -1,3 +1,3 @@
 # Overview
 
-The shared search panel targets Omarchy/Hyprland, macOS and Windows. Continuous abbreviation expansion currently runs on Omarchy only. macOS and Windows packages are beta and require platform testing; do not treat them as verified releases.
+The shared search panel targets Omarchy/Hyprland, macOS and Windows. Continuous abbreviation expansion runs on Omarchy and Windows. macOS and Windows packages remain beta while their broader platform checklists are completed.

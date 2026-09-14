@@ -1,0 +1,36 @@
+services:
+  mail:
+    ports: !override []
+    networks:
+      default:
+      dbh_proxy:
+        aliases:
+          - "${DBH_PROFILE}-typerelay-mail"
+
+  server:
+    ports: !override []
+    environment:
+      ORIGIN: "${TYPERELAY_ORIGIN}"
+      TRUST_PROXY: "1"
+    networks:
+      default:
+      dbh_proxy:
+        aliases:
+          - "${DBH_PROFILE}-typerelay-server"
+
+  mcp:
+    ports: !override []
+    environment:
+      APP_ORIGIN: "${TYPERELAY_ORIGIN}"
+      MCP_ORIGIN: "${TYPERELAY_MCP_ORIGIN}"
+      TRUST_PROXY: "1"
+    networks:
+      default:
+      dbh_proxy:
+        aliases:
+          - "${DBH_PROFILE}-typerelay-mcp"
+
+networks:
+  dbh_proxy:
+    name: "${DBH_PROXY_NETWORK}"
+    external: true

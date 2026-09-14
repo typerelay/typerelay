@@ -308,7 +308,7 @@ test('code metadata, optional abbreviations, import previews and idempotent impo
 	assert.equal(result.library.snippets[0].content.language, 'JavaScript');
 	const competing = await Fixture.upload(owner, result.library, [{ id: entry.id, base_revision: entry.revision, value: { ...Libraries.value(entry), title: 'Offline title' } }]);
 	assert.equal(competing.conflicts.length, 1, 'Concurrent metadata edits must retain a conflict');
-	await assert.rejects(Libraries.validate([{ trigger: 'literal', replace: '{{ invalid text mode }}' }]), /Code mode/);
+	await Libraries.validate([{ trigger: 'literal', replace: '{{ invalid text mode }}' }]);
 	const bad = { ...body, selected: [{ key: '1:0' }] };
 	await assert.rejects(Libraries.mutate(owner, randomUUID(), bad, (ctx, session) => Libraries.importSnippetsLab(ctx, bad, session)), /invalid/);
 	await assert.rejects(Libraries.snippetsLab({ contents: { snippets: [{ title: 'Missing' }] } }), /no fragments/);
@@ -357,4 +357,30 @@ test('shared import commit corrects abbreviations, stays private, retries and ro
 	assert.equal(next.libraries[0].name, 'Beta (2)'); assert.equal(next.libraries[0].snippets[0].trigger, null);
 	const admin = await Fixture.user('admin', owner.account);
 	await assert.rejects(Libraries.get(admin, libraries[0]._id), /not found/);
+});
+
+test('template metadata survives imports, edits, conflicts, moves and Trash', async () => {
+	const ctx = await Fixture.user('owner', (await Account.create({ name: 'Template tests' }))._id);
+	const content = { version: 1, type: 'template', text: 'Hi {{name}} {{date}}{{key:enter}}', variables: { name: { label: 'Customer', default: 'Nitai', required: true, multiline: false }, date: { timezone: 'utc', format: 'DD/MM/YYYY' } } };
+	const body = { name: 'Template', snippets: [{ id: randomUUID(), trigger: 'template', content }] };
+	let result = await Libraries.mutate(ctx, randomUUID(), body, (fresh, session) => Libraries.create(fresh, body, session).then(library => ({ library })));
+	let library = result.library; const first = library.snippets[0];
+	assert.deepEqual(first.content.variables, content.variables);
+	const yaml = await Yaml.export(library.snippets.map(Libraries.yaml));
+	const parsed = await Yaml.run(yaml.yaml); assert.equal(parsed.matches[0].type, 'template'); assert.equal(parsed.matches[0].variables.name.label, 'Customer');
+	const changed = { ...content, variables: { ...content.variables, name: { ...content.variables.name, label: 'Updated' } } };
+	result = await Fixture.upload(ctx, library, [{ id: first.id, base_revision: first.revision, value: { trigger: 'template', content: changed } }]); library = result.library;
+	const competing = await Fixture.upload(ctx, library, [{ id: first.id, base_revision: first.revision, value: { trigger: 'template', content: { ...content, text: 'Dear {{name}}' } } }]);
+	assert.equal(competing.conflicts.length, 1);
+	const conflict = await Conflict.findById(competing.conflicts[0]).lean(); assert.equal(conflict.local.content.type, 'template'); assert.equal(conflict.server.content.variables.name.label, 'Updated');
+	const destination = await Fixture.create(ctx, 'matches: []');
+	const move = { action: 'move', source_library: library._id, destination_library: destination.library._id, items: [{ id: first.id, base_revision: library.snippets[0].revision }] };
+	const moved = await Libraries.mutate(ctx, randomUUID(), move, (fresh, session) => Libraries.batch(fresh, move, session));
+	const entry = moved.libraries.find(item => item._id === destination.library._id).snippets[0]; assert.deepEqual(entry.content, changed);
+	const target = { type: 'snippet', id: entry.id, library: destination.library._id, revision: entry.revision };
+	await Libraries.mutate(ctx, randomUUID(), target, (fresh, session) => Libraries.trashAction(fresh, target, 'trash', session));
+	const row = (await Libraries.trash(ctx)).find(row => row.id === entry.id);
+	await Libraries.mutate(ctx, randomUUID(), row, (fresh, session) => Libraries.trashAction(fresh, row, 'restore', session));
+	assert.deepEqual((await Libraries.get(ctx, destination.library._id)).snippets[0].content, changed);
+	await assert.rejects(Libraries.validate([{ trigger: 'bad', type: 'template', replace: '{{shell:ls}}' }]), /variable name/);
 });

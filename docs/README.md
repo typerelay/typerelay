@@ -1,7 +1,7 @@
 # TypeRelay
 
 TypeRelay provides text expansion, offline snippet editing and team synchronization.
-The current keyboard adapter supports Omarchy/Hyprland on Linux with a US layout.
+The current keyboard adapters support Omarchy/Hyprland and Windows with a US layout.
 
 Use typerelay-tui to create libraries, edit snippets and manage Trash. The web app adds account/team management, sharing and conflict resolution.
 Type a prefix plus abbreviation, then Space to expand; the default prefix is a comma.
