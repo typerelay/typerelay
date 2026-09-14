@@ -18,16 +18,22 @@ export class Security {
 		await new Promise((resolve, reject) => req.session.regenerate(error => error ? reject(error) : resolve()));
 		req.session.csrf = Support.token();
 		req.session.return_to = destination;
+		let result;
 		if (user.totp_enabled && !verifiedFactor) {
 			req.session.pending_factor = { user: String(id), version: user.auth_version || 0, expires: Date.now() + 300000 };
-			return { requires2FA: true, csrf: req.session.csrf, redirect: '/auth/two-factor' };
+			result = { requires2FA: true, csrf: req.session.csrf, redirect: '/auth/two-factor' };
+		} else {
+			req.session.user = String(id);
+			req.session.auth_version = user.auth_version || 0;
+			req.session.auth_at = Date.now();
+			delete req.session.return_to;
+			result = { redirect: destination, csrf: req.session.csrf };
 		}
-		req.session.user = String(id);
-		req.session.auth_version = user.auth_version || 0;
-		req.session.auth_at = Date.now();
-		delete req.session.return_to;
-		return { redirect: destination, csrf: req.session.csrf };
+		// Persist before redirect headers expose the new cookie to a follow-up request.
+		await new Promise((resolve, reject) => req.session.save(error => error ? reject(error) : resolve()));
+		return result;
 	}
+
 	static async passwordLogin(req) {
 		const email = Security.email(req.body.email);
 		Support.assert(typeof req.body.password === 'string' && req.body.password.length <= 256, 'Invalid email or password', 401);

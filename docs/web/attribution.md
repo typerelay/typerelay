@@ -5,3 +5,5 @@ Restored login/signup/recovery forms, random-password reset, TOTP setup and pass
 Settings sidebar navigation and the navbar search palette follow Streamient/Mailtwine's views/layout.pug and settings sidebar patterns, scoped to TypeRelay's available features.
 
 Beta corner ribbon and responsive pill adapt Mailtwine's views/includes/beta_notice.pug and public/css/mailtwine-tabler.css, copyright its contributors, AGPL-3.0. The upstream license is retained in Mailtwine-LICENSE; TypeRelay uses its own branding and beta copy.
+
+Public integration OAuth and the separate Streamable HTTP MCP adapter follow Mailtwine/Streamient patterns. VitePress navigation, OpenAPI operation pages, sidebar generation, theme initialization, and API CSS adapt Mailtwine docs, copyright its contributors, AGPL-3.0. The retained Mailtwine-LICENSE applies to these adaptations. TypeRelay uses independent credentials and data.

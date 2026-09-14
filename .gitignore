@@ -30,3 +30,12 @@ credentials*.json
 *.sqlite-wal
 *.sqlite-shm
 *.db
+
+# Generated documentation
+/docs/node_modules/
+/docs/.vitepress/cache/
+/docs/.vitepress/dist/
+/docs/.vitepress/data/
+/docs/public/openapi.json
+
+/.pnpm-store/
