@@ -8,8 +8,6 @@ TypeRelay turns short abbreviations into reusable text, code and fillable templa
 
 [Guide](docs/guide/index.md) · [Desktop](docs/desktop/index.md) · [TUI](docs/cli/tui.md) · [Self-hosting](docs/selfhosted/index.md) · [MCP](docs/mcp/index.md) · [API](docs/api/index.md)
 
-> [!NOTE]
-> TypeRelay is in beta. Omarchy/Hyprland is the most thoroughly verified desktop target; Windows and macOS support is still completing broader platform testing.
 
 ## Why TypeRelay?
 
@@ -38,9 +36,9 @@ TypeRelay does not log keystrokes. Exported YAML is a portable copy, not live st
 | Platform | Current support |
 | --- | --- |
 | Omarchy / Hyprland, US layout | Continuous expansion, desktop panel and TUI; primary verified target |
-| Windows x64, US layout | Continuous expansion, desktop panel and TUI; beta |
-| macOS Apple Silicon | Desktop search and insertion panel; beta |
-| Other Linux desktops, layouts and architectures | Not currently supported |
+| Windows x64, US layout | Continuous expansion, desktop panel and TUI |
+| macOS Apple Silicon | Desktop search and insertion panel |
+| Other Linux desktops, layouts and architectures | Should work, but not extensively tested |
 
 See the [desktop overview](docs/desktop/index.md) and [troubleshooting guide](docs/desktop/troubleshooting.md) for current limitations.
 
