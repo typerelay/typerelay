@@ -5503,6 +5503,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "clap",
+ "clipboard-win",
  "crossterm",
  "ctrlc",
  "evdev",
