@@ -25,6 +25,7 @@
     "bcryptjs": "^3.0.3",
     "bootstrap": "^5.3.8",
     "connect-mongo": "^6.0.0",
+    "croner": "^10.0.1",
     "csv-parse": "^7.0.2",
     "esbuild": "^0.28.2",
     "express": "^5.1.0",

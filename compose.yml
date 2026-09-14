@@ -18,6 +18,7 @@ services:
     ports:
       - "127.0.0.1:8040:8025"
   server:
+    image: typerelay-server
     build:
       context: .
       dockerfile: apps/server/Dockerfile
@@ -46,6 +47,24 @@ services:
         condition: service_healthy
       mail:
         condition: service_started
+  scheduler:
+    image: typerelay-server
+    build:
+      context: .
+      dockerfile: apps/server/Dockerfile
+    command: [node, scripts/start.js]
+    environment:
+      MONGODB_URI: mongodb://mongo:27017/typerelay?replicaSet=typerelay
+      SERVER_MODE: scheduler
+    volumes:
+      - ./apps/server:/app
+      - typerelay-node-modules:/app/node_modules
+    restart: unless-stopped
+    deploy:
+      replicas: 1
+    depends_on:
+      mongo:
+        condition: service_healthy
   docs:
     profiles: [tools]
     image: node:24-bookworm-slim

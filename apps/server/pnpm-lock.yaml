@@ -145,6 +145,9 @@ importers:
       connect-mongo:
         specifier: ^6.0.0
         version: 6.0.0(express-session@1.19.0)(mongodb@7.6.0)
+      croner:
+        specifier: ^10.0.1
+        version: 10.0.1
       csv-parse:
         specifier: ^7.0.2
         version: 7.0.2
@@ -817,6 +820,10 @@ packages:
 
   crelt@1.0.7:
     resolution: {integrity: sha512-aK6BbWfhf4U/wCcLHKPJl/xa6VkVstRaPywWtMKGwuOLc/wZTyQYuoxgvZnNsBvv7Kg3YTBQYYBCggcviQczuA==}
+
+  croner@10.0.1:
+    resolution: {integrity: sha512-ixNtAJndqh173VQ4KodSdJEI6nuioBWI0V1ITNKhZZsO0pEMoDxz539T4FTTbSZ/xIOSuDnzxLVRqBVSvPNE2g==}
+    engines: {node: '>=18.0'}
 
   cssstyle@4.6.0:
     resolution: {integrity: sha512-2z+rWdzbbSZv6/rhtvzvqeZQHrBaqgogqt85sqFNbabZOuFbCVFb8kPeEtZjiKkbrm395irpNKiYeFeLiQnFPg==}
@@ -2334,6 +2341,8 @@ snapshots:
   cookie@0.7.2: {}
 
   crelt@1.0.7: {}
+
+  croner@10.0.1: {}
 
   cssstyle@4.6.0:
     dependencies:
