@@ -32,7 +32,7 @@ Keep backups until counts, IDs and text are verified. Backups and exports are ou
 ## Trash
 
 Both apps support snippets and libraries in Trash. Restore is refused after 30 days.
-Server cleanup runs at startup and hourly using transactions, not MongoDB TTL deletion.
+The dedicated server scheduler purges expired Trash daily at 02:30 using transactions, not MongoDB TTL deletion.
 Local-only cleanup runs on client startup and periodically.
 Synced deadlines start at server acceptance. Offline operations remain queued until authorized.
 Purge removes content, related conflicts and caches while retaining content-free IDs/receipts.

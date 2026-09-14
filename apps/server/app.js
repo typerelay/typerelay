@@ -13,14 +13,19 @@ import { Team } from './services/team.js';
 import { StorageMigration } from './services/storage_migration.js';
 import { PublicApi } from './api/public.js';
 import { Security } from './services/security.js';
+import { Scheduler } from './services/scheduler.js';
 
 export class Server {
 	static async start() {
 		await mongoose.connect(process.env.MONGODB_URI, { autoIndex: false });
+		if (process.env.SERVER_MODE === 'scheduler') {
+			Scheduler.start();
+			console.log('TypeRelay scheduler running: Trash cleanup daily at 02:30');
+			return;
+		}
 		await StorageMigration.code();
 		await Promise.all(Object.values(mongoose.models).map(model => model.createIndexes()));
 		await StorageMigration.run();
-		await Libraries.cleanup();
 		const secretPath = process.env.SESSION_SECRET_FILE || '/data/session-secret';
 		try { writeFileSync(secretPath, Support.token(), { flag: 'wx', mode: 0o600 }); } catch (error) { if (error.code !== 'EEXIST') throw error; }
 		const mcpSecretPath = process.env.MCP_SECRET_FILE || '/data/mcp-secret';
@@ -188,10 +193,7 @@ export class Server {
 			res.status(status).json({ error: status === 500 ? 'Request failed; please retry' : (error.code === 11000 ? 'Abbreviation or name already exists' : error.message) });
 		});
 		const server = app.listen(Number(process.env.PORT || 3040), '0.0.0.0');
-		let cleaning = false;
-		const cleanup = setInterval(async () => { if (cleaning) return; cleaning = true; try { await Libraries.cleanup(); } catch (error) { console.error('Trash cleanup failed:', error.message); } finally { cleaning = false; } }, 3600000);
-		cleanup.unref();
-		server.on('close', () => { clearInterval(cleanup); sessionStore.close(); });
+		server.on('close', () => sessionStore.close());
 		return server;
 	}
 	static presentation(library) {

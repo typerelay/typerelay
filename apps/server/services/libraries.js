@@ -427,18 +427,27 @@ export class Libraries {
 		return { affected };
 	}
 	static async cleanup() {
+		const summary = { libraries: 0, snippets: 0 };
 		for (const account of await Account.find({}).select('_id').lean()) {
-			await mongoose.connection.transaction(async session => {
+			const purged = await mongoose.connection.transaction(async session => {
 				await Account.updateOne({ _id: account._id }, { $inc: { sequence: 1 } }, { session });
 				const now = new Date();
 				const libraries = await Library.find({ account: account._id, state: 'trashed', expires_at: { $lte: now } }).session(session).lean();
 				for (const library of libraries) await Libraries.purge(library, null, session);
+				let snippets = 0;
 				for (const entry of await Snippet.find({ account: account._id, state: 'trashed', expires_at: { $lte: now } }).session(session).lean()) {
 					const library = await Library.findById(entry.library).session(session).lean();
-					if (library && library.state !== 'purged') await Libraries.purge(library, entry, session);
+					if (library && library.state !== 'purged') {
+						await Libraries.purge(library, entry, session);
+						snippets++;
+					}
 				}
+				return { libraries: libraries.length, snippets };
 			});
+			summary.libraries += purged.libraries;
+			summary.snippets += purged.snippets;
 		}
+		return summary;
 	}
 	static async download(ctx, cursor) {
 		Support.assert(Number.isSafeInteger(cursor) && cursor >= 0, 'Invalid cursor');
