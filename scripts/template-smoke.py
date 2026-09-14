@@ -105,7 +105,7 @@ class TemplateSmoke(desktop.Smoke):
 ''')
             (config / 'settings.yml').write_text("trigger_prefix: ','\nsync_url: ''\n")
             (config / 'panel.json').write_text(json.dumps({'shortcut': 'Ctrl+Shift+Comma', 'launch_at_login': False}))
-            env = {**os.environ, 'XDG_CONFIG_HOME': str(root / 'config'), 'XDG_DATA_HOME': str(root / 'data'), 'XDG_CACHE_HOME': str(root / 'cache')}
+            env = {**os.environ, 'TYPERELAY_DIAGNOSTIC': '1', 'XDG_CONFIG_HOME': str(root / 'config'), 'XDG_DATA_HOME': str(root / 'data'), 'XDG_CACHE_HOME': str(root / 'cache')}
             try:
                 if service: self.command('systemctl', '--user', 'stop', 'typerelay')
                 if panel_running: subprocess.run([str(old_panel), '--quit'], check=True, timeout=10); time.sleep(.8)
@@ -118,11 +118,11 @@ class TemplateSmoke(desktop.Smoke):
                 self.focus('TypeRelay GTK Test'); target = self.active()
                 self.keys(',ask ', target); self.wait(lambda: self.record(output) == ',ask ')
                 print('PASS: missing panel leaves prompted abbreviation unchanged', flush=True)
-                self.keys('\b' * 5, target)
+                gtk.send_signal(signal.SIGUSR1); self.wait(lambda: self.record(output) == '')
                 self.keys(',date next', target); self.wait(lambda: self.record(output).startswith('date=') and self.record(output).endswith('next'))
                 print('PASS: built-in date expands and following typing is preserved', flush=True)
                 # Clear the disposable target before testing prompts.
-                self.keys('\b' * len(self.record(output)), target)
+                gtk.send_signal(signal.SIGUSR1); self.wait(lambda: self.record(output) == '')
                 panel_log = (root / 'panel.log').open('w+')
                 panel = self.start(str(self.root / 'target/templates/release/typerelay-panel'), '--background', env=env, stdout=panel_log, stderr=panel_log)
                 time.sleep(1.5)
@@ -141,11 +141,11 @@ class TemplateSmoke(desktop.Smoke):
                 if self.record(output): raise AssertionError('Inserted before modifiers were released')
                 held.wait(timeout=5); self.wait(lambda: self.record(output) == 'Hi nitai nitai')
                 print('PASS: repeated input, original focus and modifier release', flush=True)
-                self.keys('\b' * len(self.record(output)), target)
+                gtk.send_signal(signal.SIGUSR1); self.wait(lambda: self.record(output) == '')
                 self.keys(',ask ', target); window = self.panel_window(panel.pid); self.keys('{{key:enter}}\n', window)
                 self.wait(lambda: self.record(output) == 'Hi {{key:enter}} {{key:enter}}')
                 print('PASS: entered action syntax stays literal', flush=True)
-                self.keys('\b' * len(self.record(output)), target)
+                gtk.send_signal(signal.SIGUSR1); self.wait(lambda: self.record(output) == '')
                 self.keys(',ask ', target); window = self.panel_window(panel.pid); self.keys('\x1b', window)
                 self.wait(lambda: self.record(output) == '')
                 print('PASS: cancel inserts nothing and does not restore abbreviation', flush=True)
@@ -161,7 +161,7 @@ class TemplateSmoke(desktop.Smoke):
                 self.focus('TypeRelay Browser Test'); self.keys(',action ')
                 self.wait(lambda: self.record(browser_output) == 'one\ntwo')
                 print('PASS: ordered insertion into browser textarea', flush=True)
-                self.focus('TypeRelay GTK Test'); target = self.active(); self.keys('\b' * len(self.record(output)), target)
+                self.focus('TypeRelay GTK Test'); target = self.active(); gtk.send_signal(signal.SIGUSR1); self.wait(lambda: self.record(output) == '')
                 self.keys(',ask ', target); window = self.panel_window(panel.pid)
                 gtk.terminate(); gtk.wait(timeout=3)
                 self.keys('nothing\n', window)
@@ -171,7 +171,7 @@ class TemplateSmoke(desktop.Smoke):
                 self.keys('\x1b', window)
                 print('PASS: a removed original target never redirects insertion elsewhere', flush=True)
             except Exception:
-                for name in ['engine.log', 'panel.log']:
+                for name in ['engine.log', 'panel.log', 'gtk.txt', 'terminal.json']:
                     path = root / name
                     if path.exists(): print(name + ':\n' + path.read_text()[-3000:], file=sys.stderr)
                 raise

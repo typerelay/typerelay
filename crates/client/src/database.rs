@@ -626,10 +626,11 @@ impl Database {
             for (position, entry) in document.matches.iter().enumerate() {
                 let previous = baseline.iter().find(|record| record["trigger"] == entry.trigger);
                 let snippet_id = previous.and_then(|record| record["id"].as_str()).map(str::to_owned).unwrap_or_else(|| Uuid::new_v4().to_string());
-                let content = json!({"version":1,"type":"plain_text","text":entry.replace});
-                let record = json!({"id":snippet_id,"trigger":entry.trigger,"content":content,"position":position,"state":"active","revision":previous.map(|record| record["revision"].clone()).unwrap_or(json!(1))});
+                let value=entry.value();
+                let content = value["content"].clone();
+                let record = json!({"id":snippet_id,"trigger":value["trigger"],"title":entry.title,"content":content,"position":position,"state":"active","revision":previous.map(|record| record["revision"].clone()).unwrap_or(json!(1))});
                 self.put_record(&id, &record)?;
-                if managed.is_some() && previous.is_none_or(|record| record["replace"] != entry.replace) { changes.push(json!({"id":snippet_id,"base_revision":previous.map(|record|record["revision"].clone()),"base":previous,"value":{"trigger":entry.trigger,"content":content}})); }
+                if managed.is_some() && previous.is_none_or(|record| record["replace"] != entry.replace) { changes.push(json!({"id":snippet_id,"base_revision":previous.map(|record|record["revision"].clone()),"base":previous,"value":value})); }
             }
             for previous in &baseline {
                 if !document.matches.iter().any(|entry| previous["trigger"] == entry.trigger) {
