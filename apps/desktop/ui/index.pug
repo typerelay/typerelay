@@ -8,18 +8,28 @@ html(lang="en")
 		script(src="panel.js" defer)
 	body
 		main
-			header
-				img(src="icon.svg" alt="" width="24" height="24")
-				strong TypeRelay
-				button#close(type="button" aria-label="Close panel") ×
+			header.titlebar
+				.brand
+					img(src="icon.svg" alt="" width="24" height="24")
+					h1 TypeRelay
+				span.shortcut-key(aria-hidden="true") ⌃⇧,
+				button#close.icon-button(type="button" aria-label="Close TypeRelay") ×
 			section#search-view
-				label(for="query") Search snippets
-				input#query(type="search" autocomplete="off" spellcheck="false" aria-controls="results")
+				.search-field
+					span.search-icon(aria-hidden="true") ⌕
+					label.visually-hidden(for="query") Search snippets
+					input#query(type="search" autocomplete="off" spellcheck="false" aria-controls="results")
 				p#hint Type an abbreviation or part of a snippet.
 				ul#results(role="listbox" aria-label="Snippets")
 				footer
-					span ↑ ↓ Select · Enter Insert · Esc Close
-					button#copy(type="button" disabled) Copy
+					span
+						span.keycap ↑↓
+						span Select
+						span.keycap ↩
+						span Insert
+						span.keycap esc
+						span Close
+					button#copy.secondary(type="button" disabled) Copy
 			section#fill-view(hidden)
 				form#fill-form
 					h2 Fill template
@@ -27,31 +37,53 @@ html(lang="en")
 					label Preview
 					pre#fill-preview
 					p#fill-actions
-					.row
+					.row.form-actions
 						button#fill-cancel(type="button") Cancel
-						button#fill-copy(type="button") Copy filled text
-						button#fill-submit(type="submit") Insert
+						span.action-group
+							button#fill-copy.secondary(type="button") Copy filled text
+							button#fill-submit.primary(type="submit") Insert
 			section#settings-view(hidden)
+				.settings-heading
+					button#settings-cancel.back-button(type="button") ‹ Back
+					div
+						h2 Settings
+						p Configure TypeRelay on this Mac.
 				form#settings-form
-					label(for="shortcut") Search shortcut
-					input#shortcut(required)
-					small Ctrl, Shift, Alt or Super + Comma, A–Z, 0–9 or F1–F12
-					label.check
-						input#autostart(type="checkbox")
-						span Start at login
-					.row
-						button#settings-cancel(type="button") Back
-						button(type="submit") Save
-				form#connect-form
-					label(for="server") Sync server URL
-					input#server(type="url" required)
-					.row
-						button#sync(type="button") Sync now
-						button(type="submit") Authenticate in browser
-				form#enroll-form
-					p Upload selected local libraries as private libraries
-					div#local-libraries
-					button(type="submit") Upload selected
+					.settings-group
+						label(for="shortcut") Search shortcut
+						input#shortcut(required)
+						small Ctrl, Shift, Alt or Super + Comma, A–Z, 0–9 or F1–F12
+						label.check
+							input#autostart(type="checkbox")
+							span Start TypeRelay at login
+						.form-actions
+							span
+							button.primary(type="submit") Save
+				section#accessibility-card.mac-only.settings-group
+					.setting-copy
+						h3 Accessibility
+						p Required to return focus and insert snippets into other apps.
+					.setting-control
+						span#accessibility-state.status-pill
+						button#open-accessibility.secondary(type="button") Open System Settings
+				section#tui-card.mac-only.settings-group
+					.setting-copy
+						h3 TypeRelay TUI
+						p Edit local libraries and snippets in Terminal.
+					button#open-tui.secondary(type="button") Open in Terminal
+				section#sync-settings.settings-group
+					form#connect-form
+						label(for="server") Sync server URL
+						input#server(type="url" required)
+						.form-actions
+							button#sync.secondary(type="button") Sync now
+							button.primary(type="submit") Authenticate in browser
+					form#enroll-form
+						p Upload selected local libraries as private libraries
+						div#local-libraries
+						.form-actions
+							span
+							button.primary(type="submit") Upload selected
 			p#status(role="status" aria-live="polite")
 		template#result-template
 			li(role="option" aria-selected="false")

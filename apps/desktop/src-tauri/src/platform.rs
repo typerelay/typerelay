@@ -13,6 +13,10 @@ pub use native::{Target,fallback_allowed};
 #[cfg(target_os = "windows")]
 pub use native::{ExpansionRequest, ExpansionSession};
 
+pub fn accessibility(prompt:bool)->bool { #[cfg(target_os="macos")] {native::accessibility(prompt)} #[cfg(not(target_os="macos"))] {let _=prompt;true} }
+pub fn open_accessibility_settings()->Result<()> { #[cfg(target_os="macos")] {native::open_accessibility_settings()} #[cfg(not(target_os="macos"))] {anyhow::bail!("Accessibility settings are available on macOS")} }
+pub fn open_tui()->Result<()> { #[cfg(target_os="macos")] {native::open_tui()} #[cfg(not(target_os="macos"))] {anyhow::bail!("Open TypeRelay TUI from your application launcher")} }
+
 pub fn copy(text: String) -> Result<()> {
     #[cfg(target_os = "linux")]
     { typerelay_client::clipboard::PasteJob::copy_text(text) }

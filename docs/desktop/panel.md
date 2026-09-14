@@ -6,7 +6,7 @@ Right-click the T icon for **Sync now**, **Settings** and **Quit TypeRelay**. Se
 
 Closing the panel hides it. On Omarchy, quitting the panel leaves the separate expansion service running. Search works offline. Read-only snippets and entries without abbreviations remain searchable.
 
-On macOS grant Accessibility permission when required. On Windows the resident panel also performs prefix + abbreviation + Space expansion; elevated/protected applications may reject insertion. Windows users can edit the same local database through **TypeRelay TUI** from the Start menu, where expansion is paused. Native macOS and Windows builds remain beta pending broader platform verification.
+On macOS, TypeRelay requests Accessibility on first launch and Settings shows its current state with a direct System Settings button. Open bundled **TypeRelay TUI** from the menu-bar menu or Settings to edit the same local database in Terminal. On Windows the resident panel also performs prefix + abbreviation + Space expansion; elevated/protected applications may reject insertion. Windows users can open **TypeRelay TUI** from Start, where expansion is paused. Native macOS and Windows builds remain beta pending broader platform verification.
 
 ## Filling templates
 

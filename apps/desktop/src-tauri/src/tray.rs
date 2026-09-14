@@ -1,5 +1,4 @@
 use anyhow::Result;
-#[cfg(target_os="linux")]
 use tauri::Manager;
 use crate::Runtime;
 #[cfg(target_os="linux")]
@@ -17,11 +16,14 @@ pub fn install(app:&tauri::AppHandle)->Result<()> {
     {use ksni::blocking::TrayMethods;let handle=Tray(app.clone()).spawn()?;app.manage(handle);}
     #[cfg(not(target_os="linux"))]
     {
-        use tauri::{menu::{Menu,MenuItem},tray::{TrayIconBuilder,TrayIconEvent,MouseButton,MouseButtonState}};
+		use tauri::{menu::{MenuBuilder,MenuItem},tray::{TrayIconBuilder,TrayIconEvent,MouseButton,MouseButtonState}};
 		let sync=MenuItem::with_id(app,"sync","Sync now",true,None::<&str>)?;let updates=MenuItem::with_id(app,"updates","Check for updates…",true,None::<&str>)?;let settings=MenuItem::with_id(app,"settings","Settings",true,None::<&str>)?;let quit=MenuItem::with_id(app,"quit","Quit TypeRelay",true,None::<&str>)?;
-		let menu=Menu::with_items(app,&[&sync,&updates,&settings,&quit])?;
+		let menu=MenuBuilder::new(app).item(&sync);
+		#[cfg(target_os="macos")]
+		let menu={let tui=MenuItem::with_id(app,"tui","Open TypeRelay TUI",true,None::<&str>)?;menu.item(&tui)};
+		let menu=menu.item(&updates).item(&settings).item(&quit).build()?;
         let icon: &[u8]=if cfg!(target_os="macos"){include_bytes!("../icons/tray-template.png")}else{include_bytes!("../icons/icon.png")};
-		TrayIconBuilder::with_id("typerelay").icon(tauri::image::Image::from_bytes(icon)?).icon_as_template(cfg!(target_os="macos")).tooltip("TypeRelay").menu(&menu).show_menu_on_left_click(false).on_menu_event(|app,event|match event.id.as_ref(){"sync"=>{let _=crate::sync_now(app.clone());},"updates"=>crate::update::check(app.clone(),true),"settings"=>Runtime::open(app,true),"quit"=>Runtime::quit(app),_=>()}).on_tray_icon_event(|tray,event|{if matches!(event,TrayIconEvent::Click{button:MouseButton::Left,button_state:MouseButtonState::Up,..}){Runtime::open(tray.app_handle(),false);}}).build(app)?;
+		TrayIconBuilder::with_id("typerelay").icon(tauri::image::Image::from_bytes(icon)?).icon_as_template(cfg!(target_os="macos")).tooltip("TypeRelay").menu(&menu).show_menu_on_left_click(false).on_menu_event(|app,event|match event.id.as_ref(){"sync"=>{let _=crate::sync_now(app.clone());},"tui"=>{if let Err(error)=crate::open_tui(){*app.state::<Runtime>().status.lock().unwrap()=error;Runtime::open(app,true);}},"updates"=>crate::update::check(app.clone(),true),"settings"=>Runtime::open(app,true),"quit"=>Runtime::quit(app),_=>()}).on_tray_icon_event(|tray,event|{if matches!(event,TrayIconEvent::Click{button:MouseButton::Left,button_state:MouseButtonState::Up,..}){Runtime::open(tray.app_handle(),false);}}).build(app)?;
     }
     Ok(())
 }

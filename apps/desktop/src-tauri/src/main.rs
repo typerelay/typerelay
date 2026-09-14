@@ -127,7 +127,7 @@ impl Runtime {
 #[tauri::command]
 fn initialize(app:tauri::AppHandle)->std::result::Result<Value,String> {
     let state=app.state::<Runtime>(); let settings=Panel::settings(&state.root).map_err(|e|e.to_string())?;
-		Ok(json!({"config":settings,"prompt":state.prompt_hit.lock().unwrap().clone(),"server":typerelay_client::settings::SettingsStore::open(state.root.join("settings.yml")).ok().map(|s|s.settings.sync_url).unwrap_or_default(),"theme":Runtime::theme(),"settings":state.settings.load(Ordering::SeqCst),"status":*state.status.lock().unwrap(),"update":app.state::<update::UpdateState>().value()}))
+		Ok(json!({"config":settings,"prompt":state.prompt_hit.lock().unwrap().clone(),"server":typerelay_client::settings::SettingsStore::open(state.root.join("settings.yml")).ok().map(|s|s.settings.sync_url).unwrap_or_default(),"theme":Runtime::theme(),"settings":state.settings.load(Ordering::SeqCst),"status":*state.status.lock().unwrap(),"update":app.state::<update::UpdateState>().value(),"accessibility":platform::accessibility(false)}))
 }
 #[tauri::command]
 async fn search(app:tauri::AppHandle,query:String)->std::result::Result<Vec<Hit>,String> {
@@ -222,6 +222,10 @@ async fn libraries(app:tauri::AppHandle)->std::result::Result<Value,String>{
 }
 #[tauri::command]
 async fn enroll(app:tauri::AppHandle,names:Vec<String>)->std::result::Result<(),String>{let root=app.state::<Runtime>().root.clone();tauri::async_runtime::spawn_blocking(move||->Result<()>{let sync=Sync::new(root.clone(),root.join("snippets"))?;for name in names{sync.enroll(&name)?;}Ok(())}).await.map_err(|e|e.to_string())?.map_err(|e|e.to_string())}
+#[tauri::command]
+fn open_accessibility_settings()->std::result::Result<(),String>{platform::open_accessibility_settings().map_err(|e|e.to_string())}
+#[tauri::command]
+fn open_tui()->std::result::Result<(),String>{platform::open_tui().map_err(|e|e.to_string())}
 fn main() {
     if std::env::args().any(|a|a=="--version"){println!("typerelay-panel {}",env!("CARGO_PKG_VERSION"));return;}
     #[cfg(target_os="linux")]
@@ -240,6 +244,8 @@ fn main() {
         let config=Panel::settings(&root)?;
 		app.manage(Runtime{root:root.clone(),target:Mutex::new(None),last:Mutex::new(None),erase:Mutex::new(0),busy:AtomicBool::new(false),syncing:AtomicBool::new(false),prompting:AtomicBool::new(false),prompt_hit:Mutex::new(None),settings:AtomicBool::new(false),status:Mutex::new(String::new()),#[cfg(target_os="linux")] registration:Mutex::new(None)});
 		app.manage(update::UpdateState::default());
+		#[cfg(target_os="macos")]
+		if !platform::accessibility(true){*app.state::<Runtime>().status.lock().unwrap()="Allow TypeRelay in System Settings → Privacy & Security → Accessibility".into();}
         #[cfg(target_os="windows")]
         {let requests=platform::ExpansionSession::start(root.join("snippets"),root.join("settings.yml"))?;let handle=app.handle().clone();std::thread::spawn(move||for request in requests{if let Err(error)=Runtime::expand(&handle,request){let message=format!("Expansion failed: {error:#}");*handle.state::<Runtime>().status.lock().unwrap()=message.clone();let _=handle.notification().builder().title("TypeRelay").body(&message).show();}});}
         #[cfg(target_os="linux")]
@@ -268,7 +274,7 @@ fn main() {
     }).on_window_event(|window,event|match event {
         tauri::WindowEvent::CloseRequested{api,..}=>{api.prevent_close();set_prompt_view(window.app_handle().clone(),false);Runtime::hide(window.app_handle());},
         tauri::WindowEvent::Focused(false)if Runtime::hide_on_focus_loss() && !window.app_handle().state::<Runtime>().busy.load(Ordering::SeqCst) && !window.app_handle().state::<Runtime>().settings.load(Ordering::SeqCst) && !window.app_handle().state::<Runtime>().prompting.load(Ordering::SeqCst)=> {Runtime::hide(window.app_handle());},_=>()
-    }).invoke_handler(tauri::generate_handler![initialize,search,insert,copy_snippet,prepare_template,set_prompt_view,set_settings_view,dismiss,sync_now,save_settings,connect,libraries,enroll]).run(tauri::generate_context!());
+    }).invoke_handler(tauri::generate_handler![initialize,search,insert,copy_snippet,prepare_template,set_prompt_view,set_settings_view,dismiss,sync_now,save_settings,connect,libraries,enroll,open_accessibility_settings,open_tui]).run(tauri::generate_context!());
     if let Err(error)=result {eprintln!("TypeRelay panel: {error}");std::process::exit(1);}
 }
 

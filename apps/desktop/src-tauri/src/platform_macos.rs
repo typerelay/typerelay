@@ -1,6 +1,6 @@
 use anyhow::{Context,Result,ensure};
 use objc2_app_kit::{NSWorkspace,NSRunningApplication,NSApplicationActivationOptions};
-use std::{ffi::{c_void,CString},sync::Arc};
+use std::{ffi::{c_void,CString},process::Command,sync::Arc};
 type Ref = *const c_void;
 #[link(name="ApplicationServices",kind="framework")]
 unsafe extern "C" { fn AXIsProcessTrusted() -> bool; fn AXUIElementCreateApplication(pid:i32)->Ref; fn AXUIElementCopyAttributeValue(element:Ref,attribute:Ref,value:*mut Ref)->i32; fn AXUIElementPerformAction(element:Ref,action:Ref)->i32; fn AXValueGetValue(value:Ref,kind:i32,result:*mut c_void)->bool; fn CGEventSourceKeyState(source:i32,key:u16)->bool; }
@@ -22,6 +22,9 @@ impl Target {
 }
 pub fn keys_down()->bool { [56,60,59,62,58,61,55,54,36,43].iter().any(|key|unsafe{CGEventSourceKeyState(1,*key)}) }
 pub fn fallback_allowed()->bool { NSWorkspace::sharedWorkspace().frontmostApplication().is_some_and(|app|app.processIdentifier()==std::process::id() as i32) }
+pub fn accessibility(prompt:bool)->bool { let trusted=unsafe{AXIsProcessTrusted()};if !trusted&&prompt{let _=enigo::Enigo::new(&enigo::Settings::default());}trusted }
+pub fn open_accessibility_settings()->Result<()> { let status=Command::new("/usr/bin/open").arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility").status()?;ensure!(status.success(),"Could not open Accessibility settings");Ok(()) }
+pub fn open_tui()->Result<()> { let executable=std::env::current_exe()?.with_file_name("typerelay-tui");ensure!(executable.is_file(),"TypeRelay TUI is missing from this application");let status=Command::new("/usr/bin/open").arg(executable).status()?;ensure!(status.success(),"Could not open TypeRelay TUI");Ok(()) }
 
 pub struct ClipboardLease { context:clipboard_rs::ClipboardContext, saved:Vec<clipboard_rs::ClipboardContent>, marker:Vec<u8>, active:bool }
 impl ClipboardLease {

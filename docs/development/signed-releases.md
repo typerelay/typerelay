@@ -34,7 +34,7 @@ Uses the installed Developer ID Application identity and existing Apple notariza
 
 Existing credential names are supported: `APPLE_APP_SPECIFIC_PASSWORD` maps to Tauri's `APPLE_PASSWORD`; the Electron-style `APPLE_API_KEY` path plus `APPLE_API_KEY_ID` maps to Tauri's key path/ID variables. Already configured Tauri-style variables also work. Credentials and certificate contents are never written into generated configuration.
 
-Tauri performs signing/notarization with hardened runtime enabled. The command checks the resulting app with codesign, Gatekeeper, stapler and lipo. As with the existing release tooling, verification concerns the stapled application inside the DMG; no separate outer-DMG notarization claim is made. See [Tauri macOS signing](https://v2.tauri.app/distribute/sign/macos/).
+Tauri performs signing/notarization with hardened runtime enabled. The app bundles the matching native **TypeRelay TUI** sidecar, including a combined binary for universal builds. The command checks both panel and TUI architectures plus the resulting app with codesign, Gatekeeper and stapler. As with the existing release tooling, verification concerns the stapled application inside the DMG; no separate outer-DMG notarization claim is made. See [Tauri macOS signing](https://v2.tauri.app/distribute/sign/macos/).
 
 ## Outputs and boundaries
 
