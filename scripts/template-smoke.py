@@ -168,7 +168,6 @@ class TemplateSmoke(desktop.Smoke):
                 self.wait(lambda: self.active().get('pid') == panel.pid)
                 assert self.record(browser_output) == 'one\ntwo'
                 assert json.loads(self.record(terminal_output))['text'] == 'Static works.one\ntwo'
-                self.keys('\x1b', window)
                 print('PASS: a removed original target never redirects insertion elsewhere', flush=True)
             except Exception:
                 for name in ['engine.log', 'panel.log', 'gtk.txt', 'terminal.json']:
