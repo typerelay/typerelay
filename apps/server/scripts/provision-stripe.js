@@ -7,14 +7,13 @@ export class StripeProvisioner {
 
 	static client() {
 		if (!process.env.STRIPE_SECRET_KEY) throw new Error('STRIPE_SECRET_KEY is required');
-		if (process.env.STRIPE_SECRET_KEY.includes('_live_') && process.env.STRIPE_PROVISION_LIVE !== 'true') throw new Error('Set STRIPE_PROVISION_LIVE=true to provision the live Stripe account');
+		if (process.env.STRIPE_SECRET_KEY.includes('_live_') && process.env.PROVISION_LIVE !== 'true') throw new Error('Set PROVISION_LIVE=true to provision the live Stripe account');
 		return new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2026-07-29.dahlia', maxNetworkRetries: 2, timeout: 15000 });
 	}
 
 	static metadata(plan = '') { return { catalog: Billing.catalogName, catalog_version: Billing.catalogVersion, ...(plan ? { plan_key: plan } : {}) }; }
 
 	static async validateTax(stripe) {
-		if (process.env.STRIPE_TAX_ENABLED !== 'true') return;
 		const [settings, registrations] = await Promise.all([stripe.tax.settings.retrieve(), stripe.tax.registrations.list({ status: 'active', limit: 100 })]);
 		if (settings.status !== 'active' || !registrations.data.length) throw new Error('Stripe Tax requires active settings and at least one active registration before Checkout activation');
 	}
@@ -47,22 +46,21 @@ export class StripeProvisioner {
 		return price || stripe.prices.create(StripeProvisioner.priceParams(product, plan));
 	}
 
-	static async portal(stripe, purpose, products) {
+	static async portal(stripe, products) {
 		const configurations = await stripe.billingPortal.configurations.list({ active: true, limit: 100 });
-		let portal = configurations.data.find(candidate => candidate.metadata?.catalog === Billing.catalogName && candidate.metadata?.purpose === purpose);
-		const general = purpose === 'account_management';
+		let portal = configurations.data.find(candidate => candidate.metadata?.catalog === Billing.catalogName && candidate.metadata?.purpose === 'account_management');
 		const params = {
-			name: `TypeRelay ${Billing.catalogVersion} ${general ? 'account' : 'change'}`,
+			name: `TypeRelay ${Billing.catalogVersion}`,
 			business_profile: { headline: 'TypeRelay is made by Helpmonks LLC' },
-			features: general ? { customer_update: { enabled: true, allowed_updates: ['address', 'name', 'phone', 'tax_id'] }, invoice_history: { enabled: true }, payment_method_update: { enabled: true }, subscription_cancel: { enabled: true, mode: 'at_period_end', cancellation_reason: { enabled: true, options: ['too_expensive', 'missing_features', 'switched_service', 'unused', 'other'] } }, subscription_update: { enabled: false } } : { customer_update: { enabled: false }, invoice_history: { enabled: false }, payment_method_update: { enabled: true }, subscription_cancel: { enabled: false }, subscription_update: { enabled: true, default_allowed_updates: ['price', 'quantity'], proration_behavior: 'create_prorations', products: products.filter(entry => entry.plan.key !== 'free').map(entry => ({ product: entry.product.id, prices: [entry.price.id] })) } },
-			metadata: { ...StripeProvisioner.metadata(), purpose },
+			features: { customer_update: { enabled: true, allowed_updates: ['address', 'name', 'phone', 'tax_id'] }, invoice_history: { enabled: true }, payment_method_update: { enabled: true }, subscription_cancel: { enabled: true, mode: 'at_period_end', cancellation_reason: { enabled: true, options: ['too_expensive', 'missing_features', 'switched_service', 'unused', 'other'] } }, subscription_update: { enabled: true, default_allowed_updates: ['price', 'quantity'], proration_behavior: 'create_prorations', products: products.filter(entry => entry.plan.key !== 'free').map(entry => ({ product: entry.product.id, prices: [entry.price.id] })) } },
+			metadata: { ...StripeProvisioner.metadata(), purpose: 'account_management' },
 		};
 		portal = portal ? await stripe.billingPortal.configurations.update(portal.id, { ...params, active: true }) : await stripe.billingPortal.configurations.create(params);
 		return portal;
 	}
 
 	static async webhook(stripe) {
-		const url = process.env.STRIPE_WEBHOOK_URL || 'https://app.typerelay.com/billing/webhook';
+		const url = 'https://app.typerelay.com/billing/webhook';
 		const endpoints = await stripe.webhookEndpoints.list({ limit: 100 });
 		let endpoint = endpoints.data.find(candidate => candidate.metadata?.catalog === Billing.catalogName || candidate.url === url);
 		if (endpoint) endpoint = await stripe.webhookEndpoints.update(endpoint.id, { url, enabled_events: StripeProvisioner.webhookEvents, metadata: StripeProvisioner.metadata(), description: 'TypeRelay subscription billing' });
@@ -77,22 +75,16 @@ export class StripeProvisioner {
 			const product = await StripeProvisioner.product(stripe, plan);
 			products.push({ plan, product, price: await StripeProvisioner.price(stripe, product, plan) });
 		}
-		const general = await StripeProvisioner.portal(stripe, 'account_management', products);
-		const change = await StripeProvisioner.portal(stripe, 'change_confirmation', products);
+		const portal = await StripeProvisioner.portal(stripe, products);
 		const webhook = await StripeProvisioner.webhook(stripe);
-		return { products, general, change, webhook };
+		return { products, portal, webhook };
 	}
 }
 
 if (process.argv[1] === new URL(import.meta.url).pathname) {
 	StripeProvisioner.run().then(result => {
-		for (const entry of result.products) {
-			console.log(`STRIPE_${entry.plan.key.toUpperCase()}_PRODUCT_ID=${entry.product.id}`);
-			console.log(`STRIPE_${entry.plan.key.toUpperCase()}_PRICE_ID=${entry.price.id}`);
-		}
-		console.log(`STRIPE_PORTAL_CONFIG_ID=${result.general.id}`);
-		console.log(`STRIPE_CHANGE_PORTAL_CONFIG_ID=${result.change.id}`);
-		console.log(`STRIPE_WEBHOOK_ENDPOINT_ID=${result.webhook.id}`);
+		for (const entry of result.products) console.log(`STRIPE_${entry.plan.key.toUpperCase()}_PRICE_ID=${entry.price.id}`);
+		console.log(`STRIPE_PORTAL_CONFIG_ID=${result.portal.id}`);
 		if (result.webhook.secret) console.log(`STRIPE_WEBHOOK_SECRET=${result.webhook.secret}`);
 	}).catch(error => { console.error(`TypeRelay Stripe provisioning failed: ${error.message}`); process.exitCode = 1; });
 }

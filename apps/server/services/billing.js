@@ -20,10 +20,9 @@ export class Billing {
 	}
 
 	static enabled() { return Billing.hosted() && process.env.BILLING_ENABLED === 'true'; }
-	static trialDays() { return Number.parseInt(process.env.STRIPE_TRIAL_DAYS || '7', 10) || 7; }
+	static trialDays() { return 7; }
 	static priceId(plan) { return process.env[`STRIPE_${String(plan).toUpperCase()}_PRICE_ID`] || ''; }
-	static productId(plan) { return process.env[`STRIPE_${String(plan).toUpperCase()}_PRODUCT_ID`] || ''; }
-	static portalConfig(change = false) { return process.env[change ? 'STRIPE_CHANGE_PORTAL_CONFIG_ID' : 'STRIPE_PORTAL_CONFIG_ID'] || ''; }
+	static portalConfig() { return process.env.STRIPE_PORTAL_CONFIG_ID || ''; }
 
 	static stripe() {
 		if (!Billing.stripeClient) {
@@ -208,7 +207,7 @@ export class Billing {
 			cancel_url: options.cancelUrl,
 			integration_identifier: `typerelay_${suffix}`,
 		};
-		if (process.env.STRIPE_TAX_ENABLED === 'true') Object.assign(params, { automatic_tax: { enabled: true }, tax_id_collection: { enabled: true }, customer_update: { address: 'auto', name: 'auto' } });
+		Object.assign(params, { automatic_tax: { enabled: true }, tax_id_collection: { enabled: true }, customer_update: { address: 'auto', name: 'auto' } });
 		const checkout = await stripe.checkout.sessions.create(params);
 		return checkout.url;
 	}
@@ -218,7 +217,7 @@ export class Billing {
 		const user = options.user || await Billing.owner(accountId);
 		const stripe = options.stripe || Billing.stripe();
 		const customer = account.billing?.stripe_customer_id || await Billing.ensureCustomer(account, user, { stripe });
-		const configuration = Billing.portalConfig(false);
+		const configuration = Billing.portalConfig();
 		if (!configuration) throw Billing.error(503, 'Stripe Portal is not configured', 'billing_unavailable');
 		return (await stripe.billingPortal.sessions.create({ customer, configuration, return_url: returnUrl })).url;
 	}
@@ -270,7 +269,7 @@ export class Billing {
 		const currentSeats = Number(item.quantity || account.billing.seat_quantity || 1);
 		const downgrade = Billing.plans[target].rank < Billing.plans[currentPlan].rank || (target === currentPlan && seats < currentSeats);
 		if (!downgrade) {
-			const configuration = Billing.portalConfig(true);
+			const configuration = Billing.portalConfig();
 			if (!configuration) throw Billing.error(503, 'Stripe change Portal is not configured', 'billing_unavailable');
 			const session = await stripe.billingPortal.sessions.create({ customer: account.billing.stripe_customer_id, configuration, return_url: options.returnUrl, flow_data: { type: 'subscription_update_confirm', subscription_update_confirm: { subscription: subscription.id, items: [{ id: item.id, price: Billing.priceId(target), quantity: seats }] }, after_completion: { type: 'redirect', redirect: { return_url: options.returnUrl } } } });
 			return { url: session.url };

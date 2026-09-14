@@ -19,8 +19,8 @@ class Fixture {
 }
 
 before(async () => {
-	for (const key of ['TYPERELAY_HOSTED_EDITION', 'BILLING_ENABLED', 'STRIPE_SECRET_KEY', 'STRIPE_FREE_PRICE_ID', 'STRIPE_PRO_PRICE_ID', 'STRIPE_TEAM_PRICE_ID', 'STRIPE_PORTAL_CONFIG_ID', 'STRIPE_CHANGE_PORTAL_CONFIG_ID', 'STRIPE_TAX_ENABLED', 'WHITE_LABEL_ENABLED', 'WHITE_LABEL_CNAME_TARGET', 'WHITE_LABEL_ASSETS_DIR', 'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ZONE_ID']) Fixture.environment[key] = process.env[key];
-	Object.assign(process.env, { TYPERELAY_HOSTED_EDITION: 'true', BILLING_ENABLED: 'true', STRIPE_SECRET_KEY: 'sk_test_fixture', STRIPE_FREE_PRICE_ID: 'price_free', STRIPE_PRO_PRICE_ID: 'price_pro', STRIPE_TEAM_PRICE_ID: 'price_team', STRIPE_PORTAL_CONFIG_ID: 'portal_account', STRIPE_CHANGE_PORTAL_CONFIG_ID: 'portal_change', STRIPE_TAX_ENABLED: 'false', WHITE_LABEL_ENABLED: 'true', WHITE_LABEL_CNAME_TARGET: 'custom.typerelay.com', CLOUDFLARE_API_TOKEN: 'cloudflare-fixture', CLOUDFLARE_ZONE_ID: 'zone-fixture' });
+	for (const key of ['TYPERELAY_HOSTED_EDITION', 'BILLING_ENABLED', 'STRIPE_SECRET_KEY', 'STRIPE_FREE_PRICE_ID', 'STRIPE_PRO_PRICE_ID', 'STRIPE_TEAM_PRICE_ID', 'STRIPE_PORTAL_CONFIG_ID', 'WHITE_LABEL_ENABLED', 'WHITE_LABEL_CNAME_TARGET', 'WHITE_LABEL_ASSETS_DIR', 'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ZONE_ID']) Fixture.environment[key] = process.env[key];
+	Object.assign(process.env, { TYPERELAY_HOSTED_EDITION: 'true', BILLING_ENABLED: 'true', STRIPE_SECRET_KEY: 'sk_test_fixture', STRIPE_FREE_PRICE_ID: 'price_free', STRIPE_PRO_PRICE_ID: 'price_pro', STRIPE_TEAM_PRICE_ID: 'price_team', STRIPE_PORTAL_CONFIG_ID: 'portal_account', WHITE_LABEL_ENABLED: 'true', WHITE_LABEL_CNAME_TARGET: 'custom.typerelay.com', CLOUDFLARE_API_TOKEN: 'cloudflare-fixture', CLOUDFLARE_ZONE_ID: 'zone-fixture' });
 	await mongoose.connect(process.env.MONGO_URI.replace('/typerelay?', '/typerelay_billing_test?'));
 	await mongoose.connection.dropDatabase();
 	await Promise.all(Object.values(mongoose.models).map(model => model.init()));
@@ -42,6 +42,7 @@ test('catalog exposes the approved Free, Pro and Team limits', () => {
 	assert.equal(Billing.plans.team.price, 39);
 	assert.equal(Billing.plans.team.additionalSeatPrice, 6);
 	assert.equal(Billing.entitlements(Fixture.account).plan, 'free');
+	assert.equal(Billing.portalConfig(), 'portal_account');
 	assert.throws(() => Billing.assertApi(Fixture.ctx), error => error.status === 403 && error.code === 'plan_required');
 });
 
@@ -101,7 +102,9 @@ test('Checkout uses dynamic payment methods and approved Team quantity', async (
 	assert.equal(url, 'https://checkout.example/session');
 	assert.deepEqual(params.line_items, [{ price: 'price_team', quantity: 7 }]);
 	assert.equal(Object.hasOwn(params, 'payment_method_types'), false);
-	assert.equal(Object.hasOwn(params, 'automatic_tax'), false);
+	assert.deepEqual(params.automatic_tax, { enabled: true });
+	assert.deepEqual(params.tax_id_collection, { enabled: true });
+	assert.deepEqual(params.customer_update, { address: 'auto', name: 'auto' });
 	assert.match(params.integration_identifier, /^typerelay_[a-z]{8}$/i);
 });
 
@@ -183,6 +186,25 @@ test('Stripe provisioner creates exact tax-exclusive price shapes', () => {
 	assert.equal(StripeProvisioner.priceParams(product, Billing.plans.pro).unit_amount, 800);
 	assert.deepEqual(StripeProvisioner.priceParams(product, Billing.plans.team).tiers, [{ up_to: 5, flat_amount: 3900, unit_amount: 0 }, { up_to: 'inf', unit_amount: 600 }]);
 	assert.equal(StripeProvisioner.priceParams(product, Billing.plans.team).tax_behavior, 'exclusive');
+});
+
+test('Stripe provisioner uses one Portal configuration for management and confirmed changes', async () => {
+	let created;
+	const stripe = { billingPortal: { configurations: { list: async () => ({ data: [] }), create: async params => { created = params; return { id: 'portal', ...params }; } } } };
+	const products = [{ plan: Billing.plans.pro, product: { id: 'prod_pro' }, price: { id: 'price_pro' } }, { plan: Billing.plans.team, product: { id: 'prod_team' }, price: { id: 'price_team' } }];
+	const portal = await StripeProvisioner.portal(stripe, products);
+	assert.equal(portal.id, 'portal');
+	assert.equal(created.features.subscription_cancel.enabled, true);
+	assert.equal(created.features.subscription_update.enabled, true);
+	assert.equal(created.features.payment_method_update.enabled, true);
+	assert.deepEqual(created.features.subscription_update.products, [{ product: 'prod_pro', prices: ['price_pro'] }, { product: 'prod_team', prices: ['price_team'] }]);
+});
+
+test('Stripe provisioner requires an active Tax registration', async () => {
+	const stripe = { tax: { settings: { retrieve: async () => ({ status: 'active' }) }, registrations: { list: async () => ({ data: [] }) } } };
+	await assert.rejects(StripeProvisioner.validateTax(stripe), /active registration/);
+	stripe.tax.registrations.list = async () => ({ data: [{ id: 'taxreg' }] });
+	await StripeProvisioner.validateTax(stripe);
 });
 
 test('billing and white-label browser mutations replace only their fragments', async () => {
