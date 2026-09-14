@@ -7,6 +7,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 export class NativeTools {
 	static root = fileURLToPath(new URL('../../../', import.meta.url));
 	static names = ['typerelay', 'typerelay-tui'];
+	static rustflags = 'CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS';
+	static environment(environment = process.env) { return { ...environment, [NativeTools.rustflags]: [environment[NativeTools.rustflags], '-C target-feature=+crt-static'].filter(Boolean).join(' ') }; }
 	static plan(target, { platform = process.platform, environment = process.env, root = NativeTools.root } = {}) {
 		if (target !== 'x86_64-pc-windows-msvc') throw new Error('Unsupported native-tools target');
 		const targetRoot = environment.CARGO_TARGET_DIR ? path.resolve(root, environment.CARGO_TARGET_DIR) : path.join(root, 'target');
@@ -21,7 +23,7 @@ export class NativeTools {
 	static async stage(target, options = {}) {
 		const plan = NativeTools.plan(target, options);
 		await new Promise((resolve, reject) => {
-			const child = spawn(plan.command, plan.args, { cwd: options.root || NativeTools.root, env: options.environment || process.env, stdio: 'inherit' });
+			const child = spawn(plan.command, plan.args, { cwd: options.root || NativeTools.root, env: NativeTools.environment(options.environment || process.env), stdio: 'inherit' });
 			child.on('error', reject); child.on('close', code => code === 0 ? resolve() : reject(new Error(plan.command + ' failed with exit code ' + code)));
 		});
 		await fs.mkdir(path.dirname(plan.files[0].destination), { recursive: true });
