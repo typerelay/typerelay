@@ -23,9 +23,12 @@ test('Windows CLI and TUI use one native staging plan', () => {
 test('Windows bundle embeds both tools and owns its TUI shortcut', async () => {
 	const config = JSON.parse(await fs.readFile(path.join(root, 'apps/desktop/src-tauri/tauri.windows.conf.json'), 'utf8'));
 	const hooks = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/installer-hooks.nsh'), 'utf8');
+	const platform = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/platform.rs'), 'utf8');
 	const windows = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/platform_windows.rs'), 'utf8');
 	assert.deepEqual(config.bundle.externalBin, ['binaries/typerelay', 'binaries/typerelay-tui']);
 	assert.match(windows, /keys_down\(\)[\s\S]*0x20/);
+	assert.match(windows, /released:Receiver<\(\)>/);
+	assert.match(platform, /paste_key=Key::V/);
 	assert.match(hooks, /NSIS_HOOK_POSTINSTALL[\s\S]*CreateShortCut "\$SMPROGRAMS\\TypeRelay TUI\.lnk" "\$INSTDIR\\typerelay-tui\.exe"/);
 	assert.match(hooks, /NSIS_HOOK_PREUNINSTALL[\s\S]*Delete "\$SMPROGRAMS\\TypeRelay TUI\.lnk"/);
 });

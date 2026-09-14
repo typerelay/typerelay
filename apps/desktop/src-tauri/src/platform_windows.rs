@@ -16,22 +16,22 @@ impl Target {
 pub fn keys_down() -> bool { [0x10,0x11,0x12,0x5b,0x5c,0x0d,0x20,0xbc].iter().any(|key|unsafe { GetAsyncKeyState(*key) < 0 }) }
 pub fn fallback_allowed()->bool { unsafe { let window=GetForegroundWindow();let mut pid=0;GetWindowThreadProcessId(window,Some(&mut pid));let mut class=[0u16;256];let length=GetClassNameW(window,&mut class);pid==std::process::id() || ["Shell_TrayWnd","NotifyIconOverflowWindow","#32768"].contains(&String::from_utf16_lossy(&class[..length as usize]).as_str()) } }
 
-pub struct ExpansionRequest { pub target:Target, pub expansion:Expansion }
-struct HookState { store:DatabaseSnapshot, settings:SettingsStore, engine:Engine, target:Option<Target>, sender:SyncSender<ExpansionRequest>, suppress_space:bool }
+pub struct ExpansionRequest { pub target:Target, pub expansion:Expansion, pub released:Receiver<()> }
+struct HookState { store:DatabaseSnapshot, settings:SettingsStore, engine:Engine, target:Option<Target>, sender:SyncSender<ExpansionRequest>, suppress_space:Option<SyncSender<()>> }
 thread_local! { static HOOK_STATE:RefCell<Option<HookState>>=const{RefCell::new(None)}; }
 impl HookState {
-    fn new(directory:PathBuf,settings_path:PathBuf,sender:SyncSender<ExpansionRequest>)->Result<Self>{let store=DatabaseSnapshot::open(&directory)?;let settings=SettingsStore::open(settings_path)?;let mut engine=Engine::new(store.snapshot.clone());engine.set_prefix(&settings.settings.trigger_prefix).map_err(anyhow::Error::msg)?;Ok(Self{store,settings,engine,target:None,sender,suppress_space:false})}
+    fn new(directory:PathBuf,settings_path:PathBuf,sender:SyncSender<ExpansionRequest>)->Result<Self>{let store=DatabaseSnapshot::open(&directory)?;let settings=SettingsStore::open(settings_path)?;let mut engine=Engine::new(store.snapshot.clone());engine.set_prefix(&settings.settings.trigger_prefix).map_err(anyhow::Error::msg)?;Ok(Self{store,settings,engine,target:None,sender,suppress_space:None})}
     fn input(vk:u32)->Input {match vk{0x08=>Input::Backspace,0x20=>Input::Space,0x30..=0x39=>Input::Character(char::from_u32(vk).unwrap()),0x41..=0x5a=>Input::Character(char::from_u32(vk+32).unwrap()),0xbd=>Input::Character('-'),0xbc=>Input::Character(','),0xba=>Input::Character(';'),0xbe=>Input::Character('.'),0xbf=>Input::Character('/'),0xde=>Input::Character('\''),0xdb=>Input::Character('['),0xdd=>Input::Character(']'),0xdc=>Input::Character('\\'),0xc0=>Input::Character('`'),0xbb=>Input::Character('='),_=>Input::Cancel}}
     fn modified()->bool {unsafe{[VK_SHIFT,VK_CONTROL,VK_MENU,VK_LWIN,VK_RWIN].iter().any(|key|GetAsyncKeyState(key.0 as i32)<0)||GetKeyState(VK_CAPITAL.0 as i32)&1!=0}}
     fn key(&mut self,vk:u32,down:bool)->bool {
-        if !down {if self.suppress_space&&vk==0x20{self.suppress_space=false;return true;}return false;}
+        if !down {if vk==0x20&&let Some(released)=self.suppress_space.take(){let _=released.try_send(());return true;}return false;}
         if Self::modified(){self.engine.feed(Input::Cancel);self.target=None;return false;}
         if self.target.as_ref().is_some_and(|target|target.focused().ok()!=Some(true)){self.engine.feed(Input::Cancel);self.target=None;}
         let input=Self::input(vk);
         if matches!(input,Input::Character(character)if character==self.engine.prefix()){self.target=Target::capture().ok();}
         if self.target.is_none(){self.engine.feed(Input::Cancel);return false;}
         let expansion=self.engine.feed(input);
-        if let Some(expansion)=expansion&&let Some(target)=self.target.take()&&target.focused().ok()==Some(true)&&self.sender.try_send(ExpansionRequest{target,expansion}).is_ok(){self.suppress_space=true;return true;}
+        if let Some(expansion)=expansion&&let Some(target)=self.target.take()&&target.focused().ok()==Some(true){let (release,released)=sync_channel(1);if self.sender.try_send(ExpansionRequest{target,expansion,released}).is_ok(){self.suppress_space=Some(release);return true;}}
         if matches!(input,Input::Cancel|Input::Space){self.target=None;}
         false
     }

@@ -38,8 +38,12 @@ pub fn paste(target: &Target, erase: usize, text: Option<String>) -> Result<()> 
         for _ in 0..erase { enigo.key(Key::Backspace,Direction::Click)?; }
         if !has_text { enigo.key(Key::Return,Direction::Click)?; std::thread::sleep(Duration::from_millis(100)); return Ok(()); }
         let modifier = if cfg!(target_os = "macos") { Key::Meta } else { Key::Control };
+        #[cfg(target_os="windows")]
+        let paste_key=Key::V;
+        #[cfg(target_os="macos")]
+        let paste_key=Key::Unicode('v');
         enigo.key(modifier,Direction::Press)?;
-        let result = enigo.key(Key::Unicode('v'),Direction::Click);
+        let result = enigo.key(paste_key,Direction::Click);
         let released = enigo.key(modifier,Direction::Release);
         result?; released?;
         std::thread::sleep(Duration::from_millis(350)); Ok(())

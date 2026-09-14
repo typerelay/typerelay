@@ -73,7 +73,7 @@ impl Runtime {
     }
     #[cfg(target_os="windows")]
     fn expand(app:&tauri::AppHandle,request:platform::ExpansionRequest)->Result<()>{
-        let platform::ExpansionRequest{target,expansion}=request;
+        let platform::ExpansionRequest{target,expansion,released}=request;released.recv_timeout(std::time::Duration::from_secs(2)).context("Release Space before expansion")?;
         if let Some(template)=expansion.template {
             let identity=template.identity.context("Template identity unavailable")?;
             let hit=Hit{id:identity.id,library:identity.library,revision:identity.revision,library_name:String::new(),title:template.abbreviation.clone(),abbreviation:template.abbreviation,preview:String::new()};
