@@ -23,7 +23,7 @@ export class Server {
 		await mongoose.connect(process.env.MONGO_URI, { autoIndex: false });
 		if (process.env.SERVER_MODE === 'scheduler') {
 			Scheduler.start();
-			console.log('TypeRelay scheduler running: Trash cleanup daily; billing and white-label reconciliation every five minutes');
+			console.log('TypeRelay scheduler running: Trash cleanup daily; trial and white-label reconciliation every five minutes; Helpmonks trial enrollment every minute');
 			return;
 		}
 		await StorageMigration.code();

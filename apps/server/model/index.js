@@ -20,6 +20,14 @@ const accountSchema = new mongoose.Schema({
 		trial_started_at: { type: Date, default: null },
 		trial_ends_at: { type: Date, default: null },
 		status_changed_at: { type: Date, default: null },
+		helpmonks_sequence: {
+			status: { type: String, enum: ['pending', 'completed', 'failed', null], default: null },
+			attempts: { type: Number, default: 0 },
+			next_attempt_at: { type: Date, default: null },
+			last_error: { type: String, default: '' },
+			contact_id: { type: String, default: '' },
+			enrolled_at: { type: Date, default: null },
+		},
 		scheduled_change: {
 			plan: { type: String, enum: ['free', 'pro', 'team'] },
 			seat_quantity: Number,
@@ -44,6 +52,7 @@ const accountSchema = new mongoose.Schema({
 	},
 }, { timestamps: true });
 accountSchema.index({ 'white_label.hostname': 1 }, { unique: true, partialFilterExpression: { 'white_label.hostname': { $type: 'string', $gt: '' } } });
+accountSchema.index({ 'billing.helpmonks_sequence.status': 1, 'billing.helpmonks_sequence.next_attempt_at': 1 });
 const Account = mongoose.model('Account', accountSchema);
 const membership = new mongoose.Schema({ account: objectid, user: objectid, role: { type: String, enum: ['owner', 'admin', 'member'] } });
 membership.index({ account: 1, user: 1 }, { unique: true });

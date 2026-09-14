@@ -289,7 +289,7 @@ export class Billing {
 		const account = await Billing.account(accountId, null, true);
 		if (!account || Billing.entitlements(account, now).plan !== 'free' || account.billing?.trial_started_at) throw Billing.error(409, 'The Pro trial is no longer available', 'trial_unavailable');
 		const ends = new Date(now.getTime() + Billing.trialDays() * 86400000);
-		const result = await Account.updateOne({ _id: accountId, plan: { $in: ['free', null] }, 'billing.trial_started_at': null, $or: [{ 'billing.status': { $in: ['incomplete', 'trial_expired', 'canceled'] } }, { 'billing.status': { $exists: false } }] }, { $set: { plan: 'free', 'billing.status': 'trialing', 'billing.trial_source': 'no_card', 'billing.trial_started_at': now, 'billing.trial_ends_at': ends, 'billing.status_changed_at': now } });
+		const result = await Account.updateOne({ _id: accountId, plan: { $in: ['free', null] }, 'billing.trial_started_at': null, $or: [{ 'billing.status': { $in: ['incomplete', 'trial_expired', 'canceled'] } }, { 'billing.status': { $exists: false } }] }, { $set: { plan: 'free', 'billing.status': 'trialing', 'billing.trial_source': 'no_card', 'billing.trial_started_at': now, 'billing.trial_ends_at': ends, 'billing.status_changed_at': now, 'billing.helpmonks_sequence.status': 'pending', 'billing.helpmonks_sequence.attempts': 0, 'billing.helpmonks_sequence.next_attempt_at': now, 'billing.helpmonks_sequence.last_error': '', 'billing.helpmonks_sequence.contact_id': '', 'billing.helpmonks_sequence.enrolled_at': null } });
 		if (result.modifiedCount !== 1) throw Billing.error(409, 'The Pro trial is no longer available', 'trial_unavailable');
 		return Billing.account(accountId);
 	}
