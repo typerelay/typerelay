@@ -1,0 +1,86 @@
+#subscription-content
+	h3.h6.fw-bold Subscription
+	if !billingEnabled
+		.alert.alert-secondary Billing is managed only by the hosted TypeRelay service.
+	else
+		if isTrialing
+			.alert.alert-info
+				span Your Pro trial is active. 
+				strong= trialText
+		else if billingStatus === 'past_due'
+			.alert.alert-warning Payment is past due. Update the payment method to retain paid features.
+		else if plan === 'free'
+			.alert.alert-secondary You are on Free.
+		else
+			.alert.alert-success= `Your ${plans[plan].name} subscription is active.`
+		if account.billing && account.billing.scheduled_change && account.billing.scheduled_change.plan
+			.alert.alert-info= `Change to ${plans[account.billing.scheduled_change.plan].name} is scheduled for ${new Date(account.billing.scheduled_change.effective_at).toLocaleDateString()}.`
+		.table-responsive.mb-5
+			table.table.table-sm.align-middle
+				tbody
+					tr
+						th Plan
+						td= isTrialing ? 'Pro trial' : plans[plan].name
+					tr
+						th Active libraries
+						td= `${usage.libraries} / ${entitlements.limits.libraries || 'Unlimited'}`
+					tr
+						th Active snippets
+						td= `${usage.snippets} / ${entitlements.limits.snippets || 'Unlimited'}`
+					tr
+						th Connected machines
+						td= `${usage.machines} / ${entitlements.limits.machines || 'Unlimited'}`
+					tr
+						th People and invitations
+						td= plan === 'team' ? `${usage.people + usage.invitations} / ${account.billing.seat_quantity || plans.team.seats}` : `${usage.people + usage.invitations} / 1`
+		if canManageBilling
+			.d-flex.flex-wrap.justify-content-end.gap-3.mb-5
+				if isTrialing || plan === 'free'
+					if trialAvailable
+						button.btn.btn-outline-primary.btn-sm(type="button" data-start-trial) Start 7-day Pro trial
+					button.btn.btn-primary.btn-sm(type="button" data-checkout-plan="pro") Upgrade to Pro — $8/month
+					button.btn.btn-outline-primary.btn-sm(type="button" data-checkout-team) Choose Team
+				else
+					button.btn.btn-outline-secondary.btn-sm(type="button" data-billing-portal) Manage billing, invoices, or cancellation
+			if plan === 'team' && !isTrialing
+				form#team-seats-form.card.p-3.mb-5
+					h3.h6.fw-bold Team seats
+					p.text-muted Five people are included. Additional seats cost $6 per person each month.
+					label.form-label(for="team-seats") Purchased seats
+					input#team-seats.form-control.form-control-sm.mb-3(type="number" name="seats" min="5" max="10000" value=account.billing.seat_quantity || 5 required)
+					.d-flex.justify-content-between
+						button.btn.btn-outline-secondary.btn-sm(type="reset") Cancel
+						button.btn.btn-primary.btn-sm(type="submit") Update seats
+				form#change-to-pro-form.mb-5
+					.d-flex.justify-content-end
+						button.btn.btn-outline-primary.btn-sm(type="submit") Change to Pro at renewal
+			else if plan === 'pro' && !isTrialing
+				form#change-to-team-form.card.p-3.mb-5
+					h3.h6.fw-bold Upgrade to Team
+					label.form-label(for="upgrade-team-seats") Purchased seats
+					input#upgrade-team-seats.form-control.form-control-sm.mb-3(type="number" name="seats" min="5" max="10000" value="5" required)
+					.d-flex.justify-content-between
+						button.btn.btn-outline-secondary.btn-sm(type="reset") Cancel
+						button.btn.btn-primary.btn-sm(type="submit") Continue in Stripe
+			if (plan === 'free' || isTrialing)
+				form#checkout-team-form.card.p-3.mb-5(hidden)
+					h3.h6.fw-bold Team seats
+					label.form-label(for="checkout-team-seats") Purchased seats
+					input#checkout-team-seats.form-control.form-control-sm.mb-3(type="number" name="seats" min="5" max="10000" value="5" required)
+					.d-flex.justify-content-between
+						button.btn.btn-outline-secondary.btn-sm(type="button" data-cancel-team-checkout) Cancel
+						button.btn.btn-primary.btn-sm(type="submit") Continue — $39/month
+		h3.h6.fw-bold Plans
+		.row.g-3.mb-5
+			.col-lg-4
+				.card.p-3.h-100
+					h3.h6.fw-bold Free — $0
+					p.small.mb-0 1 person, 250 snippets, 1 library, 1 synced machine, local dynamic extensions; no API or MCP.
+			.col-lg-4
+				.card.p-3.h-100
+					h3.h6.fw-bold Pro — $8/month
+					p.small.mb-0 1 person, unlimited snippets, libraries and machines, web sync, dynamic extensions, API and MCP.
+			.col-lg-4
+				.card.p-3.h-100
+					h3.h6.fw-bold Team — $39/month
+					p.small.mb-0 5 people included, Pro features, shared libraries, team management and white-labeling. Extra seats are $6/month.

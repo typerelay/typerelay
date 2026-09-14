@@ -5,6 +5,7 @@ import { Abbreviation } from '../public/abbreviation.js';
 import { randomUUID } from 'node:crypto';
 import { mongoose, Library, Snippet, Operation, Conflict, Account, Change, Member, Group } from '../model/index.js';
 import { Support, Yaml } from './support.js';
+import { Billing } from './billing.js';
 
 export class Libraries {
 	static retention = 30 * 86400000;
@@ -221,6 +222,8 @@ export class Libraries {
 	static async create(ctx, body, session) {
 		const entries = body.yaml !== undefined ? (await Yaml.run(body.yaml)).matches : (body.snippets || []);
 		await Libraries.validate(entries);
+		await Billing.assertResourceIncrease(ctx, 'libraries', 1, session);
+		await Billing.assertResourceIncrease(ctx, 'snippets', entries.length, session);
 		const [library] = await Library.create([{ account: ctx.account, creator: ctx.user, name: Support.text(body.name), shared: false, editable: false, members: [], groups: [], revision: 1, state: 'active' }], { session });
 		for (const entry of entries) if (entry.id !== undefined) Support.assert(typeof entry.id === 'string' && /^[a-zA-Z0-9_-]{16,128}$/.test(entry.id), 'Invalid snippet ID');
 		for (const [position, entry] of entries.entries()) await Snippet.create([{ account: ctx.account, library: library._id, id: entry.id || randomUUID(), ...Libraries.value(entry), position, revision: 1, state: 'active' }], { session });
@@ -273,6 +276,7 @@ export class Libraries {
 		if (body.deleted === true) return Libraries.trashAction(ctx, { type: 'library', id, library: id, revision: library.revision }, 'trash', session);
 		Support.assert(typeof body.shared === 'boolean' && typeof body.editable === 'boolean', 'Sharing and editing must be booleans');
 		Support.assert(Array.isArray(body.members) && Array.isArray(body.groups) && body.members.length <= 1000 && body.groups.length <= 1000, 'Invalid grants');
+		if (body.shared || body.members.length || body.groups.length) Billing.assertTeam(ctx, 'sharing');
 		const members = [...new Set(body.members.map(Support.id))];
 		const groups = [...new Set(body.groups.map(Support.id))];
 		Support.assert(await Member.countDocuments({ account: ctx.account, user: { $in: members } }).session(session) === members.length, 'Member belongs to another account');
@@ -283,6 +287,7 @@ export class Libraries {
 	}
 	static same(a, b) { return a === b || (!!a && !!b && JSON.stringify(Libraries.value(a)) === JSON.stringify(Libraries.value(b))); }
 	static async upload(ctx, id, body, session) {
+		const before = Billing.enabled() ? await Billing.usage(ctx.account, session) : null;
 		const library = await Libraries.get(ctx, id, session, true);
 		Support.assert(Support.access(ctx, library).edit, 'Library is read-only', 403);
 		Support.assert(Number.isInteger(body.base_revision) && body.base_revision >= 1 && body.base_revision <= library.revision, 'Invalid base revision', 409);
@@ -313,6 +318,10 @@ export class Libraries {
 			}
 		}
 		await Libraries.validate(await Snippet.find({ library: library._id, state: 'active' }).session(session).lean());
+		if (before) {
+			const after = await Billing.usage(ctx.account, session);
+			Billing.assertLimit(ctx, 'snippets', before.snippets, Math.max(0, after.snippets - before.snippets));
+		}
 		await Library.updateOne({ _id: library._id }, { $inc: { revision: 1 } }, { session });
 		await Support.change(ctx.account, library._id, 'snippets', session);
 		return { library: Libraries.view(ctx, await Libraries.get(ctx, id, session, true)), conflicts };
@@ -404,6 +413,8 @@ export class Libraries {
 		if (action === 'restore') {
 			Support.assert(record.expires_at > new Date(), 'Trash retention expired', 410);
 			Support.assert(target.type === 'library' || library.state === 'active', 'Restore the library first', 409);
+			await Billing.assertResourceIncrease(ctx, target.type === 'library' ? 'libraries' : 'snippets', 1, session);
+			if (target.type === 'library') await Billing.assertResourceIncrease(ctx, 'snippets', library.snippets.length, session);
 		}
 		if (action === 'purge') await Libraries.purge(library, target.type === 'snippet' ? record : null, session);
 		else {

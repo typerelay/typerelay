@@ -60,7 +60,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 @media (prefers-reduced-motion: reduce) { .scroll-top { transition: none; } }
 
 .app-navbar > .brand-link { justify-self: start; }
-.app-navbar > .dropdown { justify-self: end; }
+.app-navbar > .d-flex { justify-self: end; }
 @media (max-width: 40rem) { .app-navbar { grid-template-columns: 8rem minmax(0, 1fr) 2.5rem; column-gap: .75rem; } }
 
 @media (max-width: 60rem) { #search-shortcut { display: none; } }
@@ -93,3 +93,6 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 #template-options legend { font-size: .8rem; margin-bottom: .5rem; }
 #template-options fieldset { padding: .75rem; border: .0625rem solid var(--bs-border-color); border-radius: .375rem; }
 #template-options .form-check-inline { margin-right: 1rem; }
+
+.white-label-preview { display: block; max-width: 100%; max-height: 5rem; object-fit: contain; }
+@media (max-width: 48rem) { #billing-nav-action { display: none; } }

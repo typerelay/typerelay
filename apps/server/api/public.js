@@ -9,6 +9,7 @@ import { Libraries } from '../services/libraries.js';
 import { Team } from '../services/team.js';
 import { Integration, IntegrationToken, ApiAudit, Member, Account, Device, Conflict, Operation } from '../model/index.js';
 import { operations } from './catalog.js';
+import { Billing } from '../services/billing.js';
 
 export class PublicApi {
 	static clean(value) {
@@ -47,7 +48,9 @@ export class PublicApi {
 			if (!req.session.user) { req.session.return_to = req.originalUrl; return res.render('login', { returnTo: req.originalUrl }); }
 			res.setHeader('Content-Security-Policy', String(res.getHeader('Content-Security-Policy') || '').replace("form-action 'self'", "form-action 'self' " + new URL(req.query.redirect_uri).origin));
 			const members = await Member.find({ user: req.session.user }).lean();
-			res.render('integration-authorize', { client, scopes, request: req.query, accounts: await Account.find({ _id: { $in: members.map(member => member.account) } }).lean() });
+			const accounts = (await Account.find({ _id: { $in: members.map(member => member.account) } }).lean()).filter(account => (!req.boundAccount || String(account._id) === req.boundAccount) && Billing.entitlements(account).capabilities.api);
+			Support.assert(accounts.length, 'API and MCP access require Pro or Team', 403);
+			res.render('integration-authorize', { client, scopes, request: req.query, accounts });
 		});
 		app.post('/integrations/authorize', async (req, res) => { Support.assert(req.session.user, 'Sign in required', 401); res.redirect(await Auth.approveIntegration(req.session.user, req.body)); });
 		app.post('/integrations/delegate', authLimit, async (req, res) => {
@@ -63,12 +66,15 @@ export class PublicApi {
 		app.use('/api/v3', rateLimit({ windowMs: 60000, limit: 600, standardHeaders: 'draft-8', legacyHeaders: false }), async (req, res, next) => {
 			res.set('Cache-Control', 'no-store');
 			try { req.ctx = await Auth.integration(req.headers.authorization); } catch (error) { if (error.status === 401) res.set('WWW-Authenticate', 'Bearer resource_metadata="' + Auth.origin + '/.well-known/oauth-protected-resource/api/v3"'); throw error; }
+			if (req.boundAccount) Support.assert(req.ctx.account === req.boundAccount, 'Custom domain account mismatch', 403);
 			next();
 		});
 		app.use('/api/v3', rateLimit({ windowMs: 60000, limit: 300, standardHeaders: 'draft-8', legacyHeaders: false, keyGenerator: req => req.ctx.credential }));
 		for (const operation of operations) app[operation.method]('/api/v3' + operation.path, async (req, res) => {
 			res.on('finish', () => ApiAudit.create({ account: req.ctx.account, user: req.ctx.user, credential: req.ctx.credential, operation: operation.id, status: res.statusCode, expires: new Date(Date.now() + 90 * 86400000) }).catch(() => console.error('API audit write failed')));
 			Auth.requireScope(req.ctx, operation.scope);
+			if (operation.scope.startsWith('team:')) Billing.assertTeam(req.ctx);
+			if (operation.scope === 'sharing:write') Billing.assertTeam(req.ctx, 'sharing');
 			const validate = validators.get(operation.id);
 			Support.assert(!validate || validate(req.body), 'Invalid request: ' + (validate?.errors?.map(error => error.instancePath + " " + error.message).join('; ') || 'body required'));
 			const result = operation.mutation ? await Libraries.mutate(req.ctx, req.body.operation_id, { operation: operation.id, params: req.params, body: req.body }, async (ctx, session) => {

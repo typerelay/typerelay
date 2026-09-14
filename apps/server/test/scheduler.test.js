@@ -12,24 +12,28 @@ class FakeCron {
 	}
 }
 
-test('scheduler registers one protected daily Trash cleanup without overlap', async () => {
+test('scheduler registers protected Trash, trial and white-label jobs without overlap', async () => {
 	FakeCron.instances = [];
 	let release;
 	const gate = new Promise(resolve => { release = resolve; });
 	let calls = 0;
 	const logs = [];
-	Scheduler.start({ CronClass: FakeCron, cleanup: async () => { calls++; await gate; return { libraries: 2, snippets: 3 }; }, logger: { log: message => logs.push(message), error: message => logs.push(message) } });
-	assert.equal(FakeCron.instances.length, 1);
+	Scheduler.start({ CronClass: FakeCron, cleanup: async () => { calls++; await gate; return { libraries: 2, snippets: 3 }; }, expireTrials: async () => ({ expired: 2 }), reconcileWhiteLabel: async () => ({ checked: 1, updated: 1, failed: 0 }), logger: { log: message => logs.push(message), error: message => logs.push(message) } });
+	assert.equal(FakeCron.instances.length, 3);
 	const job = FakeCron.instances[0];
 	assert.equal(job.pattern, '30 2 * * *');
 	assert.equal(job.options.protect, true);
+	assert.deepEqual(FakeCron.instances.slice(1).map(instance => instance.pattern), ['*/5 * * * *', '*/5 * * * *']);
+	assert.ok(FakeCron.instances.slice(1).every(instance => instance.options.protect));
 	const first = job.callback();
 	const overlapping = job.callback();
 	await Promise.resolve();
 	assert.equal(calls, 1);
 	release();
 	await Promise.all([first, overlapping]);
-	assert.deepEqual(logs, ['Trash cleanup complete: purged 2 libraries and 3 snippets']);
+	await FakeCron.instances[1].callback();
+	await FakeCron.instances[2].callback();
+	assert.deepEqual(logs, ['Trash cleanup complete: purged 2 libraries and 3 snippets', 'Trial lifecycle complete: downgraded 2 accounts to Free', 'White-label reconciliation complete: checked 1, updated 1, failed 0']);
 });
 
 test('scheduler logs cleanup failure and permits the next run', async () => {

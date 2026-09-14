@@ -2,9 +2,49 @@ import mongoose from 'mongoose';
 
 const objectid = mongoose.Schema.Types.ObjectId;
 const mixed = mongoose.Schema.Types.Mixed;
+const asset = new mongoose.Schema({ url: String, storage_key: { type: String, select: false }, mime_type: String, size: Number, width: Number, height: Number, updated_at: Date }, { _id: false });
 const User = mongoose.model('User', new mongoose.Schema({ email: { type: String, unique: true }, name: String, password: { type: String, select: false }, totp_secret: { type: String, select: false }, totp_enabled: { type: Boolean, default: false }, totp_step: { type: Number, select: false }, auth_version: { type: Number, default: 0 } }, { timestamps: true }));
 const Passkey = mongoose.model('Passkey', new mongoose.Schema({ user: { type: objectid, index: true }, credential_id: { type: String, unique: true }, public_key: { type: String, select: false }, counter: Number, transports: [String], name: String }, { timestamps: true }));
-const Account = mongoose.model('Account', new mongoose.Schema({ name: String, sequence: { type: Number, default: 0 } }));
+const accountSchema = new mongoose.Schema({
+	name: String,
+	sequence: { type: Number, default: 0 },
+	plan: { type: String, enum: ['free', 'pro', 'team'], default: 'free' },
+	billing: {
+		stripe_customer_id: { type: String, select: false },
+		stripe_subscription_id: { type: String, select: false },
+		stripe_free_subscription_id: { type: String, select: false },
+		price_id: { type: String, default: '' },
+		seat_quantity: { type: Number, default: 1 },
+		status: { type: String, enum: ['incomplete', 'checkout_pending', 'trialing', 'trial_expired', 'active', 'past_due', 'canceled', 'unpaid', 'incomplete_expired'], default: 'incomplete' },
+		trial_source: { type: String, enum: ['no_card', 'stripe', null], default: null },
+		trial_started_at: { type: Date, default: null },
+		trial_ends_at: { type: Date, default: null },
+		status_changed_at: { type: Date, default: null },
+		scheduled_change: {
+			plan: { type: String, enum: ['free', 'pro', 'team'] },
+			seat_quantity: Number,
+			effective_at: Date,
+			schedule_id: { type: String, select: false },
+		},
+	},
+	white_label: {
+		logo: { type: asset, default: null },
+		favicon: { type: asset, default: null },
+		login_logo: { type: asset, default: null },
+		hostname: { type: String, default: '' },
+		state: { type: String, enum: ['unconfigured', 'pending_dns', 'pending_ssl', 'active', 'disabled_by_plan', 'error'], default: 'unconfigured' },
+		cloudflare_hostname_id: { type: String, default: '', select: false },
+		cloudflare_hostname_status: { type: String, default: '' },
+		cloudflare_ssl_status: { type: String, default: '' },
+		dns_verified_at: { type: Date, default: null },
+		cloudflare_checked_at: { type: Date, default: null },
+		next_check_at: { type: Date, default: null },
+		disabled_at: { type: Date, default: null },
+		last_error: { type: String, default: '' },
+	},
+}, { timestamps: true });
+accountSchema.index({ 'white_label.hostname': 1 }, { unique: true, partialFilterExpression: { 'white_label.hostname': { $type: 'string', $gt: '' } } });
+const Account = mongoose.model('Account', accountSchema);
 const membership = new mongoose.Schema({ account: objectid, user: objectid, role: { type: String, enum: ['owner', 'admin', 'member'] } });
 membership.index({ account: 1, user: 1 }, { unique: true });
 const Member = mongoose.model('Member', membership);

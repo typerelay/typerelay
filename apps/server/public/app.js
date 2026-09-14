@@ -46,6 +46,7 @@ class TypeRelay {
 			if (event.target.hasAttribute('data-import-key')) { const field = document.querySelector('[data-import-trigger="' + event.target.dataset.importKey + '"]'); if (field) field.disabled = !event.target.checked || field.dataset.review === 'true'; }
 			if (event.target.id === 'import-file') { this.importSource = null; document.querySelector('#import-preview').replaceChildren(); document.querySelector('#record-form button[type=submit]').disabled = true; }
 			if (event.target.id === 'yaml-file' && event.target.files[0]) document.querySelector('#yaml').value = await event.target.files[0].text();
+			if (event.target.hasAttribute('data-white-label-file') && event.target.files[0]) await this.whiteLabelUpload(event.target).catch(error => this.toast(error.message, 'error'));
 		});
 		document.querySelector('#form-modal')?.addEventListener('hidden.bs.modal', () => {
 			this.codeVersion = (this.codeVersion || 0) + 1; this.codeView?.destroy(); this.codeView = null;
@@ -61,6 +62,7 @@ class TypeRelay {
 			this.devices().catch(() => {});
 			const invitation = new URL(location.href).searchParams.get('invite');
 			if (invitation) this.accept(invitation);
+			if (location.hash === '#settings-subscription') { bootstrap.Modal.getOrCreateInstance(document.querySelector('#settings')).show(); this.settingsTab('subscription'); }
 		}
 	}
 	updateScrollTop() {
@@ -75,8 +77,13 @@ class TypeRelay {
 	toast(title, icon = 'success') { return Swal.fire({ toast: true, position: 'top-end', title, icon, timer: 3500, showConfirmButton: false }); }
 	async request(path, method = 'GET', body, raw = false) {
 		const response = await fetch(path.startsWith('/') ? path : '/api/v2/' + path, { method, headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': document.querySelector('meta[name=csrf-token]').content, 'X-Account-Id': this.account || '' }, body: body ? JSON.stringify({ operation_id: this.submitting ? this.formOperation : crypto.randomUUID(), ...body }) : undefined });
-		if (!response.ok) throw new Error((await response.json()).error);
+		if (!response.ok) { const result = await response.json(); const error = new Error(result.error); Object.assign(error, result); throw error; }
 		return raw ? response.text() : response.json();
+	}
+	async upload(path, data) {
+		const response = await fetch('/api/v2/' + path, { method: 'POST', headers: { 'X-CSRF-Token': document.querySelector('meta[name=csrf-token]').content, 'X-Account-Id': this.account || '' }, body: data });
+		if (!response.ok) { const result = await response.json(); const error = new Error(result.error); Object.assign(error, result); throw error; }
+		return response.json();
 	}
 	fragment(html) { const template = document.createElement('template'); template.innerHTML = html; return template.content.firstElementChild; }
 	update(selector, container, html) {
@@ -155,6 +162,26 @@ class TypeRelay {
 		document.querySelectorAll('.settings-pane').forEach(pane => { pane.hidden = pane.id !== 'settings-pane-' + id; });
 		if (focus) tab.focus();
 		if (id === 'tokens') this.tokens().catch(error => this.toast(error.message, 'error'));
+		if (id === 'whiteLabel') this.refreshWhiteLabel().catch(error => this.toast(error.message, 'error'));
+		if (id === 'subscription') this.refreshBilling().catch(error => this.toast(error.message, 'error'));
+	}
+	applyBilling(result) {
+		if (result.subscription_html && document.querySelector('#settings-pane-subscription')) this.update('#subscription-content', '#settings-pane-subscription', result.subscription_html);
+		if (result.trial_html) this.update('#billing-nav-action', 'header .d-flex', result.trial_html);
+		if (result.tokens_form_html && !document.querySelector('#access-token-form')) document.querySelector('#access-token-form-container')?.replaceChildren(this.fragment(result.tokens_form_html));
+	}
+	async refreshBilling() { if (document.querySelector('#settings-pane-subscription')) this.applyBilling(await this.request('billing/fragments')); }
+	applyWhiteLabel(result) {
+		if (result.html) this.update('#white-label-content', '#settings-pane-whiteLabel', result.html);
+		if (result.brand_html) this.update('header .brand', '.brand-link', result.brand_html);
+		if (result.settings) document.querySelector('link[rel="icon"]').href = result.settings.favicon_url || '/assets/favicon.ico';
+	}
+	async whiteLabelRequest(path, method = 'GET', body) { try { const result = await this.request(path, method, body); this.applyWhiteLabel(result); return result; } catch (error) { this.applyWhiteLabel(error); throw error; } }
+	async refreshWhiteLabel() { await this.whiteLabelRequest('white-label'); }
+	async whiteLabelUpload(input) {
+		const button = input;
+		button.disabled = true;
+		try { const data = new FormData(); data.append('file', input.files[0]); this.applyWhiteLabel(await this.upload('white-label/assets/' + input.dataset.whiteLabelFile, data)); this.toast('Brand asset saved'); } finally { button.disabled = false; }
 	}
 	async tokens() {
 		const rows = await this.request('access-tokens');
@@ -269,7 +296,7 @@ class TypeRelay {
 	}
 	async onSubmit(event) {
 		const form = event.target;
-		if (!['login', 'access-token-form', 'profile-form', 'account-form', 'invite-form', 'record-form'].includes(form.id)) return;
+		if (!['login', 'access-token-form', 'profile-form', 'account-form', 'invite-form', 'record-form', 'team-seats-form', 'change-to-pro-form', 'change-to-team-form', 'checkout-team-form', 'white-label-domain-form'].includes(form.id)) return;
 		event.preventDefault();
 		const abbreviation = form.querySelector('#trigger');
 		if (abbreviation) Abbreviation.field(abbreviation);
@@ -277,6 +304,10 @@ class TypeRelay {
 		const button = event.submitter;
 		if (button) button.disabled = true;
 		try {
+			if (form.id === 'team-seats-form' || form.id === 'change-to-team-form') { const result = await this.request('billing/change', 'POST', { plan: 'team', seats: Number(data.get('seats')) }); if (result.url) location.assign(result.url); else { this.applyBilling(result); this.toast('Change scheduled'); } return; }
+			if (form.id === 'change-to-pro-form') { const result = await this.request('billing/change', 'POST', { plan: 'pro', seats: 1 }); this.applyBilling(result); this.toast('Change scheduled'); return; }
+			if (form.id === 'checkout-team-form') { const result = await this.request('billing/checkout', 'POST', { plan: 'team', seats: Number(data.get('seats')) }); location.assign(result.url); return; }
+			if (form.id === 'white-label-domain-form') { await this.whiteLabelRequest('white-label/domain', 'PUT', { hostname: data.get('hostname') }); this.toast('Domain saved'); return; }
 			if (form.id === 'login') this.toast((await this.request('/auth/login', 'POST', { email: data.get('email') })).message);
 			if (form.id === 'access-token-form') { const row = await this.request('access-tokens', 'POST', { name: form.elements.name.value, days: Number(form.elements.days.value), scopes: [...form.querySelectorAll('[name=scopes]:checked')].map(input => input.value) }); this.update('[data-access-token="' + row.id + '"]', '#access-tokens', row.html); document.querySelector('#token-secret-value').textContent = row.token; document.querySelector('#token-secret').hidden = false; form.reset(); return; }
 			if (form.id === 'profile-form') {
@@ -291,7 +322,7 @@ class TypeRelay {
 				document.querySelector('#account-switch').selectedOptions[0].textContent = data.get('name');
 				this.toast('Account saved');
 			}
-			if (form.id === 'invite-form') { const result = await this.request('team/invitations', 'POST', { email: data.get('email') }); this.update('[data-invitation="' + result.invitation + '"]', '#invitations', await this.request('fragments/invitation/' + result.invitation, 'GET', null, true)); this.toast('Invitation sent'); }
+			if (form.id === 'invite-form') { const result = await this.request('team/invitations', 'POST', { email: data.get('email') }); this.update('[data-invitation="' + result.invitation + '"]', '#invitations', await this.request('fragments/invitation/' + result.invitation, 'GET', null, true)); await this.refreshBilling(); this.toast('Invitation sent'); }
 			if (form.id === 'record-form') { this.submitting = true; await this.submit(data); bootstrap.Modal.getInstance(document.querySelector('#form-modal')).hide(); this.toast('Saved'); }
 		} catch (error) { this.toast(error.message, 'error'); }
 		finally { this.submitting = false; if (button) button.disabled = false; }
@@ -369,6 +400,16 @@ class TypeRelay {
 		if (card && !window.getSelection()?.toString()) return this.open(card.dataset.id);
 		const button = event.target.closest('button');
 		if (!button) return;
+		if (button.dataset.settingsOpen) { bootstrap.Modal.getOrCreateInstance(document.querySelector('#settings')).show(); this.settingsTab(button.dataset.settingsOpen); return; }
+		if (button.hasAttribute('data-start-trial')) { button.disabled = true; try { this.applyBilling(await this.request('billing/trial', 'POST', {})); this.toast('Pro trial started'); } finally { button.disabled = false; } return; }
+		if (button.dataset.checkoutPlan) { button.disabled = true; try { location.assign((await this.request('billing/checkout', 'POST', { plan: button.dataset.checkoutPlan, seats: 1 })).url); } finally { button.disabled = false; } return; }
+		if (button.hasAttribute('data-billing-portal')) { button.disabled = true; try { location.assign((await this.request('billing/portal', 'POST', {})).url); } finally { button.disabled = false; } return; }
+		if (button.hasAttribute('data-checkout-team')) { document.querySelector('#checkout-team-form').hidden = false; document.querySelector('#checkout-team-seats').focus(); return; }
+		if (button.hasAttribute('data-cancel-team-checkout')) { document.querySelector('#checkout-team-form').hidden = true; return; }
+		if (button.dataset.whiteLabelDelete && await this.confirm('Remove this brand asset?')) { this.applyWhiteLabel(await this.request('white-label/assets/' + button.dataset.whiteLabelDelete, 'DELETE')); return; }
+		if (button.hasAttribute('data-white-label-verify')) { button.disabled = true; try { await this.whiteLabelRequest('white-label/domain/verify', 'POST', {}); this.toast('Domain verification started'); } finally { button.disabled = false; } return; }
+		if (button.hasAttribute('data-white-label-refresh')) { button.disabled = true; try { await this.whiteLabelRequest('white-label/domain/refresh', 'POST', {}); } finally { button.disabled = false; } return; }
+		if (button.hasAttribute('data-white-label-remove-domain') && await this.confirm('Remove this custom domain?')) { await this.whiteLabelRequest('white-label/domain', 'DELETE'); return; }
 		if (button.hasAttribute('data-bulk-move')) return this.batchAction('move');
 		if (button.hasAttribute('data-bulk-trash')) return this.batchAction('trash');
 		if (button.hasAttribute('data-restore-trash')) {
@@ -446,6 +487,7 @@ class TypeRelay {
 			await this.request('team/members/' + id, 'PATCH', data.role ? { role: data.next } : {});
 			if (data.removeMember) document.querySelector('[data-member="' + id + '"]').remove();
 			else this.update('[data-member="' + id + '"]', '#members', await this.request('fragments/member/' + id, 'GET', null, true));
+			await this.refreshBilling();
 		}
 		if (button.id === 'new-group' || data.editGroup) {
 			const group = data.editGroup ? JSON.parse(data.editGroup) : null;
@@ -459,7 +501,7 @@ class TypeRelay {
 			document.querySelector('[data-group="' + data.deleteGroup + '"]').remove();
 			bootstrap.Modal.getInstance(document.querySelector('#form-modal')).hide();
 		}
-		if (data.revokeInvitation && await this.confirm('Revoke this invitation?')) { await this.request('team/invitations/' + data.revokeInvitation, 'DELETE'); document.querySelector('[data-invitation="' + data.revokeInvitation + '"]').remove(); }
+		if (data.revokeInvitation && await this.confirm('Revoke this invitation?')) { await this.request('team/invitations/' + data.revokeInvitation, 'DELETE'); document.querySelector('[data-invitation="' + data.revokeInvitation + '"]').remove(); await this.refreshBilling(); }
 		if (data.revokeDevice && await this.confirm('Revoke this device?')) { await this.request('devices/' + data.revokeDevice, 'DELETE'); document.querySelector('[data-device="' + data.revokeDevice + '"]').remove(); }
 		if (data.resolve) return this.form('conflict', { library: data.library, conflict: data.resolve }, async fields => {
 			const current = (await this.request('library-view/' + data.library)).library;

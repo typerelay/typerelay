@@ -9,6 +9,7 @@
   "packageManager": "pnpm@12.0.0",
   "scripts": {
     "start": "node scripts/start.js",
+    "stripe:provision": "node scripts/provision-stripe.js",
     "test": "node --test test/*.test.js",
     "build": "node scripts/build-editor.js"
   },
@@ -31,6 +32,8 @@
     "express": "^5.1.0",
     "express-rate-limit": "^8.0.0",
     "express-session": "^1.18.2",
+    "file-type": "^22.0.2",
+    "formidable": "^3.5.4",
     "helmet": "^8.1.0",
     "htmlparser2": "^12.0.0",
     "mongoose": "^9.0.0",
@@ -38,6 +41,8 @@
     "otplib": "^13.5.0",
     "pug": "^3.0.3",
     "qrcode": "^1.5.4",
+    "sharp": "^0.35.4",
+    "stripe": "^22.6.2",
     "sweetalert2": "^11.23.0"
   },
   "devDependencies": {

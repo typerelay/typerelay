@@ -1,6 +1,7 @@
 import { Member, Group, User, Ticket, Account, Device } from '../model/index.js';
 import { Support } from './support.js';
 import { Auth } from './auth.js';
+import { Billing } from './billing.js';
 
 export class Team {
 	static async list(ctx) {
@@ -10,6 +11,7 @@ export class Team {
 	}
 	static async invite(ctx, email) {
 		Support.assert(Support.admin(ctx), 'Admin required', 403);
+		await Billing.assertSeatCapacity(ctx);
 		email = Support.text(email, 254).toLowerCase();
 		Support.assert(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email), 'Invalid email');
 		const token = Support.token();
@@ -21,6 +23,8 @@ export class Team {
 		const user = await User.findById(ctx.user).session(session).lean();
 		const ticket = await Ticket.findOneAndDelete({ hash: Support.hash(token), kind: 'invite', email: user.email, expires: { $gt: new Date() } }, { session }).lean();
 		Support.assert(ticket, 'Invitation invalid, expired, or for another email');
+		const account = await Account.findById(ticket.account).session(session).lean();
+		await Billing.assertSeatCapacity({ account: String(ticket.account), entitlements: Billing.entitlements(account) }, 1, session);
 		await Member.updateOne({ account: ticket.account, user: ctx.user }, { $setOnInsert: { role: 'member' } }, { upsert: true, session });
 		await Support.change(ticket.account, null, 'membership', session);
 		return { account: String(ticket.account) };
@@ -29,6 +33,7 @@ export class Team {
 		const target = await Member.findOne({ _id: Support.id(id), account: ctx.account }).session(session).lean();
 		Support.assert(target && target.role !== 'owner' && Support.admin(ctx) && (ctx.role === 'owner' || (target.role === 'member' && !body.role)), 'Cannot change this member', 403);
 		if (body.role) {
+			Billing.assertTeam(ctx);
 			Support.assert(['admin', 'member'].includes(body.role) && ctx.role === 'owner', 'Only owners appoint admins', 403);
 			await Member.updateOne({ _id: target._id }, { $set: { role: body.role } }, { session });
 		} else {
@@ -41,6 +46,7 @@ export class Team {
 	}
 	static async group(ctx, id, body, session) {
 		Support.assert(Support.admin(ctx), 'Admin required', 403);
+		Billing.assertTeam(ctx);
 		if (id) Support.assert(await Group.exists({ _id: Support.id(id), account: ctx.account }).session(session), 'Group not found', 404);
 		if (body.deleted) await Group.deleteOne({ _id: id, account: ctx.account }, { session });
 		else {

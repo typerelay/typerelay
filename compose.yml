@@ -29,7 +29,27 @@ services:
       service: base
     ports:
       - "127.0.0.1:3040:3040"
-    environment: *env
+    environment:
+      <<: *env
+      TYPERELAY_HOSTED_EDITION: "${TYPERELAY_HOSTED_EDITION:-false}"
+      BILLING_ENABLED: "${BILLING_ENABLED:-false}"
+      STRIPE_SECRET_KEY: "${STRIPE_SECRET_KEY:-}"
+      STRIPE_WEBHOOK_SECRET: "${STRIPE_WEBHOOK_SECRET:-}"
+      STRIPE_FREE_PRODUCT_ID: "${STRIPE_FREE_PRODUCT_ID:-}"
+      STRIPE_FREE_PRICE_ID: "${STRIPE_FREE_PRICE_ID:-}"
+      STRIPE_PRO_PRODUCT_ID: "${STRIPE_PRO_PRODUCT_ID:-}"
+      STRIPE_PRO_PRICE_ID: "${STRIPE_PRO_PRICE_ID:-}"
+      STRIPE_TEAM_PRODUCT_ID: "${STRIPE_TEAM_PRODUCT_ID:-}"
+      STRIPE_TEAM_PRICE_ID: "${STRIPE_TEAM_PRICE_ID:-}"
+      STRIPE_PORTAL_CONFIG_ID: "${STRIPE_PORTAL_CONFIG_ID:-}"
+      STRIPE_CHANGE_PORTAL_CONFIG_ID: "${STRIPE_CHANGE_PORTAL_CONFIG_ID:-}"
+      STRIPE_TRIAL_DAYS: "${STRIPE_TRIAL_DAYS:-7}"
+      STRIPE_TAX_ENABLED: "${STRIPE_TAX_ENABLED:-false}"
+      WHITE_LABEL_ENABLED: "${WHITE_LABEL_ENABLED:-false}"
+      WHITE_LABEL_CNAME_TARGET: "${WHITE_LABEL_CNAME_TARGET:-custom.typerelay.com}"
+      WHITE_LABEL_ASSETS_DIR: /data/white-label
+      CLOUDFLARE_API_TOKEN: "${CLOUDFLARE_API_TOKEN:-}"
+      CLOUDFLARE_ZONE_ID: "${CLOUDFLARE_ZONE_ID:-}"
     volumes:
       - typerelay-server:/data
       - ./docs:/documentation:ro
@@ -52,6 +72,12 @@ services:
       <<: *env
       TYPERELAY_APP: scheduler
       SERVER_MODE: scheduler
+      TYPERELAY_HOSTED_EDITION: "${TYPERELAY_HOSTED_EDITION:-false}"
+      BILLING_ENABLED: "${BILLING_ENABLED:-false}"
+      WHITE_LABEL_ENABLED: "${WHITE_LABEL_ENABLED:-false}"
+      WHITE_LABEL_CNAME_TARGET: "${WHITE_LABEL_CNAME_TARGET:-custom.typerelay.com}"
+      CLOUDFLARE_API_TOKEN: "${CLOUDFLARE_API_TOKEN:-}"
+      CLOUDFLARE_ZONE_ID: "${CLOUDFLARE_ZONE_ID:-}"
     restart: unless-stopped
     deploy:
       replicas: 1

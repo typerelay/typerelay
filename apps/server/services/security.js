@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import { generateSecret, generateURI, verifySync } from 'otplib';
 import QRCode from 'qrcode';
 import { generateRegistrationOptions, verifyRegistrationResponse, generateAuthenticationOptions, verifyAuthenticationResponse } from '@simplewebauthn/server';
-import { mongoose, User, Ticket, Passkey } from '../model/index.js';
+import { mongoose, User, Ticket, Passkey, Member } from '../model/index.js';
 import { Auth } from './auth.js';
 import { Support, Fault } from './support.js';
 
@@ -40,6 +40,7 @@ export class Security {
 		const user = await User.findOne({ email }).select('+password').lean();
 		const matches = await bcrypt.compare(req.body.password, user?.password || Security.dummy);
 		Support.assert(user?.password && matches, 'Invalid email or password', 401);
+		if (req.boundAccount) Support.assert(await Member.exists({ account: req.boundAccount, user: user._id }), 'Account access denied', 403);
 		return Security.establish(req, user._id);
 	}
 	static async verifyCode(user, code) {
@@ -113,6 +114,7 @@ export class Security {
 		return { password: result.password };
 	}
 	static async passkeyOptions(req, register) {
+		Support.assert(!req.boundAccount, 'Use app.typerelay.com for passkeys', 403);
 		const rpID = new URL(Auth.origin).hostname;
 		let options;
 		if (register) {
@@ -128,6 +130,7 @@ export class Security {
 	}
 	static passkeyFailure() { throw new Fault(400, 'Passkey response could not be verified. Try again.'); }
 	static async passkeyVerify(req, register) {
+		Support.assert(!req.boundAccount, 'Use app.typerelay.com for passkeys', 403);
 		if (register) Security.fresh(req);
 		Support.assert(req.session.passkey, 'Passkey challenge expired; try again');
 		const ticket = await Ticket.findOneAndDelete({ hash: Support.hash(req.session.passkey), kind: register ? 'passkey-register' : 'passkey-login', expires: { $gt: new Date() } }).lean();
@@ -154,8 +157,8 @@ export class Security {
 	static mount(app, limit) {
 		app.use('/auth', (req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
 		app.get('/login', (req, res) => res.render('login'));
-		app.get('/signup', (req, res) => res.render('auth', { kind: 'signup' }));
-		app.post('/auth/signup', limit, async (req, res) => { await Auth.login(Security.email(req.body.email), req.body.name); res.json({ message: 'Check your email to finish creating your account.' }); });
+		app.get('/signup', (req, res) => req.boundAccount ? res.redirect(new URL('/signup', Auth.origin).toString()) : res.render('auth', { kind: 'signup' }));
+		app.post('/auth/signup', limit, async (req, res) => { Support.assert(!req.boundAccount, 'Create accounts at app.typerelay.com', 403); await Auth.login(Security.email(req.body.email), req.body.name); res.json({ message: 'Check your email to finish creating your account.' }); });
 		app.post('/auth/password', limit, async (req, res) => res.json(await Security.passwordLogin(req)));
 		app.get('/auth/two-factor', (req, res) => res.render('auth', { kind: 'factor' }));
 		app.post('/auth/two-factor', limit, async (req, res) => res.json(await Security.factor(req)));

@@ -1,0 +1,34 @@
+#white-label-content
+	h3.h6.fw-bold White-label
+	if !whiteLabelSettings.entitled
+		.alert.alert-warning White-label branding and custom domains require Team.
+	else
+		.card.p-3.mb-5
+			h3.h6.fw-bold Brand assets
+			.row.g-3
+				each label, kind in {logo: 'Top navigation logo', login_logo: 'Login logo', favicon: 'Favicon'}
+					.col-lg-4
+						label.form-label(for='white-label-' + kind)= label
+						if whiteLabelSettings[kind] && whiteLabelSettings[kind].url
+							img.white-label-preview.mb-3(src=whiteLabelSettings[kind].url alt=label)
+						input.form-control.form-control-sm.mb-3(type="file" id='white-label-' + kind accept="image/png,image/jpeg,image/webp,image/gif,image/avif,image/x-icon" data-white-label-file=kind)
+						.d-flex.justify-content-end
+							button.btn.btn-outline-danger.btn-sm(type="button" data-white-label-delete=kind disabled=!(whiteLabelSettings[kind] && whiteLabelSettings[kind].url)) Remove
+		.card.p-3.mb-5
+			h3.h6.fw-bold Custom domain
+			p.text-muted Add a DNS-only CNAME record pointing to the target, then verify it for Cloudflare SSL.
+			form#white-label-domain-form
+				label.form-label(for="white-label-hostname") Hostname
+				input#white-label-hostname.form-control.form-control-sm.mb-3(name="hostname" value=whiteLabelSettings.hostname autocomplete="off" required)
+				label.form-label(for="white-label-cname") CNAME target
+				input#white-label-cname.form-control.form-control-sm.mb-3(value=whiteLabelSettings.cname_target readonly)
+				.d-flex.justify-content-between
+					button.btn.btn-outline-danger.btn-sm(type="button" data-white-label-remove-domain disabled=!whiteLabelSettings.hostname) Remove
+					.d-flex.gap-3
+						button.btn.btn-outline-secondary.btn-sm(type="button" data-white-label-refresh disabled=!whiteLabelSettings.hostname) Refresh
+						button.btn.btn-outline-primary.btn-sm(type="button" data-white-label-verify disabled=!whiteLabelSettings.hostname) Verify
+						button.btn.btn-primary.btn-sm(type="submit") Save
+			.mt-3
+				span.badge.text-bg-secondary= whiteLabelSettings.state
+				if whiteLabelSettings.last_error
+					span.text-danger.small.ms-3= whiteLabelSettings.last_error

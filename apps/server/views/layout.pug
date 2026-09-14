@@ -6,7 +6,10 @@ html(lang="en")
 		meta(name="csrf-token" content=csrf)
 		meta(name="style-nonce" content=styleNonce)
 		title TypeRelay
-		link(rel="icon" href="/assets/favicon.ico")
+		if whiteLabel && whiteLabel.favicon_url
+			link(rel="icon" href=whiteLabel.favicon_url)
+		else
+			link(rel="icon" href="/assets/favicon.ico")
 		link(rel="stylesheet" href="/vendor/bootstrap/css/bootstrap.min.css")
 		link(rel="stylesheet" href="/vendor/sweetalert2/sweetalert2.min.css")
 		link(rel="stylesheet" href="/assets/app.css")
@@ -18,7 +21,8 @@ html(lang="en")
 	body
 		header.app-navbar.container-fluid.py-3.mb-5
 			a.brand-link(href="/")
-				img.brand(src="/assets/typerelay-logo.svg" alt="TypeRelay")
+				- const brandAsset = whiteLabel && (profile ? whiteLabel.logo_url : (whiteLabel.login_logo_url || whiteLabel.logo_url))
+				img.brand(src=brandAsset || '/assets/typerelay-logo.svg' alt=brandAsset ? 'Logo' : 'TypeRelay')
 			if profile
 				button#search-trigger.btn.global-search(type="button" aria-haspopup="dialog" aria-controls="search-modal")
 					svg.me-2(width="1.1rem" height="1.1rem" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true")
@@ -28,19 +32,21 @@ html(lang="en")
 					kbd.mx-2 /
 					span to search
 					kbd.ms-auto#search-shortcut Ctrl K
-				.dropdown.ms-auto
-					include ajax/avatar
-					ul.dropdown-menu.dropdown-menu-end
-						li
-							button.dropdown-item(type="button" data-bs-toggle="modal" data-bs-target="#settings") Settings
-						li
-							button.dropdown-item(type="button" data-bs-toggle="modal" data-bs-target="#trash") Trash
-						li
-							button.dropdown-item(type="button" data-bs-toggle="modal" data-bs-target="#help") Help
-						li
-							hr.dropdown-divider
-						li
-							button#logout.dropdown-item(type="button") Sign out
+				.d-flex.align-items-center.gap-3.ms-auto
+					include ajax/trial-button
+					.dropdown
+						include ajax/avatar
+						ul.dropdown-menu.dropdown-menu-end
+							li
+								button.dropdown-item(type="button" data-bs-toggle="modal" data-bs-target="#settings") Settings
+							li
+								button.dropdown-item(type="button" data-bs-toggle="modal" data-bs-target="#trash") Trash
+							li
+								button.dropdown-item(type="button" data-bs-toggle="modal" data-bs-target="#help") Help
+							li
+								hr.dropdown-divider
+							li
+								button#logout.dropdown-item(type="button") Sign out
 		main.container
 			block content
 		if profile

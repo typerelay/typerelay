@@ -2,21 +2,24 @@ if kind === 'library'
 	label.form-label.fw-bold(for="name") Library name
 	input#name.form-control.form-control-sm.mb-4(name="name" value=library ? library.name : '' required maxlength="100")
 	if library
-		.form-check.d-flex.align-items-center.ps-0.mb-4
-			input#shared.form-check-input.m-0(type="checkbox" name="shared" checked=library.shared)
-			label.form-check-label.ms-3(for="shared") Shared with team
-		label.form-label.fw-bold(for="editable") Editing
-		select#editable.form-select.form-select-sm.mb-4(name="editable")
-			option(value="false" selected=!library.editable) Creator and account admins only
-			option(value="true" selected=library.editable) Assigned members may edit
-		label.form-label.fw-bold(for="members-select") Members
-		select#members-select.form-select.form-select-sm.mb-4(name="members" multiple disabled=!library.shared)
-			each member in team.members
-				option(value=member.user selected=library.members.map(String).includes(String(member.user)))= member.profile.email
-		label.form-label.fw-bold(for="groups-select") Groups
-		select#groups-select.form-select.form-select-sm.mb-4(name="groups" multiple disabled=!library.shared)
-			each group in team.groups
-				option(value=group._id selected=library.groups.map(String).includes(String(group._id)))= group.name
+		if ctx.entitlements.capabilities.sharing
+			.form-check.d-flex.align-items-center.ps-0.mb-4
+				input#shared.form-check-input.m-0(type="checkbox" name="shared" checked=library.shared)
+				label.form-check-label.ms-3(for="shared") Shared with team
+			label.form-label.fw-bold(for="editable") Editing
+			select#editable.form-select.form-select-sm.mb-4(name="editable")
+				option(value="false" selected=!library.editable) Creator and account admins only
+				option(value="true" selected=library.editable) Assigned members may edit
+			label.form-label.fw-bold(for="members-select") Members
+			select#members-select.form-select.form-select-sm.mb-4(name="members" multiple disabled=!library.shared)
+				each member in team.members
+					option(value=member.user selected=library.members.map(String).includes(String(member.user)))= member.profile.email
+			label.form-label.fw-bold(for="groups-select") Groups
+			select#groups-select.form-select.form-select-sm.mb-4(name="groups" multiple disabled=!library.shared)
+				each group in team.groups
+					option(value=group._id selected=library.groups.map(String).includes(String(group._id)))= group.name
+		else if library.shared
+			.alert.alert-warning Sharing is disabled. Saving this library removes its stored sharing grants.
 		button.btn.btn-outline-danger.btn-sm(type="button" data-delete-library=library._id) Move library to Trash
 	else
 		label.form-label.fw-bold(for="yaml-file") Import YAML (optional)

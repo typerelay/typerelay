@@ -30,11 +30,14 @@ h3.h6.fw-bold Security
 			.d-flex.justify-content-between
 				button#cancel-totp.btn.btn-outline-secondary.btn-sm(type="button") Cancel
 				button.btn.btn-primary.btn-sm Verify
-.card.p-4.mb-5
-	h6.fw-bold Passkeys
-	ul#passkeys.list-group.mb-3
-	form#passkey-add-form
-		label.form-label(for="passkey-name") Passkey name
-		input#passkey-name.form-control.form-control-sm.mb-3(name="name" value="My passkey" required maxlength="100")
-		.d-flex.justify-content-end
-			button.btn.btn-outline-secondary.btn-sm(type="submit") Add passkey
+if passkeysAvailable
+	.card.p-4.mb-5
+		h6.fw-bold Passkeys
+		ul#passkeys.list-group.mb-3
+		form#passkey-add-form
+			label.form-label(for="passkey-name") Passkey name
+			input#passkey-name.form-control.form-control-sm.mb-3(name="name" value="My passkey" required maxlength="100")
+			.d-flex.justify-content-end
+				button.btn.btn-outline-secondary.btn-sm(type="submit") Add passkey
+else
+	.alert.alert-secondary Passkeys are managed at app.typerelay.com because they are bound to that domain.

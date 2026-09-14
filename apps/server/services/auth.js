@@ -4,6 +4,7 @@ import { scopes } from '../api/catalog.js';
 import { createHash } from 'node:crypto';
 import { mongoose, User, Account, Member, Ticket, Device, Integration, IntegrationToken, OAuthClient } from '../model/index.js';
 import { Support } from './support.js';
+import { Billing } from './billing.js';
 
 export class Auth {
 	static origin = process.env.APP_URL || 'http://localhost:3040';
@@ -35,25 +36,30 @@ export class Auth {
 		if (!Auth.smtpTransports.has(key)) Auth.smtpTransports.set(key, nodemailer.createTransport({ host: server.host, port: server.port, secure: server.secure, auth: server.user ? { user: server.user, pass: server.pass } : undefined }));
 		return Auth.smtpTransports.get(key).sendMail({ ...message, from: server.from });
 	}
-	static async login(email, name) {
+	static async login(email, name, options = {}) {
 		email = Support.text(email, 254).toLowerCase();
 		Support.assert(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email), 'Enter a valid email');
 		const token = Support.token();
-		await Ticket.create({ hash: Support.hash(token), kind: 'login', email, data: name ? { name: Support.text(name) } : undefined, expires: new Date(Date.now() + 900000) });
-		await Auth.mail.sendMail({ to: email, subject: 'Sign in to TypeRelay', text: Auth.origin + '/auth/callback?token=' + token });
+		const origin = options.origin || Auth.origin;
+		const data = { ...(name ? { name: Support.text(name) } : {}), ...(options.account ? { account: String(options.account) } : {}), origin };
+		await Ticket.create({ hash: Support.hash(token), kind: 'login', email, data, expires: new Date(Date.now() + 900000) });
+		await Auth.mail.sendMail({ to: email, subject: 'Sign in to TypeRelay', text: origin + '/auth/callback?token=' + token });
 	}
 	static async consume(token) {
 		let user;
+		let account;
 		await mongoose.connection.transaction(async session => {
 			const ticket = await Ticket.findOneAndDelete({ hash: Support.hash(Support.text(token, 256)), kind: 'login', expires: { $gt: new Date() } }, { session }).lean();
 			Support.assert(ticket, 'Link expired or already used', 401);
 			user = await User.findOne({ email: ticket.email }).session(session).lean();
+			if (ticket.data?.account) Support.assert(user && await Member.exists({ account: ticket.data.account, user: user._id }).session(session), 'Account access denied', 403);
 			if (!user) {
 				[user] = await User.create([{ email: ticket.email, name: ticket.data?.name || ticket.email.split('@')[0] }], { session });
-				const [account] = await Account.create([{ name: user.name + '’s team' }], { session });
+				[account] = await Account.create([{ name: user.name + '’s team' }], { session });
 				await Member.create([{ account: account._id, user: user._id, role: 'owner' }], { session });
 			}
 		});
+		if (account) await Billing.initializeAccount(account, user).catch(error => console.error(`Stripe setup failed for new TypeRelay account: ${error.message}`));
 		return String(user._id);
 	}
 	static redirect(uri) {
@@ -63,6 +69,7 @@ export class Auth {
 	}
 	static async authorize(user, body) {
 		const ctx = await Support.context(user, body.account);
+		await Billing.assertDeviceEnrollment(ctx);
 		const redirect = Auth.redirect(body.redirect_uri);
 		Support.assert(body.client_id === 'typerelay-desktop' && body.code_challenge_method === 'S256' && /^[A-Za-z0-9_-]{43}$/.test(body.code_challenge), 'Invalid PKCE request');
 		Support.assert(typeof body.state === 'string' && body.state.length >= 20 && body.state.length <= 256, 'Invalid state');
@@ -82,14 +89,16 @@ export class Auth {
 				Support.assert(body.client_id === 'typerelay-desktop' && /^[A-Za-z0-9._~-]{43,128}$/.test(body.code_verifier), 'Invalid client or verifier');
 				const ticket = await Ticket.findOne({ hash: Support.hash(Support.text(body.code, 256)), kind: 'oauth', expires: { $gt: new Date() } }).session(session).lean();
 				Support.assert(ticket && ticket.data.redirect === Auth.redirect(body.redirect_uri) && ticket.data.challenge === createHash('sha256').update(body.code_verifier).digest('base64url'), 'Invalid authorization code', 401);
-				await Support.context(ticket.data.user, String(ticket.account), session);
+				const ctx = await Support.context(ticket.data.user, String(ticket.account), session);
+				await Billing.assertDeviceEnrollment(ctx, session);
 				await Ticket.deleteOne({ _id: ticket._id }, { session });
 				[device] = await Device.create([{ account: ticket.account, user: ticket.data.user, name: ticket.data.name }], { session });
 			} else {
 				Support.assert(body.grant_type === 'refresh_token', 'Unsupported grant');
 				device = await Device.findOne({ refresh: Support.hash(Support.text(body.refresh_token, 256)), refresh_expires: { $gt: new Date() }, revoked: false }).session(session).lean();
 				Support.assert(device, 'Invalid refresh token', 401);
-				await Support.context(String(device.user), String(device.account), session);
+				const ctx = await Support.context(String(device.user), String(device.account), session);
+				await Billing.assertDevice(ctx, device, session);
 			}
 			await Device.updateOne({ _id: device._id }, { $set: { access: Support.hash(access), access_expires: new Date(Date.now() + 900000), refresh: Support.hash(refresh), refresh_expires: new Date(Date.now() + 90 * 86400000) } }, { session });
 		});
@@ -98,7 +107,9 @@ export class Auth {
 	static async bearer(token) {
 		const device = await Device.findOne({ access: Support.hash(token), access_expires: { $gt: new Date() }, revoked: false }).lean();
 		Support.assert(device, 'Device authentication expired or revoked', 401);
-		return { ...await Support.context(String(device.user), String(device.account)), device: String(device._id) };
+		const ctx = await Support.context(String(device.user), String(device.account));
+		await Billing.assertDevice(ctx, device);
+		return { ...ctx, device: String(device._id) };
 	}
 	static scopes = scopes;
 	static apiResource() { return Auth.origin + '/api/v3'; }
@@ -108,6 +119,7 @@ export class Auth {
 		return [...new Set(scopes)].sort();
 	}
 	static async createIntegration(ctx, body) {
+		Billing.assertApi(ctx);
 		const days = Number(body.days || 90);
 		Support.assert(Number.isInteger(days) && days >= 1 && days <= 365, 'Expiry must be 1–365 days');
 		const token = 'tr_pat_' + Support.token();
@@ -125,6 +137,7 @@ export class Auth {
 		}
 		Support.assert(grant, 'Integration token expired, revoked or invalid for this resource', 401);
 		const ctx = await Support.context(String(grant.user), String(grant.account));
+		Billing.assertApi(ctx);
 		await Integration.updateOne({ _id: grant._id }, { $set: { last_used: new Date() } });
 		return { ...ctx, credential: String(grant._id), scopes: grant.scopes, grant };
 	}
@@ -152,6 +165,7 @@ export class Auth {
 		const { client, scopes } = await Auth.integrationRequest(body);
 		if (body.decision === 'deny') { const redirect = new URL(body.redirect_uri); redirect.searchParams.set('error', 'access_denied'); redirect.searchParams.set('state', body.state); return redirect.href; }
 		const ctx = await Support.context(user, body.account);
+		Billing.assertApi(ctx);
 		const code = Support.token();
 		await Ticket.create({ hash: Support.hash(code), kind: 'integration-code', account: ctx.account, expires: new Date(Date.now() + 300000), data: { user, client: client.client_id, name: client.name, scopes, resource: body.resource, redirect: body.redirect_uri, challenge: body.code_challenge } });
 		const url = new URL(body.redirect_uri); url.searchParams.set('code', code); url.searchParams.set('state', body.state);
@@ -170,13 +184,15 @@ export class Auth {
 				Support.assert(/^[A-Za-z0-9._~-]{43,128}$/.test(body.code_verifier || ''), 'Invalid verifier');
 				const ticket = await Ticket.findOneAndDelete({ hash: Support.hash(String(body.code || '')), kind: 'integration-code', expires: { $gt: new Date() } }, { session }).lean();
 				Support.assert(ticket && ticket.data.client === body.client_id && ticket.data.redirect === body.redirect_uri && ticket.data.resource === body.resource && ticket.data.challenge === createHash('sha256').update(body.code_verifier).digest('base64url'), 'Invalid authorization code, resource or verifier', 401);
-				await Support.context(ticket.data.user, String(ticket.account), session);
+				const ctx = await Support.context(ticket.data.user, String(ticket.account), session);
+				Billing.assertApi(ctx);
 				[grant] = await Integration.create([{ user: ticket.data.user, account: ticket.account, name: ticket.data.name, kind: 'oauth', client: body.client_id, resource: body.resource, scopes: ticket.data.scopes, expires: new Date(Date.now() + 90 * 86400000) }], { session });
 			} else {
 				Support.assert(body.grant_type === 'refresh_token', 'Unsupported grant');
 				grant = await Integration.findOne({ refresh: Support.hash(String(body.refresh_token || '')), client: body.client_id, resource: body.resource, revoked: false, refresh_expires: { $gt: new Date() }, expires: { $gt: new Date() } }).session(session).lean();
 				Support.assert(grant, 'Invalid refresh token or resource', 401);
-				await Support.context(String(grant.user), String(grant.account), session);
+				const ctx = await Support.context(String(grant.user), String(grant.account), session);
+				Billing.assertApi(ctx);
 				await Ticket.create([{ hash: Support.hash(body.refresh_token), kind: 'used-integration-refresh', data: { grant: grant._id }, expires: grant.expires }], { session });
 			}
 			await Integration.updateOne({ _id: grant._id }, { $set: { refresh: Support.hash(refresh), refresh_expires: grant.expires } }, { session });

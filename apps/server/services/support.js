@@ -1,9 +1,10 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { Account, Change, Group, Member } from '../model/index.js';
+import { Billing } from './billing.js';
 
 export class Fault extends Error {
-	constructor(status, message) { super(message); this.status = status; }
+	constructor(status, message, code = '', details = null) { super(message); this.status = status; this.code = code; this.details = details; }
 }
 export class Support {
 	static assert(value, message, status = 400) { if (!value) throw new Fault(status, message); }
@@ -16,8 +17,12 @@ export class Support {
 		Support.id(String(account));
 		const member = await Member.findOne({ user, account }).session(session || null).lean();
 		Support.assert(member, 'Account access denied', 403);
+		const record = await Account.findById(account).session(session || null).lean();
+		Support.assert(record, 'Account missing', 404);
+		const entitlements = Billing.entitlements(record);
+		if (Billing.enabled() && entitlements.plan !== 'team' && member.role !== 'owner') throw new Fault(403, 'This account requires the Team plan', 'plan_required', { capability: 'people', upgrade_url: '/#settings-subscription' });
 		const groups = await Group.find({ account, users: user }).session(session || null).lean();
-		return { user: String(user), account: String(account), role: member.role, groups: groups.map(group => String(group._id)) };
+		return { user: String(user), account: String(account), role: member.role, groups: groups.map(group => String(group._id)), plan: record.plan || 'free', entitlements };
 	}
 	static admin(ctx) { return ['owner', 'admin'].includes(ctx.role); }
 	static access(ctx, library) {

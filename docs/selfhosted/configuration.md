@@ -16,6 +16,8 @@ docker compose -f compose.prod.yml up -d
 
 `MCP_BASE_URL` is the public MCP host without `/mcp`; TypeRelay appends the resource path. `SMTP_SERVERS` accepts `name`, `host`, `port`, `secure`, `user`, `pass`, and `from`. Optional `APP_PORT` and `MCP_PORT` change the published ports from `3000` and `3002`. `API_BASE_URL` and `MONGO_URI` are wired internally by the production Compose file. Keep credentials outside Git and put both public services behind HTTPS.
 
+Self-hosted installations remain unrestricted. Do not set `TYPERELAY_HOSTED_EDITION=true` or `BILLING_ENABLED=true`; Stripe plans and hosted Cloudflare white-label provisioning are SaaS-only.
+
 
 The development application serves the compiled site at `http://localhost:3040/docs/`. Build it with `docker compose run --rm docs`. For a dedicated docs host, build with `docker compose run --rm -e TYPERELAY_DOCS_BASE=/ docs` and serve the output separately. Rebuild with the default base before serving it under the application again.
 

@@ -31,7 +31,12 @@ block content
 						button.btn-close(data-bs-dismiss="modal" aria-label="Close")
 					.modal-body.settings-body.p-0
 						nav.settings-nav.list-group.list-group-flush(role="tablist" aria-label="Settings sections" aria-orientation="vertical")
-							each label, key in {profile: 'Profile', security: 'Security', team: 'My team', devices: 'Connected devices', tokens: 'Access tokens'}
+							- var settingsSections = {profile: 'Profile', security: 'Security', team: 'My team', devices: 'Connected devices', tokens: 'Access tokens'}
+							if billingEnabled
+								- settingsSections.subscription = 'Subscription'
+								if ['owner', 'admin'].includes(ctx.role)
+									- settingsSections.whiteLabel = 'White-label'
+							each label, key in settingsSections
 								button.list-group-item.list-group-item-action(type="button" role="tab" id='settings-tab-' + key data-settings-tab=key aria-controls='settings-pane-' + key aria-selected=(key === 'profile').toString() tabindex=key === 'profile' ? '0' : '-1' class=key === 'profile' ? 'active' : '')= label
 						.settings-content
 							section.settings-pane(id="settings-pane-profile" role="tabpanel" aria-labelledby="settings-tab-profile" hidden=false)
@@ -48,53 +53,54 @@ block content
 								include ajax/security
 							section.settings-pane(id="settings-pane-team" role="tabpanel" aria-labelledby="settings-tab-team" hidden=true)
 								h3.h6.fw-bold Account and team
+								if !ctx.entitlements.capabilities.team
+									.alert.alert-warning Team management and sharing require Team. Existing extra members can be removed after a downgrade.
 								if ['owner', 'admin'].includes(ctx.role)
 									form#account-form.mb-3
 										label.form-label(for="account-name") Account name
 										input#account-name.form-control.form-control-sm.mb-3(name="name" value=account.name required)
 										.d-flex.justify-content-end
 											button.btn.btn-primary.btn-sm Save
-									form#invite-form.mb-3
-										label.form-label(for="invite-email") Invite by email
-										input#invite-email.form-control.form-control-sm.mb-3(name="email" type="email" required)
-										.d-flex.justify-content-end
-											button.btn.btn-primary.btn-sm Invite
+									if ctx.entitlements.capabilities.team
+										form#invite-form.mb-3
+											label.form-label(for="invite-email") Invite by email
+											input#invite-email.form-control.form-control-sm.mb-3(name="email" type="email" required)
+											.d-flex.justify-content-end
+												button.btn.btn-primary.btn-sm Invite
 								ul#invitations.list-group.mb-3
 									each invitation in team.invitations
 										include ajax/invitation
 								ul#members.list-group.mb-3
 									each member in team.members
 										include ajax/member
-								h3.h6.fw-bold Groups
-								ul#groups.list-group.mb-3
-									each group in team.groups
-										include ajax/group
-								if ['owner', 'admin'].includes(ctx.role)
-									button#new-group.btn.btn-outline-secondary.btn-sm.mb-5 New group
+								if ctx.entitlements.capabilities.team
+									h3.h6.fw-bold Groups
+									ul#groups.list-group.mb-3
+										each group in team.groups
+											include ajax/group
+									if ['owner', 'admin'].includes(ctx.role)
+										button#new-group.btn.btn-outline-secondary.btn-sm.mb-5 New group
 							section.settings-pane(id="settings-pane-devices" role="tabpanel" aria-labelledby="settings-tab-devices" hidden=true)
 								h3.h6.fw-bold Connected devices
 								ul#devices.list-group.mb-3
 							section.settings-pane(id="settings-pane-tokens" role="tabpanel" aria-labelledby="settings-tab-tokens" hidden=true)
 								h3.h6.fw-bold Access tokens and authorized integrations
+								if !ctx.entitlements.capabilities.api
+									.alert.alert-warning API and MCP access require Pro or Team. Existing tokens stay stored but cannot authenticate.
 								ul#access-tokens.list-group.mb-5
-								form#access-token-form
-									label.form-label(for="token-name") Name
-									input#token-name.form-control.form-control-sm.mb-3(name="name" required maxlength="100")
-									label.form-label(for="token-days") Expiry in days
-									input#token-days.form-control.form-control-sm.mb-3(name="days" type="number" min="1" max="365" value="90" required)
-									fieldset.mb-3
-										legend.h6 Permissions
-										each scope in integrationScopes
-											.form-check
-												input.form-check-input(type="checkbox" name="scopes" value=scope id='scope-' + scope checked=scope === 'content:read')
-												label.form-check-label(for='scope-' + scope)= scope
-									.d-flex.justify-content-between
-										button.btn.btn-outline-secondary.btn-sm(type="reset") Cancel
-										button.btn.btn-primary.btn-sm Create token
+								#access-token-form-container
+								if ctx.entitlements.capabilities.api
+									include ajax/access-token-form
 								div#token-secret.mb-3(hidden)
 									p Copy this token now. It will not be shown again.
 									code#token-secret-value
 									button#dismiss-token.btn.btn-outline-secondary.btn-sm.ms-3(type="button") Done
+							if billingEnabled
+								section.settings-pane(id="settings-pane-subscription" role="tabpanel" aria-labelledby="settings-tab-subscription" hidden=true)
+									include ajax/subscription
+								if ['owner', 'admin'].includes(ctx.role)
+									section.settings-pane(id="settings-pane-whiteLabel" role="tabpanel" aria-labelledby="settings-tab-whiteLabel" hidden=true)
+										include ajax/white-label
 		include ajax/template-fill
 		#form-modal.modal.fade(tabindex="-1" aria-label="Edit" data-bs-backdrop="static" data-bs-keyboard="false")
 			.modal-dialog.modal-lg.modal-dialog-scrollable
