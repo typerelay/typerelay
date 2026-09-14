@@ -28,11 +28,12 @@ services:
       ORIGIN: http://localhost:3040
       SMTP_HOST: mail
       SESSION_SECRET_FILE: /data/session-secret
+      DOCS_DIR: /documentation/.vitepress/dist
       MCP_SECRET_FILE: /integrations/mcp-secret
     volumes:
       - typerelay-server:/data
       - typerelay-integrations:/integrations
-      - ./docs/.vitepress/dist:/docs:ro
+      - ./docs:/documentation:ro
       - ./apps/server:/app
       - typerelay-node-modules:/app/node_modules
     healthcheck:
