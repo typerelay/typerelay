@@ -26,6 +26,7 @@ export class Server {
 		const mcpSecretPath = process.env.MCP_SECRET_FILE || '/data/mcp-secret';
 		try { writeFileSync(mcpSecretPath, Support.token(), { flag: 'wx', mode: 0o600 }); } catch (error) { if (error.code !== 'EEXIST') throw error; }
 		const app = express();
+		if (process.env.TRUST_PROXY === '1') app.set('trust proxy', 1);
 		app.set('view engine', 'pug');
 		app.set('views', './views');
 		app.use((req, res, next) => { res.locals.styleNonce = Support.token(); next(); });

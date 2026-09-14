@@ -39,6 +39,7 @@ export class TypeRelayMcp {
 	}
 	static app({ apiBase = process.env.API_BASE || 'http://server:3040', resource = process.env.MCP_ORIGIN || 'http://localhost:3041/mcp', issuer = process.env.APP_ORIGIN || 'http://localhost:3040', secret = () => readFileSync(process.env.MCP_SECRET_FILE || '/run/typerelay/mcp-secret', 'utf8').trim() } = {}) {
 		const app = express();
+		if (process.env.TRUST_PROXY === '1') app.set('trust proxy', 1);
 		app.disable('x-powered-by');
 		const origin = new URL(resource).origin;
 		const metadata = origin + '/.well-known/oauth-protected-resource' + new URL(resource).pathname;
