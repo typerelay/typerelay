@@ -42,7 +42,7 @@ impl Cli {
             }
             let timeout = if dirty { interval.saturating_sub(last_draw.elapsed()) } else { Duration::from_millis(250) };
             if event::poll(timeout)? {
-                let input = event::read()?;
+                let input = terminal::TerminalSession::normalize(event::read()?);
                 if matches!(&input, Event::Mouse(mouse) if mouse.kind == MouseEventKind::Moved) || matches!(&input, Event::Key(key) if key.kind == KeyEventKind::Release) { continue; }
                 app.handle(input);
                 dirty = true;

@@ -1,7 +1,9 @@
 use anyhow::Result;
-use ratatui::crossterm::{event::{EnableMouseCapture, DisableMouseCapture, EnableBracketedPaste, DisableBracketedPaste}, execute};
+use ratatui::crossterm::{event::{EnableMouseCapture, DisableMouseCapture, EnableBracketedPaste, DisableBracketedPaste, Event}, execute};
 #[cfg(not(target_os = "windows"))]
 use ratatui::crossterm::event::{PushKeyboardEnhancementFlags, PopKeyboardEnhancementFlags, KeyboardEnhancementFlags};
+#[cfg(target_os = "windows")]
+use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 use std::io::{IsTerminal, Write};
 use ratatui::crossterm::terminal::{enable_raw_mode, EnterAlternateScreen};
 
@@ -35,6 +37,30 @@ impl TerminalSession {
     }
     #[cfg(not(target_os = "windows"))]
     fn keyboard_flags() -> KeyboardEnhancementFlags { KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES }
+    #[cfg(not(target_os = "windows"))]
+    pub fn normalize(event: Event) -> Event { event }
+    #[cfg(target_os = "windows")]
+    pub fn normalize(mut event: Event) -> Event {
+        if let Event::Key(key) = &mut event && let KeyCode::Char(character) = key.code && key.modifiers.contains(KeyModifiers::SHIFT) { key.code = KeyCode::Char(Self::shifted_windows_character(character)); }
+        event
+    }
+    #[cfg(target_os = "windows")]
+    fn shifted_windows_character(character: char) -> char {
+        use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyboardLayout, MapVirtualKeyExW, ToUnicodeEx, VkKeyScanExW, MAPVK_VK_TO_VSC, VK_SHIFT};
+        use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+        if !character.is_ascii() { return character; }
+        unsafe {
+            let layout = GetKeyboardLayout(GetWindowThreadProcessId(GetForegroundWindow(), None));
+            let mapping = VkKeyScanExW(character as u16, layout);
+            if mapping == -1 || mapping & 0x0100 != 0 { return character; }
+            let virtual_key = u32::from(mapping as u16 & 0x00ff);
+            let scan_code = MapVirtualKeyExW(virtual_key, MAPVK_VK_TO_VSC, Some(layout));
+            let mut state = [0; 256]; state[usize::from(VK_SHIFT.0)] = 0x80;
+            let mut buffer = [0; 4];
+            let length = ToUnicodeEx(virtual_key, scan_code, &state, &mut buffer, 4, Some(layout));
+            if length == 1 { char::decode_utf16(buffer).next().and_then(|result|result.ok()).unwrap_or(character) } else { character }
+        }
+    }
     #[cfg(target_os = "windows")]
     fn title()->Result<Vec<u16>>{use windows::{Win32::System::Console::{GetConsoleTitleW,SetConsoleTitleW},core::w};let mut title=vec![0;32768];let length=unsafe{GetConsoleTitleW(&mut title)} as usize;title.truncate(length);title.push(0);unsafe{SetConsoleTitleW(w!("TypeRelay TUI"))?;}Ok(title)}
     pub fn connected() -> bool {
