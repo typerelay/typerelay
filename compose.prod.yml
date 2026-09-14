@@ -6,6 +6,20 @@ x-environment: &environment
   MCP_BASE_URL: ${MCP_BASE_URL}
   API_BASE_URL: http://app:3000
   MONGO_URI: mongodb://mongo:27017/typerelay?replicaSet=typerelay
+  MEMCACHED_SERVERS: ${MEMCACHED_SERVERS:-memcached:11211}
+  API_RATE_LIMIT_ENABLED: "${API_RATE_LIMIT_ENABLED:-true}"
+  API_RATE_LIMIT_WINDOW_MS: "${API_RATE_LIMIT_WINDOW_MS:-60000}"
+  API_RATE_LIMIT_GENERAL_PER_MINUTE: "${API_RATE_LIMIT_GENERAL_PER_MINUTE:-120}"
+  API_RATE_LIMIT_EXPENSIVE_PER_MINUTE: "${API_RATE_LIMIT_EXPENSIVE_PER_MINUTE:-60}"
+  API_RATE_LIMIT_UPLOAD_PER_MINUTE: "${API_RATE_LIMIT_UPLOAD_PER_MINUTE:-20}"
+  MCP_RATE_LIMIT_ENABLED: "${MCP_RATE_LIMIT_ENABLED:-true}"
+  MCP_RATE_LIMIT_WINDOW_MS: "${MCP_RATE_LIMIT_WINDOW_MS:-60000}"
+  MCP_IP_FLOOD_PER_MINUTE: "${MCP_IP_FLOOD_PER_MINUTE:-300}"
+  MCP_UNAUTH_PER_MINUTE: "${MCP_UNAUTH_PER_MINUTE:-30}"
+  MCP_AUTH_PER_MINUTE: "${MCP_AUTH_PER_MINUTE:-120}"
+  MCP_HEAVY_TOOL_PER_MINUTE: "${MCP_HEAVY_TOOL_PER_MINUTE:-30}"
+  MCP_TOOL_CONCURRENCY: "${MCP_TOOL_CONCURRENCY:-3}"
+  MCP_HEAVY_TOOL_CONCURRENCY: "${MCP_HEAVY_TOOL_CONCURRENCY:-1}"
   SESSION_SECRET: ${SESSION_SECRET}
   JWT_SECRET: ${JWT_SECRET}
   SMTP_FROM: ${SMTP_FROM}
@@ -38,6 +52,8 @@ services:
     depends_on:
       mongo:
         condition: service_healthy
+      memcached:
+        condition: service_started
 
   scheduler:
     <<: *app
@@ -71,6 +87,13 @@ services:
     depends_on:
       app:
         condition: service_healthy
+      memcached:
+        condition: service_started
+
+  memcached:
+    image: memcached:1.6.45-trixie@sha256:75c93cc91e76853da7c029e74d6e8dbd44774dd3713c93be8cd1971ad26120a4
+    command: [memcached, -m, "256", -I, 4m, -c, "1024", -t, "2"]
+    restart: unless-stopped
 
   mongo:
     image: mongo:8

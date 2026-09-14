@@ -1,11 +1,12 @@
 import cachePackage from '@managani/cache';
 import { rateLimit } from 'express-rate-limit';
-import { RateLimitSupport } from '../shared/rate_limit_support.js';
+import { RateLimitLogger, RateLimitSupport } from './rate_limit_support.js';
 
 const { createCache, createRateLimitStore } = cachePackage;
 
 export class ApiRateLimit {
 	static cache;
+	static storeFactory;
 	static getConfig() {
 		return {
 			enabled: RateLimitSupport.boolean('API_RATE_LIMIT_ENABLED', 'ApiRateLimit'),
@@ -32,10 +33,11 @@ export class ApiRateLimit {
 		return (method === 'GET' && /^\/libraries\/[^/]+\/export$/.test(path)) || (method === 'POST' && ['/snippets/batch', '/trash/action', '/trash/purge', '/trash/empty'].includes(path));
 	}
 	static getCache() {
-		if (!ApiRateLimit.cache) ApiRateLimit.cache = createCache({ servers: RateLimitSupport.cacheServers(), namespace: `${process.env.APP_INSTANCE || 'typerelay'}:v${process.env.APP_VERSION || 1}`, logger: console, l1: { maxBytes: 16 * 1024 * 1024, maxTtlMs: 2000 } });
+		if (!ApiRateLimit.cache) ApiRateLimit.cache = createCache({ servers: RateLimitSupport.cacheServers(), namespace: `${process.env.APP_INSTANCE || 'typerelay'}:v${process.env.APP_VERSION || 1}`, logger: new RateLimitLogger('api'), l1: { maxBytes: 16 * 1024 * 1024, maxTtlMs: 2000 } });
 		return ApiRateLimit.cache;
 	}
 	static getStore(prefix, windowMs) {
+		if (ApiRateLimit.storeFactory) return ApiRateLimit.storeFactory(prefix, windowMs);
 		try { return createRateLimitStore({ cache: ApiRateLimit.getCache(), prefix: `rl:${prefix}:`, windowMs }); }
 		catch (error) { console.warn(JSON.stringify({ event: 'api_rate_limit_store_fallback', prefix, error: error.message })); return undefined; }
 	}
