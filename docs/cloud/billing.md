@@ -6,9 +6,9 @@ Free includes one person, 250 active snippets, one active library, and one conne
 
 Team includes five prepaid seats. Purchase additional seats in Subscription before inviting more people. Seat reductions and Team-to-Pro changes take effect at renewal after current members and invitations fit the target.
 
-The no-card Pro trial becomes paid immediately when Checkout completes. Without Checkout, it returns to Free at expiry. A canceled paid subscription returns to Free after Stripe confirms the subscription ended.
+The no-card Pro trial becomes paid immediately when Checkout completes. Without Checkout, request-time checks end Pro access at the exact expiry timestamp and a protected scheduler persists the return to Free every five minutes. Trial owners are enrolled into the configured Helpmonks sequence by a durable worker with twelve attempts at five-minute intervals. A canceled paid subscription returns to Free after Stripe confirms the subscription ended.
 
-Stripe Tax must not be enabled until the live Stripe account has the appropriate active tax registration. TypeRelay Products use the business-use hosted SaaS tax code and tax-exclusive Prices.
+Stripe Tax is enabled for Checkout. Keep the live account's registrations active. TypeRelay Products use the business-use hosted SaaS tax code and tax-exclusive Prices.
 
 ## White-label domains
 

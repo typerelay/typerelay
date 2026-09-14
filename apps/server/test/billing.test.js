@@ -9,6 +9,7 @@ import { Support } from '../services/support.js';
 import { Auth } from '../services/auth.js';
 import { Libraries } from '../services/libraries.js';
 import { StripeProvisioner } from '../scripts/provision-stripe.js';
+import { Helpmonks } from '../services/helpmonks.js';
 
 class Fixture {
 	static environment = {};
@@ -19,8 +20,8 @@ class Fixture {
 }
 
 before(async () => {
-	for (const key of ['TYPERELAY_HOSTED_EDITION', 'BILLING_ENABLED', 'STRIPE_SECRET_KEY', 'STRIPE_FREE_PRICE_ID', 'STRIPE_PRO_PRICE_ID', 'STRIPE_TEAM_PRICE_ID', 'STRIPE_PORTAL_CONFIG_ID', 'WHITE_LABEL_ENABLED', 'WHITE_LABEL_CNAME_TARGET', 'WHITE_LABEL_ASSETS_DIR', 'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ZONE_ID']) Fixture.environment[key] = process.env[key];
-	Object.assign(process.env, { TYPERELAY_HOSTED_EDITION: 'true', BILLING_ENABLED: 'true', STRIPE_SECRET_KEY: 'sk_test_fixture', STRIPE_FREE_PRICE_ID: 'price_free', STRIPE_PRO_PRICE_ID: 'price_pro', STRIPE_TEAM_PRICE_ID: 'price_team', STRIPE_PORTAL_CONFIG_ID: 'portal_account', WHITE_LABEL_ENABLED: 'true', WHITE_LABEL_CNAME_TARGET: 'custom.typerelay.com', CLOUDFLARE_API_TOKEN: 'cloudflare-fixture', CLOUDFLARE_ZONE_ID: 'zone-fixture' });
+	for (const key of ['TYPERELAY_HOSTED_EDITION', 'BILLING_ENABLED', 'STRIPE_SECRET_KEY', 'STRIPE_FREE_PRICE_ID', 'STRIPE_PRO_PRICE_ID', 'STRIPE_TEAM_PRICE_ID', 'STRIPE_PORTAL_CONFIG_ID', 'WHITE_LABEL_ENABLED', 'WHITE_LABEL_CNAME_TARGET', 'WHITE_LABEL_ASSETS_DIR', 'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ZONE_ID', 'HELPMONKS_API_URL', 'HELPMONKS_SIGNUP_API_URL', 'HELPMONKS_SIGNUP_HOST_ID', 'HELPMONKS_SIGNUP_SEQUENCE_ID']) Fixture.environment[key] = process.env[key];
+	Object.assign(process.env, { TYPERELAY_HOSTED_EDITION: 'true', BILLING_ENABLED: 'true', STRIPE_SECRET_KEY: 'sk_test_fixture', STRIPE_FREE_PRICE_ID: 'price_free', STRIPE_PRO_PRICE_ID: 'price_pro', STRIPE_TEAM_PRICE_ID: 'price_team', STRIPE_PORTAL_CONFIG_ID: 'portal_account', WHITE_LABEL_ENABLED: 'true', WHITE_LABEL_CNAME_TARGET: 'custom.typerelay.com', CLOUDFLARE_API_TOKEN: 'cloudflare-fixture', CLOUDFLARE_ZONE_ID: 'zone-fixture', HELPMONKS_API_URL: 'http://helpmonks-general.test', HELPMONKS_SIGNUP_API_URL: 'http://helpmonks-signup.test', HELPMONKS_SIGNUP_HOST_ID: '53837271b7b1cbce6da6ce06', HELPMONKS_SIGNUP_SEQUENCE_ID: '6a8694a0e4e1989c9dafdbf2' });
 	await mongoose.connect(process.env.MONGO_URI.replace('/typerelay?', '/typerelay_billing_test?'));
 	await mongoose.connection.dropDatabase();
 	await Promise.all(Object.values(mongoose.models).map(model => model.init()));
@@ -65,6 +66,13 @@ test('Free resource gates reject a second library and second machine', async () 
 test('one-time Pro trial unlocks API and machines, then expires to Free', async () => {
 	const startedAt = new Date();
 	const account = await Billing.startTrial(Fixture.account._id, startedAt);
+	assert.equal(account.billing.helpmonks_sequence.status, 'pending');
+	let enrollmentRequest;
+	const enrollment = await Helpmonks.enrollTrialUsers(startedAt, { fetch: async (url, options) => { enrollmentRequest = { url, options }; return { ok: true, status: 200, json: async () => ({ success: true, results: { _id: '6a8697777777777777777777' }, sequence_enrollment: { campaign_id: process.env.HELPMONKS_SIGNUP_SEQUENCE_ID } }) }; } });
+	assert.deepEqual(enrollment, { checked: 1, enrolled: 1, retrying: 0, failed: 0, configured: true });
+	assert.equal(enrollmentRequest.url, 'http://helpmonks-signup.test/api/v1/trusted/company_user/create');
+	assert.deepEqual(JSON.parse(enrollmentRequest.options.body), { customer: { email: Fixture.owner.email, labels: [] }, host_id: process.env.HELPMONKS_SIGNUP_HOST_ID, campaign_id: process.env.HELPMONKS_SIGNUP_SEQUENCE_ID });
+	assert.equal((await Account.findById(Fixture.account._id).lean()).billing.helpmonks_sequence.status, 'completed');
 	const trial = Billing.entitlements(account, new Date(startedAt.getTime() + 86400000));
 	assert.equal(trial.plan, 'pro');
 	assert.equal(trial.trial, true);
@@ -83,6 +91,23 @@ test('one-time Pro trial unlocks API and machines, then expires to Free', async 
 	await assert.rejects(Auth.integration(`Token ${integration.token}`, Auth.mcpResource()), error => error.code === 'plan_required');
 	await assert.rejects(Billing.assertDevice(await Fixture.context(), secondary), error => error.code === 'plan_limit');
 	await assert.rejects(Billing.startTrial(Fixture.account._id), error => error.code === 'trial_unavailable');
+});
+
+test('Helpmonks trial enrollment retries every five minutes and fails after twelve attempts', async () => {
+	const user = await User.create({ email: `${randomUUID()}@example.test`, name: 'Retry owner' });
+	const now = new Date();
+	const account = await Account.create({ name: 'Retry account', billing: { helpmonks_sequence: { status: 'pending', attempts: 10, next_attempt_at: now } } });
+	await Member.create({ account: account._id, user: user._id, role: 'owner' });
+	const unavailable = async () => ({ ok: false, status: 503, json: async () => ({}) });
+	assert.deepEqual(await Helpmonks.enrollTrialUsers(now, { fetch: unavailable }), { checked: 1, enrolled: 0, retrying: 1, failed: 0, configured: true });
+	let stored = await Account.findById(account._id).lean();
+	assert.equal(stored.billing.helpmonks_sequence.attempts, 11);
+	assert.equal(stored.billing.helpmonks_sequence.next_attempt_at.getTime(), now.getTime() + Helpmonks.retryDelay);
+	assert.deepEqual(await Helpmonks.enrollTrialUsers(new Date(now.getTime() + Helpmonks.retryDelay), { fetch: unavailable }), { checked: 1, enrolled: 0, retrying: 0, failed: 1, configured: true });
+	stored = await Account.findById(account._id).lean();
+	assert.equal(stored.billing.helpmonks_sequence.status, 'failed');
+	assert.equal(stored.billing.helpmonks_sequence.attempts, 12);
+	assert.equal(Helpmonks.configuration({ env: { HELPMONKS_API_URL: 'http://fallback.test' } }).apiUrl, 'http://fallback.test');
 });
 
 test('new Free account gets one Stripe customer and tracking subscription', async () => {
