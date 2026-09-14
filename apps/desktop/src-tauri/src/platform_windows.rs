@@ -1,45 +1,94 @@
-use anyhow::{Result, ensure};
-use std::{sync::Arc,os::windows::io::{OwnedHandle,FromRawHandle}};
+use anyhow::{Context, Result, ensure};
+use std::{cell::RefCell,path::PathBuf,sync::{Arc,mpsc::{Receiver,SyncSender,sync_channel}},os::windows::io::{OwnedHandle,FromRawHandle},time::Duration};
+use typerelay_client::{database::DatabaseSnapshot,settings::SettingsStore};
+use typerelay_core::{Engine,Expansion,Input};
 use windows::Win32::System::Threading::{OpenProcess,PROCESS_QUERY_LIMITED_INFORMATION};
-use windows::Win32::{Foundation::{HWND,RECT}, UI::{WindowsAndMessaging::{GetForegroundWindow,GetWindowRect,GetClassNameW,GetWindowThreadProcessId,SetForegroundWindow,IsWindow}, Input::KeyboardAndMouse::GetAsyncKeyState}};
+use windows::Win32::System::{Com::{DVASPECT_CONTENT,FORMATETC,IDataObject,STGMEDIUM,TYMED_HGLOBAL},Memory::{GlobalLock,GlobalSize,GlobalUnlock},Ole::{OleGetClipboard,OleInitialize,OleUninitialize,ReleaseStgMedium}};
+use windows::Win32::{Foundation::{HWND,LPARAM,LRESULT,RECT,WPARAM}, UI::{WindowsAndMessaging::{CallNextHookEx,DispatchMessageW,GetForegroundWindow,GetMessageW,GetWindowRect,GetWindowTextW,GetClassNameW,GetWindowThreadProcessId,IsWindow,KBDLLHOOKSTRUCT,KillTimer,LLKHF_INJECTED,MSG,SetForegroundWindow,SetTimer,SetWindowsHookExW,TranslateMessage,UnhookWindowsHookEx,WH_KEYBOARD_LL,WM_KEYDOWN,WM_KEYUP,WM_SYSKEYDOWN,WM_SYSKEYUP,WM_TIMER,HHOOK}, Input::KeyboardAndMouse::{GetAsyncKeyState,GetKeyState,VK_CAPITAL,VK_CONTROL,VK_LWIN,VK_MENU,VK_RWIN,VK_SHIFT}}};
 #[derive(Clone,Debug)]
 pub struct Target { handle: isize, pid: u32, _process: Arc<OwnedHandle>, pub bounds: Option<(i32,i32,u32,u32)> }
 impl Target {
-    pub fn capture() -> Result<Self> { unsafe { let window = GetForegroundWindow(); let mut pid=0; GetWindowThreadProcessId(window,Some(&mut pid)); ensure!(!window.0.is_null() && pid != std::process::id(),"Choose another application first"); let mut class=[0u16;256]; let len=GetClassNameW(window,&mut class); let class=String::from_utf16_lossy(&class[..len as usize]); ensure!(!["Shell_TrayWnd","NotifyIconOverflowWindow","#32768"].contains(&class.as_str()),"Tray has focus"); let mut rect=RECT::default(); GetWindowRect(window,&mut rect)?; let process=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,false,pid)?; let process=OwnedHandle::from_raw_handle(process.0); Ok(Self { handle: window.0 as isize,pid,_process:Arc::new(process),bounds:Some((rect.left,rect.top,(rect.right-rect.left).max(1) as u32,(rect.bottom-rect.top).max(1) as u32)) }) } }
+    pub fn capture() -> Result<Self> { unsafe { let window = GetForegroundWindow(); let mut pid=0; GetWindowThreadProcessId(window,Some(&mut pid)); ensure!(!window.0.is_null() && pid != std::process::id(),"Choose another application first"); let mut class=[0u16;256]; let len=GetClassNameW(window,&mut class); let class=String::from_utf16_lossy(&class[..len as usize]); ensure!(!["Shell_TrayWnd","NotifyIconOverflowWindow","#32768"].contains(&class.as_str()),"Tray has focus");let mut title=[0u16;256];let length=GetWindowTextW(window,&mut title);ensure!(!String::from_utf16_lossy(&title[..length.max(0) as usize]).starts_with("TypeRelay TUI"),"Expansion is paused in TypeRelay TUI"); let mut rect=RECT::default(); GetWindowRect(window,&mut rect)?; let process=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,false,pid)?; let process=OwnedHandle::from_raw_handle(process.0); Ok(Self { handle: window.0 as isize,pid,_process:Arc::new(process),bounds:Some((rect.left,rect.top,(rect.right-rect.left).max(1) as u32,(rect.bottom-rect.top).max(1) as u32)) }) } }
     fn valid(&self) -> bool { unsafe { let hwnd=HWND(self.handle as *mut _); let mut pid=0; GetWindowThreadProcessId(hwnd,Some(&mut pid)); IsWindow(Some(hwnd)).as_bool() && pid == self.pid } }
     pub fn restore(&self) -> Result<()> { ensure!(self.valid(),"Original window closed"); unsafe { let _ = SetForegroundWindow(HWND(self.handle as *mut _)); } for _ in 0..40 { if self.focused()? { return Ok(()); } std::thread::sleep(std::time::Duration::from_millis(15)); } anyhow::bail!("Windows refused focus restoration; use Copy") }
     pub fn focused(&self) -> Result<bool> { Ok(self.valid() && unsafe { GetForegroundWindow().0 as isize == self.handle }) }
 }
-pub fn keys_down() -> bool { [0x10,0x11,0x12,0x5b,0x5c,0x0d,0xbc].iter().any(|key|unsafe { GetAsyncKeyState(*key) < 0 }) }
+pub fn keys_down() -> bool { [0x10,0x11,0x12,0x5b,0x5c,0x0d,0x20,0xbc].iter().any(|key|unsafe { GetAsyncKeyState(*key) < 0 }) }
 pub fn fallback_allowed()->bool { unsafe { let window=GetForegroundWindow();let mut pid=0;GetWindowThreadProcessId(window,Some(&mut pid));let mut class=[0u16;256];let length=GetClassNameW(window,&mut class);pid==std::process::id() || ["Shell_TrayWnd","NotifyIconOverflowWindow","#32768"].contains(&String::from_utf16_lossy(&class[..length as usize]).as_str()) } }
 
+pub struct ExpansionRequest { pub target:Target, pub expansion:Expansion }
+struct HookState { store:DatabaseSnapshot, settings:SettingsStore, engine:Engine, target:Option<Target>, sender:SyncSender<ExpansionRequest>, suppress_space:bool }
+thread_local! { static HOOK_STATE:RefCell<Option<HookState>>=const{RefCell::new(None)}; }
+impl HookState {
+    fn new(directory:PathBuf,settings_path:PathBuf,sender:SyncSender<ExpansionRequest>)->Result<Self>{let store=DatabaseSnapshot::open(&directory)?;let settings=SettingsStore::open(settings_path)?;let mut engine=Engine::new(store.snapshot.clone());engine.set_prefix(&settings.settings.trigger_prefix).map_err(anyhow::Error::msg)?;Ok(Self{store,settings,engine,target:None,sender,suppress_space:false})}
+    fn input(vk:u32)->Input {match vk{0x08=>Input::Backspace,0x20=>Input::Space,0x30..=0x39=>Input::Character(char::from_u32(vk).unwrap()),0x41..=0x5a=>Input::Character(char::from_u32(vk+32).unwrap()),0xbd=>Input::Character('-'),0xbc=>Input::Character(','),0xba=>Input::Character(';'),0xbe=>Input::Character('.'),0xbf=>Input::Character('/'),0xde=>Input::Character('\''),0xdb=>Input::Character('['),0xdd=>Input::Character(']'),0xdc=>Input::Character('\\'),0xc0=>Input::Character('`'),0xbb=>Input::Character('='),_=>Input::Cancel}}
+    fn modified()->bool {unsafe{[VK_SHIFT,VK_CONTROL,VK_MENU,VK_LWIN,VK_RWIN].iter().any(|key|GetAsyncKeyState(key.0 as i32)<0)||GetKeyState(VK_CAPITAL.0 as i32)&1!=0}}
+    fn key(&mut self,vk:u32,down:bool)->bool {
+        if !down {if self.suppress_space&&vk==0x20{self.suppress_space=false;return true;}return false;}
+        if Self::modified(){self.engine.feed(Input::Cancel);self.target=None;return false;}
+        if self.target.as_ref().is_some_and(|target|target.focused().ok()!=Some(true)){self.engine.feed(Input::Cancel);self.target=None;}
+        let input=Self::input(vk);
+        if matches!(input,Input::Character(character)if character==self.engine.prefix()){self.target=Target::capture().ok();}
+        if self.target.is_none(){self.engine.feed(Input::Cancel);return false;}
+        let expansion=self.engine.feed(input);
+        if let Some(expansion)=expansion&&let Some(target)=self.target.take()&&target.focused().ok()==Some(true)&&self.sender.try_send(ExpansionRequest{target,expansion}).is_ok(){self.suppress_space=true;return true;}
+        if matches!(input,Input::Cancel|Input::Space){self.target=None;}
+        false
+    }
+    fn reload(&mut self){
+        if let Ok(Some(snapshot))=self.store.reload(){self.engine.replace_snapshot(snapshot);self.target=None;}
+        if let Ok(true)=self.settings.reload(){let _=self.engine.set_prefix(&self.settings.settings.trigger_prefix);self.target=None;}
+    }
+}
+struct Hook(HHOOK);
+impl Drop for Hook {fn drop(&mut self){unsafe{let _=UnhookWindowsHookEx(self.0);}}}
+pub struct ExpansionSession;
+impl ExpansionSession {
+    pub fn start(directory:PathBuf,settings:PathBuf)->Result<Receiver<ExpansionRequest>>{
+        let (sender,receiver)=sync_channel(1);let (ready_sender,ready_receiver)=sync_channel(1);
+        std::thread::spawn(move||{let result=Self::run(directory,settings,sender,ready_sender.clone());if let Err(error)=result{let _=ready_sender.try_send(Err(error));}});
+        ready_receiver.recv_timeout(Duration::from_secs(3)).context("Windows expansion hook did not start")??;Ok(receiver)
+    }
+    fn run(directory:PathBuf,settings:PathBuf,sender:SyncSender<ExpansionRequest>,ready:SyncSender<Result<()>>)->Result<()>{
+        let state=HookState::new(directory,settings,sender)?;HOOK_STATE.with(|current|current.replace(Some(state)));
+        let hook=Hook(unsafe{SetWindowsHookExW(WH_KEYBOARD_LL,Some(Self::callback),None,0)}?);
+        let timer=unsafe{SetTimer(None,1,500,None)};ensure!(timer!=0,"Cannot start Windows expansion reload timer");
+        let _=ready.send(Ok(()));let mut message=MSG::default();
+        loop {let result=unsafe{GetMessageW(&mut message,None,0,0)}.0;if result==0{break;}ensure!(result>0,"Windows expansion event loop failed");if message.message==WM_TIMER{HOOK_STATE.with(|state|{if let Ok(mut state)=state.try_borrow_mut()&&let Some(state)=state.as_mut(){state.reload();}});}
+            unsafe{let _=TranslateMessage(&message);DispatchMessageW(&message);}
+        }
+        unsafe{let _=KillTimer(None,timer);}HOOK_STATE.with(|state|state.replace(None));drop(hook);Ok(())
+    }
+    unsafe extern "system" fn callback(code:i32,wparam:WPARAM,lparam:LPARAM)->LRESULT {
+        if code>=0 {let event=unsafe{&*(lparam.0 as *const KBDLLHOOKSTRUCT)};if !event.flags.contains(LLKHF_INJECTED){let message=wparam.0 as u32;let down=message==WM_KEYDOWN||message==WM_SYSKEYDOWN;let up=message==WM_KEYUP||message==WM_SYSKEYUP;if (down||up)&&HOOK_STATE.with(|state|state.try_borrow_mut().ok().and_then(|mut state|state.as_mut().map(|state|state.key(event.vkCode,down))).unwrap_or(false)){return LRESULT(1);}}}
+        unsafe{CallNextHookEx(None,code,wparam,lparam)}
+    }
+}
+
+struct Ole;
+impl Ole {fn enter()->Result<Self>{unsafe{OleInitialize(None).context("Cannot initialize Windows clipboard")?;}Ok(Self)}}
+impl Drop for Ole {fn drop(&mut self){unsafe{OleUninitialize();}}}
+struct Medium(STGMEDIUM);
+impl Drop for Medium {fn drop(&mut self){unsafe{ReleaseStgMedium(&mut self.0);}}}
 pub struct ClipboardLease { saved:Vec<(u32,Vec<u8>)>, marker_format:u32, marker:Vec<u8>, active:bool }
 impl ClipboardLease {
+    fn read(source:&IDataObject,format:u32)->Result<Vec<u8>>{let request=FORMATETC{cfFormat:u16::try_from(format)?,ptd:std::ptr::null_mut(),dwAspect:DVASPECT_CONTENT.0,lindex:-1,tymed:TYMED_HGLOBAL.0 as u32};let medium=Medium(unsafe{source.GetData(&request)}.with_context(||format!("Cannot preserve clipboard format {format}"))?);ensure!(medium.0.tymed==TYMED_HGLOBAL.0 as u32,"Clipboard format {format} is not movable memory");let handle=unsafe{medium.0.u.hGlobal};let size=unsafe{GlobalSize(handle)};ensure!(size>0,"Clipboard format {format} is empty");let pointer=unsafe{GlobalLock(handle)};ensure!(!pointer.is_null(),"Cannot lock clipboard format {format}");let bytes=unsafe{std::slice::from_raw_parts(pointer.cast::<u8>(),size)}.to_vec();let _=unsafe{GlobalUnlock(handle)};Ok(bytes)}
+    fn write(saved:&[(u32,Vec<u8>)])->Result<()>{use clipboard_win::raw;for (format,bytes) in saved{raw::set_without_clear(*format,bytes).map_err(|e|anyhow::anyhow!("Clipboard restoration failed for format {format}: {e}"))?;}Ok(())}
     pub fn publish(text:String)->Result<Self> {
         use clipboard_win::{Clipboard,raw,options::NoClear};
-        let _lock=Clipboard::new_attempts(10).map_err(|e|anyhow::anyhow!("Clipboard is busy: {e}"))?;
-        let formats:Vec<_>=raw::EnumFormats::new().collect();
-        ensure!(formats.len()<=64,"Too many clipboard formats; use Copy");
-        let mut saved=Vec::new();let mut total=0;
-        for format in formats {
-            ensure!([1,7,8,13,15,16,17].contains(&format) || format>=0xc000,"Clipboard contains a native format that cannot be preserved; use Copy");
-            total+=raw::size(format).map(|size|size.get()).unwrap_or(0);ensure!(total<=16*1024*1024,"Clipboard too large to preserve; use Copy");
-            let mut bytes=Vec::new();raw::get_vec(format,&mut bytes).map_err(|e|anyhow::anyhow!("Cannot preserve clipboard format {format}: {e}"))?;
-            saved.push((format,bytes));
-        }
         let marker_format=clipboard_win::register_format("com.typerelay.clipboard-owner").ok_or_else(||anyhow::anyhow!("Cannot register clipboard marker"))?.get();
+        let formats={let _lock=Clipboard::new_attempts(10).map_err(|e|anyhow::anyhow!("Clipboard is busy: {e}"))?;raw::EnumFormats::new().collect::<Vec<_>>()};ensure!(formats.len()<=64,"Too many clipboard formats; use Copy");
+        let _ole=Ole::enter()?;let source=if formats.is_empty(){None}else{Some(unsafe{OleGetClipboard()}.context("Cannot preserve Windows clipboard")?)};let mut saved=Vec::new();let mut total=0;
+        for format in formats{ensure!([1,7,8,13,15,16,17].contains(&format)||format>=0xc000,"Clipboard contains a native format that cannot be preserved; use Copy");let bytes=Self::read(source.as_ref().unwrap(),format)?;total+=bytes.len();ensure!(total<=16*1024*1024,"Clipboard too large to preserve; use Copy");saved.push((format,bytes));}
         let marker=uuid::Uuid::new_v4().to_string().into_bytes();
-        let result=(||{raw::empty()?;raw::set_string_with(&text,NoClear)?;raw::set_without_clear(marker_format,&marker)})();
-        if let Err(error)=result {let _=raw::empty();for (format,bytes) in &saved{let _=raw::set_without_clear(*format,bytes);}return Err(anyhow::anyhow!("Clipboard write failed: {error}"));}
+        let result=(||->Result<()>{let _lock=Clipboard::new_attempts(10).map_err(|e|anyhow::anyhow!("Clipboard is busy: {e}"))?;raw::empty().map_err(|e|anyhow::anyhow!("Clipboard write failed: {e}"))?;let result=(||{raw::set_string_with(&text,NoClear)?;raw::set_without_clear(marker_format,&marker)})();if let Err(error)=result{let _=raw::empty();let _=Self::write(&saved);return Err(anyhow::anyhow!("Clipboard write failed: {error}"));}Ok(())})();result?;
         Ok(Self{saved,marker_format,marker,active:true})
     }
     pub fn restore(&mut self)->Result<()> {
         use clipboard_win::{Clipboard,raw};
         if !self.active{return Ok(());}
-        let _lock=Clipboard::new_attempts(10).map_err(|e|anyhow::anyhow!("Cannot restore busy clipboard: {e}"))?;
-        let mut marker=Vec::new();
-        if raw::get_vec(self.marker_format,&mut marker).is_ok() && marker==self.marker {raw::empty().map_err(|e|anyhow::anyhow!("{e}"))?;for (format,bytes) in &self.saved{raw::set_without_clear(*format,bytes).map_err(|e|anyhow::anyhow!("Clipboard restoration failed: {e}"))?;}}
-        self.active=false;Ok(())
+        let owned=(||{let _lock=Clipboard::new_attempts(10).map_err(|e|anyhow::anyhow!("Cannot inspect busy clipboard: {e}"))?;let mut marker=Vec::new();Ok::<_,anyhow::Error>(raw::get_vec(self.marker_format,&mut marker).is_ok()&&marker==self.marker)})();
+        let result=owned.and_then(|owned|if owned{let _lock=Clipboard::new_attempts(10).map_err(|e|anyhow::anyhow!("Cannot restore busy clipboard: {e}"))?;raw::empty().map_err(|e|anyhow::anyhow!("Cannot clear TypeRelay clipboard: {e}"))?;Self::write(&self.saved)}else{Ok(())});self.active=false;result
     }
 }
 impl Drop for ClipboardLease {fn drop(&mut self){let _=self.restore();}}

@@ -44,6 +44,14 @@ test('late responses are ignored; keyboard selection, Copy and Escape use explic
  }finally{f.dom.window.close();}
 });
 
+test('one result click inserts the clicked snippet',async()=>{
+ const f=await Fixture.create();try{
+  const search=f.panel.search(f.panel.sequence);f.pending[0].resolve([Fixture.hit('one'),Fixture.hit('two')]);await search;
+  f.panel.list.children[1].click();await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(f.calls.find(call=>call.name==='insert').args.hit.id,'two');
+ }finally{f.dom.window.close();}
+});
+
 test('settings mode reaches native focus policy from tray and Back',async()=>{
  const f=await Fixture.create();try{
   await f.panel.settings(true);

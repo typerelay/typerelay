@@ -12,11 +12,19 @@ impl Write for TerminalOutput {
 }
 pub type Terminal = ratatui::Terminal<ratatui::backend::CrosstermBackend<TerminalOutput>>;
 
-pub struct TerminalSession;
+pub struct TerminalSession {
+    #[cfg(target_os = "windows")]
+    title: Vec<u16>,
+}
 impl TerminalSession {
     pub fn enter() -> Result<(Self, Terminal)> {
+        #[cfg(target_os = "windows")]
+        let title=Self::title()?;
         enable_raw_mode()?;
-        let guard = Self;
+        let guard = Self {
+            #[cfg(target_os = "windows")]
+            title,
+        };
         execute!(TerminalOutput, EnterAlternateScreen)?;
         let terminal = Terminal::new(ratatui::backend::CrosstermBackend::new(TerminalOutput))?;
         #[cfg(not(target_os = "windows"))]
@@ -25,6 +33,8 @@ impl TerminalSession {
         execute!(TerminalOutput, EnableMouseCapture, EnableBracketedPaste)?;
         Ok((guard, terminal))
     }
+    #[cfg(target_os = "windows")]
+    fn title()->Result<Vec<u16>>{use windows::{Win32::System::Console::{GetConsoleTitleW,SetConsoleTitleW},core::w};let mut title=vec![0;32768];let length=unsafe{GetConsoleTitleW(&mut title)} as usize;title.truncate(length);title.push(0);unsafe{SetConsoleTitleW(w!("TypeRelay TUI"))?;}Ok(title)}
     pub fn connected() -> bool {
         #[cfg(target_os = "linux")]
         {
@@ -40,7 +50,7 @@ impl Drop for TerminalSession {
         #[cfg(not(target_os = "windows"))]
         let _ = execute!(TerminalOutput, DisableMouseCapture, DisableBracketedPaste, PopKeyboardEnhancementFlags);
         #[cfg(target_os = "windows")]
-        let _ = execute!(TerminalOutput, DisableMouseCapture, DisableBracketedPaste);
+        {let _ = execute!(TerminalOutput, DisableMouseCapture, DisableBracketedPaste);unsafe{let _=windows::Win32::System::Console::SetConsoleTitleW(windows::core::PCWSTR(self.title.as_ptr()));}}
         let _ = ratatui::try_restore();
     }
 }

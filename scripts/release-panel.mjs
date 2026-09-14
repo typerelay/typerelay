@@ -104,9 +104,9 @@ export class PanelRelease {
 		const options = PanelRelease.options([...args]);
 		const working = path.join(PanelRelease.root, 'apps/desktop');
 		let target = path.join(PanelRelease.root, 'target/desktop-releases', options.mode);
-		const build = ['tauri', 'build', '--target', options.target, '--bundles', options.mode === 'windows' ? 'nsis' : 'app,dmg', '--', '--locked'];
-		if (options.mode === 'windows') { build.splice(2, 0, '--runner', 'cargo-xwin'); build.splice(build.indexOf('--'), 0, '--config', 'src-tauri/tauri.windows.conf.json'); }
-		if (options.dry) { console.log(JSON.stringify({ source: 'clean develop + git pull --ff-only', platform: options.mode, target: options.target, install: ['pnpm', 'install', '--frozen-lockfile'], nativeTools: options.mode === 'windows' ? [NativeTools.plan(options.target).command, ...NativeTools.plan(options.target).args] : null, build: ['pnpm', ...build], signing: options.mode === 'windows' ? 'Shared Helpmonks YubiKey signer via private socket; hidden PIN and touch in local terminal' : 'Local Developer ID + Apple notarization; verify signature, Gatekeeper and stapled app ticket', output: target, publish: false }, null, 2)); return; }
+		const build = options.mode === 'windows' ? ['tauri', 'bundle', '--target', options.target, '--bundles', 'nsis', '--config', 'src-tauri/tauri.windows.conf.json'] : ['tauri', 'build', '--target', options.target, '--bundles', 'app,dmg', '--', '--locked'];
+		const compile = options.mode === 'windows' ? ['xwin', 'build', '--manifest-path', 'src-tauri/Cargo.toml', '--release', '--target', options.target, '--locked'] : null;
+		if (options.dry) { console.log(JSON.stringify({ source: 'clean develop + git pull --ff-only', platform: options.mode, target: options.target, install: ['pnpm', 'install', '--frozen-lockfile'], nativeTools: options.mode === 'windows' ? [NativeTools.plan(options.target).command, ...NativeTools.plan(options.target).args] : null, compile: compile ? ['cargo', ...compile] : null, build: ['pnpm', ...build], signing: options.mode === 'windows' ? 'Shared Helpmonks YubiKey signer via private socket; hidden PIN and touch in local terminal' : 'Local Developer ID + Apple notarization; verify signature, Gatekeeper and stapled app ticket', output: target, publish: false }, null, 2)); return; }
 		if (Number(process.versions.node.split('.')[0]) < 24) throw new Error('Node.js 24 or newer is required');
 		await PanelRelease.requireCommands(['git', 'pnpm', 'cargo', 'rustup', ...(options.mode === 'windows' ? ['cargo-xwin', 'clang', 'lld-link', 'llvm-rc', 'makensis', 'wine'] : ['security', 'codesign', 'spctl', 'xcrun', 'lipo'])]);
 		const commit = await PanelRelease.repository();
@@ -117,11 +117,12 @@ export class PanelRelease {
 		await fs.mkdir(target, { recursive: true });
 		target = await fs.mkdtemp(path.join(target, commit.slice(0, 12) + '-')); // Fresh artifacts; a failed run cannot inherit a previous verification report.
 		const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'typerelay-release-')); await fs.chmod(temporary, 0o700);
-		const environment = { ...PanelRelease.buildEnvironment(process.env), CARGO_TARGET_DIR: target, TMPDIR: temporary };
+		const baseEnvironment = { ...PanelRelease.buildEnvironment(process.env), CARGO_TARGET_DIR: target, TMPDIR: temporary };
+		const environment = options.mode === 'windows' ? NativeTools.environment(baseEnvironment) : baseEnvironment;
 		let signer; let signingEnvironment; let bridge;
 		try {
 			await PanelRelease.run('pnpm', ['install', '--frozen-lockfile'], { cwd: working, environment });
-			if (options.mode === 'windows') await NativeTools.stage(options.target, { environment });
+			if (options.mode === 'windows') {await PanelRelease.run('pnpm', ['build'], { cwd: working, environment });await NativeTools.stage(options.target, { environment });}
 			let overlay;
 			if (options.mode === 'windows') {
 				const tools = path.resolve(process.env.TYPERELAY_RELEASE_TOOLS || path.join(os.homedir(), 'repos/helpmonks-install-script/scripts/desktop-release'));
@@ -146,7 +147,7 @@ export class PanelRelease {
 				overlay = { bundle: { macOS: { signingIdentity: identity, hardenedRuntime: true } } };
 			}
 			const overlayPath = path.join(temporary, 'tauri-signing.json'); await fs.writeFile(overlayPath, JSON.stringify(overlay), { mode: 0o600 });
-			build.splice(build.indexOf('--'), 0, '--config', overlayPath);
+			if (options.mode === 'windows') {build.push('--config', overlayPath);await PanelRelease.run('cargo', compile, { cwd: working, environment });}else{build.splice(build.indexOf('--'), 0, '--config', overlayPath);}
 			await PanelRelease.run('pnpm', build, { cwd: working, environment });
 			const release = path.join(target, options.target, 'release'); let artifacts;
 			if (options.mode === 'windows') {

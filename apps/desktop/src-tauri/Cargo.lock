@@ -5521,6 +5521,7 @@ dependencies = [
  "typerelay-core",
  "url",
  "uuid",
+ "windows 0.61.3",
  "wl-clipboard-rs",
  "yaml-edit",
 ]

@@ -12,7 +12,7 @@ use tauri_plugin_notification::NotificationExt;
 #[cfg(not(target_os="linux"))]
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
-struct Runtime { root:PathBuf, target:Mutex<Option<platform::Target>>, last:Mutex<Option<platform::Target>>, busy:AtomicBool, syncing:AtomicBool, prompting:AtomicBool, prompt_hit:Mutex<Option<Hit>>, settings:AtomicBool, status:Mutex<String>, #[cfg(target_os="linux")] registration:Mutex<Option<typerelay_client::desktop::Registration>> }
+struct Runtime { root:PathBuf, target:Mutex<Option<platform::Target>>, last:Mutex<Option<platform::Target>>, erase:Mutex<usize>, busy:AtomicBool, syncing:AtomicBool, prompting:AtomicBool, prompt_hit:Mutex<Option<Hit>>, settings:AtomicBool, status:Mutex<String>, #[cfg(target_os="linux")] registration:Mutex<Option<typerelay_client::desktop::Registration>> }
 impl Runtime {
     fn sync_notice(app:&tauri::AppHandle,message:&str) {
         *app.state::<Runtime>().status.lock().unwrap()=message.into();
@@ -28,6 +28,7 @@ impl Runtime {
     }
     fn open(app: &tauri::AppHandle, settings:bool) {
         let state=app.state::<Runtime>(); if state.busy.load(Ordering::SeqCst) {return;}
+        if state.prompt_hit.lock().unwrap().is_none(){*state.erase.lock().unwrap()=0;}
         let Some(window)=app.get_webview_window("panel") else{return;};
         if state.prompting.load(Ordering::SeqCst) && window.is_visible().unwrap_or(false) { let _=window.set_focus(); return; }
         if !window.is_visible().unwrap_or(false) {
@@ -70,13 +71,30 @@ impl Runtime {
             });
         }
     }
+    #[cfg(target_os="windows")]
+    fn expand(app:&tauri::AppHandle,request:platform::ExpansionRequest)->Result<()>{
+        let platform::ExpansionRequest{target,expansion}=request;
+        if let Some(template)=expansion.template {
+            let identity=template.identity.context("Template identity unavailable")?;
+            let hit=Hit{id:identity.id,library:identity.library,revision:identity.revision,library_name:String::new(),title:template.abbreviation.clone(),abbreviation:template.abbreviation,preview:String::new()};
+            if template.prompted {
+                let state=app.state::<Runtime>();if state.busy.load(Ordering::SeqCst)||state.prompting.load(Ordering::SeqCst){platform::paste(&target,0,Some(" ".into()))?;return Ok(());}
+                let prompt_app=app.clone();let main_app=prompt_app.clone();prompt_app.run_on_main_thread(move||{let state=main_app.state::<Runtime>();*state.target.lock().unwrap()=Some(target);*state.erase.lock().unwrap()=expansion.erase;*state.prompt_hit.lock().unwrap()=Some(hit);state.prompting.store(true,Ordering::SeqCst);Runtime::open(&main_app,false);})?;return Ok(());
+            }
+            let rendered=Panel::render(&app.state::<Runtime>().root.join("snippets"),&hit,Default::default(),false)?;let mut erase=expansion.erase;
+            for step in rendered.steps {Panel::content(&app.state::<Runtime>().root.join("snippets"),&hit)?;platform::paste(&target,std::mem::take(&mut erase),match step{typerelay_core::template::Step::Text{text}=>Some(text),typerelay_core::template::Step::Enter=>None})?;}
+        } else {platform::paste(&target,expansion.erase,Some(expansion.text))?;}
+        Ok(())
+    }
     fn hide(app:&tauri::AppHandle) {
         if let Some(window)=app.get_webview_window("panel") {let _=window.hide();}
         #[cfg(target_os="linux")]
         { app.state::<Runtime>().registration.lock().unwrap().take(); }
     }
     fn theme()->Value {
-        let mut result=json!({"os":std::env::consts::OS});
+        let result=json!({"os":std::env::consts::OS});
+        #[cfg(target_os="linux")]
+        let mut result=result;
         #[cfg(target_os="linux")]
         if let Some(home)=std::env::var_os("HOME") {
             for path in [".local/state/omarchy/current/theme/colors.toml",".config/omarchy/current/theme/colors.toml"] {
@@ -118,6 +136,8 @@ async fn search(app:tauri::AppHandle,query:String)->std::result::Result<Vec<Hit>
 async fn insert(app:tauri::AppHandle,hit:Hit,values:Option<std::collections::BTreeMap<String,String>>)->std::result::Result<(),String> {
     let state=app.state::<Runtime>(); if state.busy.swap(true,Ordering::SeqCst){return Err("Insertion already in progress".into());}
     let target=state.target.lock().unwrap().clone(); let directory=state.root.join("snippets");
+    #[cfg(not(target_os="linux"))]
+    let erase=*state.erase.lock().unwrap();
     let Some(target)=target else{state.busy.store(false,Ordering::SeqCst);return Err("No original window; use Copy".into());};
     let clock=typerelay_client::templates::Templates::clock();
     Runtime::hide(&app);
@@ -128,11 +148,11 @@ async fn insert(app:tauri::AppHandle,hit:Hit,values:Option<std::collections::BTr
         #[cfg(target_os="linux")]
         { let _=rendered; typerelay_client::panel_ipc::PanelIpc::insert(typerelay_client::panel_ipc::Request{hit,values,generation:None,clock:Some(clock),erase:0,prepare:false,target:target.address.clone(),created_ms:std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis()})?; }
         #[cfg(not(target_os="linux"))]
-        { for step in rendered.steps { Panel::content(&directory,&hit)?; platform::paste(&target,match step { typerelay_core::template::Step::Text{text}=>Some(text),typerelay_core::template::Step::Enter=>None })?; } }
+        { let mut erase=erase;for step in rendered.steps { Panel::content(&directory,&hit)?; platform::paste(&target,std::mem::take(&mut erase),match step { typerelay_core::template::Step::Text{text}=>Some(text),typerelay_core::template::Step::Enter=>None })?; } }
         Ok(())
     }).await.map_err(|e|e.to_string()).and_then(|r|r.map_err(|e|e.to_string()));
     app.state::<Runtime>().busy.store(false,Ordering::SeqCst);
-    if result.is_ok(){let state=app.state::<Runtime>();state.status.lock().unwrap().clear();state.prompting.store(false,Ordering::SeqCst);state.prompt_hit.lock().unwrap().take();}
+    if result.is_ok(){let state=app.state::<Runtime>();state.status.lock().unwrap().clear();*state.erase.lock().unwrap()=0;state.prompting.store(false,Ordering::SeqCst);state.prompt_hit.lock().unwrap().take();}
     if let Err(error)=&result { *app.state::<Runtime>().status.lock().unwrap()=error.clone(); if let Some(window)=app.get_webview_window("panel"){let _=window.show();let _=window.set_focus();} }
     result
 }
@@ -147,7 +167,7 @@ async fn prepare_template(app:tauri::AppHandle,hit:Hit,values:Option<std::collec
     tauri::async_runtime::spawn_blocking(move||Panel::render(&directory,&hit,values.unwrap_or_default(),true).map_err(|e|e.to_string())).await.map_err(|e|e.to_string())?
 }
 #[tauri::command]
-fn set_prompt_view(app:tauri::AppHandle,enabled:bool){let state=app.state::<Runtime>();state.prompting.store(enabled,Ordering::SeqCst);if !enabled{state.prompt_hit.lock().unwrap().take();}}
+fn set_prompt_view(app:tauri::AppHandle,enabled:bool){let state=app.state::<Runtime>();state.prompting.store(enabled,Ordering::SeqCst);if !enabled{state.prompt_hit.lock().unwrap().take();*state.erase.lock().unwrap()=0;}}
 #[tauri::command]
 fn set_settings_view(app:tauri::AppHandle,enabled:bool){app.state::<Runtime>().settings.store(enabled,Ordering::SeqCst);}
 #[tauri::command]
@@ -216,7 +236,9 @@ fn main() {
         let root=Paths::config_dir()?; Database::open(&root.join("snippets"))?;
         Sync::worker(root.clone(),root.join("snippets"));
         let config=Panel::settings(&root)?;
-        app.manage(Runtime{root,target:Mutex::new(None),last:Mutex::new(None),busy:AtomicBool::new(false),syncing:AtomicBool::new(false),prompting:AtomicBool::new(false),prompt_hit:Mutex::new(None),settings:AtomicBool::new(false),status:Mutex::new(String::new()),#[cfg(target_os="linux")] registration:Mutex::new(None)});
+        app.manage(Runtime{root:root.clone(),target:Mutex::new(None),last:Mutex::new(None),erase:Mutex::new(0),busy:AtomicBool::new(false),syncing:AtomicBool::new(false),prompting:AtomicBool::new(false),prompt_hit:Mutex::new(None),settings:AtomicBool::new(false),status:Mutex::new(String::new()),#[cfg(target_os="linux")] registration:Mutex::new(None)});
+        #[cfg(target_os="windows")]
+        {let requests=platform::ExpansionSession::start(root.join("snippets"),root.join("settings.yml"))?;let handle=app.handle().clone();std::thread::spawn(move||for request in requests{if let Err(error)=Runtime::expand(&handle,request){let message=format!("Expansion failed: {error:#}");*handle.state::<Runtime>().status.lock().unwrap()=message.clone();let _=handle.notification().builder().title("TypeRelay").body(&message).show();}});}
         #[cfg(target_os="linux")]
         {let _=std::fs::remove_file(typerelay_client::panel_ipc::PanelIpc::directory()?.join("ready"));}
         if std::env::args().any(|arg|arg=="--quit"||arg=="--uninstall") {if std::env::args().any(|arg|arg=="--uninstall"){app.autolaunch().disable()?;}app.handle().exit(0);return Ok(());}

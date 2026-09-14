@@ -124,6 +124,8 @@ mod tests {
         let mut engine = Engine::new(Fixture::snapshot());
         Fixture::type_text(&mut engine, ",brbmore");
         assert_eq!(engine.feed(Input::Space), Some(Expansion { template: None, erase: 8, text: "Later".into() }));
+        Fixture::type_text(&mut engine, ",brb");
+        assert_eq!(engine.feed(Input::Space), Some(Expansion { template: None, erase: 4, text: "Be right back.".into() }));
         assert_eq!(engine.feed(Input::Space), None);
     }
     #[test]

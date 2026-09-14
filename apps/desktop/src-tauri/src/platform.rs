@@ -8,6 +8,8 @@ use anyhow::{Context, ensure};
 #[cfg(target_os = "windows")]
 #[path = "platform_windows.rs"] mod native;
 pub use native::{Target,fallback_allowed};
+#[cfg(target_os = "windows")]
+pub use native::{ExpansionRequest, ExpansionSession};
 
 pub fn copy(text: String) -> Result<()> {
     #[cfg(target_os = "linux")]
@@ -17,17 +19,24 @@ pub fn copy(text: String) -> Result<()> {
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn paste(target: &Target, text: Option<String>) -> Result<()> {
+pub fn paste(target: &Target, erase: usize, text: Option<String>) -> Result<()> {
     use enigo::{Enigo, Keyboard, Key, Direction};
     use std::time::{Duration, Instant};
     let mut enigo = Enigo::new(&enigo::Settings::default()).context("Allow TypeRelay accessibility/input permission")?;
     let deadline = Instant::now() + Duration::from_secs(2);
     while native::keys_down() { ensure!(Instant::now() < deadline, "Release shortcut keys before inserting"); std::thread::sleep(Duration::from_millis(10)); }
     ensure!(target.focused()?, "Original window lost focus; nothing inserted");
-    let mut clipboard = text.map(native::ClipboardLease::publish).transpose()?;
+    let mut clipboard=None;let has_text=text.is_some();
+    if let Some(text)=text {match native::ClipboardLease::publish(text.clone()){Ok(lease)=>clipboard=Some(lease),Err(_error)=>{
+        #[cfg(target_os="windows")]
+        {copy(text)?;}
+        #[cfg(not(target_os="windows"))]
+        {return Err(_error);}
+    }}}
     let insertion: Result<()> = (|| {
         ensure!(target.focused()?, "Original window lost focus; nothing inserted");
-        if clipboard.is_none() { enigo.key(Key::Return,Direction::Click)?; std::thread::sleep(Duration::from_millis(100)); return Ok(()); }
+        for _ in 0..erase { enigo.key(Key::Backspace,Direction::Click)?; }
+        if !has_text { enigo.key(Key::Return,Direction::Click)?; std::thread::sleep(Duration::from_millis(100)); return Ok(()); }
         let modifier = if cfg!(target_os = "macos") { Key::Meta } else { Key::Control };
         enigo.key(modifier,Direction::Press)?;
         let result = enigo.key(Key::Unicode('v'),Direction::Click);

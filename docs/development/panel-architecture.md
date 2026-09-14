@@ -8,11 +8,11 @@ The panel uses a shared local Pug/JavaScript UI in Tauri. Linux reads Omarchy th
 
 - Omarchy/Hyprland: existing evdev/keyd service detects the configured shortcut. A private Unix datagram channel opens the GUI; a separate worker validates insertion requests against SQLite before submitting them to the existing paste coordinator. The keyboard loop never waits on database validation or a full notification socket. Requests expire and are not replayed. The panel is excluded from expansion by live PID/start-time identity. Focus/placement use the current Omarchy Lua dispatcher API, not legacy Hyprland focuswindow commands. Linux tray activation uses ksni/StatusNotifierItem because the standard AppIndicator backend does not expose reliable left-click behavior.
 - macOS: global hotkey + AppKit/Accessibility window identity and activation, CoreGraphics key-state checks, Enigo paste, template T status icon. Accessibility permission is required for target-window capture and insertion. A clipboard with multiple items is left untouched and automatic insertion is refused; Copy remains explicit.
-- Windows: global hotkey, HWND + retained process handle, foreground verification, key-release checks and native input. Clipboard preservation uses native numeric format IDs, not registered string aliases. Opaque GDI clipboard formats that cannot be safely copied cause insertion to stop before modifying the clipboard. Elevated/protected applications can reject input; TypeRelay does not elevate itself to bypass that.
+- Windows: global hotkey plus a low-level keyboard hook, HWND + retained process handle, foreground verification, confirming-key release checks and native input. Injected keys are ignored by the hook, snapshots/settings reload without restarting, and expansion is paused in TypeRelay TUI. Clipboard preservation snapshots movable formats by native numeric ID. RDP clipboard providers can refuse snapshots; that path still inserts through the clipboard and leaves the inserted text there. Elevated/protected applications can reject input; TypeRelay does not elevate itself to bypass that.
 
 The original window is captured before showing the panel. The background target cache is used only when the foreground belongs to the panel/tray itself. A failed capture from a different application never falls back to an unrelated earlier target. After restoring focus, the adapter verifies identity again. Native focus and keyboard APIs are not one atomic OS operation; external focus changes can still race with input, so each platform needs real application testing.
 
-Clipboard data is temporarily replaced, then restored only while TypeRelay's unique ownership marker remains. Linux preserves existing MIME types via the engine's helper. Windows checks/restores while holding the clipboard lock; macOS checks the pasteboard marker. No source commands or variables are evaluated.
+Clipboard data is temporarily replaced, then restored only while TypeRelay's unique ownership marker remains. Linux preserves existing MIME types via the engine's helper. Windows materializes movable clipboard formats through OLE, then checks/restores while holding the clipboard lock; unreadable RDP clipboard data uses the documented replacement fallback. macOS checks the pasteboard marker. No source commands or variables are evaluated.
 
 ## Configuration and storage
 
@@ -34,7 +34,7 @@ The Desktop panel builds workflow produces an Omarchy bundle containing engine, 
 
 Portable Rust search/selection/shortcut tests, isolated IPC expiry/full-socket tests, installer ownership tests and shared UI stale-query/keyboard tests are automated. The live Omarchy smoke test confirmed global shortcut activation, a floating themed window, searching and exact insertion into the original GTK editor, clipboard restoration and Escape dismissal. Additional application/tray tests are recorded in delivery notes when completed.
 
-macOS and Windows build success is not runtime verification. Their native behavior remains pending the user's checklist below.
+Windows Notepad and PowerShell now pass direct expansion plus keyboard and one-click panel insertion in the test VM. The broader Windows checklist and all macOS runtime checks remain pending.
 
 ## macOS / Windows checklist
 
