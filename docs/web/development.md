@@ -1,8 +1,7 @@
 # Database-backed TypeRelay development
 
 Run docker compose up -d --build from the repository root.
-App: http://localhost:3040. Captured email: http://localhost:8040.
-MongoDB runs an isolated replica set. Production deployment remains separate.
+`APP_URL` and `MCP_BASE_URL` select the development endpoints. `DEV_TYPERELAY_MONGODB_URI` and `SMTP_SERVERS` connect to the shared dbh development services; the development Compose file does not run MongoDB or SMTP containers. Production deployment remains separate.
 
 ## Storage version 2
 
@@ -41,7 +40,7 @@ Offline devices apply changes on their next successful connection.
 
 ## Verification
 
-    docker compose run --rm --no-deps server node --test --test-force-exit test/*.test.js
+    docker compose run --rm --no-deps app node --test --test-force-exit test/*.test.js
     cargo test --workspace
     cargo clippy --workspace --all-targets -- -D warnings
     python3 -m unittest discover -s scripts/tests

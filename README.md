@@ -74,13 +74,19 @@ Then type the configured prefix, an abbreviation and Space in another applicatio
 
 The web app stores synchronized libraries in MongoDB. Devices authenticate in the browser, users explicitly enroll local libraries and assigned shared libraries download automatically. Conflicts retain both versions for resolution in the web app.
 
-Start the development stack from the repository root:
+For an open-source production deployment, export the public URLs and private values from your Fish terminal, then start the production stack:
 
 ```fish
-docker compose up -d --build
+set -x APP_URL https://typerelay.example.com
+set -x MCP_BASE_URL https://mcp.typerelay.example.com
+set -x SESSION_SECRET (openssl rand -hex 64)
+set -x JWT_SECRET (openssl rand -hex 64)
+set -x SMTP_FROM noreply@example.com
+set -x SMTP_SERVERS '[{"name":"primary","host":"smtp.example.com","port":587,"secure":false,"user":"user","pass":"password","from":"noreply@example.com"}]'
+docker compose -f compose.prod.yml up -d
 ```
 
-Open the app at [localhost:3040](http://localhost:3040) and development email at [localhost:8040](http://localhost:8040). Production needs your own HTTPS proxy, SMTP service, secrets and persistent storage; see [self-hosted configuration](docs/selfhosted/configuration.md).
+The production stack includes the app, MCP adapter, scheduler and a persistent MongoDB replica set. Put ports `3000` and `3002` behind your HTTPS proxy. See [self-hosted configuration](docs/selfhosted/configuration.md).
 
 ## MCP and API
 
@@ -111,7 +117,7 @@ Repository layout:
 Run the checks relevant to your change and the repository policy check before opening a pull request:
 
 ```fish
-docker compose run --rm server pnpm test
+docker compose run --rm app npm test
 docker compose run --rm --no-deps mcp-tools
 docker compose run --rm --no-deps rust-tools
 python3 scripts/check-repository.py

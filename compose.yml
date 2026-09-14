@@ -1,76 +1,63 @@
-name: typerelay
+x-env: &env
+  NODE_ENV: development
+  TYPERELAY_APP: web
+  PORT: 3040
+  MONGO_URI: ${DEV_TYPERELAY_MONGODB_URI}
+  APP_URL: ${APP_URL:-http://localhost:3040}
+  MCP_BASE_URL: ${MCP_BASE_URL:-http://localhost:3041}
+  API_BASE_URL: http://app:3040
+  SMTP_SERVERS: ${SMTP_SERVERS}
+  SMTP_FROM: ${SMTP_FROM}
+  SESSION_SECRET: ${SESSION_SECRET}
+  JWT_SECRET: ${JWT_SECRET}
+  IS_DOCKER: "true"
+  DOCS_DIR: /documentation/.vitepress/dist
+
 services:
-  mongo:
-    image: mongo:8
-    command: ["mongod", "--replSet", "typerelay", "--bind_ip_all"]
-    volumes:
-      - typerelay-mongo:/data/db
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - >-
-          mongosh --quiet --eval 'try { rs.status().ok } catch(e) { rs.initiate({_id:"typerelay",members:[{_id:0,host:"mongo:27017"}]}) }'
-      interval: 3s
-      timeout: 5s
-      retries: 30
-  mail:
-    image: axllent/mailpit:v1.27
-    ports:
-      - "127.0.0.1:8040:8025"
-  server:
-    image: typerelay-server
-    build:
-      context: .
-      dockerfile: apps/server/Dockerfile
-      target: production
+  init:
+    extends:
+      file: ./compose.base.yml
+      service: base
+    user: root
+    environment: *env
+    command: [corepack, pnpm, install, --frozen-lockfile]
+    restart: "no"
+
+  app:
+    extends:
+      file: ./compose.base.yml
+      service: base
     ports:
       - "127.0.0.1:3040:3040"
-    environment:
-      MONGO_URI: mongodb://mongo:27017/typerelay?replicaSet=typerelay
-      APP_URL: ${APP_URL:-http://localhost:3040}
-      MCP_BASE_URL: ${MCP_BASE_URL:-http://localhost:3041}
-      SMTP_SERVERS: ${SMTP_SERVERS:-}
-      SMTP_FROM: ${SMTP_FROM:-TypeRelay <noreply@localhost>}
-      SESSION_SECRET: ${SESSION_SECRET:-change-me}
-      JWT_SECRET: ${JWT_SECRET:-change-me}
-      IS_DOCKER: "true"
-      DOCS_DIR: /documentation/.vitepress/dist
+    environment: *env
     volumes:
       - typerelay-server:/data
       - ./docs:/documentation:ro
-      - ./apps/server:/opt/typerelay/apps/server
-      - typerelay-node-modules:/opt/typerelay/apps/server/node_modules
     healthcheck:
       test: [CMD, node, -e, "fetch('http://127.0.0.1:3040/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 5s
       timeout: 3s
       retries: 12
     depends_on:
-      mongo:
-        condition: service_healthy
-      mail:
-        condition: service_started
+      init:
+        condition: service_completed_successfully
   scheduler:
-    image: typerelay-server
-    build:
-      context: .
-      dockerfile: apps/server/Dockerfile
-      target: production
+    extends:
+      file: ./compose.base.yml
+      service: base
     command: [node, scripts/start.js]
     healthcheck:
       disable: true
     environment:
-      MONGO_URI: mongodb://mongo:27017/typerelay?replicaSet=typerelay
+      <<: *env
+      TYPERELAY_APP: scheduler
       SERVER_MODE: scheduler
-    volumes:
-      - ./apps/server:/opt/typerelay/apps/server
-      - typerelay-node-modules:/opt/typerelay/apps/server/node_modules
     restart: unless-stopped
     deploy:
       replicas: 1
     depends_on:
-      mongo:
-        condition: service_healthy
+      init:
+        condition: service_completed_successfully
   docs:
     profiles: [tools]
     image: node:24-bookworm-slim
@@ -84,20 +71,19 @@ services:
       - "127.0.0.1:5173:5173"
     command: [sh, -c, "npx --yes pnpm@12.0.0 install --frozen-lockfile && npx --yes pnpm@12.0.0 run build"]
   mcp:
-    profiles: [integrations]
+    image: typerelay-mcp
     build:
       context: .
       dockerfile: apps/mcp/Dockerfile
     ports:
       - "127.0.0.1:3041:3041"
     environment:
-      API_BASE_URL: http://server:3040
-      APP_URL: ${APP_URL:-http://localhost:3040}
-      MCP_BASE_URL: ${MCP_BASE_URL:-http://localhost:3041}
-      JWT_SECRET: ${JWT_SECRET:-change-me}
-      IS_DOCKER: "true"
+      <<: *env
+      TYPERELAY_APP: mcp
+      PORT: 3041
+    restart: unless-stopped
     depends_on:
-      server:
+      app:
         condition: service_healthy
   mcp-tools:
     profiles: [tools]
@@ -111,7 +97,7 @@ services:
     command: [sh, -c, "npx --yes pnpm@12.0.0 install --frozen-lockfile && npx --yes pnpm@12.0.0 test"]
   browser-check:
     depends_on:
-      server:
+      app:
         condition: service_healthy
     profiles: [tools]
     build:
@@ -122,7 +108,9 @@ services:
       - /tmp/typerelay-docs-artifacts:/artifacts
   template-server:
     profiles: [tools]
-    image: typerelay-server
+    extends:
+      file: ./compose.base.yml
+      service: base
     user: "0:0"
     command: [node, test/template-browser-server.js]
     healthcheck:
@@ -131,12 +119,10 @@ services:
       timeout: 3s
       retries: 30
     volumes:
-      - ./apps/server:/opt/typerelay/apps/server
-      - typerelay-node-modules:/opt/typerelay/apps/server/node_modules
       - /tmp/typerelay-template-fixture:/fixtures
     depends_on:
-      mongo:
-        condition: service_healthy
+      init:
+        condition: service_completed_successfully
   template-browser:
     profiles: [tools]
     build:
@@ -167,6 +153,5 @@ services:
     command: [git, /repo, "--log-opts=--all --full-history", --redact]
 
 volumes:
-  typerelay-mongo:
   typerelay-server:
   typerelay-node-modules:

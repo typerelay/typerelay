@@ -36,7 +36,7 @@ export class TypeRelayMcp {
 		const query = operation.method === 'get' ? new URLSearchParams(Object.entries(body).map(([key, value]) => [key, String(value)])) : null;
 		return api.request('/api/v3' + path + (query?.size ? '?' + query : ''), operation.method.toUpperCase(), operation.method === 'get' ? undefined : body);
 	}
-	static app({ apiBase = process.env.API_BASE_URL || 'http://server:3040', resource = (process.env.MCP_BASE_URL || 'http://localhost:3041').replace(/\/$/, '') + '/mcp', issuer = process.env.APP_URL || 'http://localhost:3040', secret = () => process.env.JWT_SECRET || 'change-me' } = {}) {
+	static app({ apiBase = process.env.API_BASE_URL || 'http://localhost:3040', resource = (process.env.MCP_BASE_URL || 'http://localhost:3041').replace(/\/$/, '') + '/mcp', issuer = process.env.APP_URL || 'http://localhost:3040', secret = () => process.env.JWT_SECRET || 'change-me' } = {}) {
 		const app = express();
 		if (process.env.IS_DOCKER === 'true') app.set('trust proxy', 1);
 		app.disable('x-powered-by');

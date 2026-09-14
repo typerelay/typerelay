@@ -1,0 +1,13 @@
+services:
+  base:
+    user: root
+    restart: unless-stopped
+    image: typerelay-dev:local
+    build:
+      context: .
+      dockerfile: apps/server/Dockerfile
+      target: production
+    working_dir: /opt/typerelay/apps/server
+    volumes:
+      - ./apps/server:/opt/typerelay/apps/server
+      - typerelay-node-modules:/opt/typerelay/apps/server/node_modules

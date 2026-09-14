@@ -1,3 +1,3 @@
 # Development and deployment
 
-Development uses root Docker Compose with an isolated MongoDB replica set, Mailpit, the application and optional documentation/MCP services. Production uses your own domain, HTTPS proxy, SMTP and persistent storage. Production deployment is not performed by this feature.
+`compose.yml` is development-only and includes source mounts, test tools and the dbh overlay. Development uses MongoDB and SMTP from dbh through terminal environment variables. `compose.prod.yml` is the open-source production stack with the app, MCP adapter, scheduler and persistent MongoDB. Production uses your own domains, HTTPS proxy and SMTP service.

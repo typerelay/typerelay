@@ -1,27 +1,14 @@
 services:
-  mail:
+  app:
     ports: !override []
     networks:
       default:
       dbh_proxy:
         aliases:
-          - "${DBH_PROFILE}-typerelay-mail"
-
-  server:
-    ports: !override []
-    environment:
-      APP_URL: "${APP_URL}"
-    networks:
-      default:
-      dbh_proxy:
-        aliases:
-          - "${DBH_PROFILE}-typerelay-server"
+          - "${DBH_PROFILE}-typerelay-app"
 
   mcp:
     ports: !override []
-    environment:
-      APP_URL: "${APP_URL}"
-      MCP_BASE_URL: "${MCP_BASE_URL}"
     networks:
       default:
       dbh_proxy:
