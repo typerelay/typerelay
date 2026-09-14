@@ -6,6 +6,7 @@
   "packageManager": "pnpm@12.0.0",
   "scripts": {
     "build": "node build.mjs",
+    "build:macos:local": "node scripts/build-macos-local.mjs",
     "tauri": "tauri",
     "test": "node --test test/*.test.mjs"
   },

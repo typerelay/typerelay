@@ -8,7 +8,7 @@ html(lang="en")
 		script(src="panel.js" defer)
 	body
 		main
-			header.titlebar
+			header.titlebar(data-tauri-drag-region)
 				.brand
 					img(src="icon.svg" alt="" width="24" height="24")
 					h1 TypeRelay
@@ -16,7 +16,7 @@ html(lang="en")
 				button#close.icon-button(type="button" aria-label="Close TypeRelay") ×
 			section#search-view
 				.search-field
-					span.search-icon(aria-hidden="true") ⌕
+					span.search-icon(aria-hidden="true")
 					label.visually-hidden(for="query") Search snippets
 					input#query(type="search" autocomplete="off" spellcheck="false" aria-controls="results")
 				p#hint Type an abbreviation or part of a snippet.
@@ -47,7 +47,7 @@ html(lang="en")
 					button#settings-cancel.back-button(type="button") ‹ Back
 					div
 						h2 Settings
-						p Configure TypeRelay on this Mac.
+						p Configure TypeRelay.
 				form#settings-form
 					.settings-group
 						label(for="shortcut") Search shortcut
