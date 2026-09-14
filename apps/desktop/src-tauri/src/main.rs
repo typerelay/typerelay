@@ -15,6 +15,8 @@ use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 struct Runtime { root:PathBuf, target:Mutex<Option<platform::Target>>, last:Mutex<Option<platform::Target>>, erase:Mutex<usize>, busy:AtomicBool, syncing:AtomicBool, prompting:AtomicBool, prompt_hit:Mutex<Option<Hit>>, settings:AtomicBool, status:Mutex<String>, #[cfg(target_os="linux")] registration:Mutex<Option<typerelay_client::desktop::Registration>> }
 impl Runtime {
+	#[cfg(target_os="macos")]
+	const ACCESSIBILITY_MESSAGE:&'static str="Allow TypeRelay in System Settings → Privacy & Security → Accessibility";
     fn hide_on_focus_loss()->bool { cfg!(not(target_os="linux")) }
     fn sync_notice(app:&tauri::AppHandle,message:&str) {
         *app.state::<Runtime>().status.lock().unwrap()=message.into();
@@ -127,7 +129,10 @@ impl Runtime {
 #[tauri::command]
 fn initialize(app:tauri::AppHandle)->std::result::Result<Value,String> {
     let state=app.state::<Runtime>(); let settings=Panel::settings(&state.root).map_err(|e|e.to_string())?;
-		Ok(json!({"config":settings,"prompt":state.prompt_hit.lock().unwrap().clone(),"server":typerelay_client::settings::SettingsStore::open(state.root.join("settings.yml")).ok().map(|s|s.settings.sync_url).unwrap_or_default(),"theme":Runtime::theme(),"settings":state.settings.load(Ordering::SeqCst),"status":*state.status.lock().unwrap(),"update":app.state::<update::UpdateState>().value(),"accessibility":platform::accessibility(false)}))
+		let accessibility=platform::accessibility(false);
+		#[cfg(target_os="macos")]
+		if accessibility{let mut status=state.status.lock().unwrap();if status.as_str()==Runtime::ACCESSIBILITY_MESSAGE{status.clear();}}
+		Ok(json!({"config":settings,"prompt":state.prompt_hit.lock().unwrap().clone(),"server":typerelay_client::settings::SettingsStore::open(state.root.join("settings.yml")).ok().map(|s|s.settings.sync_url).unwrap_or_default(),"theme":Runtime::theme(),"settings":state.settings.load(Ordering::SeqCst),"status":*state.status.lock().unwrap(),"update":app.state::<update::UpdateState>().value(),"accessibility":accessibility}))
 }
 #[tauri::command]
 async fn search(app:tauri::AppHandle,query:String)->std::result::Result<Vec<Hit>,String> {
@@ -247,7 +252,7 @@ fn main() {
 		app.manage(Runtime{root:root.clone(),target:Mutex::new(None),last:Mutex::new(None),erase:Mutex::new(0),busy:AtomicBool::new(false),syncing:AtomicBool::new(false),prompting:AtomicBool::new(false),prompt_hit:Mutex::new(None),settings:AtomicBool::new(false),status:Mutex::new(String::new()),#[cfg(target_os="linux")] registration:Mutex::new(None)});
 		app.manage(update::UpdateState::default());
 		#[cfg(target_os="macos")]
-		if !platform::accessibility(true){*app.state::<Runtime>().status.lock().unwrap()="Allow TypeRelay in System Settings → Privacy & Security → Accessibility".into();}
+		if !platform::accessibility(true){*app.state::<Runtime>().status.lock().unwrap()=Runtime::ACCESSIBILITY_MESSAGE.into();}
         #[cfg(target_os="windows")]
         {let requests=platform::ExpansionSession::start(root.join("snippets"),root.join("settings.yml"))?;let handle=app.handle().clone();std::thread::spawn(move||for request in requests{if let Err(error)=Runtime::expand(&handle,request){let message=format!("Expansion failed: {error:#}");*handle.state::<Runtime>().status.lock().unwrap()=message.clone();let _=handle.notification().builder().title("TypeRelay").body(&message).show();}});}
         #[cfg(target_os="linux")]

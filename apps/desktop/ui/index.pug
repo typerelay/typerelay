@@ -11,7 +11,7 @@ html(lang="en")
 			header.titlebar(data-tauri-drag-region)
 				.brand
 					img(src="icon.svg" alt="" width="24" height="24")
-					h1 TypeRelay
+					h1#window-title TypeRelay
 				span.shortcut-key(aria-hidden="true") ⌃⇧,
 				button#close.icon-button(type="button" aria-label="Close TypeRelay") ×
 			section#search-view
@@ -45,7 +45,7 @@ html(lang="en")
 			section#settings-view(hidden)
 				.settings-heading
 					button#settings-cancel.back-button(type="button") ‹ Search
-					h2 Settings
+					h2.visually-hidden Settings
 				nav.settings-tabs(aria-label="Settings sections")
 					button(type="button" data-settings-tab="general" aria-selected="true") General
 					button(type="button" data-settings-tab="sync" aria-selected="false") Sync

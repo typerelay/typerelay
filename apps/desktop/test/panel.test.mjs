@@ -81,6 +81,16 @@ test('macOS settings expose Accessibility and bundled TUI actions',async()=>{
  }finally{f.dom.window.close();}
 });
 
+test('returning from macOS settings reconciles granted Accessibility and clears stale guidance',async()=>{
+ const f=await Fixture.create();try{
+	await f.panel.open({settings:true,theme:{os:'macos'},config:{shortcut:'Ctrl+Shift+Comma',launch_at_login:false},accessibility:false,status:'Allow TypeRelay in System Settings → Privacy & Security → Accessibility'});
+	f.panel.invoke=async(name)=>name==='initialize'?{config:{shortcut:'Ctrl+Shift+Comma',launch_at_login:false},theme:{os:'macos'},settings:true,accessibility:true,status:''}:null;
+	f.dom.window.dispatchEvent(new f.dom.window.Event('focus'));await new Promise(resolve=>setTimeout(resolve,0));
+	assert.equal(f.dom.window.document.querySelector('#accessibility-state').textContent,'Allowed');
+	assert.equal(f.panel.status.textContent,'');
+ }finally{f.dom.window.close();}
+});
+
 test('template fields wait for confirmation, retain literal answers and clear on cancellation',async()=>{
  const f=await Fixture.create();try{
   const original=f.panel.invoke;
