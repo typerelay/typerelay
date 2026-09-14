@@ -72,6 +72,7 @@ test('macOS settings expose Accessibility and bundled TUI actions',async()=>{
   assert.ok(f.calls.some(call=>call.name==='open_accessibility_settings'));
   assert.ok(f.calls.some(call=>call.name==='open_tui'));
 	assert.equal(f.dom.window.document.querySelector('#accessibility-state').textContent,'Required');
+	assert.equal(f.dom.window.document.querySelector('#accessibility-card').hidden,false);
 	assert.equal(f.dom.window.document.body.dataset.os,'macos');
 	assert.equal(f.dom.window.document.body.dataset.view,'settings');
 	f.dom.window.document.querySelector('[data-settings-tab="sync"]').click();
@@ -86,7 +87,7 @@ test('returning from macOS settings reconciles granted Accessibility and clears 
 	await f.panel.open({settings:true,theme:{os:'macos'},config:{shortcut:'Ctrl+Shift+Comma',launch_at_login:false},accessibility:false,status:'Allow TypeRelay in System Settings → Privacy & Security → Accessibility'});
 	f.panel.invoke=async(name)=>name==='initialize'?{config:{shortcut:'Ctrl+Shift+Comma',launch_at_login:false},theme:{os:'macos'},settings:true,accessibility:true,status:''}:null;
 	f.dom.window.dispatchEvent(new f.dom.window.Event('focus'));await new Promise(resolve=>setTimeout(resolve,0));
-	assert.equal(f.dom.window.document.querySelector('#accessibility-state').textContent,'Allowed');
+	assert.equal(f.dom.window.document.querySelector('#accessibility-card').hidden,true);
 	assert.equal(f.panel.status.textContent,'');
  }finally{f.dom.window.close();}
 });
