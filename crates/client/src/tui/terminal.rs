@@ -28,11 +28,13 @@ impl TerminalSession {
         execute!(TerminalOutput, EnterAlternateScreen)?;
         let terminal = Terminal::new(ratatui::backend::CrosstermBackend::new(TerminalOutput))?;
         #[cfg(not(target_os = "windows"))]
-        execute!(TerminalOutput, PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES), EnableMouseCapture, EnableBracketedPaste)?;
+        execute!(TerminalOutput, PushKeyboardEnhancementFlags(Self::keyboard_flags()), EnableMouseCapture, EnableBracketedPaste)?;
         #[cfg(target_os = "windows")]
         execute!(TerminalOutput, EnableMouseCapture, EnableBracketedPaste)?;
         Ok((guard, terminal))
     }
+    #[cfg(not(target_os = "windows"))]
+    fn keyboard_flags() -> KeyboardEnhancementFlags { KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES }
     #[cfg(target_os = "windows")]
     fn title()->Result<Vec<u16>>{use windows::{Win32::System::Console::{GetConsoleTitleW,SetConsoleTitleW},core::w};let mut title=vec![0;32768];let length=unsafe{GetConsoleTitleW(&mut title)} as usize;title.truncate(length);title.push(0);unsafe{SetConsoleTitleW(w!("TypeRelay TUI"))?;}Ok(title)}
     pub fn connected() -> bool {
@@ -44,6 +46,13 @@ impl TerminalSession {
         }
         std::io::stdin().is_terminal()
     }
+}
+
+#[cfg(all(test, not(target_os = "windows")))]
+mod tests {
+    use super::*;
+    #[test]
+    fn keyboard_protocol_requests_layout_characters() { assert!(TerminalSession::keyboard_flags().contains(KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS)); }
 }
 impl Drop for TerminalSession {
     fn drop(&mut self) {
