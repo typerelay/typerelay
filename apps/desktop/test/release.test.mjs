@@ -49,6 +49,13 @@ test('failed signer never reports a verified artifact', { skip: process.platform
 	try { await bridge.start(); await assert.rejects(SigningBridge.request(bridge.path, file), /failed/); assert.equal(bridge.signed.size, 0); } finally { await bridge.close(); await fs.rm(root, { recursive: true, force: true }); }
 });
 
+test('extensionless NSIS uninstaller is signed only through the private bridge root', { skip: process.platform === 'win32' }, async () => {
+	const root=await fs.mkdtemp(path.join(os.tmpdir(),'typerelay-nsis-sign-test-'));const uninstaller=path.join(os.tmpdir(),`makensis${process.pid}${Date.now()}`);const outside=path.join(root,'makensisOutside');const link=path.join(os.tmpdir(),`makensis${process.pid}link${Date.now()}`);await fs.writeFile(uninstaller,'MZ fixture');await fs.writeFile(outside,'MZ outside');await fs.symlink(outside,link);
+	const bridge=new SigningBridge(path.join(root,'sign.sock'),[root],async file=>fs.appendFile(file,' signed'));
+	try{await bridge.start();await SigningBridge.requestTauri(bridge.path,PanelRelease.root,uninstaller);assert.equal(await fs.readFile(uninstaller,'utf8'),'MZ fixture signed');assert.equal([...bridge.signed].filter(file=>path.basename(file).startsWith('nsis-uninstaller-')).length,1);await assert.rejects(SigningBridge.requestTauri(bridge.path,PanelRelease.root,outside),/Invalid/);await assert.rejects(SigningBridge.requestTauri(bridge.path,PanelRelease.root,link),/Invalid/);assert.deepEqual((await fs.readdir(root)).sort(),['makensisOutside','sign.sock']);}
+	finally{await bridge.close();await fs.rm(uninstaller,{force:true});await fs.rm(link,{force:true});await fs.rm(root,{recursive:true,force:true});}
+});
+
 test('release tooling creates signed updater artifacts for every supported platform', async () => {
 	const source = await fs.readFile(path.join(PanelRelease.root, 'scripts/release-panel.mjs'), 'utf8');
 	const config = JSON.parse(await fs.readFile(path.join(PanelRelease.root, 'apps/desktop/src-tauri/tauri.conf.json'), 'utf8'));
@@ -60,8 +67,9 @@ test('release tooling creates signed updater artifacts for every supported platf
 	assert.match(source, /linux-x86_64/);
 	assert.match(source, /nativeTools=await NativeTools\.stage/);
 	assert.match(source, /path\.dirname\(nativeTools\[0\]\)/);
-	assert.match(source, /path\.join\(release, 'typerelay-panel\.exe'\), \.\.\.nativeTools/);
+	assert.match(source, /const panel=path\.join\(release,'typerelay-panel\.exe'\);.*executables=\[panel,\.\.\.nativeTools/);
 	assert.match(source, /path\.join\(working, 'src-tauri'\), '%1'/);
+	assert.match(source, /Tauri did not sign the NSIS uninstaller/);
 	assert.equal(config.plugins.updater.endpoints[0], 'https://transfer.typerelay.com/apps/latest.json');
 	assert.match(config.plugins.updater.pubkey, /^[A-Za-z0-9+/=]+$/);
 });

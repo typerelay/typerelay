@@ -35,7 +35,7 @@ export class SigningBridge {
 				handled = true;
 				this.queue = this.queue.catch(() => {}).then(async () => {
 					try { const request = JSON.parse(input.trim()); const file = await this.validate(request.file); await this.sign(file); this.signed.add(file); socket.end(JSON.stringify({ ok: true }) + '\n'); }
-					catch { socket.end(JSON.stringify({ error: 'Signing or verification failed; see the private release terminal' }) + '\n'); }
+					catch(error) { console.error(`Windows signing bridge failed: ${error.message}`);socket.end(JSON.stringify({ error: 'Signing or verification failed; see the private release terminal' }) + '\n'); }
 				});
 			});
 		});
@@ -53,6 +53,18 @@ export class SigningBridge {
 			socket.on('error', reject);
 			socket.on('end', () => { try { const result = JSON.parse(output); if (!result.ok) throw new Error(result.error || 'Signing failed'); resolve(); } catch (error) { reject(error); } });
 		});
+	}
+	static async requestTauri(socketPath, base, file) {
+		const absolute=path.resolve(base,file);
+		if (path.extname(absolute)) return SigningBridge.request(socketPath,absolute);
+		const stat=await fs.lstat(absolute);const resolved=await fs.realpath(absolute);const temporary=await fs.realpath(os.tmpdir());
+		if (!stat.isFile()||stat.isSymbolicLink()||stat.nlink!==1||stat.size<2||stat.size>64*1024*1024||path.dirname(resolved)!==temporary||!/^makensis[A-Za-z0-9]+$/.test(path.basename(resolved))||(process.getuid&&stat.uid!==process.getuid())) throw new Error('Invalid NSIS uninstaller signing path');
+		const staged=path.join(path.dirname(socketPath),`nsis-uninstaller-${process.pid}-${Date.now()}.exe`);
+		try {
+			await fs.copyFile(resolved,staged);await fs.chmod(staged,0o600);await SigningBridge.request(socketPath,staged);
+			const bytes=await fs.readFile(staged);const handle=await fs.open(absolute,'r+');
+			try {const current=await handle.stat();if(current.dev!==stat.dev||current.ino!==stat.ino||current.nlink!==1)throw new Error('NSIS uninstaller changed during signing');await handle.truncate(0);await handle.writeFile(bytes);await handle.sync();}finally{await handle.close();}
+		} finally {await fs.rm(staged,{force:true});}
 	}
 }
 
@@ -104,7 +116,7 @@ export class PanelRelease {
 		return files;
 	}
 	static async main(args = process.argv.slice(2)) {
-		if (args[0] === 'sign-file') { if (args.length !== 4) throw new Error('Invalid signing hook request'); return SigningBridge.request(args[1], args[3], args[2]); }
+		if (args[0] === 'sign-file') { if (args.length !== 4) throw new Error('Invalid signing hook request'); return SigningBridge.requestTauri(args[1],args[2],args[3]); }
 		const options = PanelRelease.options([...args]);
 		const working = path.join(PanelRelease.root, 'apps/desktop');
 		let target = path.join(PanelRelease.root, 'target/desktop-releases', options.mode);
@@ -160,10 +172,12 @@ export class PanelRelease {
 			await PanelRelease.run('pnpm', build, { cwd: working, environment });
 			const release = path.join(target, options.target, 'release'); let artifacts; let updater;
 			if (options.mode === 'windows') {
-				const executables = [path.join(release, 'typerelay-panel.exe'), ...nativeTools, ...await PanelRelease.files(path.join(release, 'bundle/nsis'), '.exe')];
+				const panel=path.join(release,'typerelay-panel.exe');const installers=await PanelRelease.files(path.join(release,'bundle/nsis'),'.exe');const executables=[panel,...nativeTools,...installers];
 				if (executables.length < 4) throw new Error('Missing Windows native tools or installer');
-				for (const file of executables) { if (!bridge.signed.has(await fs.realpath(file))) throw new Error('Tauri did not sign every release artifact'); await PanelRelease.run('osslsigncode', ['verify', '-CAfile', signingEnvironment.WINDOWS_SIGNING_CA_FILE, '-ignore-cdp', '-ignore-crl', '-in', file], { capture: true, environment }); }
-				const installers = await PanelRelease.files(path.join(release, 'bundle/nsis'), '.exe'); const signatures = await PanelRelease.files(path.join(release, 'bundle/nsis'), '.sig');
+				for(const file of executables)if(!bridge.signed.has(await fs.realpath(file)))throw new Error('Tauri did not sign every release artifact');
+				if(![...bridge.signed].some(file=>path.basename(file).startsWith('nsis-uninstaller-')))throw new Error('Tauri did not sign the NSIS uninstaller');
+				for(const file of [...nativeTools,...installers])await PanelRelease.run('osslsigncode',['verify','-CAfile',signingEnvironment.WINDOWS_SIGNING_CA_FILE,'-ignore-cdp','-ignore-crl','-in',file],{capture:true,environment});
+				const signatures = await PanelRelease.files(path.join(release, 'bundle/nsis'), '.sig');
 				if (installers.length !== 1 || signatures.length !== 1) throw new Error('Expected one Windows NSIS installer and updater signature');
 				artifacts = [...installers, ...signatures]; updater = { target: 'windows-x86_64', file: installers[0], signature: signatures[0] };
 			} else if (options.mode === 'macos') {
