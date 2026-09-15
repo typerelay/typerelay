@@ -12,7 +12,9 @@ pub use native::{Target,fallback_allowed};
 pub use native::{ExpansionRequest, ExpansionSession};
 
 pub fn accessibility(prompt:bool)->bool { #[cfg(target_os="macos")] {native::accessibility(prompt)} #[cfg(not(target_os="macos"))] {let _=prompt;true} }
+pub fn input_monitoring(prompt:bool)->bool { #[cfg(target_os="macos")] {native::input_monitoring(prompt)} #[cfg(not(target_os="macos"))] {let _=prompt;true} }
 pub fn open_accessibility_settings()->Result<()> { #[cfg(target_os="macos")] {native::open_accessibility_settings()} #[cfg(not(target_os="macos"))] {anyhow::bail!("Accessibility settings are available on macOS")} }
+pub fn open_input_monitoring_settings()->Result<()> { #[cfg(target_os="macos")] {native::open_input_monitoring_settings()} #[cfg(not(target_os="macos"))] {anyhow::bail!("Input Monitoring settings are available on macOS")} }
 pub fn open_tui()->Result<()> { #[cfg(target_os="macos")] {native::open_tui()} #[cfg(not(target_os="macos"))] {anyhow::bail!("Open TypeRelay TUI from your application launcher")} }
 #[cfg(target_os="macos")]
 pub fn release_modifiers()->Result<()> {native::release_modifiers()}

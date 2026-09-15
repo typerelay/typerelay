@@ -10,7 +10,7 @@ class Fixture {
   const calls=[];const callbacks={};const pending=[];
   const style=dom.window.document.createElement('style');style.textContent=await readFile('ui/panel.css','utf8');dom.window.document.head.append(style);
   dom.window.HTMLElement.prototype.scrollIntoView=()=>{};
-  dom.window.__TAURI__={core:{invoke:async(name,args)=>{calls.push({name,args});if(name==='initialize')return{config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},theme:{os:'linux'},settings:false,accessibility:false};if(name==='search')return new Promise(resolve=>pending.push({query:args.query,resolve}));if(name==='libraries')return[];if(name==='prepare_template')return{fields:[],steps:[{kind:'text',text:'Literal'}],text:'Literal',enter_actions:0,template:{text:'Literal',variables:{}}};return null;}},event:{listen:(name,callback)=>{callbacks[name]=callback;}}};
+  dom.window.__TAURI__={core:{invoke:async(name,args)=>{calls.push({name,args});if(name==='initialize')return{config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},theme:{os:'linux'},settings:false,accessibility:false,input_monitoring:false};if(name==='search')return new Promise(resolve=>pending.push({query:args.query,resolve}));if(name==='libraries')return[];if(name==='prepare_template')return{fields:[],steps:[{kind:'text',text:'Literal'}],text:'Literal',enter_actions:0,template:{text:'Literal',variables:{}}};return null;}},event:{listen:(name,callback)=>{callbacks[name]=callback;}}};
   dom.window.eval((await readFile('ui/panel.js','utf8')).replace('new Panel();','window.panel = new Panel();'));
   await new Promise(resolve=>setTimeout(resolve,0));
   return {dom,panel:dom.window.panel,calls,pending,callbacks};
@@ -74,15 +74,19 @@ test('missing insertion target hint stays out of search and settings',async()=>{
  }finally{f.dom.window.close();}
 });
 
-test('macOS settings expose Accessibility and bundled TUI actions',async()=>{
+test('macOS settings expose missing permissions and bundled TUI actions',async()=>{
  const f=await Fixture.create();try{
-	await f.panel.open({settings:true,theme:{os:'macos'},config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},accessibility:false});
+	await f.panel.open({settings:true,theme:{os:'macos'},config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},accessibility:false,input_monitoring:false});
   f.dom.window.document.querySelector('#open-accessibility').click();await new Promise(resolve=>setTimeout(resolve,0));
+  f.dom.window.document.querySelector('#open-input-monitoring').click();await new Promise(resolve=>setTimeout(resolve,0));
   f.dom.window.document.querySelector('#open-tui').click();await new Promise(resolve=>setTimeout(resolve,0));
   assert.ok(f.calls.some(call=>call.name==='open_accessibility_settings'));
+  assert.ok(f.calls.some(call=>call.name==='open_input_monitoring_settings'));
   assert.ok(f.calls.some(call=>call.name==='open_tui'));
 	assert.equal(f.dom.window.document.querySelector('#accessibility-state').textContent,'Required');
+	assert.equal(f.dom.window.document.querySelector('#input-monitoring-state').textContent,'Required');
 	assert.equal(f.dom.window.document.querySelector('#accessibility-card').hidden,false);
+	assert.equal(f.dom.window.document.querySelector('#input-monitoring-card').hidden,false);
 	assert.equal(f.dom.window.document.body.dataset.os,'macos');
 	assert.equal(f.dom.window.document.body.dataset.view,'settings');
 	f.dom.window.document.querySelector('[data-settings-tab="sync"]').click();
@@ -94,19 +98,36 @@ test('macOS settings expose Accessibility and bundled TUI actions',async()=>{
 
 test('Windows hides macOS-only settings actions',async()=>{
  const f=await Fixture.create();try{
-	await f.panel.open({settings:true,theme:{os:'windows'},config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},accessibility:false});
+	await f.panel.open({settings:true,theme:{os:'windows'},config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},accessibility:false,input_monitoring:false});
 	assert.equal(f.dom.window.getComputedStyle(f.dom.window.document.querySelector('#tui-card').parentElement).display,'none');
-	await f.panel.open({settings:true,theme:{os:'macos'},config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},accessibility:false});
+	await f.panel.open({settings:true,theme:{os:'macos'},config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},accessibility:false,input_monitoring:false});
 	assert.equal(f.dom.window.getComputedStyle(f.dom.window.document.querySelector('#tui-card').parentElement).display,'block');
  }finally{f.dom.window.close();}
 });
 
-test('returning from macOS settings reconciles granted Accessibility and clears stale guidance',async()=>{
+test('returning from macOS settings identifies the remaining missing permission',async()=>{
  const f=await Fixture.create();try{
-	await f.panel.open({settings:true,theme:{os:'macos'},config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},accessibility:false,status:'Allow TypeRelay in System Settings → Privacy & Security → Accessibility'});
-	f.panel.invoke=async(name)=>name==='initialize'?{config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},theme:{os:'macos'},settings:true,accessibility:true,status:''}:null;
+	await f.panel.open({settings:true,theme:{os:'macos'},config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},accessibility:false,input_monitoring:false,status:'TypeRelay needs Accessibility and Input Monitoring. Open Settings to allow both.'});
+	f.panel.invoke=async(name)=>name==='initialize'?{config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},theme:{os:'macos'},settings:true,accessibility:true,input_monitoring:false,status:'TypeRelay needs Input Monitoring. Open Settings to allow it.'}:null;
 	f.dom.window.dispatchEvent(new f.dom.window.Event('focus'));await new Promise(resolve=>setTimeout(resolve,0));
 	assert.equal(f.dom.window.document.querySelector('#accessibility-card').hidden,true);
+	assert.equal(f.dom.window.document.querySelector('#input-monitoring-card').hidden,false);
+	assert.match(f.panel.status.textContent,/needs Input Monitoring/);
+	f.panel.invoke=async(name)=>name==='initialize'?{config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},theme:{os:'macos'},settings:true,accessibility:true,input_monitoring:true,status:''}:null;
+	f.dom.window.dispatchEvent(new f.dom.window.Event('focus'));await new Promise(resolve=>setTimeout(resolve,0));
+	assert.equal(f.dom.window.document.querySelector('#input-monitoring-card').hidden,true);
+	assert.equal(f.panel.status.textContent,'');
+ }finally{f.dom.window.close();}
+});
+
+test('returning from macOS Privacy settings refreshes permissions without a relaunch',async()=>{
+ const f=await Fixture.create();try{
+	await f.panel.open({settings:false,theme:{os:'macos'},config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},accessibility:false,input_monitoring:false,status:'TypeRelay needs Accessibility and Input Monitoring. Open Settings to allow both.'});
+	f.panel.invoke=async(name)=>name==='initialize'?{config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},theme:{os:'macos'},settings:false,accessibility:true,input_monitoring:true,status:''}:null;
+	f.dom.window.dispatchEvent(new f.dom.window.Event('focus'));await new Promise(resolve=>setTimeout(resolve,0));
+	assert.equal(f.dom.window.document.body.dataset.view,'search');
+	assert.equal(f.dom.window.document.querySelector('#accessibility-card').hidden,true);
+	assert.equal(f.dom.window.document.querySelector('#input-monitoring-card').hidden,true);
 	assert.equal(f.panel.status.textContent,'');
  }finally{f.dom.window.close();}
 });

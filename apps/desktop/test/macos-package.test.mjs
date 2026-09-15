@@ -22,13 +22,21 @@ test('macOS bundle stages the TUI for native and universal targets', async () =>
 	assert.equal(config.app.windows[0].titleBarStyle, 'Overlay');
 });
 
-test('macOS startup requests Accessibility and offers settings and TUI launchers', async () => {
+test('macOS startup requests both permissions and offers settings and TUI launchers', async () => {
 	const main = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/main.rs'), 'utf8'); const shared = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/platform.rs'), 'utf8'); const platform = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/platform_macos.rs'), 'utf8'); const smoke = await fs.readFile(path.join(root, 'scripts/macos-typing-smoke.swift'), 'utf8'); const tray = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/tray.rs'), 'utf8');
-	assert.match(main, /platform::accessibility\(true\)/);
-	assert.match(main, /platform::accessibility\(false\)\{message\}else\{Runtime::ACCESSIBILITY_MESSAGE/);
+	assert.match(main, /Runtime::permissions\(true\)/);
+	assert.match(main, /platform::input_monitoring\(prompt&&accessibility\)/);
 	assert.match(main, /--accessibility-status/);
+	assert.match(main, /--input-monitoring-status/);
 	assert.match(platform, /Enigo::new/);
+	assert.match(platform, /CGPreflightListenEventAccess/);
+	assert.match(platform, /CGRequestListenEventAccess/);
 	assert.match(platform, /Privacy_Accessibility/);
+	assert.match(platform, /Privacy_ListenEvent/);
+	assert.match(platform, /open_input_monitoring_settings[^\n]+input_monitoring\(true\)/);
+	assert.match(main, /accessibility&&input_monitoring&&let Err\(error\)=Runtime::start_expansion/);
+	assert.match(main, /Runtime::open\(app\.handle\(\),missing_permissions\)/);
+	assert.match(main, /open_input_monitoring_settings/);
 	assert.match(platform, /with_file_name\("typerelay-tui"\)/);
 	assert.match(platform, /CGEvent::new_keyboard_event/);
 	assert.match(platform, /KeyCode::ANSI_V/);

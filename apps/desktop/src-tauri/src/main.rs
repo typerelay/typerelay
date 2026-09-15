@@ -13,10 +13,16 @@ use tauri_plugin_notification::NotificationExt;
 #[cfg(not(target_os="linux"))]
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
-struct Runtime { root:PathBuf, target:Mutex<Option<platform::Target>>, last:Mutex<Option<platform::Target>>, erase:Mutex<usize>, busy:AtomicBool, syncing:AtomicBool, prompting:AtomicBool, prompt_hit:Mutex<Option<Hit>>, settings:AtomicBool, status:Mutex<String>, #[cfg(target_os="linux")] registration:Mutex<Option<typerelay_client::desktop::Registration>> }
+struct Runtime { root:PathBuf, target:Mutex<Option<platform::Target>>, last:Mutex<Option<platform::Target>>, erase:Mutex<usize>, busy:AtomicBool, syncing:AtomicBool, prompting:AtomicBool, prompt_hit:Mutex<Option<Hit>>, settings:AtomicBool, status:Mutex<String>, #[cfg(any(target_os="windows",target_os="macos"))] expansion_started:AtomicBool, #[cfg(target_os="linux")] registration:Mutex<Option<typerelay_client::desktop::Registration>> }
 impl Runtime {
 	#[cfg(target_os="macos")]
-	const ACCESSIBILITY_MESSAGE:&'static str="Allow TypeRelay in System Settings → Privacy & Security → Accessibility";
+	fn permission_message(accessibility:bool,input_monitoring:bool)->Option<&'static str> {match(accessibility,input_monitoring){(false,false)=>Some("TypeRelay needs Accessibility and Input Monitoring. Open Settings to allow both."),(false,true)=>Some("TypeRelay needs Accessibility. Open Settings to allow it."),(true,false)=>Some("TypeRelay needs Input Monitoring. Open Settings to allow it."),(true,true)=>None}}
+	#[cfg(target_os="macos")]
+	fn permissions(prompt:bool)->(bool,bool) {let accessibility=platform::accessibility(prompt);let input_monitoring=platform::input_monitoring(prompt&&accessibility);(accessibility,input_monitoring)}
+	#[cfg(target_os="macos")]
+	fn update_permission_status(&self,accessibility:bool,input_monitoring:bool) {let message=Self::permission_message(accessibility,input_monitoring);let mut status=self.status.lock().unwrap();if let Some(message)=message{*status=message.into();}else if status.starts_with("TypeRelay needs Accessibility")||status.starts_with("TypeRelay needs Input Monitoring"){status.clear();}}
+	#[cfg(any(target_os="windows",target_os="macos"))]
+	fn start_expansion(app:&tauri::AppHandle)->Result<()> {let state=app.state::<Runtime>();if state.expansion_started.swap(true,Ordering::SeqCst){return Ok(());}let result=(||{let requests=platform::ExpansionSession::start(state.root.join("snippets"),state.root.join("settings.yml"))?;let handle=app.clone();std::thread::spawn(move||for request in requests{if let Err(error)=Runtime::expand(&handle,request){let message=format!("Expansion failed: {error:#}");*handle.state::<Runtime>().status.lock().unwrap()=message.clone();let _=handle.notification().builder().title("TypeRelay").body(&message).show();}});Ok(())})();if result.is_err(){state.expansion_started.store(false,Ordering::SeqCst);}result}
     fn hide_on_focus_loss()->bool { cfg!(not(target_os="linux")) }
     fn sync_notice(app:&tauri::AppHandle,message:&str) {
         *app.state::<Runtime>().status.lock().unwrap()=message.into();
@@ -41,7 +47,7 @@ impl Runtime {
             if target.is_none(){
                 let message=captured.err().map(|e|e.to_string()).unwrap_or("Choose an application to insert into".into());
                 #[cfg(target_os="macos")]
-                {*state.status.lock().unwrap()=if platform::accessibility(false){message}else{Runtime::ACCESSIBILITY_MESSAGE.into()};}
+                {let (accessibility,input_monitoring)=Runtime::permissions(false);*state.status.lock().unwrap()=Runtime::permission_message(accessibility,input_monitoring).unwrap_or(&message).into();}
                 #[cfg(not(target_os="macos"))]
                 {*state.status.lock().unwrap()=message;}
             }
@@ -154,10 +160,15 @@ impl Runtime {
 #[tauri::command]
 fn initialize(app:tauri::AppHandle)->std::result::Result<Value,String> {
     let state=app.state::<Runtime>(); let settings=Panel::settings(&state.root).map_err(|e|e.to_string())?;
-		let accessibility=platform::accessibility(false);
 		#[cfg(target_os="macos")]
-		if accessibility{let mut status=state.status.lock().unwrap();if status.as_str()==Runtime::ACCESSIBILITY_MESSAGE{status.clear();}}
-		Ok(json!({"config":settings,"prompt":state.prompt_hit.lock().unwrap().clone(),"server":typerelay_client::settings::SettingsStore::open(state.root.join("settings.yml")).ok().map(|s|s.settings.sync_url).unwrap_or_default(),"theme":Runtime::theme(),"settings":state.settings.load(Ordering::SeqCst),"status":*state.status.lock().unwrap(),"update":app.state::<update::UpdateState>().value(),"accessibility":accessibility}))
+		let (accessibility,input_monitoring)=Runtime::permissions(true);
+		#[cfg(not(target_os="macos"))]
+		let accessibility=platform::accessibility(false);
+		#[cfg(not(target_os="macos"))]
+		let input_monitoring=platform::input_monitoring(false);
+		#[cfg(target_os="macos")]
+		{state.update_permission_status(accessibility,input_monitoring);if accessibility&&input_monitoring{match Runtime::start_expansion(&app){Ok(())=>{let mut status=state.status.lock().unwrap();if status.starts_with("TypeRelay could not start Input Monitoring"){status.clear();}},Err(error)=>*state.status.lock().unwrap()=format!("TypeRelay could not start Input Monitoring: {error:#}")}}}
+		Ok(json!({"config":settings,"prompt":state.prompt_hit.lock().unwrap().clone(),"server":typerelay_client::settings::SettingsStore::open(state.root.join("settings.yml")).ok().map(|s|s.settings.sync_url).unwrap_or_default(),"theme":Runtime::theme(),"settings":state.settings.load(Ordering::SeqCst),"status":*state.status.lock().unwrap(),"update":app.state::<update::UpdateState>().value(),"accessibility":accessibility,"input_monitoring":input_monitoring}))
 }
 #[tauri::command]
 async fn search(app:tauri::AppHandle,query:String)->std::result::Result<Vec<Hit>,String> {
@@ -255,11 +266,15 @@ async fn enroll(app:tauri::AppHandle,names:Vec<String>)->std::result::Result<(),
 #[tauri::command]
 fn open_accessibility_settings()->std::result::Result<(),String>{platform::open_accessibility_settings().map_err(|e|e.to_string())}
 #[tauri::command]
+fn open_input_monitoring_settings()->std::result::Result<(),String>{platform::open_input_monitoring_settings().map_err(|e|e.to_string())}
+#[tauri::command]
 fn open_tui()->std::result::Result<(),String>{platform::open_tui().map_err(|e|e.to_string())}
 fn main() {
     if std::env::args().any(|a|a=="--version"){println!("typerelay-panel {}",env!("CARGO_PKG_VERSION"));return;}
     #[cfg(target_os="macos")]
     if std::env::args().any(|a|a=="--accessibility-status"){println!("{}",if platform::accessibility(false){"allowed"}else{"required"});return;}
+    #[cfg(target_os="macos")]
+    if std::env::args().any(|a|a=="--input-monitoring-status"){println!("{}",if platform::input_monitoring(false){"allowed"}else{"required"});return;}
     #[cfg(target_os="macos")]
     if std::env::args().any(|a|a=="--repair-input"){if let Err(error)=platform::release_modifiers(){eprintln!("TypeRelay input repair failed: {error}");std::process::exit(1);}return;}
     #[cfg(target_os="linux")]
@@ -276,12 +291,12 @@ fn main() {
         let root=Paths::config_dir()?; Database::open(&root.join("snippets"))?;
         Sync::worker(root.clone(),root.join("snippets"));
         let config=Panel::settings(&root)?;
-		app.manage(Runtime{root:root.clone(),target:Mutex::new(None),last:Mutex::new(None),erase:Mutex::new(0),busy:AtomicBool::new(false),syncing:AtomicBool::new(false),prompting:AtomicBool::new(false),prompt_hit:Mutex::new(None),settings:AtomicBool::new(false),status:Mutex::new(String::new()),#[cfg(target_os="linux")] registration:Mutex::new(None)});
+		app.manage(Runtime{root:root.clone(),target:Mutex::new(None),last:Mutex::new(None),erase:Mutex::new(0),busy:AtomicBool::new(false),syncing:AtomicBool::new(false),prompting:AtomicBool::new(false),prompt_hit:Mutex::new(None),settings:AtomicBool::new(false),status:Mutex::new(String::new()),#[cfg(any(target_os="windows",target_os="macos"))] expansion_started:AtomicBool::new(false),#[cfg(target_os="linux")] registration:Mutex::new(None)});
 		app.manage(update::UpdateState::default());
 		#[cfg(target_os="macos")]
-		if !platform::accessibility(true){*app.state::<Runtime>().status.lock().unwrap()=Runtime::ACCESSIBILITY_MESSAGE.into();}
-        #[cfg(any(target_os="windows",target_os="macos"))]
-        {let requests=platform::ExpansionSession::start(root.join("snippets"),root.join("settings.yml"))?;let handle=app.handle().clone();std::thread::spawn(move||for request in requests{if let Err(error)=Runtime::expand(&handle,request){let message=format!("Expansion failed: {error:#}");*handle.state::<Runtime>().status.lock().unwrap()=message.clone();let _=handle.notification().builder().title("TypeRelay").body(&message).show();}});}
+		let missing_permissions={let (accessibility,input_monitoring)=Runtime::permissions(true);app.state::<Runtime>().update_permission_status(accessibility,input_monitoring);if accessibility&&input_monitoring&&let Err(error)=Runtime::start_expansion(app.handle()){*app.state::<Runtime>().status.lock().unwrap()=format!("TypeRelay could not start Input Monitoring: {error:#}");}!(accessibility&&input_monitoring)};
+        #[cfg(target_os="windows")]
+        Runtime::start_expansion(app.handle())?;
         #[cfg(target_os="linux")]
         {let _=std::fs::remove_file(typerelay_client::panel_ipc::PanelIpc::directory()?.join("ready"));}
         if std::env::args().any(|arg|arg=="--quit"||arg=="--uninstall") {if std::env::args().any(|arg|arg=="--uninstall"){app.autolaunch().disable()?;}app.handle().exit(0);return Ok(());}
@@ -303,12 +318,17 @@ fn main() {
                 } else {let quit=&bytes[..length]==b"quit";let app=handle.clone();let _=handle.run_on_main_thread(move||if quit{Runtime::quit(&app);}else{Runtime::open(&app,false);});}
             }}});
         }
-        if !std::env::args().any(|a|a=="--background"){Runtime::open(app.handle(),false);}
+        if !std::env::args().any(|a|a=="--background"){
+            #[cfg(target_os="macos")]
+            Runtime::open(app.handle(),missing_permissions);
+            #[cfg(not(target_os="macos"))]
+            Runtime::open(app.handle(),false);
+        }
         Ok(())
     }).on_window_event(|window,event|match event {
         tauri::WindowEvent::CloseRequested{api,..}=>{api.prevent_close();set_prompt_view(window.app_handle().clone(),false);Runtime::hide(window.app_handle());},
         tauri::WindowEvent::Focused(false)if Runtime::hide_on_focus_loss() && !window.app_handle().state::<Runtime>().busy.load(Ordering::SeqCst) && !window.app_handle().state::<Runtime>().settings.load(Ordering::SeqCst) && !window.app_handle().state::<Runtime>().prompting.load(Ordering::SeqCst)=> {Runtime::hide(window.app_handle());},_=>()
-    }).invoke_handler(tauri::generate_handler![initialize,search,insert,copy_snippet,prepare_template,set_prompt_view,set_settings_view,dismiss,sync_now,save_settings,connect,libraries,enroll,open_accessibility_settings,open_tui]).run(tauri::generate_context!());
+    }).invoke_handler(tauri::generate_handler![initialize,search,insert,copy_snippet,prepare_template,set_prompt_view,set_settings_view,dismiss,sync_now,save_settings,connect,libraries,enroll,open_accessibility_settings,open_input_monitoring_settings,open_tui]).run(tauri::generate_context!());
     if let Err(error)=result {eprintln!("TypeRelay panel: {error}");std::process::exit(1);}
 }
 
