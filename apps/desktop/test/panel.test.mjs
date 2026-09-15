@@ -8,6 +8,7 @@ class Fixture {
  static async create() {
   const dom=new JSDOM(pug.renderFile('ui/index.pug'),{runScripts:'outside-only',pretendToBeVisual:true});
   const calls=[];const callbacks={};const pending=[];
+  const style=dom.window.document.createElement('style');style.textContent=await readFile('ui/panel.css','utf8');dom.window.document.head.append(style);
   dom.window.HTMLElement.prototype.scrollIntoView=()=>{};
   dom.window.__TAURI__={core:{invoke:async(name,args)=>{calls.push({name,args});if(name==='initialize')return{config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},theme:{os:'linux'},settings:false,accessibility:false};if(name==='search')return new Promise(resolve=>pending.push({query:args.query,resolve}));if(name==='libraries')return[];if(name==='prepare_template')return{fields:[],steps:[{kind:'text',text:'Literal'}],text:'Literal',enter_actions:0,template:{text:'Literal',variables:{}}};return null;}},event:{listen:(name,callback)=>{callbacks[name]=callback;}}};
   dom.window.eval((await readFile('ui/panel.js','utf8')).replace('new Panel();','window.panel = new Panel();'));
@@ -79,6 +80,15 @@ test('macOS settings expose Accessibility and bundled TUI actions',async()=>{
 	assert.equal(f.dom.window.document.querySelector('#settings-general').hidden,true);
 	assert.equal(f.dom.window.document.querySelector('#settings-sync').hidden,false);
 	assert.equal(f.dom.window.document.querySelector('#connect-form').closest('.settings-page').id,'settings-sync');
+ }finally{f.dom.window.close();}
+});
+
+test('Windows hides macOS-only settings actions',async()=>{
+ const f=await Fixture.create();try{
+	await f.panel.open({settings:true,theme:{os:'windows'},config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},accessibility:false});
+	assert.equal(f.dom.window.getComputedStyle(f.dom.window.document.querySelector('#tui-card').parentElement).display,'none');
+	await f.panel.open({settings:true,theme:{os:'macos'},config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},accessibility:false});
+	assert.equal(f.dom.window.getComputedStyle(f.dom.window.document.querySelector('#tui-card').parentElement).display,'block');
  }finally{f.dom.window.close();}
 });
 
