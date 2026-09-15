@@ -63,6 +63,7 @@ test('release tooling creates signed updater artifacts for every supported platf
 	assert.match(source, /TypeRelay-Omarchy-\$\{config\.version\}-x86_64\.tar\.gz/);
 	assert.match(source, /windows-x86_64/);
 	assert.match(source, /darwin-aarch64/);
+	assert.match(source, /TypeRelay_\$\{config\.version\}_\$\{macArchitecture\}\.app\.tar\.gz/);
 	assert.match(source, /Bundled macOS TUI version does not match/);
 	assert.match(source, /linux-x86_64/);
 	assert.match(source, /nativeTools=await NativeTools\.stage/);

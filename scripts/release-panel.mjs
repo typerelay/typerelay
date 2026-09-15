@@ -190,7 +190,9 @@ export class PanelRelease {
 				await PanelRelease.run('lipo', [tui, '-verify_arch', ...targets.map(value => value.startsWith('aarch64') ? 'arm64' : 'x86_64')]);
 				const dmgs = await PanelRelease.files(path.join(release, 'bundle/dmg'), '.dmg'); const archives = await PanelRelease.files(path.join(release, 'bundle/macos'), '.app.tar.gz'); const signatures = await PanelRelease.files(path.join(release, 'bundle/macos'), '.sig');
 				if (dmgs.length !== 1 || archives.length !== 1 || signatures.length !== 1) throw new Error('Expected one macOS DMG and signed updater archive');
-				artifacts = [...dmgs, ...archives, ...signatures]; updater = { target: options.target.startsWith('aarch64') ? 'darwin-aarch64' : 'darwin-x86_64', file: archives[0], signature: signatures[0] };
+				const macArchitecture = options.target.startsWith('aarch64') ? 'aarch64' : options.target.startsWith('x86_64') ? 'x64' : 'universal'; const archive = path.join(path.dirname(archives[0]), `TypeRelay_${config.version}_${macArchitecture}.app.tar.gz`); const signature = `${archive}.sig`;
+				await fs.rename(archives[0], archive); await fs.rename(signatures[0], signature);
+				artifacts = [...dmgs, archive, signature]; updater = { target: options.target.startsWith('aarch64') ? 'darwin-aarch64' : 'darwin-x86_64', file: archive, signature };
 			} else {
 				const engine = path.join(release, 'typerelay'); const tui = path.join(release, 'typerelay-tui'); const panel = path.join(release, 'typerelay-panel');
 				for (const [name, file] of [['typerelay', engine], ['typerelay-tui', tui], ['typerelay-panel', panel]]) { const version = await PanelRelease.run(file, ['--version'], { capture: true }); if (version !== `${name} ${config.version}`) throw new Error(`${name} version does not match ${config.version}`); const type = await PanelRelease.run('file', ['--brief', file], { capture: true }); if (!/ELF 64-bit.*x86-64/i.test(type)) throw new Error(`${name} is not an x86-64 ELF binary`); }
