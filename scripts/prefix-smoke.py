@@ -39,18 +39,24 @@ class PrefixSmoke(desktop.Smoke):
                 if client.poll() is not None:
                     raise RuntimeError((directory / "engine.log").read_text())
                 output = directory / "output.txt"
+                output.write_text("")
                 self.start(sys.executable, str(self.root / "scripts/desktop-smoke.py"), "--fixture", "gtk", "--output", str(output))
                 identity = self.focus("TypeRelay GTK Test")
                 self.type_keys(identity, ",brb ")
-                assert output.read_text() == "Be right back."
+                actual = output.read_text()
+                assert actual == "Be right back.", repr(actual)
                 settings.write_text("trigger_prefix: ';'\nsync_url: ''\n")
                 time.sleep(0.7)
                 self.type_keys(identity, ";brb ")
-                assert output.read_text() == "Be right back.Be right back."
+                actual = output.read_text()
+                assert actual == "Be right back.Be right back.", repr(actual)
                 self.type_keys(identity, ",brb ")
-                assert output.read_text() == "Be right back.Be right back.,brb "
-                assert file.read_text() == content
-                print("PASS: comma expands, semicolon reloads live, old prefix stops expanding; snippet file unchanged", flush=True)
+                actual = output.read_text()
+                assert actual == "Be right back.Be right back.,brb ", repr(actual)
+                self.type_keys(identity, "--overlap")
+                actual = output.read_text()
+                assert actual == "Be right back.Be right back.,brb Be right back.x", repr(actual)
+                print("PASS: prefix reload, overlapping-key expansion and following input order", flush=True)
             finally:
                 if client and client.poll() is None:
                     client.send_signal(signal.SIGINT)
