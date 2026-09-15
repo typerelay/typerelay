@@ -43,7 +43,8 @@ export class SigningBridge {
 		await fs.chmod(this.path, 0o600);
 	}
 	async close() { await this.queue.catch(() => {}); for (const socket of this.connections) socket.destroy(); if (this.server) await new Promise(resolve => this.server.close(resolve)); }
-	static request(socketPath, file) {
+	static request(socketPath, file, base = process.cwd()) {
+		file = path.resolve(base, file);
 		return new Promise((resolve, reject) => {
 			const socket = net.createConnection(socketPath); let output = '';
 			socket.setTimeout(300000, () => socket.destroy(new Error('Signing request timed out')));
@@ -103,7 +104,7 @@ export class PanelRelease {
 		return files;
 	}
 	static async main(args = process.argv.slice(2)) {
-		if (args[0] === 'sign-file') { if (args.length !== 3) throw new Error('Invalid signing hook request'); return SigningBridge.request(args[1], args[2]); }
+		if (args[0] === 'sign-file') { if (args.length !== 4) throw new Error('Invalid signing hook request'); return SigningBridge.request(args[1], args[3], args[2]); }
 		const options = PanelRelease.options([...args]);
 		const working = path.join(PanelRelease.root, 'apps/desktop');
 		let target = path.join(PanelRelease.root, 'target/desktop-releases', options.mode);
@@ -140,7 +141,7 @@ export class PanelRelease {
 					await PanelRelease.run('osslsigncode', ['verify', '-CAfile', signingEnvironment.WINDOWS_SIGNING_CA_FILE, '-ignore-cdp', '-ignore-crl', '-in', file], { environment, capture: true });
 					});
 					await bridge.start();
-				overlay = { bundle: { createUpdaterArtifacts: true, windows: { signCommand: { cmd: process.execPath, args: [PanelRelease.script, 'sign-file', bridge.path, '%1'] } } } };
+				overlay = { bundle: { createUpdaterArtifacts: true, windows: { signCommand: { cmd: process.execPath, args: [PanelRelease.script, 'sign-file', bridge.path, path.join(working, 'src-tauri'), '%1'] } } } };
 			} else if (options.mode === 'macos') {
 				Object.assign(environment, PanelRelease.appleEnvironment(process.env), { CARGO_TARGET_DIR: target, TMPDIR: temporary });
 				environment.CI = 'true';

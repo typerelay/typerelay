@@ -28,18 +28,19 @@ test('Apple credential aliases match the existing Electron release environment',
 test('private signing bridge confines paths, serializes requests and verifies before success', { skip: process.platform === 'win32' }, async () => {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), 'typerelay-sign-test-')); await fs.chmod(root, 0o700);
 	const allowed = path.join(root, 'artifacts'); await fs.mkdir(allowed);
-	const first = path.join(allowed, 'app.exe'); const second = path.join(allowed, 'setup.exe'); const outside = path.join(root, 'outside.exe');
-	for (const file of [first, second, outside]) await fs.writeFile(file, 'MZ fixture');
+	const first = path.join(allowed, 'app.exe'); const second = path.join(allowed, 'setup.exe'); const relative = path.join(allowed, 'relative.exe'); const outside = path.join(root, 'outside.exe');
+	for (const file of [first, second, relative, outside]) await fs.writeFile(file, 'MZ fixture');
 	let active = 0; let maximum = 0; const signed = [];
 	const bridge = new SigningBridge(path.join(root, 'sign.sock'), [allowed], async file => { maximum = Math.max(maximum, ++active); await new Promise(resolve => setTimeout(resolve, 15)); signed.push(file); active--; });
 	try {
 		await bridge.start(); assert.equal((await fs.stat(bridge.path)).mode & 0o777, 0o600);
 		await Promise.all([SigningBridge.request(bridge.path, first), SigningBridge.request(bridge.path, second)]);
-		assert.equal(maximum, 1); assert.equal(signed.length, 2);
+		await SigningBridge.request(bridge.path, path.basename(relative), allowed);
+		assert.equal(maximum, 1); assert.deepEqual(new Set(signed), new Set([first, second, relative]));
 		await assert.rejects(SigningBridge.request(bridge.path, outside), /failed/);
 		const link = path.join(allowed, 'linked.exe'); await fs.symlink(outside, link); await assert.rejects(SigningBridge.request(bridge.path, link), /failed/);
 		const fake = path.join(allowed, 'bad.exe'); await fs.writeFile(fake, 'not PE'); await assert.rejects(SigningBridge.request(bridge.path, fake), /failed/);
-		assert.equal(signed.length, 2);
+		assert.equal(signed.length, 3);
 	} finally { await bridge.close(); await fs.rm(root, { recursive: true, force: true }); }
 });
 test('failed signer never reports a verified artifact', { skip: process.platform === 'win32' }, async () => {
@@ -60,6 +61,7 @@ test('release tooling creates signed updater artifacts for every supported platf
 	assert.match(source, /nativeTools=await NativeTools\.stage/);
 	assert.match(source, /path\.dirname\(nativeTools\[0\]\)/);
 	assert.match(source, /path\.join\(release, 'typerelay-panel\.exe'\), \.\.\.nativeTools/);
+	assert.match(source, /path\.join\(working, 'src-tauri'\), '%1'/);
 	assert.equal(config.plugins.updater.endpoints[0], 'https://transfer.typerelay.com/apps/latest.json');
 	assert.match(config.plugins.updater.pubkey, /^[A-Za-z0-9+/=]+$/);
 });
