@@ -44,4 +44,6 @@ objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSWorkspace", "NSRunningApplication", "NSApplication", "NSWindow"] }
 objc2-foundation = "0.3"
 core-graphics = { version = "0.25", features = ["elcapitan"] }
+core-foundation = "0.10"
+foreign-types = "0.5"
 enigo = "0.6"

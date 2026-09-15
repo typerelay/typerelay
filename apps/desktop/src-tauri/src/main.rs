@@ -38,7 +38,13 @@ impl Runtime {
         if !window.is_visible().unwrap_or(false) {
             let captured=platform::Target::capture();
             let target=captured.as_ref().ok().cloned().or_else(||if platform::fallback_allowed(){state.last.lock().unwrap().clone()}else{None});
-            if target.is_none(){*state.status.lock().unwrap()=captured.err().map(|e|e.to_string()).unwrap_or("Choose an application to insert into".into());}
+            if target.is_none(){
+                let message=captured.err().map(|e|e.to_string()).unwrap_or("Choose an application to insert into".into());
+                #[cfg(target_os="macos")]
+                {*state.status.lock().unwrap()=if platform::accessibility(false){message}else{Runtime::ACCESSIBILITY_MESSAGE.into()};}
+                #[cfg(not(target_os="macos"))]
+                {*state.status.lock().unwrap()=message;}
+            }
             *state.target.lock().unwrap()=target;
         }
         state.settings.store(settings,Ordering::SeqCst);
@@ -75,14 +81,14 @@ impl Runtime {
             });
         }
     }
-    #[cfg(target_os="windows")]
+    #[cfg(any(target_os="windows",target_os="macos"))]
     fn expand(app:&tauri::AppHandle,request:platform::ExpansionRequest)->Result<()>{
         let platform::ExpansionRequest{target,expansion,released}=request;released.recv_timeout(std::time::Duration::from_secs(2)).context("Release Space before expansion")?;std::thread::sleep(std::time::Duration::from_millis(75));
         if let Some(template)=expansion.template {
             let identity=template.identity.context("Template identity unavailable")?;
             let hit=Hit{id:identity.id,library:identity.library,revision:identity.revision,library_name:String::new(),title:template.abbreviation.clone(),abbreviation:template.abbreviation,preview:String::new()};
             if template.prompted {
-                let state=app.state::<Runtime>();if state.busy.load(Ordering::SeqCst)||state.prompting.load(Ordering::SeqCst){platform::paste(&target,0,Some(" ".into()))?;return Ok(());}
+                let state=app.state::<Runtime>();if state.busy.load(Ordering::SeqCst)||state.prompting.load(Ordering::SeqCst){#[cfg(target_os="windows")]platform::paste(&target,0,Some(" ".into()))?;return Ok(());}
                 let prompt_app=app.clone();let main_app=prompt_app.clone();prompt_app.run_on_main_thread(move||{let state=main_app.state::<Runtime>();*state.target.lock().unwrap()=Some(target);*state.erase.lock().unwrap()=expansion.erase;*state.prompt_hit.lock().unwrap()=Some(hit);state.prompting.store(true,Ordering::SeqCst);Runtime::open(&main_app,false);})?;return Ok(());
             }
             let rendered=Panel::render(&app.state::<Runtime>().root.join("snippets"),&hit,Default::default(),false)?;let mut erase=expansion.erase;
@@ -255,7 +261,7 @@ fn main() {
 		app.manage(update::UpdateState::default());
 		#[cfg(target_os="macos")]
 		if !platform::accessibility(true){*app.state::<Runtime>().status.lock().unwrap()=Runtime::ACCESSIBILITY_MESSAGE.into();}
-        #[cfg(target_os="windows")]
+        #[cfg(any(target_os="windows",target_os="macos"))]
         {let requests=platform::ExpansionSession::start(root.join("snippets"),root.join("settings.yml"))?;let handle=app.handle().clone();std::thread::spawn(move||for request in requests{if let Err(error)=Runtime::expand(&handle,request){let message=format!("Expansion failed: {error:#}");*handle.state::<Runtime>().status.lock().unwrap()=message.clone();let _=handle.notification().builder().title("TypeRelay").body(&message).show();}});}
         #[cfg(target_os="linux")]
         {let _=std::fs::remove_file(typerelay_client::panel_ipc::PanelIpc::directory()?.join("ready"));}

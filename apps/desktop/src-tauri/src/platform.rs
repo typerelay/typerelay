@@ -8,7 +8,7 @@ use anyhow::ensure;
 #[cfg(target_os = "windows")]
 #[path = "platform_windows.rs"] mod native;
 pub use native::{Target,fallback_allowed};
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows",target_os = "macos"))]
 pub use native::{ExpansionRequest, ExpansionSession};
 
 pub fn accessibility(prompt:bool)->bool { #[cfg(target_os="macos")] {native::accessibility(prompt)} #[cfg(not(target_os="macos"))] {let _=prompt;true} }
