@@ -57,7 +57,7 @@ export class SigningBridge {
 	static async requestTauri(socketPath, base, file) {
 		const absolute=path.resolve(base,file);
 		if (path.extname(absolute)) return SigningBridge.request(socketPath,absolute);
-		const stat=await fs.lstat(absolute);const resolved=await fs.realpath(absolute);const temporary=await fs.realpath(os.tmpdir());
+		const stat=await fs.lstat(absolute);const resolved=await fs.realpath(absolute);const temporary=await fs.realpath('/tmp');
 		if (!stat.isFile()||stat.isSymbolicLink()||stat.nlink!==1||stat.size<2||stat.size>64*1024*1024||path.dirname(resolved)!==temporary||!/^makensis[A-Za-z0-9]+$/.test(path.basename(resolved))||(process.getuid&&stat.uid!==process.getuid())) throw new Error('Invalid NSIS uninstaller signing path');
 		const staged=path.join(path.dirname(socketPath),`nsis-uninstaller-${process.pid}-${Date.now()}.exe`);
 		try {
