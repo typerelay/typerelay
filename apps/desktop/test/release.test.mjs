@@ -57,6 +57,9 @@ test('release tooling creates signed updater artifacts for every supported platf
 	assert.match(source, /darwin-aarch64/);
 	assert.match(source, /Bundled macOS TUI version does not match/);
 	assert.match(source, /linux-x86_64/);
+	assert.match(source, /nativeTools=await NativeTools\.stage/);
+	assert.match(source, /path\.dirname\(nativeTools\[0\]\)/);
+	assert.match(source, /path\.join\(release, 'typerelay-panel\.exe'\), \.\.\.nativeTools/);
 	assert.equal(config.plugins.updater.endpoints[0], 'https://transfer.typerelay.com/apps/latest.json');
 	assert.match(config.plugins.updater.pubkey, /^[A-Za-z0-9+/=]+$/);
 });

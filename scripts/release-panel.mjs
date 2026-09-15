@@ -123,10 +123,10 @@ export class PanelRelease {
 		const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'typerelay-release-')); await fs.chmod(temporary, 0o700);
 		const baseEnvironment = { ...PanelRelease.buildEnvironment(process.env), CARGO_TARGET_DIR: target, TMPDIR: temporary };
 		const environment = options.mode === 'windows' ? NativeTools.environment(baseEnvironment) : baseEnvironment;
-		let signer; let signingEnvironment; let bridge; let ownsSigningEnvironment = false;
+		let nativeTools=[]; let signer; let signingEnvironment; let bridge; let ownsSigningEnvironment = false;
 		try {
 			await PanelRelease.run('pnpm', ['install', '--frozen-lockfile'], { cwd: working, environment });
-			if (options.mode === 'windows') { await PanelRelease.run('pnpm', ['build'], { cwd: working, environment }); await NativeTools.stage(options.target, { environment }); }
+			if (options.mode === 'windows') { await PanelRelease.run('pnpm', ['build'], { cwd: working, environment }); nativeTools=await NativeTools.stage(options.target, { environment }); }
 			if (options.mode === 'linux') await PanelRelease.run('cargo', ['build', '--release', '--locked', '--target', options.target, '--bin', 'typerelay', '--bin', 'typerelay-tui'], { environment });
 			let overlay;
 			if (options.mode === 'windows') {
@@ -135,7 +135,7 @@ export class PanelRelease {
 				const hook = createRequire(import.meta.url)(path.join(tools, 'sign-windows-pkcs11.cjs'));
 				if (process.env.WINDOWS_SIGNING_PREPARED === '1') signingEnvironment = process.env;
 				else { signingEnvironment = await signer.prepareWindowsSigningEnvironment(process.env); ownsSigningEnvironment = true; await signer.runWindowsSigningProbe(signingEnvironment, path.join(tools, 'sign-windows-pkcs11.cjs')); }
-				bridge = new SigningBridge(path.join(temporary, 'sign.sock'), [await fs.realpath(target), await fs.realpath(temporary)], async file => {
+				bridge = new SigningBridge(path.join(temporary, 'sign.sock'), [await fs.realpath(target), await fs.realpath(temporary), await fs.realpath(path.dirname(nativeTools[0]))], async file => {
 					await hook.signWithEnvironment({ hash: 'sha256', name: 'TypeRelay', site: 'https://typerelay.com', path: file }, signingEnvironment);
 					await PanelRelease.run('osslsigncode', ['verify', '-CAfile', signingEnvironment.WINDOWS_SIGNING_CA_FILE, '-ignore-cdp', '-ignore-crl', '-in', file], { environment, capture: true });
 					});
@@ -159,7 +159,7 @@ export class PanelRelease {
 			await PanelRelease.run('pnpm', build, { cwd: working, environment });
 			const release = path.join(target, options.target, 'release'); let artifacts; let updater;
 			if (options.mode === 'windows') {
-				const executables = [path.join(release, 'typerelay-panel.exe'), path.join(release, 'typerelay.exe'), path.join(release, 'typerelay-tui.exe'), ...await PanelRelease.files(path.join(release, 'bundle/nsis'), '.exe')];
+				const executables = [path.join(release, 'typerelay-panel.exe'), ...nativeTools, ...await PanelRelease.files(path.join(release, 'bundle/nsis'), '.exe')];
 				if (executables.length < 4) throw new Error('Missing Windows native tools or installer');
 				for (const file of executables) { if (!bridge.signed.has(await fs.realpath(file))) throw new Error('Tauri did not sign every release artifact'); await PanelRelease.run('osslsigncode', ['verify', '-CAfile', signingEnvironment.WINDOWS_SIGNING_CA_FILE, '-ignore-cdp', '-ignore-crl', '-in', file], { capture: true, environment }); }
 				const installers = await PanelRelease.files(path.join(release, 'bundle/nsis'), '.exe'); const signatures = await PanelRelease.files(path.join(release, 'bundle/nsis'), '.sig');
