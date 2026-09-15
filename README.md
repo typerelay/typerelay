@@ -36,7 +36,7 @@ TypeRelay does not log keystrokes. Exported YAML is a portable copy, not live st
 | Platform | Current support |
 | --- | --- |
 | Omarchy / Hyprland, US layout | Continuous expansion, desktop panel and TUI; primary verified target |
-| Windows x64, US layout | Continuous expansion, desktop panel and TUI |
+| Windows x64 | Continuous expansion, layout-aware desktop panel and TUI |
 | macOS Apple Silicon | Continuous expansion, desktop search and insertion panel |
 | Other Linux desktops, layouts and architectures | Should work, but not extensively tested |
 

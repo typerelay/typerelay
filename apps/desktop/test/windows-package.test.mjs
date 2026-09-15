@@ -30,6 +30,12 @@ test('Windows bundle embeds both tools and owns its TUI shortcut', async () => {
 	assert.match(windows, /released:Receiver<\(\)>/);
 	assert.match(windows, /GetSystemMetrics\(SM_REMOTESESSION\)/);
 	assert.match(windows, /SendInput\(input/);
+	assert.match(windows, /dwExtraInfo:TYPERELAY_EVENT_MARKER/);
+	assert.match(windows, /event\.dwExtraInfo!=TYPERELAY_EVENT_MARKER/);
+	assert.doesNotMatch(windows, /LLKHF_INJECTED/);
+	assert.match(windows, /GetKeyboardLayout/);
+	assert.match(windows, /GetKeyboardState/);
+	assert.match(windows, /ToUnicodeEx/);
 	assert.match(windows, /SendMessageTimeoutW/);
 	assert.match(hooks, /NSIS_HOOK_POSTINSTALL[\s\S]*CreateShortCut "\$SMPROGRAMS\\TypeRelay TUI\.lnk" "\$INSTDIR\\typerelay-tui\.exe"/);
 	assert.match(hooks, /NSIS_HOOK_PREUNINSTALL[\s\S]*Delete "\$SMPROGRAMS\\TypeRelay TUI\.lnk"/);
