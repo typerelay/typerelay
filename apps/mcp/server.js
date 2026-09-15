@@ -1,12 +1,13 @@
 // Streamable HTTP and API adapter pattern adapted from Mailtwine (AGPL-3.0).
 import express from 'express';
-import { rateLimit } from 'express-rate-limit';
 import { pathToFileURL } from 'node:url';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { operations } from '../server/api/catalog.js';
 import { ApiSchema } from '../server/api/openapi.js';
+import { McpCache } from './cache.js';
+import { McpRateLimit } from './rate_limit.js';
 
 export class McpApi {
 	constructor(base, authorization) { this.base = base; this.authorization = authorization; }
@@ -36,19 +37,20 @@ export class TypeRelayMcp {
 		const query = operation.method === 'get' ? new URLSearchParams(Object.entries(body).map(([key, value]) => [key, String(value)])) : null;
 		return api.request('/api/v3' + path + (query?.size ? '?' + query : ''), operation.method.toUpperCase(), operation.method === 'get' ? undefined : body);
 	}
-	static app({ apiBase = process.env.API_BASE_URL || 'http://localhost:3040', resource = (process.env.MCP_BASE_URL || 'http://localhost:3041').replace(/\/$/, '') + '/mcp', issuer = process.env.APP_URL || 'http://localhost:3040', secret = () => process.env.JWT_SECRET || 'change-me' } = {}) {
+	static app({ apiBase = process.env.API_BASE_URL || 'http://localhost:3040', resource = (process.env.MCP_BASE_URL || 'http://localhost:3041').replace(/\/$/, '') + '/mcp', issuer = process.env.APP_URL || 'http://localhost:3040', secret = () => process.env.JWT_SECRET || 'change-me', applyRateLimits = true } = {}) {
 		const app = express();
 		if (process.env.IS_DOCKER === 'true') app.set('trust proxy', 1);
 		app.disable('x-powered-by');
 		const origin = new URL(resource).origin;
 		const metadata = origin + '/.well-known/oauth-protected-resource' + new URL(resource).pathname;
-		app.use(rateLimit({ windowMs: 60000, limit: 300, standardHeaders: 'draft-8', legacyHeaders: false }));
 		app.use((req, res, next) => {
 			if (req.headers.origin && ![origin, issuer, ...(process.env.MCP_ALLOWED_ORIGINS || '').split(',')].includes(req.headers.origin)) return res.status(403).json({ error: 'Invalid Origin' });
 			res.set('Cache-Control', 'no-store'); next();
 		});
 		app.get('/health', (req, res) => res.json({ ok: true, transport: 'streamable-http' }));
 		app.get(['/.well-known/oauth-protected-resource', '/.well-known/oauth-protected-resource/mcp'], (req, res) => res.json({ resource, authorization_servers: [issuer], scopes_supported: [...new Set(TypeRelayMcp.catalog.map(operation => operation.scope))], bearer_methods_supported: ['header'] }));
+		if (applyRateLimits) { app.use(McpRateLimit.createIpFloodLimiter()); app.use(McpRateLimit.createUnauthLimiter()); }
+		const authenticatedRequestLimiter = applyRateLimits ? McpRateLimit.createAuthenticatedRequestLimiter() : null;
 		app.use(express.json({ limit: '12mb' }));
 		app.post('/mcp', async (req, res) => {
 			let server; let transport;
@@ -56,6 +58,8 @@ export class TypeRelayMcp {
 				if (!/^(Bearer|Token) [^ ]+$/.test(req.headers.authorization || '')) { const error = new Error('Authentication required'); error.status = 401; throw error; }
 				const upstream = new McpApi(apiBase, req.headers.authorization);
 				const delegated = await upstream.request('/integrations/delegate', 'POST', {}, { 'X-MCP-Secret': secret() });
+				if (applyRateLimits && !await McpRateLimit.consumeAuthenticatedRequest(authenticatedRequestLimiter, req, res)) return;
+				const rateLimitKey = applyRateLimits ? McpRateLimit.getCredentialOrIpKey(req) : null;
 				const api = new McpApi(apiBase, 'Bearer ' + delegated.access_token);
 				const identity = await api.request('/api/v3/me');
 				server = new Server({ name: 'typerelay', version: '0.1.0' }, { capabilities: { tools: {} } });
@@ -64,7 +68,10 @@ export class TypeRelayMcp {
 					try {
 						const operation = TypeRelayMcp.catalog.find(operation => operation.id === request.params.name);
 						if (!operation || !identity.scopes.includes(operation.scope)) throw new Error('Unknown tool or insufficient scope');
-						const result = await TypeRelayMcp.call(api, request.params.name, request.params.arguments || {});
+						const args = request.params.arguments || {};
+						const run = () => TypeRelayMcp.call(api, request.params.name, args);
+						const result = applyRateLimits ? await McpRateLimit.runToolWithLimits({ toolName: request.params.name, args, rateLimitKey, run }) : await run();
+						if (result?.isError) return result;
 						return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result };
 					} catch (error) { return { isError: true, content: [{ type: 'text', text: error.message }] }; }
 				});
@@ -85,4 +92,7 @@ export class TypeRelayMcp {
 		return app;
 	}
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) TypeRelayMcp.app().listen(Number(process.env.PORT || 3041), '0.0.0.0');
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+	if (McpRateLimit.getConfig().enabled) await McpCache.connect();
+	TypeRelayMcp.app().listen(Number(process.env.PORT || 3041), '0.0.0.0');
+}

@@ -1,7 +1,7 @@
 # Database-backed TypeRelay development
 
 Run docker compose up -d --build from the repository root.
-`APP_URL` and `MCP_BASE_URL` select the development endpoints. `DEV_TYPERELAY_MONGODB_URI` and `SMTP_SERVERS` connect to the shared dbh development services; the development Compose file does not run MongoDB or SMTP containers. Production deployment remains separate.
+`APP_URL` and `MCP_BASE_URL` select the development endpoints. `DEV_TYPERELAY_MONGODB_URI`, `MEMCACHED_SERVERS`, and `SMTP_SERVERS` connect to the shared dbh development services; the development Compose file does not run MongoDB, Memcached, or SMTP containers. Production deployment remains separate.
 
 ## Storage version 2
 

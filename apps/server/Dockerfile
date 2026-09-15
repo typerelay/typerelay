@@ -15,7 +15,7 @@ RUN pnpm install --frozen-lockfile
 FROM node:24-bookworm-slim AS mcp-dependencies
 RUN npm install -g pnpm@12.0.0
 WORKDIR /opt/typerelay/apps/mcp
-COPY apps/mcp/package.json apps/mcp/pnpm-lock.yaml ./
+COPY apps/mcp/package.json apps/mcp/pnpm-lock.yaml apps/mcp/pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
 FROM node:24-bookworm-slim AS production

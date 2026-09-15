@@ -1,3 +1,5 @@
 allowBuilds:
   cbor-extract: false
   esbuild: true
+overrides:
+  hashery: 3.0.1

@@ -48,3 +48,17 @@ export class RateLimitSupport {
 		return [...new Set(String(process.env.MEMCACHED_SERVERS || 'localhost:11211').split(',').map(value => value.trim()).filter(Boolean))];
 	}
 }
+
+export class RateLimitLogger {
+	constructor(component) { this.component = component; }
+	debug(context, message) { this.write('debug', context, message); }
+	info(context, message) { this.write('info', context, message); }
+	warn(context, message) { this.write('warn', context, message); }
+	error(context, message) { this.write('error', context, message); }
+	write(level, context, message) {
+		const details = typeof context === 'object' && context !== null ? context : {};
+		const text = typeof context === 'string' ? context : message;
+		const output = { event: 'rate_limit_dependency', component: this.component, level, message: text || '', ...(details.err ? { error: details.err.message || String(details.err) } : {}) };
+		(console[level] || console.log)(JSON.stringify(output));
+	}
+}
