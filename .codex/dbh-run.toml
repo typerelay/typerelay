@@ -5,9 +5,10 @@ default_files = ["compose.yml", "compose.dbh.yml"]
 APP_URL = "https://tr.{profile}.lan"
 MCP_BASE_URL = "https://mcp.tr.{profile}.lan"
 DEV_TYPERELAY_MONGODB_URI = "mongodb://dbh.pipefish-mermaid.ts.net:27017/typerelay?replicaSet=hmrs0"
+MEMCACHED_SERVERS = "dbh.pipefish-mermaid.ts.net:11211"
 
 [test]
-compose_args = ["exec", "-e", "APP_URL=http://localhost:3040", "-e", "MCP_BASE_URL=http://localhost:3041", "app", "npm", "test"]
+compose_args = ["exec", "-e", "APP_URL=http://localhost:3040", "-e", "MCP_BASE_URL=http://localhost:3041", "-e", "API_RATE_LIMIT_ENABLED=false", "app", "npm", "test"]
 
 [urls]
 app = "https://tr.{profile}.lan"

@@ -15,6 +15,8 @@ use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 struct Runtime { root:PathBuf, target:Mutex<Option<platform::Target>>, last:Mutex<Option<platform::Target>>, erase:Mutex<usize>, busy:AtomicBool, syncing:AtomicBool, prompting:AtomicBool, prompt_hit:Mutex<Option<Hit>>, settings:AtomicBool, status:Mutex<String>, #[cfg(target_os="linux")] registration:Mutex<Option<typerelay_client::desktop::Registration>> }
 impl Runtime {
+	#[cfg(target_os="macos")]
+	const ACCESSIBILITY_MESSAGE:&'static str="Allow TypeRelay in System Settings → Privacy & Security → Accessibility";
     fn hide_on_focus_loss()->bool { cfg!(not(target_os="linux")) }
     fn sync_notice(app:&tauri::AppHandle,message:&str) {
         *app.state::<Runtime>().status.lock().unwrap()=message.into();
@@ -36,7 +38,13 @@ impl Runtime {
         if !window.is_visible().unwrap_or(false) {
             let captured=platform::Target::capture();
             let target=captured.as_ref().ok().cloned().or_else(||if platform::fallback_allowed(){state.last.lock().unwrap().clone()}else{None});
-            if target.is_none(){*state.status.lock().unwrap()=captured.err().map(|e|e.to_string()).unwrap_or("Choose an application to insert into".into());}
+            if target.is_none(){
+                let message=captured.err().map(|e|e.to_string()).unwrap_or("Choose an application to insert into".into());
+                #[cfg(target_os="macos")]
+                {*state.status.lock().unwrap()=if platform::accessibility(false){message}else{Runtime::ACCESSIBILITY_MESSAGE.into()};}
+                #[cfg(not(target_os="macos"))]
+                {*state.status.lock().unwrap()=message;}
+            }
             *state.target.lock().unwrap()=target;
         }
         state.settings.store(settings,Ordering::SeqCst);
@@ -73,14 +81,14 @@ impl Runtime {
             });
         }
     }
-    #[cfg(target_os="windows")]
+    #[cfg(any(target_os="windows",target_os="macos"))]
     fn expand(app:&tauri::AppHandle,request:platform::ExpansionRequest)->Result<()>{
         let platform::ExpansionRequest{target,expansion,released}=request;released.recv_timeout(std::time::Duration::from_secs(2)).context("Release Space before expansion")?;std::thread::sleep(std::time::Duration::from_millis(75));
         if let Some(template)=expansion.template {
             let identity=template.identity.context("Template identity unavailable")?;
             let hit=Hit{id:identity.id,library:identity.library,revision:identity.revision,library_name:String::new(),title:template.abbreviation.clone(),abbreviation:template.abbreviation,preview:String::new()};
             if template.prompted {
-                let state=app.state::<Runtime>();if state.busy.load(Ordering::SeqCst)||state.prompting.load(Ordering::SeqCst){platform::paste(&target,0,Some(" ".into()))?;return Ok(());}
+                let state=app.state::<Runtime>();if state.busy.load(Ordering::SeqCst)||state.prompting.load(Ordering::SeqCst){#[cfg(target_os="windows")]platform::paste(&target,0,Some(" ".into()))?;return Ok(());}
                 let prompt_app=app.clone();let main_app=prompt_app.clone();prompt_app.run_on_main_thread(move||{let state=main_app.state::<Runtime>();*state.target.lock().unwrap()=Some(target);*state.erase.lock().unwrap()=expansion.erase;*state.prompt_hit.lock().unwrap()=Some(hit);state.prompting.store(true,Ordering::SeqCst);Runtime::open(&main_app,false);})?;return Ok(());
             }
             let rendered=Panel::render(&app.state::<Runtime>().root.join("snippets"),&hit,Default::default(),false)?;let mut erase=expansion.erase;
@@ -127,7 +135,10 @@ impl Runtime {
 #[tauri::command]
 fn initialize(app:tauri::AppHandle)->std::result::Result<Value,String> {
     let state=app.state::<Runtime>(); let settings=Panel::settings(&state.root).map_err(|e|e.to_string())?;
-		Ok(json!({"config":settings,"prompt":state.prompt_hit.lock().unwrap().clone(),"server":typerelay_client::settings::SettingsStore::open(state.root.join("settings.yml")).ok().map(|s|s.settings.sync_url).unwrap_or_default(),"theme":Runtime::theme(),"settings":state.settings.load(Ordering::SeqCst),"status":*state.status.lock().unwrap(),"update":app.state::<update::UpdateState>().value()}))
+		let accessibility=platform::accessibility(false);
+		#[cfg(target_os="macos")]
+		if accessibility{let mut status=state.status.lock().unwrap();if status.as_str()==Runtime::ACCESSIBILITY_MESSAGE{status.clear();}}
+		Ok(json!({"config":settings,"prompt":state.prompt_hit.lock().unwrap().clone(),"server":typerelay_client::settings::SettingsStore::open(state.root.join("settings.yml")).ok().map(|s|s.settings.sync_url).unwrap_or_default(),"theme":Runtime::theme(),"settings":state.settings.load(Ordering::SeqCst),"status":*state.status.lock().unwrap(),"update":app.state::<update::UpdateState>().value(),"accessibility":accessibility}))
 }
 #[tauri::command]
 async fn search(app:tauri::AppHandle,query:String)->std::result::Result<Vec<Hit>,String> {
@@ -155,7 +166,7 @@ async fn insert(app:tauri::AppHandle,hit:Hit,values:Option<std::collections::BTr
     }).await.map_err(|e|e.to_string()).and_then(|r|r.map_err(|e|e.to_string()));
     app.state::<Runtime>().busy.store(false,Ordering::SeqCst);
     if result.is_ok(){let state=app.state::<Runtime>();state.status.lock().unwrap().clear();*state.erase.lock().unwrap()=0;state.prompting.store(false,Ordering::SeqCst);state.prompt_hit.lock().unwrap().take();}
-    if let Err(error)=&result { *app.state::<Runtime>().status.lock().unwrap()=error.clone(); if let Some(window)=app.get_webview_window("panel"){let _=window.show();let _=window.set_focus();} }
+    if let Err(error)=&result { eprintln!("TypeRelay insertion failed: {error}");*app.state::<Runtime>().status.lock().unwrap()=error.clone(); if let Some(window)=app.get_webview_window("panel"){let _=window.show();let _=window.set_focus();} }
     result
 }
 #[tauri::command]
@@ -222,8 +233,16 @@ async fn libraries(app:tauri::AppHandle)->std::result::Result<Value,String>{
 }
 #[tauri::command]
 async fn enroll(app:tauri::AppHandle,names:Vec<String>)->std::result::Result<(),String>{let root=app.state::<Runtime>().root.clone();tauri::async_runtime::spawn_blocking(move||->Result<()>{let sync=Sync::new(root.clone(),root.join("snippets"))?;for name in names{sync.enroll(&name)?;}Ok(())}).await.map_err(|e|e.to_string())?.map_err(|e|e.to_string())}
+#[tauri::command]
+fn open_accessibility_settings()->std::result::Result<(),String>{platform::open_accessibility_settings().map_err(|e|e.to_string())}
+#[tauri::command]
+fn open_tui()->std::result::Result<(),String>{platform::open_tui().map_err(|e|e.to_string())}
 fn main() {
     if std::env::args().any(|a|a=="--version"){println!("typerelay-panel {}",env!("CARGO_PKG_VERSION"));return;}
+    #[cfg(target_os="macos")]
+    if std::env::args().any(|a|a=="--accessibility-status"){println!("{}",if platform::accessibility(false){"allowed"}else{"required"});return;}
+    #[cfg(target_os="macos")]
+    if std::env::args().any(|a|a=="--repair-input"){if let Err(error)=platform::release_modifiers(){eprintln!("TypeRelay input repair failed: {error}");std::process::exit(1);}return;}
     #[cfg(target_os="linux")]
     if std::env::args().any(|a|a=="--quit") {if let Ok(root)=typerelay_client::panel_ipc::PanelIpc::directory()&& let Ok(socket)=std::os::unix::net::UnixDatagram::unbound(){let _=socket.send_to(b"quit",root.join("events.sock"));}return;}
 
@@ -240,7 +259,9 @@ fn main() {
         let config=Panel::settings(&root)?;
 		app.manage(Runtime{root:root.clone(),target:Mutex::new(None),last:Mutex::new(None),erase:Mutex::new(0),busy:AtomicBool::new(false),syncing:AtomicBool::new(false),prompting:AtomicBool::new(false),prompt_hit:Mutex::new(None),settings:AtomicBool::new(false),status:Mutex::new(String::new()),#[cfg(target_os="linux")] registration:Mutex::new(None)});
 		app.manage(update::UpdateState::default());
-        #[cfg(target_os="windows")]
+		#[cfg(target_os="macos")]
+		if !platform::accessibility(true){*app.state::<Runtime>().status.lock().unwrap()=Runtime::ACCESSIBILITY_MESSAGE.into();}
+        #[cfg(any(target_os="windows",target_os="macos"))]
         {let requests=platform::ExpansionSession::start(root.join("snippets"),root.join("settings.yml"))?;let handle=app.handle().clone();std::thread::spawn(move||for request in requests{if let Err(error)=Runtime::expand(&handle,request){let message=format!("Expansion failed: {error:#}");*handle.state::<Runtime>().status.lock().unwrap()=message.clone();let _=handle.notification().builder().title("TypeRelay").body(&message).show();}});}
         #[cfg(target_os="linux")]
         {let _=std::fs::remove_file(typerelay_client::panel_ipc::PanelIpc::directory()?.join("ready"));}
@@ -268,7 +289,7 @@ fn main() {
     }).on_window_event(|window,event|match event {
         tauri::WindowEvent::CloseRequested{api,..}=>{api.prevent_close();set_prompt_view(window.app_handle().clone(),false);Runtime::hide(window.app_handle());},
         tauri::WindowEvent::Focused(false)if Runtime::hide_on_focus_loss() && !window.app_handle().state::<Runtime>().busy.load(Ordering::SeqCst) && !window.app_handle().state::<Runtime>().settings.load(Ordering::SeqCst) && !window.app_handle().state::<Runtime>().prompting.load(Ordering::SeqCst)=> {Runtime::hide(window.app_handle());},_=>()
-    }).invoke_handler(tauri::generate_handler![initialize,search,insert,copy_snippet,prepare_template,set_prompt_view,set_settings_view,dismiss,sync_now,save_settings,connect,libraries,enroll]).run(tauri::generate_context!());
+    }).invoke_handler(tauri::generate_handler![initialize,search,insert,copy_snippet,prepare_template,set_prompt_view,set_settings_view,dismiss,sync_now,save_settings,connect,libraries,enroll,open_accessibility_settings,open_tui]).run(tauri::generate_context!());
     if let Err(error)=result {eprintln!("TypeRelay panel: {error}");std::process::exit(1);}
 }
 

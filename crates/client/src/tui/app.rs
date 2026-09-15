@@ -853,7 +853,7 @@ mod tests {
         app.handle(Event::Paste("sales".into())); Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
         Fixture::key(&mut app, KeyCode::F(2), KeyModifiers::NONE);
         assert_eq!(App::value(&app.trigger), "");
-        app.handle(Event::Paste(",hello".into()));
+        app.handle(Event::Paste(";hello".into()));
         assert_eq!(App::value(&app.trigger), "hello");
         assert_eq!(app.draft().trigger, "hello");
         Fixture::key(&mut app, KeyCode::Tab, KeyModifiers::NONE);

@@ -4,6 +4,8 @@ TypeRelay uses a Tauri adapter in the shared desktop release toolkit. The Window
 
 Normal GitHub builds remain unsigned test candidates. These maintainer commands require a clean `develop` checkout, pull it with `git pull --ff-only`, use frozen/locked dependencies, and never publish. Merge reviewed changes before running a release.
 
+For credentialed local macOS testing without notarization, use `pnpm build:macos:local` in `apps/desktop`. It builds the app and TUI with the installed Developer ID Application identity, verifies the bundle, and creates a local DMG. Set `APPLE_SIGNING_IDENTITY` only when more than one matching identity is installed. The stable identity keeps Accessibility valid across rebuilds; ad-hoc signing is unsuitable because macOS treats each build as new code.
+
 ## Windows on Omarchy
 
 ```fish
@@ -34,7 +36,7 @@ Uses the installed Developer ID Application identity and existing Apple notariza
 
 Existing credential names are supported: `APPLE_APP_SPECIFIC_PASSWORD` maps to Tauri's `APPLE_PASSWORD`; the Electron-style `APPLE_API_KEY` path plus `APPLE_API_KEY_ID` maps to Tauri's key path/ID variables. Already configured Tauri-style variables also work. Credentials and certificate contents are never written into generated configuration.
 
-Tauri performs signing/notarization with hardened runtime enabled. The command checks the resulting app with codesign, Gatekeeper, stapler and lipo. As with the existing release tooling, verification concerns the stapled application inside the DMG; no separate outer-DMG notarization claim is made. See [Tauri macOS signing](https://v2.tauri.app/distribute/sign/macos/).
+Tauri performs signing/notarization with hardened runtime enabled. The app bundles the matching native **TypeRelay TUI** sidecar, including a combined binary for universal builds. The command checks both panel and TUI architectures plus the resulting app with codesign, Gatekeeper and stapler. As with the existing release tooling, verification concerns the stapled application inside the DMG; no separate outer-DMG notarization claim is made. See [Tauri macOS signing](https://v2.tauri.app/distribute/sign/macos/).
 
 ## Outputs and boundaries
 

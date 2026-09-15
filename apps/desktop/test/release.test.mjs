@@ -55,6 +55,7 @@ test('release tooling creates signed updater artifacts for every supported platf
 	assert.match(source, /TypeRelay-Omarchy-\$\{config\.version\}-x86_64\.tar\.gz/);
 	assert.match(source, /windows-x86_64/);
 	assert.match(source, /darwin-aarch64/);
+	assert.match(source, /Bundled macOS TUI version does not match/);
 	assert.match(source, /linux-x86_64/);
 	assert.equal(config.plugins.updater.endpoints[0], 'https://transfer.typerelay.com/apps/latest.json');
 	assert.match(config.plugins.updater.pubkey, /^[A-Za-z0-9+/=]+$/);

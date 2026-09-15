@@ -11,7 +11,7 @@ TypeRelay turns short abbreviations into reusable text, code and fillable templa
 
 ## Why TypeRelay?
 
-- **Fast expansion** — type a local prefix, an abbreviation and Space to insert a snippet. The default prefix is a comma.
+- **Fast expansion** — type a local prefix, an abbreviation and Space to insert a snippet. The default prefix is a semicolon.
 - **Local-first editing** — snippets live in SQLite, remain searchable offline and queue changes for later synchronization.
 - **Private or shared libraries** — keep personal content private or explicitly enroll libraries for team sync.
 - **Text, code and templates** — preserve whitespace and Unicode, or add dates, prompted fields and explicit Enter actions.
@@ -36,8 +36,8 @@ TypeRelay does not log keystrokes. Exported YAML is a portable copy, not live st
 | Platform | Current support |
 | --- | --- |
 | Omarchy / Hyprland, US layout | Continuous expansion, desktop panel and TUI; primary verified target |
-| Windows x64, US layout | Continuous expansion, desktop panel and TUI |
-| macOS Apple Silicon | Desktop search and insertion panel |
+| Windows x64 | Continuous expansion, layout-aware desktop panel and TUI |
+| macOS Apple Silicon | Continuous expansion, desktop search and insertion panel |
 | Other Linux desktops, layouts and architectures | Should work, but not extensively tested |
 
 See the [desktop overview](docs/desktop/index.md) and [troubleshooting guide](docs/desktop/troubleshooting.md) for current limitations.
@@ -68,7 +68,7 @@ Create a library and snippets with:
 typerelay-tui
 ```
 
-Then type the configured prefix, an abbreviation and Space in another application. For example, the default prefix and an abbreviation named `email` expand from `,email `.
+Then type the configured prefix, an abbreviation and Space in another application. For example, the default prefix and an abbreviation named `email` expand from `;email `.
 
 ## Team sync and self-hosting
 

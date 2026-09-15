@@ -9,7 +9,7 @@ class Fixture {
   const dom=new JSDOM(pug.renderFile('ui/index.pug'),{runScripts:'outside-only',pretendToBeVisual:true});
   const calls=[];const callbacks={};const pending=[];
   dom.window.HTMLElement.prototype.scrollIntoView=()=>{};
-  dom.window.__TAURI__={core:{invoke:async(name,args)=>{calls.push({name,args});if(name==='initialize')return{config:{shortcut:'Ctrl+Shift+Comma',launch_at_login:false},theme:{os:'linux'},settings:false};if(name==='search')return new Promise(resolve=>pending.push({query:args.query,resolve}));if(name==='libraries')return[];if(name==='prepare_template')return{fields:[],steps:[{kind:'text',text:'Literal'}],text:'Literal',enter_actions:0,template:{text:'Literal',variables:{}}};return null;}},event:{listen:(name,callback)=>{callbacks[name]=callback;}}};
+  dom.window.__TAURI__={core:{invoke:async(name,args)=>{calls.push({name,args});if(name==='initialize')return{config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},theme:{os:'linux'},settings:false,accessibility:false};if(name==='search')return new Promise(resolve=>pending.push({query:args.query,resolve}));if(name==='libraries')return[];if(name==='prepare_template')return{fields:[],steps:[{kind:'text',text:'Literal'}],text:'Literal',enter_actions:0,template:{text:'Literal',variables:{}}};return null;}},event:{listen:(name,callback)=>{callbacks[name]=callback;}}};
   dom.window.eval((await readFile('ui/panel.js','utf8')).replace('new Panel();','window.panel = new Panel();'));
   await new Promise(resolve=>setTimeout(resolve,0));
   return {dom,panel:dom.window.panel,calls,pending,callbacks};
@@ -61,6 +61,34 @@ test('settings mode reaches native focus policy from tray and Back',async()=>{
   assert.equal(f.calls.filter(call=>call.name==='set_settings_view').at(-1).args.enabled,false);
   await f.panel.open({settings:true,theme:{os:'linux'}});
   assert.equal(f.calls.filter(call=>call.name==='set_settings_view').at(-1).args.enabled,true);
+ }finally{f.dom.window.close();}
+});
+
+test('macOS settings expose Accessibility and bundled TUI actions',async()=>{
+ const f=await Fixture.create();try{
+	await f.panel.open({settings:true,theme:{os:'macos'},config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},accessibility:false});
+  f.dom.window.document.querySelector('#open-accessibility').click();await new Promise(resolve=>setTimeout(resolve,0));
+  f.dom.window.document.querySelector('#open-tui').click();await new Promise(resolve=>setTimeout(resolve,0));
+  assert.ok(f.calls.some(call=>call.name==='open_accessibility_settings'));
+  assert.ok(f.calls.some(call=>call.name==='open_tui'));
+	assert.equal(f.dom.window.document.querySelector('#accessibility-state').textContent,'Required');
+	assert.equal(f.dom.window.document.querySelector('#accessibility-card').hidden,false);
+	assert.equal(f.dom.window.document.body.dataset.os,'macos');
+	assert.equal(f.dom.window.document.body.dataset.view,'settings');
+	f.dom.window.document.querySelector('[data-settings-tab="sync"]').click();
+	assert.equal(f.dom.window.document.querySelector('#settings-general').hidden,true);
+	assert.equal(f.dom.window.document.querySelector('#settings-sync').hidden,false);
+	assert.equal(f.dom.window.document.querySelector('#connect-form').closest('.settings-page').id,'settings-sync');
+ }finally{f.dom.window.close();}
+});
+
+test('returning from macOS settings reconciles granted Accessibility and clears stale guidance',async()=>{
+ const f=await Fixture.create();try{
+	await f.panel.open({settings:true,theme:{os:'macos'},config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},accessibility:false,status:'Allow TypeRelay in System Settings → Privacy & Security → Accessibility'});
+	f.panel.invoke=async(name)=>name==='initialize'?{config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},theme:{os:'macos'},settings:true,accessibility:true,status:''}:null;
+	f.dom.window.dispatchEvent(new f.dom.window.Event('focus'));await new Promise(resolve=>setTimeout(resolve,0));
+	assert.equal(f.dom.window.document.querySelector('#accessibility-card').hidden,true);
+	assert.equal(f.panel.status.textContent,'');
  }finally{f.dom.window.close();}
 });
 

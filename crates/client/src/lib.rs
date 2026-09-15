@@ -16,6 +16,10 @@ pub mod clipboard;
 #[path = "clipboard_windows.rs"]
 pub mod clipboard;
 
+#[cfg(target_os = "macos")]
+#[path = "clipboard_macos.rs"]
+pub mod clipboard;
+
 pub mod panel;
 
 #[cfg(target_os = "linux")]

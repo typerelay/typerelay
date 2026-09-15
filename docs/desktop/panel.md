@@ -1,12 +1,12 @@
 # Search panel
 
-Press **Ctrl+Shift+,** or left-click the **T** tray/menu-bar icon. Search across your accessible local libraries by abbreviation or content. Click a result once, or use arrow keys and **Enter**, to insert into the previously active application. **Escape** or an outside click dismisses the panel. **Copy** is available when insertion cannot safely restore your target.
+Press **Ctrl+Shift+;** or left-click the **T** tray/menu-bar icon. Search across your accessible local libraries by abbreviation or content. Click a result once, or use arrow keys and **Enter**, to insert into the previously active application. **Escape** or an outside click dismisses the panel. **Copy** is available when insertion cannot safely restore your target.
 
 Right-click the T icon for **Sync now**, **Settings** and **Quit TypeRelay**. Settings controls the shortcut, launch at login and account connection. **Authenticate in browser** signs in and links your desktop; it does not simply open the web dashboard.
 
 Closing the panel hides it. On Omarchy, quitting the panel leaves the separate expansion service running. Search works offline. Read-only snippets and entries without abbreviations remain searchable.
 
-On macOS grant Accessibility permission when required. On Windows the resident panel also performs prefix + abbreviation + Space expansion; elevated/protected applications may reject insertion. Windows users can edit the same local database through **TypeRelay TUI** from the Start menu, where expansion is paused. Native macOS and Windows builds remain beta pending broader platform verification.
+On macOS, TypeRelay requests Accessibility on first launch; Settings shows the permission row only while action is required. The resident app performs prefix + abbreviation + Space expansion using native macOS keyboard monitoring and insertion. Open bundled **TypeRelay TUI** from the menu-bar menu or Settings to edit the same local database in Terminal. On Windows the resident panel also performs prefix + abbreviation + Space expansion; elevated/protected applications may reject insertion. Windows users can open **TypeRelay TUI** from Start, where expansion is paused. Native macOS and Windows builds remain beta pending broader platform verification.
 
 ## Filling templates
 

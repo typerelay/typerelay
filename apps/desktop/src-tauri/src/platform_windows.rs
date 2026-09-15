@@ -4,7 +4,8 @@ use typerelay_client::{database::DatabaseSnapshot,settings::SettingsStore};
 use typerelay_core::{Engine,Expansion,Input};
 use windows::Win32::System::Threading::{OpenProcess,PROCESS_QUERY_LIMITED_INFORMATION};
 use windows::Win32::System::{Com::{DVASPECT_CONTENT,FORMATETC,IDataObject,STGMEDIUM,TYMED_HGLOBAL},Memory::{GlobalLock,GlobalSize,GlobalUnlock},Ole::{OleGetClipboard,OleInitialize,OleUninitialize,ReleaseStgMedium}};
-use windows::Win32::{Foundation::{HWND,LPARAM,LRESULT,RECT,WPARAM}, UI::{WindowsAndMessaging::{CallNextHookEx,DispatchMessageW,GetForegroundWindow,GetGUIThreadInfo,GetMessageW,GetSystemMetrics,GetWindowRect,GetWindowTextW,GetClassNameW,GetWindowThreadProcessId,IsWindow,KBDLLHOOKSTRUCT,KillTimer,LLKHF_INJECTED,MSG,SendMessageTimeoutW,SetForegroundWindow,SetTimer,SetWindowsHookExW,TranslateMessage,UnhookWindowsHookEx,WH_KEYBOARD_LL,WM_KEYDOWN,WM_KEYUP,WM_SYSKEYDOWN,WM_SYSKEYUP,WM_TIMER,GUITHREADINFO,HHOOK,SMTO_ABORTIFHUNG,SM_REMOTESESSION}, Input::KeyboardAndMouse::{GetAsyncKeyState,GetKeyState,SendInput,INPUT,INPUT_0,INPUT_KEYBOARD,KEYBDINPUT,KEYEVENTF_KEYUP,VIRTUAL_KEY,VK_BACK,VK_CAPITAL,VK_CONTROL,VK_LWIN,VK_MENU,VK_RETURN,VK_RWIN,VK_SHIFT,VK_V}}};
+use windows::Win32::{Foundation::{HWND,LPARAM,LRESULT,RECT,WPARAM}, UI::{WindowsAndMessaging::{CallNextHookEx,DispatchMessageW,GetForegroundWindow,GetGUIThreadInfo,GetMessageW,GetSystemMetrics,GetWindowRect,GetWindowTextW,GetClassNameW,GetWindowThreadProcessId,IsWindow,KBDLLHOOKSTRUCT,KillTimer,MSG,SendMessageTimeoutW,SetForegroundWindow,SetTimer,SetWindowsHookExW,TranslateMessage,UnhookWindowsHookEx,WH_KEYBOARD_LL,WM_KEYDOWN,WM_KEYUP,WM_SYSKEYDOWN,WM_SYSKEYUP,WM_TIMER,GUITHREADINFO,HHOOK,SMTO_ABORTIFHUNG,SM_REMOTESESSION}, Input::KeyboardAndMouse::{GetAsyncKeyState,GetKeyboardLayout,GetKeyboardState,SendInput,ToUnicodeEx,INPUT,INPUT_0,INPUT_KEYBOARD,KEYBDINPUT,KEYEVENTF_KEYUP,VIRTUAL_KEY,VK_BACK,VK_CONTROL,VK_LWIN,VK_MENU,VK_RETURN,VK_RWIN,VK_V}}};
+const TYPERELAY_EVENT_MARKER:usize=0x5452_4c59;
 #[derive(Clone,Debug)]
 pub struct Target { handle: isize, pid: u32, class:String, _process: Arc<OwnedHandle>, pub bounds: Option<(i32,i32,u32,u32)> }
 impl Target {
@@ -26,9 +27,9 @@ impl Target {
         Ok(true)
     }
 }
-pub fn keys_down() -> bool { [0x10,0x11,0x12,0x5b,0x5c,0x0d,0x20,0xbc].iter().any(|key|unsafe { GetAsyncKeyState(*key) < 0 }) }
+pub fn keys_down() -> bool { [0x10,0x11,0x12,0x5b,0x5c,0x0d,0x20,0xba,0xbc].iter().any(|key|unsafe { GetAsyncKeyState(*key) < 0 }) }
 pub fn remote_session()->bool {unsafe{GetSystemMetrics(SM_REMOTESESSION)!=0}}
-pub fn insert(target:&Target,erase:usize,paste:bool)->Result<()>{ensure!(target.focused()?,"Original window lost focus");fn key(key:VIRTUAL_KEY,up:bool)->INPUT{INPUT{r#type:INPUT_KEYBOARD,Anonymous:INPUT_0{ki:KEYBDINPUT{wVk:key,dwFlags:if up{KEYEVENTF_KEYUP}else{Default::default()},..Default::default()}}}}fn send(input:&[INPUT])->Result<()>{let sent=unsafe{SendInput(input,std::mem::size_of::<INPUT>() as i32)};ensure!(sent as usize==input.len(),"Windows rejected native input");Ok(())}let mut removal=Vec::with_capacity(erase*2);for _ in 0..erase{removal.extend([key(VK_BACK,false),key(VK_BACK,true)]);}if !removal.is_empty(){send(&removal)?;std::thread::sleep(Duration::from_millis(30));}
+pub fn insert(target:&Target,erase:usize,paste:bool)->Result<()>{ensure!(target.focused()?,"Original window lost focus");fn key(key:VIRTUAL_KEY,up:bool)->INPUT{INPUT{r#type:INPUT_KEYBOARD,Anonymous:INPUT_0{ki:KEYBDINPUT{wVk:key,dwFlags:if up{KEYEVENTF_KEYUP}else{Default::default()},dwExtraInfo:TYPERELAY_EVENT_MARKER,..Default::default()}}}}fn send(input:&[INPUT])->Result<()>{let sent=unsafe{SendInput(input,std::mem::size_of::<INPUT>() as i32)};ensure!(sent as usize==input.len(),"Windows rejected native input");Ok(())}let mut removal=Vec::with_capacity(erase*2);for _ in 0..erase{removal.extend([key(VK_BACK,false),key(VK_BACK,true)]);}if !removal.is_empty(){send(&removal)?;std::thread::sleep(Duration::from_millis(30));}
     if paste{send(&[key(VK_CONTROL,false),key(VK_V,false),key(VK_V,true),key(VK_CONTROL,true)])}else{send(&[key(VK_RETURN,false),key(VK_RETURN,true)])}}
 pub fn fallback_allowed()->bool { unsafe { let window=GetForegroundWindow();let mut pid=0;GetWindowThreadProcessId(window,Some(&mut pid));let mut class=[0u16;256];let length=GetClassNameW(window,&mut class);pid==std::process::id() || ["Shell_TrayWnd","NotifyIconOverflowWindow","#32768"].contains(&String::from_utf16_lossy(&class[..length as usize]).as_str()) } }
 
@@ -37,13 +38,14 @@ struct HookState { store:DatabaseSnapshot, settings:SettingsStore, engine:Engine
 thread_local! { static HOOK_STATE:RefCell<Option<HookState>>=const{RefCell::new(None)}; }
 impl HookState {
     fn new(directory:PathBuf,settings_path:PathBuf,sender:SyncSender<ExpansionRequest>)->Result<Self>{let store=DatabaseSnapshot::open(&directory)?;let settings=SettingsStore::open(settings_path)?;let mut engine=Engine::new(store.snapshot.clone());engine.set_prefix(&settings.settings.trigger_prefix).map_err(anyhow::Error::msg)?;Ok(Self{store,settings,engine,target:None,sender,suppress_space:None})}
-    fn input(vk:u32)->Input {match vk{0x08=>Input::Backspace,0x20=>Input::Space,0x30..=0x39=>Input::Character(char::from_u32(vk).unwrap()),0x41..=0x5a=>Input::Character(char::from_u32(vk+32).unwrap()),0xbd=>Input::Character('-'),0xbc=>Input::Character(','),0xba=>Input::Character(';'),0xbe=>Input::Character('.'),0xbf=>Input::Character('/'),0xde=>Input::Character('\''),0xdb=>Input::Character('['),0xdd=>Input::Character(']'),0xdc=>Input::Character('\\'),0xc0=>Input::Character('`'),0xbb=>Input::Character('='),_=>Input::Cancel}}
-    fn modified()->bool {unsafe{[VK_SHIFT,VK_CONTROL,VK_MENU,VK_LWIN,VK_RWIN].iter().any(|key|GetAsyncKeyState(key.0 as i32)<0)||GetKeyState(VK_CAPITAL.0 as i32)&1!=0}}
-    fn key(&mut self,vk:u32,down:bool)->bool {
+    fn input(vk:u32,scan:u32)->Input {match vk{0x08=>Input::Backspace,0x20=>Input::Space,_=>unsafe{let window=GetForegroundWindow();let thread=GetWindowThreadProcessId(window,None);let layout=GetKeyboardLayout(thread);let mut state=[0u8;256];if GetKeyboardState(&mut state).is_err(){return Input::Cancel;}
+        if let Some(key)=state.get_mut(vk as usize){*key|=0x80;}let mut buffer=[0u16;8];let length=ToUnicodeEx(vk,scan,&state,&mut buffer,5,Some(layout));if length<=0{return Input::Cancel;}let Ok(value)=String::from_utf16(&buffer[..usize::try_from(length).unwrap_or_default().min(buffer.len())])else{return Input::Cancel;};let mut characters=value.chars();let Some(character)=characters.next()else{return Input::Cancel;};if characters.next().is_some(){Input::Cancel}else{Input::Character(character)}}}}
+    fn modified()->bool {unsafe{let control=GetAsyncKeyState(VK_CONTROL.0 as i32)<0;let alt=GetAsyncKeyState(VK_MENU.0 as i32)<0;[VK_LWIN,VK_RWIN].iter().any(|key|GetAsyncKeyState(key.0 as i32)<0)||control!=alt}}
+    fn key(&mut self,vk:u32,scan:u32,down:bool)->bool {
         if !down {if vk==0x20&&let Some(released)=self.suppress_space.take(){let _=released.try_send(());return true;}return false;}
         if Self::modified(){self.engine.feed(Input::Cancel);self.target=None;return false;}
         if self.target.as_ref().is_some_and(|target|target.focused().ok()!=Some(true)){self.engine.feed(Input::Cancel);self.target=None;}
-        let input=Self::input(vk);
+        let input=Self::input(vk,scan);
         if matches!(input,Input::Character(character)if character==self.engine.prefix()){self.target=Target::capture().ok();}
         if self.target.is_none(){self.engine.feed(Input::Cancel);return false;}
         let expansion=self.engine.feed(input);
@@ -76,7 +78,7 @@ impl ExpansionSession {
         unsafe{let _=KillTimer(None,timer);}HOOK_STATE.with(|state|state.replace(None));drop(hook);Ok(())
     }
     unsafe extern "system" fn callback(code:i32,wparam:WPARAM,lparam:LPARAM)->LRESULT {
-        if code>=0 {let event=unsafe{&*(lparam.0 as *const KBDLLHOOKSTRUCT)};if !event.flags.contains(LLKHF_INJECTED){let message=wparam.0 as u32;let down=message==WM_KEYDOWN||message==WM_SYSKEYDOWN;let up=message==WM_KEYUP||message==WM_SYSKEYUP;if (down||up)&&HOOK_STATE.with(|state|state.try_borrow_mut().ok().and_then(|mut state|state.as_mut().map(|state|state.key(event.vkCode,down))).unwrap_or(false)){return LRESULT(1);}}}
+        if code>=0 {let event=unsafe{&*(lparam.0 as *const KBDLLHOOKSTRUCT)};if event.dwExtraInfo!=TYPERELAY_EVENT_MARKER{let message=wparam.0 as u32;let down=message==WM_KEYDOWN||message==WM_SYSKEYDOWN;let up=message==WM_KEYUP||message==WM_SYSKEYUP;if (down||up)&&HOOK_STATE.with(|state|state.try_borrow_mut().ok().and_then(|mut state|state.as_mut().map(|state|state.key(event.vkCode,event.scanCode,down))).unwrap_or(false)){return LRESULT(1);}}}
         unsafe{CallNextHookEx(None,code,wparam,lparam)}
     }
 }

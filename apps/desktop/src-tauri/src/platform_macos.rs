@@ -1,9 +1,14 @@
 use anyhow::{Context,Result,ensure};
+use core_foundation::runloop::CFRunLoop;
+use core_graphics::{event::{CallbackResult,CGEvent,CGEventFlags,CGEventTap,CGEventTapLocation,CGEventTapOptions,CGEventTapPlacement,CGEventType,EventField,KeyCode},event_source::{CGEventSource,CGEventSourceStateID},geometry::CGPoint};
+use foreign_types::ForeignType;
 use objc2_app_kit::{NSWorkspace,NSRunningApplication,NSApplicationActivationOptions};
-use std::{ffi::{c_void,CString},sync::Arc};
+use std::{ffi::{c_void,CString},process::Command,sync::{Arc,Mutex,mpsc::{Receiver,SyncSender,sync_channel}},time::{Duration,Instant}};
+use typerelay_client::{database::DatabaseSnapshot,settings::SettingsStore};
+use typerelay_core::{Engine,Expansion,Input};
 type Ref = *const c_void;
 #[link(name="ApplicationServices",kind="framework")]
-unsafe extern "C" { fn AXIsProcessTrusted() -> bool; fn AXUIElementCreateApplication(pid:i32)->Ref; fn AXUIElementCopyAttributeValue(element:Ref,attribute:Ref,value:*mut Ref)->i32; fn AXUIElementPerformAction(element:Ref,action:Ref)->i32; fn AXValueGetValue(value:Ref,kind:i32,result:*mut c_void)->bool; fn CGEventSourceKeyState(source:i32,key:u16)->bool; }
+unsafe extern "C" { fn AXIsProcessTrusted() -> bool; fn AXUIElementCreateApplication(pid:i32)->Ref; fn AXUIElementCopyAttributeValue(element:Ref,attribute:Ref,value:*mut Ref)->i32; fn AXUIElementPerformAction(element:Ref,action:Ref)->i32; fn AXValueGetValue(value:Ref,kind:i32,result:*mut c_void)->bool; fn CGEventSourceKeyState(source:i32,key:u16)->bool; fn CGEventKeyboardGetUnicodeString(event:core_graphics::sys::CGEventRef,max:usize,actual:*mut usize,buffer:*mut u16); }
 #[link(name="CoreFoundation",kind="framework")]
 unsafe extern "C" { fn CFStringCreateWithCString(allocator:Ref,text:*const i8,encoding:u32)->Ref; fn CFRelease(value:Ref); fn CFEqual(a:Ref,b:Ref)->bool; }
 #[derive(Debug)]
@@ -22,6 +27,44 @@ impl Target {
 }
 pub fn keys_down()->bool { [56,60,59,62,58,61,55,54,36,43].iter().any(|key|unsafe{CGEventSourceKeyState(1,*key)}) }
 pub fn fallback_allowed()->bool { NSWorkspace::sharedWorkspace().frontmostApplication().is_some_and(|app|app.processIdentifier()==std::process::id() as i32) }
+pub fn accessibility(prompt:bool)->bool { let trusted=unsafe{AXIsProcessTrusted()};if !trusted&&prompt{let _=enigo::Enigo::new(&enigo::Settings::default());}trusted }
+pub fn open_accessibility_settings()->Result<()> { let status=Command::new("/usr/bin/open").arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility").status()?;ensure!(status.success(),"Could not open Accessibility settings");Ok(()) }
+pub fn open_tui()->Result<()> { let executable=std::env::current_exe()?.with_file_name("typerelay-tui");ensure!(executable.is_file(),"TypeRelay TUI is missing from this application");let status=Command::new("/usr/bin/open").arg(executable).status()?;ensure!(status.success(),"Could not open TypeRelay TUI");Ok(()) }
+pub fn insert(target:&Target,erase:usize,has_text:bool)->Result<()> { let source=CGEventSource::new(CGEventSourceStateID::Private).map_err(|_|anyhow::anyhow!("Cannot create keyboard event source; allow TypeRelay Accessibility permission"))?;let event=|key,down,flags|->Result<CGEvent>{let event=CGEvent::new_keyboard_event(source.clone(),key,down).map_err(|_|anyhow::anyhow!("Cannot create keyboard event"))?;event.set_flags(flags|CGEventFlags::CGEventFlagNonCoalesced);event.set_location(CGPoint::new(-27469.,0.));Ok(event)};let mut events=Vec::new();for _ in 0..erase{events.push(event(KeyCode::DELETE,true,CGEventFlags::empty())?);events.push(event(KeyCode::DELETE,false,CGEventFlags::empty())?);}if !has_text{events.push(event(KeyCode::RETURN,true,CGEventFlags::empty())?);events.push(event(KeyCode::RETURN,false,CGEventFlags::empty())?);}else{let command=CGEventFlags::CGEventFlagCommand;events.push(event(KeyCode::COMMAND,true,command)?);events.push(event(KeyCode::ANSI_V,true,command)?);events.push(event(KeyCode::ANSI_V,false,command)?);events.push(event(KeyCode::COMMAND,false,CGEventFlags::empty())?);}for event in events{event.post_to_pid(target.pid);std::thread::sleep(Duration::from_millis(2));}Ok(()) }
+pub fn release_modifiers()->Result<()> { let source=CGEventSource::new(CGEventSourceStateID::HIDSystemState).map_err(|_|anyhow::anyhow!("Cannot create keyboard event source"))?;for key in [KeyCode::COMMAND,KeyCode::RIGHT_COMMAND,KeyCode::SHIFT,KeyCode::RIGHT_SHIFT,KeyCode::CONTROL,KeyCode::RIGHT_CONTROL,KeyCode::OPTION,KeyCode::RIGHT_OPTION]{let event=CGEvent::new_keyboard_event(source.clone(),key,false).map_err(|_|anyhow::anyhow!("Cannot create keyboard event"))?;event.set_flags(CGEventFlags::empty());event.post(CGEventTapLocation::HID);}Ok(()) }
+
+pub struct ExpansionRequest { pub target:Target,pub expansion:Expansion,pub released:Receiver<()> }
+struct ExpansionState { store:DatabaseSnapshot,settings:SettingsStore,engine:Engine,target:Option<Target>,sender:SyncSender<ExpansionRequest>,release:Option<SyncSender<()>>,reloaded:Instant }
+impl ExpansionState {
+    fn new(directory:&std::path::Path,settings_path:std::path::PathBuf,sender:SyncSender<ExpansionRequest>)->Result<Self>{let store=DatabaseSnapshot::open(directory)?;let settings=SettingsStore::open(settings_path)?;let mut engine=Engine::new(store.snapshot.clone());engine.set_prefix(&settings.settings.trigger_prefix).map_err(anyhow::Error::msg)?;Ok(Self{store,settings,engine,target:None,sender,release:None,reloaded:Instant::now()})}
+    fn reload(&mut self){
+        if self.reloaded.elapsed()<Duration::from_millis(500){return;}
+        self.reloaded=Instant::now();
+        if let Ok(Some(snapshot))=self.store.reload(){self.engine.replace_snapshot(snapshot);self.target=None;}
+        if let Ok(true)=self.settings.reload(){let _=self.engine.set_prefix(&self.settings.settings.trigger_prefix);self.target=None;}
+    }
+    fn character(key:u16)->Option<char>{match key{0=>Some('a'),1=>Some('s'),2=>Some('d'),3=>Some('f'),4=>Some('h'),5=>Some('g'),6=>Some('z'),7=>Some('x'),8=>Some('c'),9=>Some('v'),11=>Some('b'),12=>Some('q'),13=>Some('w'),14=>Some('e'),15=>Some('r'),16=>Some('y'),17=>Some('t'),18=>Some('1'),19=>Some('2'),20=>Some('3'),21=>Some('4'),22=>Some('6'),23=>Some('5'),24=>Some('='),25=>Some('9'),26=>Some('7'),27=>Some('-'),28=>Some('8'),29=>Some('0'),30=>Some(']'),31=>Some('o'),32=>Some('u'),33=>Some('['),34=>Some('i'),35=>Some('p'),37=>Some('l'),38=>Some('j'),39=>Some('\''),40=>Some('k'),41=>Some(';'),42=>Some('\\'),43=>Some(','),44=>Some('/'),45=>Some('n'),46=>Some('m'),47=>Some('.'),50=>Some('`'),_=>None}}
+    fn input(event:&CGEvent,key:u16)->Input{match key{51=>Input::Backspace,49=>Input::Space,_=>{let mut buffer=[0u16;8];let mut length=0;unsafe{CGEventKeyboardGetUnicodeString(event.as_ptr(),buffer.len(),&mut length,buffer.as_mut_ptr());}let value=String::from_utf16_lossy(&buffer[..length.min(buffer.len())]);let mut characters=value.chars();let character=characters.next().or_else(||Self::character(key));let Some(character)=character else{return Input::Cancel;};if characters.next().is_some(){Input::Cancel}else{Input::Character(character)}}}}
+    fn event(&mut self,event_type:CGEventType,event:&CGEvent){
+        if (event.location().x+27469.).abs()<0.001{return;}
+        let key=event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16;
+        if matches!(event_type,CGEventType::KeyUp){
+            if key==KeyCode::SPACE&&let Some(release)=self.release.take(){let _=release.try_send(());}
+            return;
+        }
+        if !matches!(event_type,CGEventType::KeyDown){self.engine.feed(Input::Cancel);self.target=None;return;}
+        self.reload();
+        let modifiers=event.get_flags();
+        if modifiers.intersects(CGEventFlags::CGEventFlagCommand|CGEventFlags::CGEventFlagControl|CGEventFlags::CGEventFlagAlternate|CGEventFlags::CGEventFlagShift|CGEventFlags::CGEventFlagAlphaShift){self.engine.feed(Input::Cancel);self.target=None;return;}
+        let input=Self::input(event,key);
+        if matches!(input,Input::Character(character)if character==self.engine.prefix()){self.target=Target::capture().ok();}
+        if self.target.is_none(){self.engine.feed(Input::Cancel);return;}
+        if let Some(mut expansion)=self.engine.feed(input)&&let Some(target)=self.target.take()&&target.focused().ok()==Some(true){expansion.erase+=1;let (release,released)=sync_channel(1);if self.sender.try_send(ExpansionRequest{target,expansion,released}).is_ok(){self.release=Some(release);}}
+        if matches!(input,Input::Cancel|Input::Space){self.target=None;}
+    }
+}
+pub struct ExpansionSession;
+impl ExpansionSession { pub fn start(directory:std::path::PathBuf,settings:std::path::PathBuf)->Result<Receiver<ExpansionRequest>>{let (sender,receiver)=sync_channel(1);let state=Arc::new(Mutex::new(ExpansionState::new(&directory,settings,sender)?));let (ready_sender,ready_receiver)=sync_channel(1);std::thread::spawn(move||{let failed=ready_sender.clone();let result=CGEventTap::with_enabled(CGEventTapLocation::HID,CGEventTapPlacement::TailAppendEventTap,CGEventTapOptions::ListenOnly,vec![CGEventType::KeyDown,CGEventType::KeyUp,CGEventType::LeftMouseDown,CGEventType::RightMouseDown,CGEventType::OtherMouseDown],move|_,event_type,event|{if let Ok(mut state)=state.try_lock(){state.event(event_type,event);}CallbackResult::Keep},move||{let _=ready_sender.send(Ok(()));CFRunLoop::run_current()});if result.is_err(){let _=failed.try_send(Err(anyhow::anyhow!("Cannot monitor keyboard events; allow TypeRelay Accessibility permission")));}});ready_receiver.recv_timeout(Duration::from_secs(3)).context("macOS expansion listener did not start")??;Ok(receiver)} }
 
 pub struct ClipboardLease { context:clipboard_rs::ClipboardContext, saved:Vec<clipboard_rs::ClipboardContent>, marker:Vec<u8>, active:bool }
 impl ClipboardLease {
