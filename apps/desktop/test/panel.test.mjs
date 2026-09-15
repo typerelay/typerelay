@@ -69,7 +69,10 @@ test('missing insertion target hint stays out of search and settings',async()=>{
  const f=await Fixture.create();try{
 	await f.panel.open({settings:false,theme:{os:'windows'},status:'Choose another application first'});
 	assert.equal(f.panel.status.textContent,'');
-	await f.panel.open({settings:true,theme:{os:'windows'},status:'Choose another application first'});
+	await f.panel.open({settings:true,theme:{os:'windows'},status:'Choose another app first'});
+	assert.equal(f.panel.status.textContent,'');
+	f.panel.invoke=async(name)=>name==='initialize'?{config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},theme:{os:'macos'},settings:true,accessibility:true,input_monitoring:true,status:'Choose an application to insert into'}:null;
+	f.dom.window.document.body.dataset.os='macos';f.dom.window.dispatchEvent(new f.dom.window.Event('focus'));await new Promise(resolve=>setTimeout(resolve,0));
 	assert.equal(f.panel.status.textContent,'');
  }finally{f.dom.window.close();}
 });
