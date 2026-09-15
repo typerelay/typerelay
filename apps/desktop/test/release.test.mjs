@@ -73,3 +73,8 @@ test('release tooling creates signed updater artifacts for every supported platf
 	assert.equal(config.plugins.updater.endpoints[0], 'https://transfer.typerelay.com/apps/latest.json');
 	assert.match(config.plugins.updater.pubkey, /^[A-Za-z0-9+/=]+$/);
 });
+
+test('desktop release version matches both native workspaces', async () => {
+	const config=JSON.parse(await fs.readFile(path.join(PanelRelease.root,'apps/desktop/src-tauri/tauri.conf.json'),'utf8'));const desktop=JSON.parse(await fs.readFile(path.join(PanelRelease.root,'apps/desktop/package.json'),'utf8'));const workspace=await fs.readFile(path.join(PanelRelease.root,'Cargo.toml'),'utf8');const panel=await fs.readFile(path.join(PanelRelease.root,'apps/desktop/src-tauri/Cargo.toml'),'utf8');
+	assert.equal(desktop.version,config.version);assert.match(workspace,new RegExp(`\\[workspace\\.package\\][\\s\\S]*?version = "${config.version}"`));assert.match(panel,new RegExp(`\\[package\\][\\s\\S]*?version = "${config.version}"`));
+});
