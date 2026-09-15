@@ -98,8 +98,8 @@ mod tests {
     use super::*;
     #[test]
     fn shortcut_conflicts_accept_keysym_names_symbols_and_keycodes() {
-        for binding in [serde_json::json!({"modmask":5,"key":"comma"}),serde_json::json!({"modmask":5,"key":","}),serde_json::json!({"modmask":5,"keycode":59})] { assert!(Hyprland::shortcut_conflicts("Ctrl+Shift+Comma", &serde_json::json!([binding])).unwrap()); }
-        assert!(!Hyprland::shortcut_conflicts("Ctrl+Shift+Comma", &serde_json::json!([{"modmask":4,"key":"comma"}])).unwrap());
+        for binding in [serde_json::json!({"modmask":5,"key":"semicolon"}),serde_json::json!({"modmask":5,"key":";"}),serde_json::json!({"modmask":5,"keycode":47})] { assert!(Hyprland::shortcut_conflicts("Ctrl+Shift+Semicolon", &serde_json::json!([binding])).unwrap()); }
+        assert!(!Hyprland::shortcut_conflicts("Ctrl+Shift+Semicolon", &serde_json::json!([{"modmask":4,"key":"semicolon"}])).unwrap());
     }
     #[test]
     fn launching_app_cannot_be_mistaken_for_editor_terminal() {

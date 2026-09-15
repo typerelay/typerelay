@@ -9,7 +9,7 @@ pub struct Hit { pub id: String, pub library: String, pub library_name: String, 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct PanelSettings { pub shortcut: String, pub launch_at_login: bool }
-impl Default for PanelSettings { fn default() -> Self { Self { shortcut: "Ctrl+Shift+Comma".into(), launch_at_login: true } } }
+impl Default for PanelSettings { fn default() -> Self { Self { shortcut: "Ctrl+Shift+Semicolon".into(), launch_at_login: true } } }
 pub struct Panel;
 impl Panel {
     pub fn settings(root: &Path) -> Result<PanelSettings> {
@@ -18,7 +18,7 @@ impl Panel {
     pub fn save_settings(root: &Path, settings: &PanelSettings) -> Result<()> { Self::shortcut(&settings.shortcut)?; Paths::atomic_write(&root.join("panel.json"), &serde_json::to_vec(settings)?, false) }
     /// Linux evdev codes and modifier groups; portable validation shares the same supported keys.
     pub fn shortcut(value: &str) -> Result<(u16, Vec<&'static [u16]>)> {
-        let parts: Vec<_> = value.split('+').collect(); ensure!((2..=5).contains(&parts.len()), "Use modifiers plus one key, e.g. Ctrl+Shift+Comma");
+        let parts: Vec<_> = value.split('+').collect(); ensure!((2..=5).contains(&parts.len()), "Use modifiers plus one key, e.g. Ctrl+Shift+Semicolon");
         let mut modifiers: Vec<&'static [u16]> = Vec::new();
         for part in &parts[..parts.len()-1] { let keys: &'static [u16] = match *part { "Ctrl" | "Control" => &[29,97], "Shift" => &[42,54], "Alt" => &[56,100], "Super" | "Meta" => &[125,126], _ => anyhow::bail!("Unknown shortcut modifier") }; ensure!(!modifiers.contains(&keys), "Repeated shortcut modifier"); modifiers.push(keys); }
         let key = *parts.last().unwrap();
@@ -80,5 +80,5 @@ mod tests {
         assert_eq!(Panel::search(dir.path(),"abc").unwrap().len(),2);
     }
     #[test]
-    fn validates_shortcuts() { assert_eq!(Panel::shortcut("Ctrl+Shift+Comma").unwrap().0,51); for bad in ["Comma","Ctrl+Ctrl+A","Ctrl+Unknown", "Fake+A"] { assert!(Panel::shortcut(bad).is_err()); } }
+    fn validates_shortcuts() { assert_eq!(PanelSettings::default().shortcut,"Ctrl+Shift+Semicolon");assert_eq!(Panel::shortcut("Ctrl+Shift+Semicolon").unwrap().0,39); for bad in ["Semicolon","Ctrl+Ctrl+A","Ctrl+Unknown", "Fake+A"] { assert!(Panel::shortcut(bad).is_err()); } }
 }

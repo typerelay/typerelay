@@ -11,7 +11,7 @@ TypeRelay turns short abbreviations into reusable text, code and fillable templa
 
 ## Why TypeRelay?
 
-- **Fast expansion** — type a local prefix, an abbreviation and Space to insert a snippet. The default prefix is a comma.
+- **Fast expansion** — type a local prefix, an abbreviation and Space to insert a snippet. The default prefix is a semicolon.
 - **Local-first editing** — snippets live in SQLite, remain searchable offline and queue changes for later synchronization.
 - **Private or shared libraries** — keep personal content private or explicitly enroll libraries for team sync.
 - **Text, code and templates** — preserve whitespace and Unicode, or add dates, prompted fields and explicit Enter actions.
@@ -68,7 +68,7 @@ Create a library and snippets with:
 typerelay-tui
 ```
 
-Then type the configured prefix, an abbreviation and Space in another application. For example, the default prefix and an abbreviation named `email` expand from `,email `.
+Then type the configured prefix, an abbreviation and Space in another application. For example, the default prefix and an abbreviation named `email` expand from `;email `.
 
 ## Team sync and self-hosting
 

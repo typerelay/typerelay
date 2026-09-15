@@ -164,7 +164,7 @@ mod tests {
         assert_eq!(store.snapshot.len(), 2);
         fs::write(&sales, "matches:\n- trigger: 'sale'\n  replace: updated\n").unwrap();
         let mut engine = typerelay_core::Engine::new(store.reload().unwrap().unwrap());
-        for c in ",sale".chars() { engine.feed(typerelay_core::Input::Character(c)); }
+        for c in ";sale".chars() { engine.feed(typerelay_core::Input::Character(c)); }
         assert_eq!(engine.feed(typerelay_core::Input::Space).unwrap().text, "updated");
         fs::remove_file(sales).unwrap();
         assert_eq!(store.reload().unwrap().unwrap().len(), 1);
@@ -181,7 +181,7 @@ mod tests {
     fn yaml_block_scalar_keeps_linebreaks() {
         let snapshot = FileStore::parse(b"matches:\n  - trigger: 'naf'\n    replace: |\n      Sincerely,\n      Nitai\n\n      Ceo & Founder\n").unwrap();
         let mut engine = typerelay_core::Engine::new(snapshot);
-        for c in ",naf".chars() { engine.feed(typerelay_core::Input::Character(c)); }
+        for c in ";naf".chars() { engine.feed(typerelay_core::Input::Character(c)); }
         assert_eq!(engine.feed(typerelay_core::Input::Space).unwrap().text, "Sincerely,\nNitai\n\nCeo & Founder\n");
     }
     #[test]

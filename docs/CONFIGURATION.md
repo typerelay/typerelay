@@ -2,7 +2,7 @@
 
 Settings stay outside the snippet database, normally ~/.config/typerelay/settings.yml:
 
-    trigger_prefix: ","
+    trigger_prefix: ";"
     sync_url: ""
 
 XDG_CONFIG_HOME is respected. Prefix changes affect this machine without rewriting synchronized snippets.

@@ -706,7 +706,7 @@ mod tests {
         let mut activated = entry.clone(); activated.trigger = "code".into();
         let file = db.edit(&file, Some(0), Some(activated.clone())).unwrap();
         let mut engine = typerelay_core::Engine::new(db.snapshot().unwrap());
-        for c in ",code".chars() { engine.feed(typerelay_core::Input::Character(c)); }
+        for c in ";code".chars() { engine.feed(typerelay_core::Input::Character(c)); }
         assert_eq!(engine.feed(typerelay_core::Input::Space).unwrap().text, entry.replace);
         let destination = db.create("Destination").unwrap();
         db.edit_move(&file, 0, activated.clone(), &destination.id).unwrap();

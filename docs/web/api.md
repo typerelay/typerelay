@@ -102,7 +102,7 @@ Ordinary deletion means Move to Trash. Restoring a library preserves independent
 Purge is creator/admin-only for shared libraries; private Trash remains creator-only.
 Restores validate active uniqueness/limits. Expired records cannot restore; cleanup runs hourly and on startup.
 
-Web abbreviation forms display a static comma prefix. Leading commas typed or pasted into the abbreviation are stripped by shared client/server normalization; stored abbreviations remain bare.
+Web abbreviation forms display a static semicolon prefix. Leading semicolons or legacy commas typed or pasted into the abbreviation are stripped by shared client/server normalization; stored abbreviations remain bare.
 
 ## Bulk selection and moves
 

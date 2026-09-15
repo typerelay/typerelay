@@ -1,4 +1,5 @@
 use anyhow::{Context,Result,ensure};
+use core_graphics::{event::{CGEvent,CGEventFlags,CGEventTapLocation,KeyCode},event_source::{CGEventSource,CGEventSourceStateID}};
 use objc2_app_kit::{NSWorkspace,NSRunningApplication,NSApplicationActivationOptions};
 use std::{ffi::{c_void,CString},process::Command,sync::Arc};
 type Ref = *const c_void;
@@ -25,6 +26,8 @@ pub fn fallback_allowed()->bool { NSWorkspace::sharedWorkspace().frontmostApplic
 pub fn accessibility(prompt:bool)->bool { let trusted=unsafe{AXIsProcessTrusted()};if !trusted&&prompt{let _=enigo::Enigo::new(&enigo::Settings::default());}trusted }
 pub fn open_accessibility_settings()->Result<()> { let status=Command::new("/usr/bin/open").arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility").status()?;ensure!(status.success(),"Could not open Accessibility settings");Ok(()) }
 pub fn open_tui()->Result<()> { let executable=std::env::current_exe()?.with_file_name("typerelay-tui");ensure!(executable.is_file(),"TypeRelay TUI is missing from this application");let status=Command::new("/usr/bin/open").arg(executable).status()?;ensure!(status.success(),"Could not open TypeRelay TUI");Ok(()) }
+pub fn insert(target:&Target,erase:usize,has_text:bool)->Result<()> { let source=CGEventSource::new(CGEventSourceStateID::Private).map_err(|_|anyhow::anyhow!("Cannot create keyboard event source; allow TypeRelay Accessibility permission"))?;let event=|key,down,flags|->Result<CGEvent>{let event=CGEvent::new_keyboard_event(source.clone(),key,down).map_err(|_|anyhow::anyhow!("Cannot create keyboard event"))?;event.set_flags(flags|CGEventFlags::CGEventFlagNonCoalesced);Ok(event)};let mut events=Vec::new();for _ in 0..erase{events.push(event(KeyCode::DELETE,true,CGEventFlags::empty())?);events.push(event(KeyCode::DELETE,false,CGEventFlags::empty())?);}if !has_text{events.push(event(KeyCode::RETURN,true,CGEventFlags::empty())?);events.push(event(KeyCode::RETURN,false,CGEventFlags::empty())?);}else{let command=CGEventFlags::CGEventFlagCommand;events.push(event(KeyCode::ANSI_V,true,command)?);events.push(event(KeyCode::ANSI_V,false,command)?);}for event in events{event.post_to_pid(target.pid);}Ok(()) }
+pub fn release_modifiers()->Result<()> { let source=CGEventSource::new(CGEventSourceStateID::HIDSystemState).map_err(|_|anyhow::anyhow!("Cannot create keyboard event source"))?;for key in [KeyCode::COMMAND,KeyCode::RIGHT_COMMAND,KeyCode::SHIFT,KeyCode::RIGHT_SHIFT,KeyCode::CONTROL,KeyCode::RIGHT_CONTROL,KeyCode::OPTION,KeyCode::RIGHT_OPTION]{let event=CGEvent::new_keyboard_event(source.clone(),key,false).map_err(|_|anyhow::anyhow!("Cannot create keyboard event"))?;event.set_flags(CGEventFlags::empty());event.post(CGEventTapLocation::HID);}Ok(()) }
 
 pub struct ClipboardLease { context:clipboard_rs::ClipboardContext, saved:Vec<clipboard_rs::ClipboardContent>, marker:Vec<u8>, active:bool }
 impl ClipboardLease {

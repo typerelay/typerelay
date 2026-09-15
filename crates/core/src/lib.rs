@@ -64,7 +64,7 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub const DEFAULT_PREFIX: char = ',';
+    pub const DEFAULT_PREFIX: char = ';';
     pub fn new(snapshot: Snapshot) -> Self { Self { snapshot, pending: String::new(), prefix: Self::DEFAULT_PREFIX } }
 
     pub fn validate_prefix(value: &str) -> Result<char, String> {
@@ -122,24 +122,24 @@ mod tests {
     #[test]
     fn waits_for_space_and_allows_overlap() {
         let mut engine = Engine::new(Fixture::snapshot());
-        Fixture::type_text(&mut engine, ",brbmore");
+        Fixture::type_text(&mut engine, ";brbmore");
         assert_eq!(engine.feed(Input::Space), Some(Expansion { template: None, erase: 8, text: "Later".into() }));
-        Fixture::type_text(&mut engine, ",brb");
+        Fixture::type_text(&mut engine, ";brb");
         assert_eq!(engine.feed(Input::Space), Some(Expansion { template: None, erase: 4, text: "Be right back.".into() }));
         assert_eq!(engine.feed(Input::Space), None);
     }
     #[test]
     fn edits_and_cancellation() {
         let mut engine = Engine::new(Fixture::snapshot());
-        Fixture::type_text(&mut engine, ",brbm");
+        Fixture::type_text(&mut engine, ";brbm");
         engine.feed(Input::Backspace);
         assert_eq!(engine.feed(Input::Space).unwrap().erase, 4);
-        Fixture::type_text(&mut engine, ",brb");
+        Fixture::type_text(&mut engine, ";brb");
         engine.feed(Input::Cancel);
         assert_eq!(engine.feed(Input::Space), None);
-        Fixture::type_text(&mut engine, "ordinary,unknown");
+        Fixture::type_text(&mut engine, "ordinary;unknown");
         assert_eq!(engine.feed(Input::Space), None);
-        Fixture::type_text(&mut engine, ",brx");
+        Fixture::type_text(&mut engine, ";brx");
         engine.feed(Input::Backspace);
         engine.feed(Input::Character('b'));
         assert!(engine.feed(Input::Space).is_some());
@@ -147,22 +147,22 @@ mod tests {
     #[test]
     fn snapshot_swap_cancels_partial_trigger() {
         let mut engine = Engine::new(Fixture::snapshot());
-        Fixture::type_text(&mut engine, ",brb");
+        Fixture::type_text(&mut engine, ";brb");
         engine.replace_snapshot(Snapshot::new(vec![]).unwrap());
         assert_eq!(engine.feed(Input::Space), None);
     }
     #[test]
     fn prefix_changes_do_not_change_snippets_and_cancel_pending_matches() {
         let mut engine = Engine::new(Fixture::snapshot());
-        Fixture::type_text(&mut engine, ",brb");
-        engine.set_prefix(";").unwrap();
-        assert!(engine.feed(Input::Space).is_none());
-        Fixture::type_text(&mut engine, ",brb");
+        Fixture::type_text(&mut engine, ";brb");
+        engine.set_prefix(",").unwrap();
         assert!(engine.feed(Input::Space).is_none());
         Fixture::type_text(&mut engine, ";brb");
+        assert!(engine.feed(Input::Space).is_none());
+        Fixture::type_text(&mut engine, ",brb");
         assert_eq!(engine.feed(Input::Space).unwrap(), Expansion { template: None, erase: 4, text: "Be right back.".into() });
         for prefix in ["", "::", "a", "-", " ", ":"] { assert!(engine.set_prefix(prefix).is_err()); }
-        assert_eq!(engine.prefix(), ';');
+        assert_eq!(engine.prefix(), ',');
     }
     #[test]
     fn rejects_unsafe_or_ambiguous_configuration() {
@@ -178,7 +178,7 @@ mod tests {
         let text = "Sincerely,\r\nNitai\r\nCeo & Founder\r\n\r\n\tCafé\n";
         let snapshot = Snapshot::new(vec![Snippet { trigger: "naf".into(), replacement: text.into() }]).unwrap();
         let mut engine = Engine::new(snapshot);
-        Fixture::type_text(&mut engine, ",naf");
+        Fixture::type_text(&mut engine, ";naf");
         let expansion = engine.feed(Input::Space).unwrap();
         assert_eq!(expansion.text, "Sincerely,\nNitai\nCeo & Founder\n\n\tCafé\n");
         assert!(expansion.requires_paste());

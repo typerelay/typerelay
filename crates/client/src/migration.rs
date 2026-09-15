@@ -106,7 +106,7 @@ mod tests {
         let current = fs::read_to_string(&file).unwrap();
         assert!(current.contains("# keep") && current.contains("# signature") && current.contains("Regards,"));
         assert_eq!(FileStore::open(snippets.clone()).unwrap().snapshot.len(), 1);
-        assert_eq!(SettingsStore::open(settings.clone()).unwrap().settings.trigger_prefix, ",");
+        assert_eq!(SettingsStore::open(settings.clone()).unwrap().settings.trigger_prefix, ";");
         assert!(fs::read_to_string(&settings).unwrap().contains("# local"));
         assert_eq!(Migration::run(&snippets, &settings, false).unwrap().files, 0);
     }

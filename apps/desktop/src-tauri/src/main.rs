@@ -160,7 +160,7 @@ async fn insert(app:tauri::AppHandle,hit:Hit,values:Option<std::collections::BTr
     }).await.map_err(|e|e.to_string()).and_then(|r|r.map_err(|e|e.to_string()));
     app.state::<Runtime>().busy.store(false,Ordering::SeqCst);
     if result.is_ok(){let state=app.state::<Runtime>();state.status.lock().unwrap().clear();*state.erase.lock().unwrap()=0;state.prompting.store(false,Ordering::SeqCst);state.prompt_hit.lock().unwrap().take();}
-    if let Err(error)=&result { *app.state::<Runtime>().status.lock().unwrap()=error.clone(); if let Some(window)=app.get_webview_window("panel"){let _=window.show();let _=window.set_focus();} }
+    if let Err(error)=&result { eprintln!("TypeRelay insertion failed: {error}");*app.state::<Runtime>().status.lock().unwrap()=error.clone(); if let Some(window)=app.get_webview_window("panel"){let _=window.show();let _=window.set_focus();} }
     result
 }
 #[tauri::command]
@@ -235,6 +235,8 @@ fn main() {
     if std::env::args().any(|a|a=="--version"){println!("typerelay-panel {}",env!("CARGO_PKG_VERSION"));return;}
     #[cfg(target_os="macos")]
     if std::env::args().any(|a|a=="--accessibility-status"){println!("{}",if platform::accessibility(false){"allowed"}else{"required"});return;}
+    #[cfg(target_os="macos")]
+    if std::env::args().any(|a|a=="--repair-input"){if let Err(error)=platform::release_modifiers(){eprintln!("TypeRelay input repair failed: {error}");std::process::exit(1);}return;}
     #[cfg(target_os="linux")]
     if std::env::args().any(|a|a=="--quit") {if let Ok(root)=typerelay_client::panel_ipc::PanelIpc::directory()&& let Ok(socket)=std::os::unix::net::UnixDatagram::unbound(){let _=socket.send_to(b"quit",root.join("events.sock"));}return;}
 

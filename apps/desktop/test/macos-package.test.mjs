@@ -23,12 +23,19 @@ test('macOS bundle stages the TUI for native and universal targets', async () =>
 });
 
 test('macOS startup requests Accessibility and offers settings and TUI launchers', async () => {
-	const main = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/main.rs'), 'utf8'); const platform = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/platform_macos.rs'), 'utf8'); const tray = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/tray.rs'), 'utf8');
+	const main = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/main.rs'), 'utf8'); const shared = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/platform.rs'), 'utf8'); const platform = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/platform_macos.rs'), 'utf8'); const tray = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/tray.rs'), 'utf8');
 	assert.match(main, /platform::accessibility\(true\)/);
 	assert.match(main, /--accessibility-status/);
 	assert.match(platform, /Enigo::new/);
 	assert.match(platform, /Privacy_Accessibility/);
 	assert.match(platform, /with_file_name\("typerelay-tui"\)/);
+	assert.match(platform, /CGEvent::new_keyboard_event/);
+	assert.match(platform, /KeyCode::ANSI_V/);
+	assert.match(platform, /post_to_pid\(target\.pid\)/);
+	assert.match(platform, /release_modifiers/);
+	assert.match(main, /--repair-input/);
+	assert.doesNotMatch(shared, /enigo\.key/);
+	assert.match(main, /TypeRelay insertion failed/);
 	assert.match(tray, /Open TypeRelay TUI/);
 });
 

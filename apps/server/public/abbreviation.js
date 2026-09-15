@@ -1,5 +1,5 @@
 export class Abbreviation {
-	static normalize(value) { return typeof value === 'string' ? value.replace(/^,+/, '') : value; }
+	static normalize(value) { return typeof value === 'string' ? value.replace(/^[,;]+/, '') : value; }
 	static field(input) {
 		const value = Abbreviation.normalize(input.value);
 		const removed = input.value.length - value.length;

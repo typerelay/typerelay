@@ -49,7 +49,7 @@ if kind === 'snippet' || kind === 'conflict'
 				option(value="template" selected=snippet && (snippet.content && snippet.content.type) === 'template') Template
 	label.form-label.fw-bold(for="trigger") Abbreviation (optional)
 	.input-group.input-group-sm.mb-4
-		span.input-group-text(aria-hidden="true") ,
+		span.input-group-text(aria-hidden="true") ;
 		input#trigger.form-control.form-control-sm(name="trigger" value=snippet ? snippet.trigger : '' pattern="[a-z0-9\\-]{1,63}" autocapitalize="off" spellcheck="false")
 	label.form-label.fw-bold(for="replace") Expansion
 	textarea#replace.form-control.form-control-sm.mb-4(name="replace" rows="8")= '\n' + (snippet ? snippet.replace : '')

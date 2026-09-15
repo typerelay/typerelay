@@ -19,6 +19,6 @@
 			else
 				label.form-label(for='abbr-' + entry.key) Abbreviation (optional)
 				.input-group.input-group-sm.mb-3
-					span.input-group-text ,
+					span.input-group-text ;
 					input.form-control.form-control-sm(id='abbr-' + entry.key data-import-trigger=entry.key value=entry.trigger data-review=entry.review disabled=entry.review pattern="[a-z0-9\\-]{1,63}")
 				pre.small= entry.content.text
