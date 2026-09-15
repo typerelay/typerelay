@@ -38,6 +38,8 @@ struct ContextWatch {
 }
 
 impl ContextWatch {
+    fn invalidates(event:&InputEvent)->bool { event.event_type()==EventType::KEY && event.value()==1 && matches!(event.code(),0x110..=0x117|0x14a) }
+
     fn connect() -> Result<Self> {
         let stream = UnixStream::connect(Hyprland::socket(".socket2.sock")?)?;
         stream.set_nonblocking(true)?;
@@ -75,8 +77,7 @@ impl ContextWatch {
         while index < self.pointers.len() {
             let disconnected = match self.pointers[index].fetch_events() {
                 Ok(events) => {
-                    // Conservative: movement, scrolling and touch also cancel the candidate.
-                    if events.into_iter().any(|e| e.event_type() != EventType::SYNCHRONIZATION) { changed = true; }
+                    if events.into_iter().any(|event|Self::invalidates(&event)) { changed = true; }
                     false
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => false,
@@ -488,6 +489,13 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pointer_motion_and_scroll_keep_candidates_but_clicks_cancel() {
+        assert!(!ContextWatch::invalidates(&InputEvent::new(EventType::RELATIVE.0,0,1)));
+        assert!(!ContextWatch::invalidates(&InputEvent::new(EventType::KEY.0,0x110,0)));
+        assert!(ContextWatch::invalidates(&InputEvent::new(EventType::KEY.0,0x110,1)));
+        assert!(ContextWatch::invalidates(&InputEvent::new(EventType::KEY.0,0x14a,1)));
+    }
     #[test]
     fn detects_competing_expander_without_flagging_required_input_tools() {
         let normal = serde_json::json!({"keyboards": [{"name": "keyd-virtual-keyboard"}, {"name": "hl-virtual-keyboard-fcitx5"}, {"name": "typerelay-virtual-keyboard"}]});
