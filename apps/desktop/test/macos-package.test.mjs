@@ -72,4 +72,7 @@ test('local macOS build uses the configured Developer ID identity', async () => 
 	assert.match(source, /Developer ID Application/);
 	assert.match(source, /APPLE_SIGNING_IDENTITY/);
 	assert.match(source, /'--options', 'runtime'/);
+	const release = await fs.readFile(path.join(root, 'scripts/release-panel.mjs'), 'utf8');
+	assert.match(release, /options\.mode === 'macos'\) nativeTools=await NativeTools\.stage\(options\.target/);
+	assert.ok(release.indexOf("options.mode === 'macos') nativeTools=await NativeTools.stage") < release.indexOf("PanelRelease.run('pnpm', build"));
 });

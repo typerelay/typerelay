@@ -140,6 +140,7 @@ export class PanelRelease {
 		try {
 			await PanelRelease.run('pnpm', ['install', '--frozen-lockfile'], { cwd: working, environment });
 			if (options.mode === 'windows') { await PanelRelease.run('pnpm', ['build'], { cwd: working, environment }); nativeTools=await NativeTools.stage(options.target, { environment }); }
+			if (options.mode === 'macos') nativeTools=await NativeTools.stage(options.target, { environment });
 			if (options.mode === 'linux') await PanelRelease.run('cargo', ['build', '--release', '--locked', '--target', options.target, '--bin', 'typerelay', '--bin', 'typerelay-tui'], { environment });
 			let overlay;
 			if (options.mode === 'windows') {
