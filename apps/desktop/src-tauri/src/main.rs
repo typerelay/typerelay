@@ -83,18 +83,37 @@ impl Runtime {
     }
     #[cfg(any(target_os="windows",target_os="macos"))]
     fn expand(app:&tauri::AppHandle,request:platform::ExpansionRequest)->Result<()>{
-        let platform::ExpansionRequest{target,expansion,released}=request;released.recv_timeout(std::time::Duration::from_secs(2)).context("Release Space before expansion")?;std::thread::sleep(std::time::Duration::from_millis(75));
+        #[cfg(target_os="windows")]
+        let platform::ExpansionRequest{target,expansion,released}=request;
+        #[cfg(target_os="macos")]
+        let platform::ExpansionRequest{target,expansion,released,deferred}=request;
+        let release=released.recv_timeout(std::time::Duration::from_secs(2)).context("Release Space before expansion");
+        #[cfg(target_os="windows")]
+        release?;
+        #[cfg(target_os="macos")]
+        if let Err(error)=release{deferred.finish(&target)?;return Err(error);}
+        std::thread::sleep(std::time::Duration::from_millis(75));
+        #[cfg(target_os="macos")]
+        if deferred.cancelled(){deferred.finish(&target)?;return Ok(());}
+        #[cfg(target_os="macos")]
+        let prompted=expansion.template.as_ref().is_some_and(|template|template.prompted);
+        #[cfg(target_os="macos")]
+        if prompted&&deferred.finish(&target)?>0{return Ok(());}
+        let result=(||->Result<()>{
         if let Some(template)=expansion.template {
             let identity=template.identity.context("Template identity unavailable")?;
             let hit=Hit{id:identity.id,library:identity.library,revision:identity.revision,library_name:String::new(),title:template.abbreviation.clone(),abbreviation:template.abbreviation,preview:String::new()};
             if template.prompted {
                 let state=app.state::<Runtime>();if state.busy.load(Ordering::SeqCst)||state.prompting.load(Ordering::SeqCst){#[cfg(target_os="windows")]platform::paste(&target,0,Some(" ".into()))?;return Ok(());}
-                let prompt_app=app.clone();let main_app=prompt_app.clone();prompt_app.run_on_main_thread(move||{let state=main_app.state::<Runtime>();*state.target.lock().unwrap()=Some(target);*state.erase.lock().unwrap()=expansion.erase;*state.prompt_hit.lock().unwrap()=Some(hit);state.prompting.store(true,Ordering::SeqCst);Runtime::open(&main_app,false);})?;return Ok(());
+                let prompt_app=app.clone();let main_app=prompt_app.clone();let prompt_target=target.clone();prompt_app.run_on_main_thread(move||{let state=main_app.state::<Runtime>();*state.target.lock().unwrap()=Some(prompt_target);*state.erase.lock().unwrap()=expansion.erase;*state.prompt_hit.lock().unwrap()=Some(hit);state.prompting.store(true,Ordering::SeqCst);Runtime::open(&main_app,false);})?;return Ok(());
             }
             let rendered=Panel::render(&app.state::<Runtime>().root.join("snippets"),&hit,Default::default(),false)?;let mut erase=expansion.erase;
             for step in rendered.steps {Panel::content(&app.state::<Runtime>().root.join("snippets"),&hit)?;platform::paste(&target,std::mem::take(&mut erase),match step{typerelay_core::template::Step::Text{text}=>Some(text),typerelay_core::template::Step::Enter=>None})?;}
         } else {platform::paste(&target,expansion.erase,Some(expansion.text))?;}
-        Ok(())
+        Ok(())})();
+        #[cfg(target_os="macos")]
+        if !prompted {let replay=deferred.finish(&target).map(|_|());return result.and(replay);}
+        result
     }
     fn hide(app:&tauri::AppHandle) {
         if let Some(window)=app.get_webview_window("panel") {let _=window.hide();}

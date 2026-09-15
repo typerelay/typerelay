@@ -23,7 +23,7 @@ test('macOS bundle stages the TUI for native and universal targets', async () =>
 });
 
 test('macOS startup requests Accessibility and offers settings and TUI launchers', async () => {
-	const main = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/main.rs'), 'utf8'); const shared = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/platform.rs'), 'utf8'); const platform = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/platform_macos.rs'), 'utf8'); const tray = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/tray.rs'), 'utf8');
+	const main = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/main.rs'), 'utf8'); const shared = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/platform.rs'), 'utf8'); const platform = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/platform_macos.rs'), 'utf8'); const smoke = await fs.readFile(path.join(root, 'scripts/macos-typing-smoke.swift'), 'utf8'); const tray = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/tray.rs'), 'utf8');
 	assert.match(main, /platform::accessibility\(true\)/);
 	assert.match(main, /platform::accessibility\(false\)\{message\}else\{Runtime::ACCESSIBILITY_MESSAGE/);
 	assert.match(main, /--accessibility-status/);
@@ -36,7 +36,9 @@ test('macOS startup requests Accessibility and offers settings and TUI launchers
 	assert.match(platform, /KeyCode::COMMAND,false/);
 	assert.match(platform, /post_to_pid\(target\.pid\)/);
 	assert.match(platform, /CGEventTap::with_enabled/);
-	assert.match(platform, /CGEventTapOptions::ListenOnly/);
+	assert.match(platform, /CGEventTapOptions::Default/);
+	assert.match(platform, /CallbackResult::Drop/);
+	assert.match(main, /deferred\.finish\(&target\)/);
 	assert.match(platform, /CGEventTapLocation::HID/);
 	assert.match(platform, /CGEventType::KeyDown/);
 	assert.match(platform, /event\.location\(\)\.x\+27469/);
@@ -45,6 +47,9 @@ test('macOS startup requests Accessibility and offers settings and TUI launchers
 	assert.match(main, /--repair-input/);
 	assert.doesNotMatch(shared, /enigo\.key/);
 	assert.match(main, /TypeRelay insertion failed/);
+	assert.match(smoke, /immediateFollow/);
+	assert.match(smoke, /releaseTimeout/);
+	assert.match(smoke, /Be right back\.x/);
 	assert.match(tray, /Open TypeRelay TUI/);
 });
 
