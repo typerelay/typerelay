@@ -38,7 +38,7 @@ struct ContextWatch {
 }
 
 impl ContextWatch {
-    fn invalidates(event:&InputEvent)->bool { event.event_type()==EventType::KEY && event.value()==1 && matches!(event.code(),0x110..=0x117|0x14a) }
+    fn invalidates(event:&InputEvent)->bool { event.event_type()==EventType::KEY && event.value()==1 && matches!(event.code(),0x110..=0x117) }
 
     fn connect() -> Result<Self> {
         let stream = UnixStream::connect(Hyprland::socket(".socket2.sock")?)?;
@@ -57,8 +57,9 @@ impl ContextWatch {
         Ok(Self { stream, pending: String::new(), pointers })
     }
 
-    fn changed(&mut self) -> Result<bool> {
+    fn changed(&mut self, expected:Option<&str>) -> Result<bool> {
         let mut changed = false;
+        let mut window_changed = false;
         let mut bytes = [0; 4096];
         loop {
             match self.stream.read(&mut bytes) {
@@ -70,9 +71,10 @@ impl ContextWatch {
         }
         while let Some(end) = self.pending.find('\n') {
             let line: String = self.pending.drain(..=end).collect();
-            if ["activewindow", "workspace", "focusedmon", "activespecial", "openlayer", "closelayer", "configreloaded"].iter().any(|prefix| line.starts_with(prefix)) { changed = true; }
+            if ["activewindow", "workspace", "focusedmon", "activespecial", "openlayer", "closelayer", "configreloaded"].iter().any(|prefix| line.starts_with(prefix)) { window_changed = true; }
         }
         if self.pending.len() > 65536 { bail!("Oversized Hyprland event"); }
+        if window_changed && expected.is_some() && Session::target()?.as_deref() == expected { window_changed = false; }
         let mut index = 0;
         while index < self.pointers.len() {
             let disconnected = match self.pointers[index].fetch_events() {
@@ -91,7 +93,7 @@ impl ContextWatch {
                 index += 1;
             }
         }
-        Ok(changed)
+        Ok(changed || window_changed)
     }
 }
 
@@ -316,7 +318,7 @@ impl Session {
                 Self::check_interference(&Hyprland::query("devices")?)?;
                 last_conflict_check = Instant::now();
             }
-            let context_changed=context.changed()?;
+            let context_changed=context.changed(target.as_deref())?;
             if context_changed {input_generation=input_generation.wrapping_add(1);}
             if context_changed || last_input.elapsed() > Duration::from_secs(10) {
                 engine.feed(Input::Cancel); target = None; insertion.clear();
@@ -366,7 +368,7 @@ impl Session {
 
             if let Some(state) = &mut paste {
                 match state.job.progress.try_recv() {
-                    Ok(Ok(Progress::Ready)) if !state.cancelled && Self::target()? == state.target && !context.changed()? => {
+                    Ok(Ok(Progress::Ready)) if !state.cancelled && Self::target()? == state.target && !context.changed(state.target.as_deref())? => {
                         let active = Hyprland::query("activewindow")?;
                         let terminal = Hyprland::is_terminal(&active);
                         insertion = Self::inject(&state.expansion, Some(terminal))?;
@@ -435,15 +437,15 @@ impl Session {
                     if caps || Self::MODIFIERS.iter().any(|key| pressed.contains(&key.0)) {
                         engine.feed(Input::Cancel);
                     } else {
-                        if context.changed()? { engine.feed(Input::Cancel); target = None; }
+                        if context.changed(target.as_deref())? { engine.feed(Input::Cancel); target = None; }
                         if matches!(Self::input(code), Input::Character(c) if c == engine.prefix()) { target = Self::target()?; if std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some() { eprintln!("Candidate target available: {}", target.is_some()); } }
                         let expansion = if target.is_some() { engine.feed(Self::input(code)) } else { engine.feed(Input::Cancel); None };
                         if expansion.is_some() && std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some() { eprintln!("Match found; held-key count {}", pressed.len()); }
                         if let Some(expansion) = expansion
-                            && Self::target()? == target && !context.changed()? {
+                            && Self::target()? == target && !context.changed(target.as_deref())? {
                                 let destination = target.clone().unwrap();
                                 pressed.remove(&code.0);
-                                if !Self::wait_for_forwarded_keys(&mut keyboard, &mut output, &mut buffered, &mut pressed, Instant::now() + Duration::from_secs(3))? || Self::target()? != Some(destination.clone()) || context.changed()? {
+                                if !Self::wait_for_forwarded_keys(&mut keyboard, &mut output, &mut buffered, &mut pressed, Instant::now() + Duration::from_secs(3))? || Self::target()? != Some(destination.clone()) || context.changed(Some(&destination))? {
                                     output.emit(&[event])?;
                                     pressed.insert(code.0);
                                     target = None;
@@ -494,7 +496,7 @@ mod tests {
         assert!(!ContextWatch::invalidates(&InputEvent::new(EventType::RELATIVE.0,0,1)));
         assert!(!ContextWatch::invalidates(&InputEvent::new(EventType::KEY.0,0x110,0)));
         assert!(ContextWatch::invalidates(&InputEvent::new(EventType::KEY.0,0x110,1)));
-        assert!(ContextWatch::invalidates(&InputEvent::new(EventType::KEY.0,0x14a,1)));
+        assert!(!ContextWatch::invalidates(&InputEvent::new(EventType::KEY.0,0x14a,1)));
     }
     #[test]
     fn detects_competing_expander_without_flagging_required_input_tools() {
