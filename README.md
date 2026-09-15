@@ -38,7 +38,7 @@ TypeRelay does not log keystrokes. Exported YAML is a portable copy, not live st
 | Omarchy / Hyprland, US layout | Continuous expansion, desktop panel and TUI; primary verified target |
 | Windows x64 | Continuous expansion, layout-aware desktop panel and TUI |
 | macOS Apple Silicon | Continuous expansion, desktop search and insertion panel |
-| Other Linux desktops, layouts and architectures | Should work, but not extensively tested |
+| Other Linux desktops, layouts and architectures | Continuous expansion and safe insertion are unsupported; generic GUI packages do not install the Omarchy input service |
 
 See the [desktop overview](docs/desktop/index.md) and [troubleshooting guide](docs/desktop/troubleshooting.md) for current limitations.
 
@@ -60,7 +60,7 @@ sh /tmp/typerelay-install.sh --dry-run
 sh /tmp/typerelay-install.sh
 ```
 
-The installer builds a pinned source commit, asks before changing the system and runs TypeRelay as your desktop user. It installs scoped device permissions; the expansion service never runs as root. Read the complete [installation and uninstall guide](docs/INSTALLATION.md) before deploying it across a team.
+The installer builds a pinned source commit, asks before changing the system and runs TypeRelay as your desktop user. It installs scoped device permissions; the expansion service never runs as root. Read the complete [installation and uninstall guide](docs/desktop/omarchy.md) before deploying it across a team.
 
 Create a library and snippets with:
 

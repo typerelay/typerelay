@@ -1,12 +1,14 @@
-# Install TypeRelay on Omarchy
+# Omarchy installation and uninstall
 
 ## Install directly from GitHub
 
-No checkout is needed. While the repository is private, sign in using `gh auth login`
-with an account that has repository access, then run this Fish-compatible command:
+No checkout is needed. Download and inspect the installer before running it:
 
 ```fish
-gh api --hostname github.com -H 'Accept: application/vnd.github.raw+json' 'repos/typerelay/typerelay/contents/scripts/install.sh?ref=main' | sh
+curl -fsSLo /tmp/typerelay-install.sh https://raw.githubusercontent.com/typerelay/typerelay/main/scripts/install.sh
+less /tmp/typerelay-install.sh
+sh /tmp/typerelay-install.sh --dry-run
+sh /tmp/typerelay-install.sh
 ```
 
 The bootstrap resolves the requested ref to a commit, downloads that exact source archive,
@@ -15,17 +17,16 @@ does not stop the current client until you confirm the installer prompts. Tempor
 and build files are cleaned up afterward. Rust/Cargo, Python 3 and tar must be installed.
 This initial distribution builds from source; it does not download a prebuilt release.
 
-To preview without changing the installation, append `-s -- --dry-run` to `sh`. To select
-a tag, branch or commit, append `-s -- --ref <ref>`. For example:
+To select a tag, branch or commit, pass `--ref`. For example:
+
+```fish
+sh /tmp/typerelay-install.sh --dry-run --ref v1.0.0
+```
+
+For a private checkout, authenticate GitHub CLI and stream the same file:
 
 ```fish
 gh api --hostname github.com -H 'Accept: application/vnd.github.raw+json' 'repos/typerelay/typerelay/contents/scripts/install.sh?ref=main' | sh -s -- --dry-run
-```
-
-After the repository becomes public, this unauthenticated command will also work:
-
-```fish
-curl -fsSL https://raw.githubusercontent.com/typerelay/typerelay/main/scripts/install.sh | sh
 ```
 
 ## Install or update an existing binary
@@ -39,7 +40,8 @@ typerelay install
 From a fresh checkout, first build with `cargo build --workspace --bins --release --locked`, then run
 `./target/release/typerelay install`. The installer is embedded in the executable;
 it does not need the checkout afterward. Python 3, systemd, keyd, acl, udev, modprobe,
-notify-send and sudo or pkexec must be available. Omarchy provides these dependencies.
+notify-send and sudo or pkexec must be available. Building the panel also requires Node.js,
+pnpm, GTK 3 and WebKitGTK 4.1 development packages. Omarchy provides the runtime dependencies.
 
 The installer prints the exact paths and asks before proceeding. It also asks before
 stopping manual TypeRelay clients or stopping/disabling Espanso. Possible conflicts with
@@ -56,7 +58,8 @@ in the service file. The installer imports the current session values when avail
 ## Files installed
 
 - `~/.local/bin/typerelay`: engine executable, replaced atomically during upgrades.
-- `~/.local/bin/typerelay-tui`: [terminal snippet editor](TUI.md), installed with the engine.
+- `~/.local/bin/typerelay-tui`: [terminal snippet editor](../cli/tui), installed with the engine.
+- `~/.local/bin/typerelay-panel`: desktop search panel when included in the bundle.
 - `~/.config/systemd/user/typerelay.service`: graphical-session service.
 - `~/.config/typerelay/snippets/`: your library SQLite database and related storage.
 - `~/.local/share/typerelay/`: installer state and the device-access helper.
@@ -72,12 +75,10 @@ updates preserve the original Espanso startup state for a later uninstall.
 
 ## Database-backed libraries
 
-Since v0.7, libraries live in SQLite under the configured directory. Manage them through the TUI/web app.
+Libraries live in SQLite under the configured directory. Manage them through the TUI or web app.
 YAML is explicit import/export only. First startup backs up and imports legacy YAML/sync state, then archives original files.
 The installer also backs up the stopped client configuration before replacing binaries for rollback.
 Active limits remain 256 libraries, 1 MiB serialized content per library, 8 MiB combined and 64 KiB per expansion.
-See [database migration](web/development.md).
-
 
 ## Service control and interference alerts
 
@@ -111,13 +112,13 @@ startup/running state. Each managed binary is removed only if it still matches i
 hash; replacements made outside the installer are preserved. Legacy engine-only manifests
 remain supported. Snippets and settings are preserved.
 
-Both source binaries must be present with matching versions before installation changes any
-service state. The GitHub bootstrap builds both. The TUI is never started as a service.
+The engine and TUI must be present with matching versions before installation changes any
+service state. When the panel binary is present, it must match too. The GitHub bootstrap builds
+all three by default; `--without-panel` installs only the engine and TUI. The TUI is never started as a service.
 
-**All snippet/configuration files are kept.** Installation never deletes the original POC
-file or Espanso files. If installation fails after permissions were configured, installer
+**All snippet/configuration files are kept.** Installation never deletes legacy YAML
+or Espanso files. If installation fails after permissions were configured, installer
 state remains available so rerunning install or uninstall can recover.
 
-For this POC, install/start/stop require the user's systemd manager to be available. Keyboard
-reconnects are handled by restarting the service; broad hotplug/compositor coverage still
-requires more testing before deployment across a team.
+Install/start/stop require the user’s systemd manager to be available. Keyboard reconnects are
+handled by restarting the service. Test hotplug and your exact keyboard/layout before team rollout.

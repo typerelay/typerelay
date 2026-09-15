@@ -25,7 +25,7 @@ Desktop migration backs up legacy YAML and sync state under backups/database-mig
 Interrupted v1 operations are reconciled against content-free server receipts before retrying through v2.
 The installer snapshots the stopped client's config under its private installation data directory and restores it if the upgrade fails.
 
-Old /api/v1 clients receive 426 and cannot upload. Install the matching v0.7 engine/TUI; credentials remain usable.
+Old `/api/v1` and pre-protocol-5 clients receive 426 and cannot upload. Install matching current engine, TUI and panel binaries; credentials remain usable.
 Keep backups until counts, IDs and text are verified. Backups and exports are outside Trash retention.
 
 ## Trash
@@ -49,9 +49,8 @@ Server tests use disposable typerelay_test, typerelay_e2e and typerelay_security
 Tests cover migration, offline replay, conflicts, Trash/restore/purge, expiry, access revocation, staged collisions and incremental UI updates.
 Do not run the retired file-based desktop smoke scripts against the database client.
 
-## Move protocol upgrade (v0.8)
+## Move storage introduced in v0.8
 
-Install the matching v0.8 engine/TUI with the server. Desktop sync protocol is now 3; no account reconnection or content migration is required.
-New SQLite base_libraries/base_snippets tables retain canonical server data while pending moves project into the working tables. They are populated on the first full protocol-3 sync and are cleared alongside content on purge/revocation.
+SQLite `base_libraries` and `base_snippets` tables retain canonical server data while pending moves project into the working tables. They are populated on a full sync and are cleared alongside content on purge/revocation. Current desktop sync protocol is 5; protocol 3 was the historical move rollout.
 The departures table keeps content-free former-location markers to prevent local resurrection when a move destination is inaccessible.
 Pending enrollment remaps both source and destination references atomically.

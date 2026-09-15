@@ -1,5 +1,7 @@
 # v0.8.0 selection and moves delivery
 
+> Historical delivery record. Current desktop sync protocol is 5; see [Sync and offline use](../guide/sync) for current user behavior.
+
 Implemented web checkboxes, select/deselect all, Shift+click ranges, conditional bulk Move/Trash actions and single-editor destination selection.
 TUI supports Space, Ctrl+A/Ctrl+D, Shift+Up/Down, F8 Move, F3 selected Trash and Ctrl+M in the editor.
 Moves preserve IDs and order, append at the destination and apply destination permissions. Batches are atomic and same-account; TUI moves require matching sync status.

@@ -1,5 +1,7 @@
 # Desktop panel delivery
 
+> Historical v0.10 delivery record. See the current [desktop overview](./index), [platform notes](./platforms) and [installation guide](./installation) for supported behavior.
+
 Version 0.10.0 adds the shared panel and native adapters. Omarchy is installed with matching engine, TUI and panel binaries. The resident panel starts hidden, has a T tray icon and a managed launch-at-login entry. Installer backup: `~/.local/share/typerelay/storage-upgrade-vevwub0w`.
 
 Live Omarchy verification passed:

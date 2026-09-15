@@ -1,12 +1,16 @@
 # Search panel
 
-Press **Ctrl+Shift+;** or left-click the **T** tray/menu-bar icon. Search across your accessible local libraries by abbreviation or content. Click a result once, or use arrow keys and **Enter**, to insert into the previously active application. **Escape** or an outside click dismisses the panel. **Copy** is available when insertion cannot safely restore your target.
+Press **Ctrl+Shift+;** or left-click the **T** tray/menu-bar icon. Search across accessible local libraries by abbreviation, title or content. Exact abbreviations rank first, followed by abbreviation prefixes, abbreviation substrings and content matches. Results identify their library and show a literal preview.
 
-Right-click the T icon for **Sync now**, **Settings** and **Quit TypeRelay**. Settings controls the shortcut, launch at login and account connection. **Authenticate in browser** signs in and links your desktop; it does not simply open the web dashboard.
+Click a result once, or use arrow keys and **Enter**, to insert into the previously active application. TypeRelay rechecks the snippet revision and access immediately before insertion. **Escape** or an outside click dismisses the panel. **Copy** is available when insertion cannot safely restore the original target.
+
+Right-click the T icon for **Sync now**, **Check for updates…**, **Settings** and **Quit TypeRelay**. Settings controls the shortcut, launch at login and account connection. **Authenticate** signs in through the browser and links this desktop to the selected account; it does not merely open the web dashboard.
 
 Closing the panel hides it. On Omarchy, quitting the panel leaves the separate expansion service running. Search works offline. Read-only snippets and entries without abbreviations remain searchable.
 
-On macOS, TypeRelay requests Accessibility on first launch; Settings shows the permission row only while action is required. The resident app performs prefix + abbreviation + Space expansion using native macOS keyboard monitoring and insertion. Open bundled **TypeRelay TUI** from the menu-bar menu or Settings to edit the same local database in Terminal. On Windows the resident panel also performs prefix + abbreviation + Space expansion; elevated/protected applications may reject insertion. Windows users can open **TypeRelay TUI** from Start, where expansion is paused. Native macOS and Windows builds remain beta pending broader platform verification.
+The default shortcut can be changed to Ctrl, Shift, Alt or Super plus another key. If registration fails because the operating system or another application already owns it, choose a different shortcut. **Start at login** manages the platform’s user startup entry.
+
+The resident app also performs prefix + abbreviation + Space expansion on macOS and Windows. Omarchy uses the separate expansion service. See [Operating system notes](./platforms) for permissions, remote-session and clipboard behavior.
 
 ## Filling templates
 
