@@ -4,3 +4,6 @@ body[data-os=macos]{--foreground:#1d1d1f;--secondary:#6e6e73;--border:rgba(0,0,0
 body[data-os=macos] main{padding-top:.9rem}body[data-os=macos] .titlebar{position:relative;min-height:2.35rem;margin-bottom:.7rem;padding-left:0}body[data-os=macos] .brand{position:absolute;left:50%;transform:translateX(-50%);margin:0}body[data-os=macos] .brand img{display:none}body[data-os=macos] .shortcut-key{margin-left:auto}body[data-os=macos] .settings-heading{min-height:1.4rem;margin-bottom:.4rem}#status:empty{display:none}#status:not(:empty){min-height:0;margin:.55rem 0 0;padding:.48rem .65rem;border:.0625rem solid color-mix(in srgb,var(--accent) 24%,transparent);border-radius:.5rem;background:color-mix(in srgb,var(--accent) 10%,transparent)}
 .status-pill{font-size:.78rem;font-weight:650;color:#703b00;background:#fff0c2;border:.0625rem solid #d89a28;padding:.18rem .5rem}
 @media(prefers-color-scheme:dark){.status-pill{color:#ffe6ad;background:#563700;border-color:#b9790d}}
+.shortcut-control{width:21rem}.shortcut-control input{width:13rem;flex:0 0 13rem}
+.status-pill[data-allowed=true]{display:inline-block;color:#145c2e;background:#d9f7df;border-color:#68b77b}
+@media(prefers-color-scheme:dark){.status-pill[data-allowed=true]{color:#c9f7d5;background:#194c2a;border-color:#3f8f57}}

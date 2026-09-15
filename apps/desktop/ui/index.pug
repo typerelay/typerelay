@@ -69,6 +69,13 @@ html(lang="en")
 						.settings-actions
 							button.primary(type="submit") Save changes
 					.settings-list.mac-only
+						.setting-row#input-monitoring-card
+							.setting-copy
+								h3 Input Monitoring
+								p Open Settings. If TypeRelay is absent, click Add; then enable it.
+							.setting-control
+								span#input-monitoring-state.status-pill
+								button#open-input-monitoring.secondary(type="button") Open Settings
 						.setting-row#accessibility-card
 							.setting-copy
 								h3 Accessibility
@@ -76,13 +83,6 @@ html(lang="en")
 							.setting-control
 								span#accessibility-state.status-pill
 								button#open-accessibility.secondary(type="button") Open Settings
-						.setting-row#input-monitoring-card
-							.setting-copy
-								h3 Input Monitoring
-								p Detect abbreviations while you type in other apps.
-							.setting-control
-								span#input-monitoring-state.status-pill
-								button#open-input-monitoring.secondary(type="button") Open Settings
 						.setting-row#tui-card
 							.setting-copy
 								h3 TypeRelay TUI

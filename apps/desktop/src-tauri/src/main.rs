@@ -16,9 +16,9 @@ use tauri_plugin_global_shortcut::GlobalShortcutExt;
 struct Runtime { root:PathBuf, target:Mutex<Option<platform::Target>>, last:Mutex<Option<platform::Target>>, erase:Mutex<usize>, busy:AtomicBool, syncing:AtomicBool, prompting:AtomicBool, prompt_hit:Mutex<Option<Hit>>, settings:AtomicBool, status:Mutex<String>, #[cfg(any(target_os="windows",target_os="macos"))] expansion_started:AtomicBool, #[cfg(target_os="linux")] registration:Mutex<Option<typerelay_client::desktop::Registration>> }
 impl Runtime {
 	#[cfg(target_os="macos")]
-	fn permission_message(accessibility:bool,input_monitoring:bool)->Option<&'static str> {match(accessibility,input_monitoring){(false,false)=>Some("TypeRelay needs Accessibility and Input Monitoring. Open Settings to allow both."),(false,true)=>Some("TypeRelay needs Accessibility. Open Settings to allow it."),(true,false)=>Some("TypeRelay needs Input Monitoring. Open Settings to allow it."),(true,true)=>None}}
+	fn permission_message(accessibility:bool,input_monitoring:bool)->Option<&'static str> {match(accessibility,input_monitoring){(false,false)=>Some("TypeRelay needs Input Monitoring, then Accessibility. Open Settings to allow both."),(false,true)=>Some("TypeRelay needs Accessibility. Open Settings to allow it."),(true,false)=>Some("TypeRelay needs Input Monitoring. Open Settings to allow it."),(true,true)=>None}}
 	#[cfg(target_os="macos")]
-	fn permissions(prompt:bool)->(bool,bool) {let accessibility=platform::accessibility(prompt);let input_monitoring=platform::input_monitoring(prompt&&accessibility);(accessibility,input_monitoring)}
+	fn permissions()->(bool,bool) {let input_monitoring=platform::input_monitoring(false);let accessibility=platform::accessibility(false);(accessibility,input_monitoring)}
 	#[cfg(target_os="macos")]
 	fn update_permission_status(&self,accessibility:bool,input_monitoring:bool) {let message=Self::permission_message(accessibility,input_monitoring);let mut status=self.status.lock().unwrap();if let Some(message)=message{*status=message.into();}else if status.starts_with("TypeRelay needs Accessibility")||status.starts_with("TypeRelay needs Input Monitoring"){status.clear();}}
 	#[cfg(any(target_os="windows",target_os="macos"))]
@@ -47,7 +47,7 @@ impl Runtime {
             if target.is_none(){
                 let message=captured.err().map(|e|e.to_string()).unwrap_or("Choose an application to insert into".into());
                 #[cfg(target_os="macos")]
-                {let (accessibility,input_monitoring)=Runtime::permissions(false);*state.status.lock().unwrap()=Runtime::permission_message(accessibility,input_monitoring).unwrap_or(&message).into();}
+                {let (accessibility,input_monitoring)=Runtime::permissions();*state.status.lock().unwrap()=Runtime::permission_message(accessibility,input_monitoring).unwrap_or(&message).into();}
                 #[cfg(not(target_os="macos"))]
                 {*state.status.lock().unwrap()=message;}
             }
@@ -161,7 +161,7 @@ impl Runtime {
 fn initialize(app:tauri::AppHandle)->std::result::Result<Value,String> {
     let state=app.state::<Runtime>(); let settings=Panel::settings(&state.root).map_err(|e|e.to_string())?;
 		#[cfg(target_os="macos")]
-		let (accessibility,input_monitoring)=Runtime::permissions(true);
+		let (accessibility,input_monitoring)=Runtime::permissions();
 		#[cfg(not(target_os="macos"))]
 		let accessibility=platform::accessibility(false);
 		#[cfg(not(target_os="macos"))]
@@ -294,7 +294,7 @@ fn main() {
 		app.manage(Runtime{root:root.clone(),target:Mutex::new(None),last:Mutex::new(None),erase:Mutex::new(0),busy:AtomicBool::new(false),syncing:AtomicBool::new(false),prompting:AtomicBool::new(false),prompt_hit:Mutex::new(None),settings:AtomicBool::new(false),status:Mutex::new(String::new()),#[cfg(any(target_os="windows",target_os="macos"))] expansion_started:AtomicBool::new(false),#[cfg(target_os="linux")] registration:Mutex::new(None)});
 		app.manage(update::UpdateState::default());
 		#[cfg(target_os="macos")]
-		let missing_permissions={let (accessibility,input_monitoring)=Runtime::permissions(true);app.state::<Runtime>().update_permission_status(accessibility,input_monitoring);if accessibility&&input_monitoring&&let Err(error)=Runtime::start_expansion(app.handle()){*app.state::<Runtime>().status.lock().unwrap()=format!("TypeRelay could not start Input Monitoring: {error:#}");}!(accessibility&&input_monitoring)};
+		let missing_permissions={let (accessibility,input_monitoring)=Runtime::permissions();app.state::<Runtime>().update_permission_status(accessibility,input_monitoring);if accessibility&&input_monitoring&&let Err(error)=Runtime::start_expansion(app.handle()){*app.state::<Runtime>().status.lock().unwrap()=format!("TypeRelay could not start Input Monitoring: {error:#}");}!(accessibility&&input_monitoring)};
         #[cfg(target_os="windows")]
         Runtime::start_expansion(app.handle())?;
         #[cfg(target_os="linux")]

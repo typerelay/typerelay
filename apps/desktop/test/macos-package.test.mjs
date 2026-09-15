@@ -20,20 +20,23 @@ test('macOS bundle stages the TUI for native and universal targets', async () =>
 	assert.equal(config.app.windows[0].windowEffects.effects[0], 'popover');
 	assert.equal(config.app.windows[0].decorations, true);
 	assert.equal(config.app.windows[0].titleBarStyle, 'Overlay');
+	const css = await fs.readFile(path.join(root, 'apps/desktop/ui/panel.css'), 'utf8');
+	assert.match(css, /status-pill\{font-size:\.78rem;font-weight:650/);
+	assert.match(css, /status-pill\[data-allowed=true\]\{display:inline-block;color:#145c2e/);
+	assert.match(css, /shortcut-control\{width:21rem\}\.shortcut-control input\{width:13rem;flex:0 0 13rem\}/);
 });
 
 test('macOS startup requests both permissions and offers settings and TUI launchers', async () => {
 	const main = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/main.rs'), 'utf8'); const shared = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/platform.rs'), 'utf8'); const platform = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/platform_macos.rs'), 'utf8'); const smoke = await fs.readFile(path.join(root, 'scripts/macos-typing-smoke.swift'), 'utf8'); const tray = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/tray.rs'), 'utf8');
-	assert.match(main, /Runtime::permissions\(true\)/);
-	assert.match(main, /platform::input_monitoring\(prompt&&accessibility\)/);
+	assert.match(main, /Runtime::permissions\(\)/);
+	assert.doesNotMatch(main, /Runtime::permissions\(true\)/);
 	assert.match(main, /--accessibility-status/);
 	assert.match(main, /--input-monitoring-status/);
 	assert.match(platform, /Enigo::new/);
-	assert.match(platform, /CGPreflightListenEventAccess/);
-	assert.match(platform, /CGRequestListenEventAccess/);
+	assert.match(platform, /IOHIDCheckAccess/);
+	assert.doesNotMatch(platform, /IOHIDRequestAccess|CGRequestListenEventAccess|CGEventTapOptions::ListenOnly/);
 	assert.match(platform, /Privacy_Accessibility/);
 	assert.match(platform, /Privacy_ListenEvent/);
-	assert.match(platform, /open_input_monitoring_settings[^\n]+input_monitoring\(true\)/);
 	assert.match(main, /accessibility&&input_monitoring&&let Err\(error\)=Runtime::start_expansion/);
 	assert.match(main, /Runtime::open\(app\.handle\(\),missing_permissions\)/);
 	assert.match(main, /open_input_monitoring_settings/);
