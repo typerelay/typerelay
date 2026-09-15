@@ -71,14 +71,23 @@ impl ContextWatch {
             if ["activewindow", "workspace", "focusedmon", "activespecial", "openlayer", "closelayer", "configreloaded"].iter().any(|prefix| line.starts_with(prefix)) { changed = true; }
         }
         if self.pending.len() > 65536 { bail!("Oversized Hyprland event"); }
-        for device in &mut self.pointers {
-            match device.fetch_events() {
+        let mut index = 0;
+        while index < self.pointers.len() {
+            let disconnected = match self.pointers[index].fetch_events() {
                 Ok(events) => {
                     // Conservative: movement, scrolling and touch also cancel the candidate.
                     if events.into_iter().any(|e| e.event_type() != EventType::SYNCHRONIZATION) { changed = true; }
+                    false
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => (),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => false,
+                Err(e) if e.raw_os_error() == Some(libc::ENODEV) => { changed = true; true },
                 Err(e) => return Err(e.into()),
+            };
+            if disconnected {
+                self.pointers.swap_remove(index);
+                eprintln!("Pointer disconnected; TypeRelay input remains active");
+            } else {
+                index += 1;
             }
         }
         Ok(changed)
@@ -86,6 +95,8 @@ impl ContextWatch {
 }
 
 impl Session {
+    const MODIFIERS: [KeyCode; 8] = [KeyCode::KEY_LEFTSHIFT, KeyCode::KEY_RIGHTSHIFT, KeyCode::KEY_LEFTCTRL, KeyCode::KEY_RIGHTCTRL, KeyCode::KEY_LEFTALT, KeyCode::KEY_RIGHTALT, KeyCode::KEY_LEFTMETA, KeyCode::KEY_RIGHTMETA];
+
     fn interference_present(devices: &serde_json::Value) -> bool {
         devices["keyboards"].as_array().is_some_and(|keyboards| keyboards.iter().any(|keyboard| keyboard["name"].as_str() == Some("espanso-virtual-device")))
     }
@@ -109,6 +120,35 @@ impl Session {
                 return Ok(());
             }
             thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn release_stale_keys(output: &mut VirtualDevice, pressed: &mut BTreeSet<u16>, keys_down: &BTreeSet<u16>) -> Result<()> {
+        let stale: Vec<_> = pressed.iter().filter(|key| !keys_down.contains(key)).copied().collect();
+        for code in stale { output.emit(&[InputEvent::new(EventType::KEY.0, code, 0)])?; pressed.remove(&code); }
+        Ok(())
+    }
+
+    fn wait_for_forwarded_keys(keyboard: &mut Device, output: &mut VirtualDevice, buffered: &mut VecDeque<InputEvent>, pressed: &mut BTreeSet<u16>, deadline: Instant) -> Result<bool> {
+        loop {
+            let mut pending = VecDeque::new();
+            while let Some(event) = buffered.pop_front() {
+                if event.event_type() == EventType::KEY && pressed.contains(&event.code()) {
+                    if event.value() == 0 { pressed.remove(&event.code()); }
+                    output.emit(&[event])?;
+                } else if event.event_type() == EventType::KEY { pending.push_back(event); }
+            }
+            *buffered = pending;
+            let keys_down: BTreeSet<_> = keyboard.get_key_state()?.iter().map(|key|key.0).collect();
+            Self::release_stale_keys(output, pressed, &keys_down)?;
+            if pressed.is_empty() { return Ok(true); }
+            if Instant::now() >= deadline { return Ok(false); }
+            match keyboard.fetch_events() {
+                Ok(events) => buffered.extend(events),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => (),
+                Err(error) => return Err(error.into()),
+            }
+            thread::sleep(Duration::from_millis(1));
         }
     }
 
@@ -302,7 +342,13 @@ impl Session {
             };
             buffered.extend(events);
             if buffered.len() > 8192 { bail!("Input backlog exceeded safety limit; stopping"); }
-            if paste.is_none() && insertion.is_empty() && pressed.is_empty() && (buffered.is_empty() || template_wait.is_some()) && keyboard.get_key_state()?.iter().all(|key| ![29,42,54,56,97,100,125,126].contains(&key.0)) && let Ok(request) = panel_requests.try_recv() {
+            let keys_down: BTreeSet<_> = keyboard.get_key_state()?.iter().map(|key|key.0).collect();
+            if buffered.is_empty() {
+                Self::release_stale_keys(&mut output, &mut pressed, &keys_down)?;
+                if suppressed_space && !keys_down.contains(&KeyCode::KEY_SPACE.0) { suppressed_space = false; }
+                if suppressed_panel_key.is_some_and(|key|!keys_down.contains(&key)) { suppressed_panel_key = None; }
+            }
+            if paste.is_none() && insertion.is_empty() && pressed.is_empty() && (buffered.is_empty() || template_wait.is_some()) && keys_down.iter().all(|key| !Self::MODIFIERS.iter().any(|modifier|modifier.0 == *key)) && let Ok(request) = panel_requests.try_recv() {
                     if template_wait.as_ref().is_none_or(|wait|request.generation==Some(wait.generation)) && Instant::now() < request.deadline && request.generation.is_none_or(|expected| expected == input_generation) && Self::target()? == Some(request.target.clone()) {
                         engine.feed(Input::Cancel); last_input=Instant::now();
                         match request.step {
@@ -374,7 +420,7 @@ impl Session {
                     continue;
                 }
                 if suppressed_space && code == KeyCode::KEY_SPACE {
-                    if event.value() == 0 { suppressed_space = false; }
+                    if event.value() == 0 { suppressed_space = false; pressed.remove(&code.0); }
                     continue;
                 }
                 if event.value() == 0 { pressed.remove(&code.0); }
@@ -385,8 +431,7 @@ impl Session {
                 if event.value() != 0 {
                     last_input = Instant::now();
                     if code == KeyCode::KEY_CAPSLOCK && event.value() == 1 { caps = !caps; }
-                    let modifiers = [KeyCode::KEY_LEFTSHIFT, KeyCode::KEY_RIGHTSHIFT, KeyCode::KEY_LEFTCTRL, KeyCode::KEY_RIGHTCTRL, KeyCode::KEY_LEFTALT, KeyCode::KEY_RIGHTALT, KeyCode::KEY_LEFTMETA, KeyCode::KEY_RIGHTMETA];
-                    if caps || modifiers.iter().any(|key| pressed.contains(&key.0)) {
+                    if caps || Self::MODIFIERS.iter().any(|key| pressed.contains(&key.0)) {
                         engine.feed(Input::Cancel);
                     } else {
                         if context.changed()? { engine.feed(Input::Cancel); target = None; }
@@ -394,29 +439,35 @@ impl Session {
                         let expansion = if target.is_some() { engine.feed(Self::input(code)) } else { engine.feed(Input::Cancel); None };
                         if expansion.is_some() && std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some() { eprintln!("Match found; held-key count {}", pressed.len()); }
                         if let Some(expansion) = expansion
-                            && Self::target()? == target && !context.changed()? && pressed.len() == 1 {
+                            && Self::target()? == target && !context.changed()? {
+                                let destination = target.clone().unwrap();
+                                pressed.remove(&code.0);
+                                if !Self::wait_for_forwarded_keys(&mut keyboard, &mut output, &mut buffered, &mut pressed, Instant::now() + Duration::from_secs(3))? || Self::target()? != Some(destination.clone()) || context.changed()? {
+                                    output.emit(&[event])?;
+                                    pressed.insert(code.0);
+                                    target = None;
+                                    continue;
+                                }
+                                suppressed_space = true;
                                 if let Some(template) = &expansion.template {
                                     if let Some(identity) = &template.identity {
                                         let hit = typerelay_client::panel::Hit { id: identity.id.clone(), library: identity.library.clone(), revision: identity.revision, library_name: String::new(), title: template.abbreviation.clone(), abbreviation: template.abbreviation.clone(), preview: String::new() };
-                                        let destination = target.clone().unwrap();
                                         let accepted = if template.prompted { typerelay_client::panel_ipc::PanelIpc::prompt(typerelay_client::panel_ipc::Prompt { hit, target: destination, erase: expansion.erase, generation:input_generation, created_ms:std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis() }) } else {
                                             let tx=template_tx.clone(); let erase=expansion.erase; let generation=input_generation; let started=Instant::now();
                                             let (done,completion)=std::sync::mpsc::channel();template_wait=Some(TemplateWait{done:completion,target:destination.clone(),started:false,generation});
                                             std::thread::spawn(move || { let result=(||->Result<()>{ let steps=typerelay_client::panel::Panel::render(&Paths::config_dir()?.join("snippets"),&hit,Default::default(),false)?.steps; anyhow::ensure!(started.elapsed()<Duration::from_secs(2),"Template preparation expired");typerelay_client::panel_ipc::PanelIpc::execute(&tx,&hit,&destination,steps,erase,Some(generation)) })().map_err(|error|error.to_string()); if let Err(error)=&result { eprintln!("Template insertion cancelled: {error}"); }let _=done.send(result); }); true
                                         };
-                                        if accepted { pressed.remove(&code.0); suppressed_space=true; target=None; break; }
+                                        if accepted { target=None; break; }
                                     }
                                     eprintln!("Prompted expansion requires the TypeRelay panel; abbreviation left unchanged");
                                     std::thread::spawn(||{let _=std::process::Command::new("notify-send").args(["TypeRelay","Prompted expansion requires the TypeRelay panel. Your abbreviation was left unchanged."]).output();});
-                                    output.emit(&[event])?; continue;
+                                    output.emit(&Self::stroke(KeyCode::KEY_SPACE,false))?; target=None; continue;
                                 }
                                 if expansion.requires_paste() {
                                     paste = Some(PasteState { job: PasteJob::start(expansion.text.clone()), expansion, target: target.clone(), reply: None, generation:input_generation, started: false, sent: false, cancelled: false });
                                 } else {
                                     insertion = Self::inject(&expansion, None)?;
                                 }
-                                pressed.remove(&code.0);
-                                suppressed_space = true;
                                 target = None;
                                 break;
                         }
