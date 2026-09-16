@@ -43,7 +43,7 @@ export class RichEditor {
 		this.fieldAnchor = document.createComment('rich-editor-field'); field.before(this.fieldAnchor); host.before(field);
 		this.editor = new Editor({
 			element: host,
-			extensions: [StarterKit.configure({ underline: false, paragraph: false, heading: false, codeBlock: {}, link: { openOnClick: false } }), AlignedParagraph, AlignedHeading, Markdown, Underline, TextAlign.configure({ types: ['heading', 'paragraph'] }), AssetImage.configure({ inline: true, allowBase64: false, resize: { enabled: true, minWidth: 32, minHeight: 32, alwaysPreserveAspectRatio: true } }), TaskList, TaskItem.configure({ nested: true }), TableKit.configure({ table: { resizable: true } }), RawHtml],
+			extensions: [StarterKit.configure({ underline: false, paragraph: false, heading: false, codeBlock: {}, link: { openOnClick: false } }), AlignedParagraph, AlignedHeading, Markdown, Underline, TextAlign.configure({ types: ['heading', 'paragraph'] }), AssetImage.configure({ inline: true, allowBase64: false }), TaskList, TaskItem.configure({ nested: true }), TableKit.configure({ table: { resizable: true } }), RawHtml],
 			content: protectRaw(field.value),
 			contentType: 'markdown',
 			editable: !options.readonly,
@@ -53,7 +53,7 @@ export class RichEditor {
 		field.hidden = true; host.hidden = false; toolbar.hidden = false;
 		toolbar.addEventListener('mousedown', event => { if (event.target.closest('button')) event.preventDefault(); });
 		toolbar.addEventListener('click', event => this.command(event).catch(error => options.onError?.(error)));
-		host.addEventListener('paste', event => { const files = this.clipboardFiles(event.clipboardData); if (files.length) { event.preventDefault(); this.files(files).catch(error => options.onError?.(error)); } });
+		host.addEventListener('paste', event => { const files = this.clipboardFiles(event.clipboardData); if (files.length) { event.preventDefault(); event.stopImmediatePropagation(); this.files(files).catch(error => options.onError?.(error)); } }, true);
 		host.addEventListener('drop', event => { if ([...(event.dataTransfer?.files || [])].some(file => file.type.startsWith('image/'))) { event.preventDefault(); this.files(event.dataTransfer.files).catch(error => options.onError?.(error)); } });
 		this.refresh();
 	}
