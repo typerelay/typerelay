@@ -89,7 +89,7 @@ export class PublicApi {
 			Support.assert(!validate || validate(req.body), 'Invalid request: ' + (validate?.errors?.map(error => error.instancePath + " " + error.message).join('; ') || 'body required'));
 			const result = operation.mutation ? await Libraries.mutate(req.ctx, req.body.operation_id, { operation: operation.id, params: req.params, body: req.body }, async (ctx, session) => {
 				// Recheck grant revocation/scopes inside the same write transaction.
-				const grant = await Integration.findOne({ _id: req.ctx.credential, revoked: false, expires: { $gt: new Date() } }).session(session).lean();
+				const grant = await Integration.findOne({ _id: req.ctx.credential, revoked: false, $or: [{ expires: { $gt: new Date() } }, { kind: 'pat', expires: { $type: 'null' } }] }).session(session).lean();
 				Support.assert(grant?.scopes.includes(operation.scope), 'Integration revoked or scope removed', 403);
 				return { ...await PublicApi.run(operation.id, ctx, req.params, req.body, req.query, session), api_scope: operation.scope };
 			}) : await PublicApi.run(operation.id, req.ctx, req.params, req.body, req.query);
@@ -97,7 +97,12 @@ export class PublicApi {
 		});
 	}
 	static mountSettings(app) {
-		app.use('/api/v2/access-tokens', (req, res, next) => { Support.assert(req.session.user && !req.headers.authorization && Date.now() - Number(req.session.auth_at || 0) < 900000, 'Sign in again to manage access tokens', 401); next(); });
+		app.use('/api/v2/access-tokens', (req, res, next) => {
+			res.set('Cache-Control', 'no-store');
+			if (!(req.session.user && !req.headers.authorization && Date.now() - Number(req.session.auth_at || 0) < 900000)) return res.status(401).json({ error: 'Sign in again to manage access tokens', code: 'reauthentication_required' });
+			res.set('X-CSRF-Token', req.session.csrf);
+			next();
+		});
 		app.get('/api/v2/access-tokens', async (req, res) => {
 			const grants = await Integration.find({ user: req.ctx.user, account: req.ctx.account, revoked: false }).sort({ createdAt: 1 }).lean();
 			res.json(grants.map(grant => ({ id: String(grant._id), html: pug.renderFile('./views/ajax/access-token.pug', { grant }) })));

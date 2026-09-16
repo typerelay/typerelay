@@ -117,6 +117,10 @@ block content
 								ul#devices.list-group.mb-3
 							section.settings-pane(id="settings-pane-tokens" role="tabpanel" aria-labelledby="settings-tab-tokens" hidden=true)
 								h3.h6.fw-bold Access tokens and authorized integrations
+								#token-auth-required.alert.alert-warning(hidden role="status")
+									p.mb-3 For your security, token management requires a sign-in within the last 15 minutes. Sign in in a new tab, then retry here.
+									a.btn.btn-primary.btn-sm(href="/login" target="_blank" rel="noopener") Sign in
+									button#retry-tokens.btn.btn-outline-secondary.btn-sm.ms-3(type="button") Retry
 								if !ctx.entitlements.capabilities.api
 									.alert.alert-warning API and MCP access require Pro or Team. Existing tokens stay stored but cannot authenticate.
 								ul#access-tokens.list-group.mb-5

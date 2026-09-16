@@ -48,6 +48,7 @@ test('catalog exposes the approved Free, Pro and Team limits', () => {
 });
 
 test('Free blocks API token creation and MCP authorization', async () => {
+	await assert.rejects(Auth.createIntegration(Fixture.ctx, { name: 'Free unlimited API', days: 0, scopes: ['content:read'] }), error => error.status === 403 && error.code === 'plan_required');
 	await assert.rejects(Auth.createIntegration(Fixture.ctx, { name: 'Free API', days: 1, scopes: ['content:read'] }), error => error.status === 403 && error.code === 'plan_required');
 	const client = await Auth.registerIntegration({ client_name: 'Free MCP', redirect_uris: ['https://example.test/callback'], token_endpoint_auth_method: 'none' });
 	const verifier = Support.token();

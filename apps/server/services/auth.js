@@ -84,7 +84,9 @@ export class Auth {
 		Support.assert(body.client_id === 'typerelay-desktop' && body.code_challenge_method === 'S256' && /^[A-Za-z0-9_-]{43}$/.test(body.code_challenge), 'Invalid PKCE request');
 		Support.assert(typeof body.state === 'string' && body.state.length >= 20 && body.state.length <= 256, 'Invalid state');
 		const code = Support.token();
-		await Ticket.create({ hash: Support.hash(code), kind: 'oauth', account: ctx.account, data: { user, redirect, challenge: body.code_challenge, name: Support.text(body.device_name || 'Desktop') }, expires: new Date(Date.now() + 300000) });
+		Support.assert(body.client_type === undefined || ['desktop', 'cli'].includes(body.client_type), 'Invalid client type');
+		Support.assert(body.os === undefined || ['macos', 'windows', 'linux'].includes(body.os), 'Invalid operating system');
+		await Ticket.create({ hash: Support.hash(code), kind: 'oauth', account: ctx.account, data: { user, redirect, challenge: body.code_challenge, name: Support.text(body.device_name || 'Desktop'), client_type: body.client_type, os: body.os }, expires: new Date(Date.now() + 300000) });
 		const url = new URL(redirect);
 		url.searchParams.set('code', code);
 		url.searchParams.set('state', body.state);
@@ -102,7 +104,7 @@ export class Auth {
 				const ctx = await Support.context(ticket.data.user, String(ticket.account), session);
 				await Billing.assertDeviceEnrollment(ctx, session);
 				await Ticket.deleteOne({ _id: ticket._id }, { session });
-				[device] = await Device.create([{ account: ticket.account, user: ticket.data.user, name: ticket.data.name }], { session });
+				[device] = await Device.create([{ account: ticket.account, user: ticket.data.user, name: ticket.data.name, client_type: ticket.data.client_type, os: ticket.data.os }], { session });
 			} else {
 				Support.assert(body.grant_type === 'refresh_token', 'Unsupported grant');
 				device = await Device.findOne({ refresh: Support.hash(Support.text(body.refresh_token, 256)), refresh_expires: { $gt: new Date() }, revoked: false }).session(session).lean();
@@ -110,7 +112,7 @@ export class Auth {
 				const ctx = await Support.context(String(device.user), String(device.account), session);
 				await Billing.assertDevice(ctx, device, session);
 			}
-			await Device.updateOne({ _id: device._id }, { $set: { access: Support.hash(access), access_expires: new Date(Date.now() + 900000), refresh: Support.hash(refresh), refresh_expires: new Date(Date.now() + 90 * 86400000) } }, { session });
+			await Device.updateOne({ _id: device._id }, { $set: { access: Support.hash(access), access_expires: new Date(Date.now() + 900000), refresh: Support.hash(refresh), refresh_expires: new Date(Date.now() + 90 * 86400000) }, $max: { last_active: new Date() } }, { session });
 		});
 		return { access_token: access, refresh_token: refresh, token_type: 'Bearer', expires_in: 900, account: String(device.account), device: String(device._id) };
 	}
@@ -119,6 +121,7 @@ export class Auth {
 		Support.assert(device, 'Device authentication expired or revoked', 401);
 		const ctx = await Support.context(String(device.user), String(device.account));
 		await Billing.assertDevice(ctx, device);
+		await Device.updateOne({ _id: device._id, revoked: false }, { $max: { last_active: new Date() } }, { timestamps: false });
 		return { ...ctx, device: String(device._id) };
 	}
 	static scopes = scopes;
@@ -130,17 +133,17 @@ export class Auth {
 	}
 	static async createIntegration(ctx, body) {
 		Billing.assertApi(ctx);
-		const days = Number(body.days || 90);
-		Support.assert(Number.isInteger(days) && days >= 1 && days <= 365, 'Expiry must be 1–365 days');
+		const days = body.days === undefined ? 90 : body.days;
+		Support.assert(typeof days === 'number' && Number.isInteger(days) && days >= 0 && days <= 365, 'Expiry must be 0–365 days');
 		const token = 'tr_pat_' + Support.token();
-		const grant = await AccountAccess.write(ctx.account, async session => (await Integration.create([{ account: ctx.account, user: ctx.user, name: Support.text(body.name), kind: 'pat', scopes: Auth.integrationScopes(body.scopes), hash: Support.hash(token), expires: new Date(Date.now() + days * 86400000) }], { session }))[0]);
+		const grant = await AccountAccess.write(ctx.account, async session => (await Integration.create([{ account: ctx.account, user: ctx.user, name: Support.text(body.name), kind: 'pat', scopes: Auth.integrationScopes(body.scopes), hash: Support.hash(token), expires: days === 0 ? null : new Date(Date.now() + days * 86400000) }], { session }))[0]);
 		return { token, grant: grant.toObject() };
 	}
 	static async integration(header, resource = Auth.apiResource()) {
 		Support.assert(typeof header === 'string' && /^(Token|Bearer) [^ ]+$/.test(header), 'Integration authentication required', 401);
 		const token = header.split(' ')[1];
 		let grant;
-		if (token.startsWith('tr_pat_')) grant = await Integration.findOne({ hash: Support.hash(token), kind: 'pat', revoked: false, expires: { $gt: new Date() } }).lean();
+		if (token.startsWith('tr_pat_')) grant = await Integration.findOne({ hash: Support.hash(token), kind: 'pat', revoked: false, $or: [{ expires: { $gt: new Date() } }, { expires: { $type: 'null' } }] }).lean();
 		else {
 			const access = await IntegrationToken.findOne({ hash: Support.hash(token), resource, expires: { $gt: new Date() } }).lean();
 			if (access) grant = await Integration.findOne({ _id: access.grant, kind: 'oauth', revoked: false, expires: { $gt: new Date() } }).lean();

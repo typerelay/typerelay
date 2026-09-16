@@ -6,7 +6,7 @@ import { Encoder } from 'cbor-x';
 const cbor = new Encoder({ useRecords: false, useTag259ForMaps: false, tagUint8Array: false });
 import { generateSync } from 'otplib';
 import { JSDOM } from 'jsdom';
-import { mongoose, User, Ticket, Member, Passkey } from '../model/index.js';
+import { mongoose, User, Ticket, Member, Passkey, Device } from '../model/index.js';
 import { Support } from '../services/support.js';
 import { Auth } from '../services/auth.js';
 import { Security } from '../services/security.js';
@@ -31,6 +31,11 @@ class Browser {
 		assert.equal(response.status, expected, JSON.stringify(value));
 		if (value.csrf) this.csrf = value.csrf;
 		return value;
+	}
+	async tokens() {
+		const token = await this.json('/api/v2/access-tokens', 'POST', { name: 'Fresh login', scopes: ['content:read'], days: 1 });
+		assert.ok((await this.json('/api/v2/access-tokens', 'GET', null)).some(row => row.id === token.id));
+		await this.json('/api/v2/access-tokens/' + token.id, 'DELETE');
 	}
 }
 class Fixture {
@@ -93,6 +98,7 @@ test('SMTP_SERVERS uses the shared authenticated multi-server format', () => {
 });
 test('signup, generated password, password login, OAuth continuation and recovery', async () => {
 	const { browser, email, user } = await Fixture.account();
+	await browser.tokens();
 	assert.equal(user.name, 'Original Name');
 	const password = (await browser.json('/api/v2/security/password')).password;
 	assert.ok(password.length >= 20);
@@ -107,6 +113,7 @@ test('signup, generated password, password login, OAuth continuation and recover
 	assert.ok(result.redirect.startsWith('/oauth/authorize?'));
 	await login.page('/');
 	assert.ok(login.account);
+	await login.tokens();
 	await login.json('/auth/forgot-password', 'POST', { email });
 	const reset = Fixture.mailUrl(Fixture.mails.findLast(mail => mail.subject.startsWith('Reset')));
 	const fresh = (await login.json('/auth/reset-password', 'POST', { token: reset.searchParams.get('token') })).password;
@@ -164,6 +171,7 @@ test('TOTP setup, password and magic-link challenges, invalid codes, replay prev
 	await login.json('/auth/two-factor', 'POST', { code: 'abcdef' }, 400);
 	await login.json('/auth/two-factor', 'POST', { code });
 	await login.page();
+	await login.tokens();
 	await login.json('/api/v2/security/totp/disable', 'POST', { code }, 401);
 	// Simulate a new time window without delaying the suite.
 	await User.updateOne({ _id: user._id }, { $unset: { totp_step: 1 } });
@@ -176,6 +184,11 @@ test('TOTP setup, password and magic-link challenges, invalid codes, replay prev
 	const magic = new Browser(); await magic.page();
 	const response = await magic.call('/auth/callback?token=' + token);
 	assert.equal(response.headers.get('location'), '/auth/two-factor');
+	await magic.page('/auth/two-factor');
+	await User.updateOne({ _id: user._id }, { $unset: { totp_step: 1 } });
+	await magic.json('/auth/two-factor', 'POST', { code: generateSync({ secret: setup.secret }) });
+	await magic.page();
+	await magic.tokens();
 });
 test('real signed passkey registration/login, challenge replay and ownership', async () => {
 	const { browser, user } = await Fixture.account();
@@ -195,6 +208,7 @@ test('real signed passkey registration/login, challenge replay and ownership', a
 	assert.equal(authenticated.redirect, '/');
 	await login.page();
 	assert.ok(login.account);
+	await login.tokens();
 	const outsider = await Fixture.account();
 	assert.equal((await outsider.browser.call('/api/v2/security/passkeys/' + result.key._id)).status, 404);
 	await outsider.browser.json('/api/v2/security/passkeys/' + result.key._id, 'DELETE');
@@ -243,4 +257,82 @@ test('login waits for persistence before returning its redirect, including pendi
 		assert.equal(persisted, true);
 		assert.equal(result.redirect, factor ? '/auth/two-factor' : '/');
 	}
+});
+test('expired token authentication offers retry without replacing settings and refreshes CSRF after sign-in', async () => {
+	const { browser, email, user } = await Fixture.account();
+	const password = (await browser.json('/api/v2/security/password')).password;
+	const dom = new JSDOM(await (await browser.call('/')).text(), { url: Fixture.origin, runScripts: 'outside-only' });
+	try {
+		const document = dom.window.document;
+		for (const [label, href] of [['Docs', 'https://docs.typerelay.com'], ['Apps', 'https://typerelay.com/apps/']]) {
+			const link = [...document.querySelectorAll('header .dropdown a')].find(node => node.textContent === label);
+			assert.equal(link.href, new URL(href).href); assert.equal(link.target, '_blank');
+		}
+		document.querySelector('#workspace').removeAttribute('data-account');
+		dom.window.fetch = (path, options) => fetch(Fixture.origin + path, { ...options, headers: { ...options.headers, Cookie: browser.cookie }, redirect: 'manual' });
+		dom.window.eval((await BrowserSource.script()).replace('export { client };', 'window.testClient = client;'));
+		const client = dom.window.testClient; client.account = browser.account;
+		client.toast = message => assert.fail(message); client.confirm = async () => true;
+		client.poll = client.loadTrash = () => assert.fail('No page or section reload');
+		const pane = document.querySelector('#settings-pane-tokens');
+		const form = document.querySelector('#access-token-form');
+		form.elements.name.value = 'Keep my input'; form.elements.days.value = '0';
+		const sessions = await mongoose.connection.collection('web_sessions').find({}).toArray();
+		const stored = sessions.find(row => JSON.parse(row.session).user === String(user._id));
+		const session = JSON.parse(stored.session); session.auth_at = Date.now() - 16 * 60000;
+		await mongoose.connection.collection('web_sessions').updateOne({ _id: stored._id }, { $set: { session: JSON.stringify(session) } });
+		const denied = await browser.call('/api/v2/access-tokens');
+		assert.equal(denied.status, 401); assert.equal(denied.headers.get('cache-control'), 'no-store');
+		assert.equal((await denied.json()).code, 'reauthentication_required');
+		await browser.json('/api/v2/access-tokens', 'POST', { name: 'Denied', scopes: ['content:read'], days: 0 }, 401);
+		await client.tokens();
+		assert.equal(document.querySelector('#token-auth-required').hidden, false);
+		assert.equal(document.querySelector('#settings-pane-tokens'), pane);
+		assert.equal(form.elements.name.value, 'Keep my input');
+		await browser.page('/login');
+		await browser.json('/auth/password', 'POST', { email, password });
+		const retry = document.querySelector('#retry-tokens');
+		await client.onClick({ target: retry });
+		assert.equal(retry.disabled, false);
+		assert.equal(document.querySelector('#token-auth-required').hidden, true);
+		assert.equal(document.querySelector('meta[name=csrf-token]').content, browser.csrf);
+		await client.onSubmit({ target: form, preventDefault() {}, submitter: form.querySelector('button:not([type=reset])') });
+		const row = document.querySelector('[data-access-token]'); assert.ok(row);
+		assert.match(row.textContent, /Never expires/);
+		assert.equal(document.querySelector('#settings-pane-tokens'), pane);
+		let release;
+		const request = client.request.bind(client);
+		client.request = async (path, ...args) => path === 'access-tokens' && !args.length ? new Promise(resolve => { release = resolve; }) : request(path, ...args);
+		const pending = client.tokens();
+		await client.onClick({ target: row.querySelector('[data-revoke-token]') });
+		release([{ id: row.dataset.accessToken, html: row.outerHTML }]); await pending;
+		assert.equal(document.querySelector('[data-access-token]'), null, 'Late list response cannot restore revoked token');
+		assert.equal(document.querySelector('#settings-pane-tokens'), pane);
+		const anonymous = new Browser(); await anonymous.page();
+		assert.notEqual((await anonymous.call('/api/v2/access-tokens')).status, 200);
+	} finally { dom.window.close(); }
+});
+test('device rows expose metadata and browser-local times; legacy devices stay unknown', async () => {
+	const { browser, user } = await Fixture.account();
+	const known = await Device.create({ account: browser.account, user: user._id, name: 'My computer', client_type: 'desktop', os: 'macos', last_active: new Date('2026-09-01T12:00:00Z') });
+	const legacy = await Device.create({ account: browser.account, user: user._id, name: 'Legacy desktop' });
+	const rows = await browser.json('/api/v2/devices', 'GET', null);
+	assert.equal(rows.find(row => row._id === String(known._id)).os, 'macos');
+	const dom = new JSDOM(await (await browser.call('/')).text(), { url: Fixture.origin, runScripts: 'outside-only' });
+	try {
+		dom.window.document.querySelector('#workspace').removeAttribute('data-account');
+		dom.window.eval((await BrowserSource.script()).replace('export { client };', 'window.testClient = client;'));
+		const client = dom.window.testClient; const pane = dom.window.document.querySelector('#settings-pane-devices');
+		client.request = async (path, method = 'GET') => path.startsWith('fragments/') ? (await browser.call('/api/v2/' + path)).text() : browser.json('/api/v2/' + path, method, null);
+		await client.devices();
+		const row = dom.window.document.querySelector('[data-device="' + known._id + '"]');
+		assert.match(row.textContent, /Client: Desktop · OS: macOS/);
+		for (const time of row.querySelectorAll('time')) assert.equal(time.textContent, new dom.window.Date(time.dateTime).toLocaleString());
+		assert.match(dom.window.document.querySelector('[data-device="' + legacy._id + '"]').textContent, /Client: Unknown · OS: Unknown/);
+		client.confirm = async () => true;
+		await client.onClick({ target: row.querySelector('button') });
+		assert.equal(dom.window.document.querySelector('[data-device="' + known._id + '"]'), null);
+		assert.equal(dom.window.document.querySelector('#settings-pane-devices'), pane);
+		assert.equal((await browser.call('/api/v2/fragments/device/' + known._id)).status, 404);
+	} finally { dom.window.close(); }
 });

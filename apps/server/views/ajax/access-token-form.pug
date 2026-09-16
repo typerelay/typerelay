@@ -2,7 +2,8 @@ form#access-token-form
 	label.form-label(for="token-name") Name
 	input#token-name.form-control.form-control-sm.mb-3(name="name" required maxlength="100")
 	label.form-label(for="token-days") Expiry in days
-	input#token-days.form-control.form-control-sm.mb-3(name="days" type="number" min="1" max="365" value="90" required)
+	input#token-days.form-control.form-control-sm(name="days" type="number" min="0" max="365" value="90" required aria-describedby="token-days-help")
+	div#token-days-help.form-text.mb-3 Set to 0 for unlimited
 	fieldset.mb-3
 		legend.h6 Permissions
 		each scope in integrationScopes

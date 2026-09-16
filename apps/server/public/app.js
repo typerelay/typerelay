@@ -14,6 +14,8 @@ class TypeRelay {
 	polling = false;
 	trashItems = [];
 	searchVersion = 0;
+	tokensVersion = 0;
+	devicesVersion = 0;
 	openVersion = 0;
 	searchTimer = null;
 	searchFocus = null;
@@ -80,7 +82,8 @@ class TypeRelay {
 	toast(title, icon = 'success') { return Swal.fire({ toast: true, position: 'top-end', title, icon, timer: 3500, showConfirmButton: false }); }
 	async request(path, method = 'GET', body, raw = false) {
 		const response = await fetch(path.startsWith('/') ? path : '/api/v2/' + path, { method, headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': document.querySelector('meta[name=csrf-token]').content, 'X-Account-Id': this.account || '' }, body: body ? JSON.stringify({ operation_id: this.submitting ? this.formOperation : crypto.randomUUID(), ...body }) : undefined });
-		if (!response.ok) { const result = await response.json(); const error = new Error(result.error); Object.assign(error, result); throw error; }
+		if (!response.ok) { const result = await response.json(); if (result.code === 'reauthentication_required') document.querySelector('#token-auth-required')?.removeAttribute('hidden'); const error = new Error(result.error); Object.assign(error, result); throw error; }
+		if (response.headers.get('X-CSRF-Token')) document.querySelector('meta[name=csrf-token]').content = response.headers.get('X-CSRF-Token');
 		return raw ? response.text() : response.json();
 	}
 	async upload(path, data) {
@@ -89,7 +92,7 @@ class TypeRelay {
 		return response.json();
 	}
 	async bundle(file) { const response = await fetch('/api/v2/import/bundle', { method: 'POST', headers: { 'Content-Type': 'application/zip', 'X-CSRF-Token': document.querySelector('meta[name=csrf-token]').content, 'X-Account-Id': this.account || '', 'X-Operation-Id': this.formOperation }, body: file }); const result = await response.json(); if (!response.ok) throw new Error(result.error); return result; }
-	fragment(html) { const template = document.createElement('template'); template.innerHTML = html; return template.content.firstElementChild; }
+	fragment(html) { const template = document.createElement('template'); template.innerHTML = html; for (const time of template.content.querySelectorAll('time[data-local-time]')) time.textContent = new Date(time.dateTime).toLocaleString(); return template.content.firstElementChild; }
 	update(selector, container, html) {
 		const old = document.querySelector(selector);
 		const next = this.fragment(html);
@@ -166,6 +169,7 @@ class TypeRelay {
 		document.querySelectorAll('.settings-pane').forEach(pane => { pane.hidden = pane.id !== 'settings-pane-' + id; });
 		if (focus) tab.focus();
 		if (id === 'tokens') this.tokens().catch(error => this.toast(error.message, 'error'));
+		if (id === 'devices') this.devices().catch(error => this.toast(error.message, 'error'));
 		if (id === 'whiteLabel') this.refreshWhiteLabel().catch(error => this.toast(error.message, 'error'));
 		if (id === 'subscription') this.refreshBilling().catch(error => this.toast(error.message, 'error'));
 	}
@@ -188,7 +192,11 @@ class TypeRelay {
 		try { const data = new FormData(); data.append('file', input.files[0]); this.applyWhiteLabel(await this.upload('white-label/assets/' + input.dataset.whiteLabelFile, data)); this.toast('Brand asset saved'); } finally { button.disabled = false; }
 	}
 	async tokens() {
-		const rows = await this.request('access-tokens');
+		const version = ++this.tokensVersion;
+		let rows;
+		try { rows = await this.request('access-tokens'); } catch (error) { if (error.code === 'reauthentication_required') return; throw error; }
+		if (version !== this.tokensVersion) return;
+		document.querySelector('#token-auth-required').hidden = true;
 		const ids = new Set(rows.map(row => row.id));
 		for (const row of rows) this.update('[data-access-token="' + row.id + '"]', '#access-tokens', row.html);
 		for (const node of document.querySelectorAll('[data-access-token]')) if (!ids.has(node.dataset.accessToken)) node.remove();
@@ -328,7 +336,7 @@ class TypeRelay {
 			if (form.id === 'checkout-team-form') { const result = await this.request('billing/checkout', 'POST', { plan: 'team', seats: Number(data.get('seats')) }); location.assign(result.url); return; }
 			if (form.id === 'white-label-domain-form') { await this.whiteLabelRequest('white-label/domain', 'PUT', { hostname: data.get('hostname') }); this.toast('Domain saved'); return; }
 			if (form.id === 'login') this.toast((await this.request('/auth/login', 'POST', { email: data.get('email') })).message);
-			if (form.id === 'access-token-form') { const row = await this.request('access-tokens', 'POST', { name: form.elements.name.value, days: Number(form.elements.days.value), scopes: [...form.querySelectorAll('[name=scopes]:checked')].map(input => input.value) }); this.update('[data-access-token="' + row.id + '"]', '#access-tokens', row.html); document.querySelector('#token-secret-value').textContent = row.token; document.querySelector('#token-secret').hidden = false; form.reset(); return; }
+			if (form.id === 'access-token-form') { ++this.tokensVersion; const row = await this.request('access-tokens', 'POST', { name: form.elements.name.value, days: Number(form.elements.days.value), scopes: [...form.querySelectorAll('[name=scopes]:checked')].map(input => input.value) }); ++this.tokensVersion; this.update('[data-access-token="' + row.id + '"]', '#access-tokens', row.html); document.querySelector('#token-secret-value').textContent = row.token; document.querySelector('#token-secret').hidden = false; form.reset(); return; }
 			if (form.id === 'profile-form') {
 				const result = await this.request('profile', 'PATCH', { name: data.get('name'), email: data.get('email') });
 				this.update('#account-avatar', 'header .dropdown', result.avatar);
@@ -450,7 +458,8 @@ class TypeRelay {
 		if (button.id === 'search-trigger') return this.openSearch();
 		if (button.dataset.settingsTab) return this.settingsTab(button.dataset.settingsTab);
 		if (button.id === 'dismiss-token') { document.querySelector('#token-secret-value').textContent = ''; document.querySelector('#token-secret').hidden = true; return; }
-		if (button.dataset.revokeToken && await this.confirm('Revoke this integration?')) { await this.request('access-tokens/' + button.dataset.revokeToken, 'DELETE'); document.querySelector('[data-access-token="' + button.dataset.revokeToken + '"]').remove(); return; }
+		if (button.id === 'retry-tokens') { button.disabled = true; try { await this.tokens(); } finally { button.disabled = false; } return; }
+		if (button.dataset.revokeToken && await this.confirm('Revoke this integration?')) { button.disabled = true; ++this.tokensVersion; try { await this.request('access-tokens/' + button.dataset.revokeToken, 'DELETE'); ++this.tokensVersion; document.querySelector('[data-access-token="' + button.dataset.revokeToken + '"]')?.remove(); } finally { button.disabled = false; } return; }
 		if (button.dataset.searchLibrary) {
 			const id = button.dataset.searchLibrary;
 			const snippet = button.dataset.searchSnippet;
@@ -521,7 +530,7 @@ class TypeRelay {
 			bootstrap.Modal.getInstance(document.querySelector('#form-modal')).hide();
 		}
 		if (data.revokeInvitation && await this.confirm('Revoke this invitation?')) { await this.request('team/invitations/' + data.revokeInvitation, 'DELETE'); document.querySelector('[data-invitation="' + data.revokeInvitation + '"]').remove(); await this.refreshBilling(); }
-		if (data.revokeDevice && await this.confirm('Revoke this device?')) { await this.request('devices/' + data.revokeDevice, 'DELETE'); document.querySelector('[data-device="' + data.revokeDevice + '"]').remove(); }
+		if (data.revokeDevice && await this.confirm('Revoke this device?')) { button.disabled = true; ++this.devicesVersion; try { await this.request('devices/' + data.revokeDevice, 'DELETE'); ++this.devicesVersion; document.querySelector('[data-device="' + data.revokeDevice + '"]')?.remove(); } finally { button.disabled = false; } }
 		if (data.resolve) return this.form('conflict', { library: data.library, conflict: data.resolve }, async fields => {
 			const current = (await this.request('library-view/' + data.library)).library;
 			const result = await this.request('conflicts/' + data.resolve, 'POST', { base_revision: current.revision, choice: fields.get('choice'), value: await this.snippetValue(fields) });
@@ -568,7 +577,19 @@ class TypeRelay {
 		document.querySelector('#empty-trash').textContent = 'Empty Trash (' + count + ')';
 		document.querySelector('#trash-empty').hidden = result.items.length !== 0;
 	}
-	async devices() { for (const device of await this.request('devices')) this.update('[data-device="' + device._id + '"]', '#devices', await this.request('fragments/device/' + device._id, 'GET', null, true)); }
+	async devices() {
+		const version = ++this.devicesVersion;
+		const devices = await this.request('devices');
+		for (const device of devices) {
+			if (version !== this.devicesVersion) return;
+			const html = await this.request('fragments/device/' + device._id, 'GET', null, true);
+			if (version !== this.devicesVersion) return;
+			this.update('[data-device="' + device._id + '"]', '#devices', html);
+		}
+		if (version !== this.devicesVersion) return;
+		const ids = new Set(devices.map(device => device._id));
+		for (const node of document.querySelectorAll('[data-device]')) if (!ids.has(node.dataset.device)) node.remove();
+	}
 	async accept(token) { if (await this.confirm('Join this TypeRelay team?')) { const result = await this.request('team/accept', 'POST', { token }); location.href = '/?account=' + result.account; } }
 }
 const client = new TypeRelay();

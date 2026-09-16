@@ -6,7 +6,7 @@ block content
 		form(method="post" action="/oauth/authorize")
 			input(type="hidden" name="_csrf" value=csrf)
 			each value, key in request
-				if ['client_id', 'redirect_uri', 'code_challenge', 'code_challenge_method', 'state', 'device_name'].includes(key)
+				if ['client_id', 'redirect_uri', 'code_challenge', 'code_challenge_method', 'state', 'device_name', 'client_type', 'os'].includes(key)
 					input(type="hidden" name=key value=value)
 			label.form-label(for="account") Account
 			select#account.form-select.form-select-sm.mb-3(name="account")

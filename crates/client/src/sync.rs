@@ -103,7 +103,8 @@ impl Sync {
         let state = Uuid::new_v4().simple().to_string();
         let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
         let mut authorize = url::Url::parse(&format!("{server}/oauth/authorize"))?;
-        authorize.query_pairs_mut().extend_pairs([("client_id", "typerelay-desktop"), ("redirect_uri", &redirect), ("code_challenge", &challenge), ("code_challenge_method", "S256"), ("state", &state), ("device_name", "TypeRelay desktop")]);
+        authorize.query_pairs_mut().extend_pairs([("client_id", "typerelay-desktop"), ("redirect_uri", &redirect), ("code_challenge", &challenge), ("code_challenge_method", "S256"), ("state", &state), ("device_name", if app_callback { "TypeRelay desktop" } else { "TypeRelay CLI / TUI" }), ("client_type", if app_callback { "desktop" } else { "cli" })]);
+        if matches!(std::env::consts::OS, "macos" | "windows" | "linux") { authorize.query_pairs_mut().append_pair("os", std::env::consts::OS); }
         println!("Open this URL in your browser:\n{authorize}");
         #[cfg(target_os = "linux")] { if open_browser { let _ = std::process::Command::new("xdg-open").arg(authorize.as_str()).spawn(); } }
         #[cfg(target_os = "macos")] { if open_browser { std::process::Command::new("open").arg(authorize.as_str()).spawn()?; } }

@@ -119,18 +119,39 @@ test('cursor access manifest reflects revocation and library deletion', async ()
 test('PKCE account binding, one-time code, rotating token, device revoke', async () => {
 	const verifier = Support.token();
 	const challenge = createHash('sha256').update(verifier).digest('base64url');
-	const body = { account: Fixture.owner.account, redirect_uri: 'http://127.0.0.1:43000/callback', client_id: 'typerelay-desktop', code_challenge_method: 'S256', code_challenge: challenge, state: Support.token() };
+	const body = { account: Fixture.owner.account, redirect_uri: 'http://127.0.0.1:43000/callback', client_id: 'typerelay-desktop', code_challenge_method: 'S256', code_challenge: challenge, state: Support.token(), client_type: 'desktop', os: 'macos' };
 	await assert.rejects(Auth.authorize(Fixture.member.user, { ...body, account: Fixture.outsider.account }), /denied/);
 	const redirect = new URL(await Auth.authorize(Fixture.owner.user, body));
 	const exchange = { grant_type: 'authorization_code', code: redirect.searchParams.get('code'), client_id: body.client_id, redirect_uri: body.redirect_uri, code_verifier: verifier };
 	await assert.rejects(Auth.exchange({ ...exchange, code_verifier: Support.token() }), /Invalid authorization/);
 	const tokens = await Auth.exchange(exchange);
+	const connected = await Device.findById(tokens.device).lean();
+	assert.equal(connected.client_type, 'desktop'); assert.equal(connected.os, 'macos'); assert.ok(connected.createdAt); assert.ok(connected.last_active);
+	await Device.updateOne({ _id: tokens.device }, { $set: { last_active: new Date(0) } });
 	assert.equal((await Auth.bearer(tokens.access_token)).account, Fixture.owner.account);
+	assert.ok((await Device.findById(tokens.device).lean()).last_active > new Date(0));
 	await assert.rejects(Auth.exchange(exchange), /Invalid authorization/);
 	const rotated = await Auth.exchange({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token });
 	await assert.rejects(Auth.exchange({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token }), /Invalid refresh/);
 	await Device.updateOne({ _id: tokens.device }, { $set: { revoked: true } });
 	await assert.rejects(Auth.bearer(rotated.access_token), /revoked/);
+});
+test('device enrollment accepts supported metadata and legacy clients without guessing', async () => {
+	for (const metadata of [{}, { client_type: 'cli', os: 'linux' }, { client_type: 'desktop', os: 'windows' }]) {
+		const verifier = Support.token();
+		const body = { account: Fixture.owner.account, redirect_uri: 'typerelay://oauth/callback', client_id: 'typerelay-desktop', code_challenge_method: 'S256', code_challenge: createHash('sha256').update(verifier).digest('base64url'), state: Support.token(), ...metadata };
+		await assert.rejects(Auth.authorize(Fixture.owner.user, { ...body, client_type: 'fake' }), /Invalid client type/);
+		await assert.rejects(Auth.authorize(Fixture.owner.user, { ...body, os: '<script>' }), /Invalid operating system/);
+		const url = new URL(await Auth.authorize(Fixture.owner.user, body));
+		const tokens = await Auth.exchange({ grant_type: 'authorization_code', code: url.searchParams.get('code'), client_id: body.client_id, redirect_uri: body.redirect_uri, code_verifier: verifier });
+		const device = await Device.findById(tokens.device).lean();
+		assert.equal(device.client_type, metadata.client_type); assert.equal(device.os, metadata.os);
+		await Device.updateOne({ _id: device._id }, { $set: { access_expires: new Date(0), last_active: new Date(0) } });
+		await assert.rejects(Auth.bearer(tokens.access_token), /expired/);
+		assert.equal(+(await Device.findById(device._id).lean()).last_active, 0);
+		await Auth.exchange({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token });
+		assert.ok(+(await Device.findById(device._id).lean()).last_active > 0);
+	}
 });
 test('desktop PKCE accepts only the registered app callback', () => {
 	assert.equal(Auth.redirect('typerelay://oauth/callback'), 'typerelay://oauth/callback');

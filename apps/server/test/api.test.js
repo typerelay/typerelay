@@ -7,6 +7,7 @@ import { Support } from '../services/support.js';
 import { Auth } from '../services/auth.js';
 import { Libraries } from '../services/libraries.js';
 import { PublicApi } from '../api/public.js';
+import { AdminAccounts } from '../services/admin_accounts.js';
 import { operations } from '../api/catalog.js';
 import spec, { ApiSchema } from '../api/openapi.js';
 
@@ -38,6 +39,25 @@ test('public authentication is separate from desktop and scope-limited; no token
 	assert.equal((await ApiFixture.request('/me', 'GET', null, 'bad')).status, 401);
 	assert.equal((await ApiFixture.request('/libraries', 'POST', { operation_id: randomUUID(), name: 'No' }, ApiFixture.reader)).status, 403);
 	const grant = await Integration.findOne({ name: 'Tests' }).lean(); assert.equal(grant.hash, undefined);
+});
+test('unlimited personal tokens support reads and writes, counts, validation and revocation', async () => {
+	const before = (await AdminAccounts.counts([new mongoose.Types.ObjectId(ApiFixture.owner.account)])).get(ApiFixture.owner.account).integrations;
+	const { token, grant } = await Auth.createIntegration(ApiFixture.owner, { name: 'Unlimited', days: 0, scopes: Auth.scopes });
+	assert.equal(grant.expires, null);
+	assert.equal((await ApiFixture.request('/me', 'GET', null, token)).status, 200);
+	assert.equal((await ApiFixture.request('/libraries', 'POST', { operation_id: randomUUID(), name: 'Unlimited token write' }, token)).status, 200);
+	assert.equal((await AdminAccounts.counts([new mongoose.Types.ObjectId(ApiFixture.owner.account)])).get(ApiFixture.owner.account).integrations, before + 1);
+	for (const days of [-1, 366, 1.5, null, '', false, '0']) await assert.rejects(Auth.createIntegration(ApiFixture.owner, { name: 'Invalid', days, scopes: ['content:read'] }), /Expiry/);
+	const finite = await Auth.createIntegration(ApiFixture.owner, { name: 'Finite', days: 365, scopes: ['content:read'] });
+	assert.ok(finite.grant.expires > new Date(Date.now() + 364 * 86400000));
+	const standard = await Auth.createIntegration(ApiFixture.owner, { name: 'Default', scopes: ['content:read'] });
+	assert.ok(Math.abs(+standard.grant.expires - Date.now() - 90 * 86400000) < 5000);
+	await Integration.updateOne({ _id: finite.grant._id }, { $set: { expires: new Date(Date.now() - 1000) } });
+	assert.equal((await ApiFixture.request('/me', 'GET', null, finite.token)).status, 401);
+	await Integration.updateOne({ _id: grant._id }, { $set: { revoked: true } });
+	assert.equal((await ApiFixture.request('/me', 'GET', null, token)).status, 401);
+	await Integration.updateOne({ _id: standard.grant._id }, { $unset: { expires: 1 } });
+	assert.equal((await ApiFixture.request('/me', 'GET', null, standard.token)).status, 401, 'Only explicit null is unlimited');
 });
 test('private CRUD, metadata, retries and search use the shared sync data', async () => {
 	const body = { operation_id: randomUUID(), name: 'Code', snippets: [{ id: randomUUID(), title: 'Tabs', trigger: null, content: { version: 1, type: 'code', language: 'rust', text: '\t  fn main() {}\n\n' } }] };
