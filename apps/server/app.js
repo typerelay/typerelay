@@ -21,11 +21,13 @@ import { Scheduler } from './services/scheduler.js';
 import { Billing } from './services/billing.js';
 import { WhiteLabel } from './services/white_label.js';
 import { Assets } from './services/assets.js';
+import { ProductUpdates } from './services/product_updates.js';
 import { Bundles } from './services/bundles.js';
 
 export class Server {
 	static async start() {
 		await mongoose.connect(process.env.MONGO_URI, { autoIndex: false });
+		if (ProductUpdates.enabled()) await ProductUpdates.backfillProductUpdatesSeenAt();
 		if (process.env.SERVER_MODE === 'scheduler') {
 			Scheduler.start();
 			console.log('TypeRelay scheduler running: Trash cleanup daily; trial and white-label reconciliation every five minutes; Helpmonks trial enrollment every minute');
@@ -40,7 +42,7 @@ export class Server {
 		app.set('views', './views');
 		app.use((req, res, next) => { res.locals.styleNonce = Support.token(); next(); });
 		app.use('/docs', helmet({ contentSecurityPolicy: false }), express.static(process.env.DOCS_DIR || '/docs', { extensions: ['html'] }));
-		app.use(helmet({ contentSecurityPolicy: { directives: { 'upgrade-insecure-requests': Auth.origin.startsWith('https:') ? [] : null, 'script-src': ["'self'", "'wasm-unsafe-eval'"], 'style-src': ["'self'", (req, res) => "'nonce-" + res.locals.styleNonce + "'"], 'style-src-attr': ["'unsafe-inline'"], 'img-src': ["'self'", 'data:'] } } }));
+		app.use(helmet({ contentSecurityPolicy: { directives: { 'upgrade-insecure-requests': Auth.origin.startsWith('https:') ? [] : null, 'script-src': ["'self'", "'wasm-unsafe-eval'"], 'style-src': ["'self'", (req, res) => "'nonce-" + res.locals.styleNonce + "'"], 'style-src-attr': ["'unsafe-inline'"], 'img-src': ["'self'", 'data:', ...(ProductUpdates.enabled() ? ['https:', 'http:'] : [])] } } }));
 		app.use(AccountAccess.middleware);
 		app.post('/billing/webhook', express.raw({ type: 'application/json' }), async (req, res) => { Support.assert(req.headers['stripe-signature'], 'Missing Stripe-Signature', 400); try { await Billing.handleWebhook(req.body, req.headers['stripe-signature']); res.json({ received: true }); } catch (error) { error.status ||= 400; throw error; } });
 		app.use(express.json({ limit: '12mb' }), express.urlencoded({ extended: false, limit: '32kb' }));
@@ -88,7 +90,10 @@ export class Server {
 			res.render('authorize', { accounts, request: req.query });
 		});
 		app.post('/oauth/authorize', async (req, res) => { Support.assert(req.session.user, 'Sign in required', 401); res.redirect(await Auth.authorize(req.session.user, req.body)); });
-		app.get('/', async (req, res) => {
+		ProductUpdates.mount(app);
+		app.get(['/', '/news'], async (req, res) => {
+			if (req.path === '/news' && !req.session.user) { req.session.return_to = req.originalUrl; return res.render('login'); }
+			if (req.path === '/news' && !ProductUpdates.eligible(req)) return res.redirect('/');
 			if (!req.session.user) { if (req.query.invite) req.session.return_to = '/?invite=' + encodeURIComponent(req.query.invite); return res.render('login'); }
 			const memberships = await Member.find({ user: req.session.user }).lean();
 			const records = await Account.find({ _id: { $in: memberships.map(member => member.account) } }).lean();
@@ -101,7 +106,7 @@ export class Server {
 			const usage = await Billing.usage(account._id);
 			const profile = await User.findById(ctx.user).lean();
 			await AdminSettings.application(req, res, profile, ctx);
-			res.render('app', { integrationScopes: Auth.scopes, importFormats: Libraries.importFormats, accounts, account, ctx, libraries: await Libraries.list(ctx), team: await Team.list(ctx), profile, ...Billing.locals(account, ctx, usage), whiteLabelSettings: WhiteLabel.serialize(account) });
+			res.render('app', { productUpdatesEnabled: ProductUpdates.eligible(req), news: req.path === '/news', product_updates: req.path === '/news' ? await ProductUpdates.listProductUpdates() : null, integrationScopes: Auth.scopes, importFormats: Libraries.importFormats, accounts, account, ctx, libraries: await Libraries.list(ctx), team: await Team.list(ctx), profile, ...Billing.locals(account, ctx, usage), whiteLabelSettings: WhiteLabel.serialize(account) });
 		});
 		app.get('/snippet-assets/:account/:id', async (req, res) => { const ctx = await Support.context(req.session.user, req.params.account); const asset = await Assets.get(ctx, req.params.id, true); res.set({ 'Content-Type': asset.mime_type, 'Content-Length': String(asset.size), ETag: `"${asset.id}"`, 'Cache-Control': 'private, max-age=31536000, immutable' }).send(asset.data); });
 		app.use('/api/v1', (req, res) => res.status(426).json({ error: 'Upgrade TypeRelay: rich text requires sync protocol 6', protocol: 6 }));

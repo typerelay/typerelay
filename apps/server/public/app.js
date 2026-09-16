@@ -1,3 +1,4 @@
+import { ProductNews } from './product-updates.js';
 import { TemplateEditor, TemplateFill } from './template-editor.js';
 import { Abbreviation } from './abbreviation.js';
 import { RichTextRuntime } from './rich-text-runtime.js';
@@ -67,6 +68,7 @@ class TypeRelay {
 			this.devices().catch(() => {});
 			const invitation = new URL(location.href).searchParams.get('invite');
 			if (invitation) this.accept(invitation);
+			this.productNews = new ProductNews(this);
 			if (location.hash === '#settings-subscription') { bootstrap.Modal.getOrCreateInstance(document.querySelector('#settings')).show(); this.settingsTab('subscription'); }
 		}
 	}

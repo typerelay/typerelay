@@ -1,0 +1,20 @@
+#productUpdatesModal.modal.fade(tabindex="-1" aria-labelledby="productUpdatesModalLabel" aria-hidden="true" data-bs-backdrop="static" data-bs-keyboard="false" data-through-update-id=product_updates.through_update_id data-read-more-link=product_updates.updates[0].link)
+	.modal-dialog.modal-dialog-centered.modal-dialog-scrollable.modal-lg
+		.modal-content
+			.modal-header
+				h2#productUpdatesModalLabel.modal-title What's new
+				button.btn-close.cursor-pointer(type="button" aria-label="Close" data-product-updates-dismiss)
+			.modal-body
+				each update in product_updates.updates
+					article.product-update-modal-item.mb-5
+						if update.feature_image
+							img.rounded.w-100.mb-3.product-update-modal-image(src=update.feature_image alt=update.title)
+						h3.mb-3= update.title
+						p.mb-0= update.excerpt.length > 1000 ? `${update.excerpt.slice(0, 1000)}...` : update.excerpt
+			.modal-footer.justify-content-between
+				button.btn.btn-sm.btn-secondary(type="button" data-product-updates-dismiss)
+					.spinner-border.spinner-border-sm.me-2.d-none(data-product-updates-spinner)
+					span Got it
+				button.btn.btn-sm.btn-primary(type="button" data-product-updates-read-more)
+					.spinner-border.spinner-border-sm.me-2.d-none(data-product-updates-spinner)
+					span Read more

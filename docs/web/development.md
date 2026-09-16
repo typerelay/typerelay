@@ -40,6 +40,16 @@ Offline devices apply changes on their next successful connection.
 
 ## Verification
 
+### In-app product updates
+
+The hosted web app reuses Mailtwine's news badge, archive and Bootstrap modal. Set `TYPERELAY_GHOST_CONTENT_API_KEY` in both the app and scheduler environments. On NadaMini, run `dbh-run secrets` after changing the development environment. The feature is disabled without a key and on self-hosted/custom-domain requests; native desktop is unchanged.
+
+Ghost posts from `https://typerelay.com` need the `product` tag to enter `/news`. Add the internal `#modal` tag to trigger the automatic popup. Sync runs on scheduler startup and every 15 minutes; failures preserve the cached feed. Existing users receive a one-time seen baseline when enabled, so historical posts stay in the archive without opening old popups. Read state is shared per user across accounts and browser sessions.
+
+Focused unit/browser tests: `node --test test/product-updates-service.test.js test/product-updates-browser.test.js test/scheduler.test.js` from `apps/server`. Database coverage is in `test/product-updates-integration.test.js`, using a disposable `typerelay_product_updates_test` database. Use `dbh-run test` for Docker-dependent tests on NadaMini. Production key provisioning and deployment are separate.
+
+### Existing suites
+
     docker compose run --rm --no-deps app node --test --test-force-exit test/*.test.js
     cargo test --workspace
     cargo clippy --workspace --all-targets -- -D warnings

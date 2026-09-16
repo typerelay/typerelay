@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 const objectid = mongoose.Schema.Types.ObjectId;
 const mixed = mongoose.Schema.Types.Mixed;
 const asset = new mongoose.Schema({ url: String, storage_key: { type: String, select: false }, mime_type: String, size: Number, width: Number, height: Number, updated_at: Date }, { _id: false });
-const User = mongoose.model('User', new mongoose.Schema({ email: { type: String, unique: true }, name: String, password: { type: String, select: false }, totp_secret: { type: String, select: false }, totp_enabled: { type: Boolean, default: false }, totp_step: { type: Number, select: false }, auth_version: { type: Number, default: 0 }, activity_sequence: { type: Number, default: 0 } }, { timestamps: true }));
+const User = mongoose.model('User', new mongoose.Schema({ email: { type: String, unique: true }, name: String, password: { type: String, select: false }, totp_secret: { type: String, select: false }, totp_enabled: { type: Boolean, default: false }, totp_step: { type: Number, select: false }, auth_version: { type: Number, default: 0 }, activity_sequence: { type: Number, default: 0 }, product_updates_seen_at: { type: Date, default: Date.now, select: false } }, { timestamps: true }));
 const Passkey = mongoose.model('Passkey', new mongoose.Schema({ user: { type: objectid, index: true }, credential_id: { type: String, unique: true }, public_key: { type: String, select: false }, counter: Number, transports: [String], name: String }, { timestamps: true }));
 const accountSchema = new mongoose.Schema({
 	name: String,
@@ -103,3 +103,23 @@ Ticket.schema.index({ expires: 1 }, { expireAfterSeconds: 0 });
 Integration.schema.index({ hash: 1 }, { unique: true, sparse: true });
 Integration.schema.index({ refresh: 1 }, { unique: true, sparse: true });
 Integration.schema.index({ account: 1, user: 1 });
+
+const productUpdateSchema = new mongoose.Schema(
+	{
+		ghost_id: { type: String, required: true, unique: true, trim: true },
+		title: { type: String, required: true, trim: true },
+		excerpt: { type: String, default: '' },
+		slug: { type: String, required: true, trim: true },
+		link: { type: String, required: true, trim: true },
+		feature_image: { type: String, default: '' },
+		published_at: { type: Date, required: true },
+		show_modal: { type: Boolean, default: false },
+		active: { type: Boolean, default: true },
+	},
+	{ timestamps: true, collection: 'product_updates' },
+);
+
+productUpdateSchema.index({ active: 1, published_at: -1, _id: -1 });
+productUpdateSchema.index({ active: 1, show_modal: 1, published_at: -1, _id: -1 });
+
+export const ProductUpdate = mongoose.model('ProductUpdate', productUpdateSchema);

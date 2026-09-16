@@ -121,3 +121,42 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 
 .white-label-preview { display: block; max-width: 100%; max-height: 5rem; object-fit: contain; }
 @media (max-width: 48rem) { #billing-nav-action { display: none; } }
+
+/* Product updates: shared Mailtwine presentation. */
+.product-updates-nav-link #product-updates-badge {
+	position: absolute;
+	top: -0.35rem;
+	right: -0.35rem;
+}
+
+.product-update-card {
+	max-width: 52rem;
+	margin-right: auto;
+	margin-left: auto;
+}
+
+.product-update-card-image,
+.product-update-modal-image {
+	max-height: 28rem;
+	object-fit: cover;
+}
+
+.product-update-excerpt {
+	white-space: pre-line;
+}
+
+#productUpdatesModal .modal-content {
+	overflow: hidden;
+}
+
+#productUpdatesModal .modal-body {
+	min-height: 0;
+	overflow-y: auto;
+}
+
+#productUpdatesModal .modal-header,
+#productUpdatesModal .modal-footer {
+	flex-shrink: 0;
+}
+.product-updates-nav-link, [data-product-updates-dismiss], [data-product-updates-read-more], [data-product-updates-load-more] { cursor: pointer; }
+@media (max-width: 40rem) { .app-navbar.has-product-updates { grid-template-columns: 8rem minmax(0, 1fr) max-content; } }

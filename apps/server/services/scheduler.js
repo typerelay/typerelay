@@ -1,4 +1,5 @@
 import { AdminAccounts } from './admin_accounts.js';
+import { ProductUpdates } from './product_updates.js';
 import { Cron } from 'croner';
 import { Libraries } from './libraries.js';
 import { Billing } from './billing.js';
@@ -6,7 +7,7 @@ import { WhiteLabel } from './white_label.js';
 import { Helpmonks } from './helpmonks.js';
 
 export class Scheduler {
-	static start({ CronClass = Cron, cleanup = () => Libraries.cleanup(), expireTrials = () => Billing.runTrialExpiry(), enrollTrialUsers = () => Helpmonks.enrollTrialUsers(), reconcileWhiteLabel = () => WhiteLabel.reconcile(), purgeAccounts = () => AdminAccounts.recover(), logger = console } = {}) {
+	static start({ CronClass = Cron, cleanup = () => Libraries.cleanup(), expireTrials = () => Billing.runTrialExpiry(), enrollTrialUsers = () => Helpmonks.enrollTrialUsers(), reconcileWhiteLabel = () => WhiteLabel.reconcile(), purgeAccounts = () => AdminAccounts.recover(), syncProductUpdates = () => ProductUpdates.syncProductUpdates(), productUpdatesEnabled = ProductUpdates.enabled(), logger = console } = {}) {
 		let running = false;
 		const cleanupJob = new CronClass('30 2 * * *', { protect: true }, async () => {
 			if (running) return;
@@ -30,6 +31,17 @@ export class Scheduler {
 			try { const summary = await reconcileWhiteLabel(); if (summary.checked) logger.log(`White-label reconciliation complete: checked ${summary.checked}, updated ${summary.updated}, failed ${summary.failed}`); } catch (error) { logger.error(`White-label reconciliation failed: ${error.message}`); }
 		});
 		const deletionJob = new CronClass('* * * * *', { protect: true }, async () => { try { await purgeAccounts(); } catch (error) { logger.error('Account deletion recovery failed'); } });
-		return { cleanupJob, trialJob, helpmonksJob, whiteLabelJob, deletionJob };
+		let productUpdatesJob = null;
+		if (productUpdatesEnabled) {
+			let syncing = false;
+			const sync = async () => {
+				if (syncing) return;
+				syncing = true;
+				try { const result = await syncProductUpdates(); logger.log(`Product updates synced: ${result.fetched} posts`); } catch (error) { logger.error(`Product update sync failed: ${error.message}`); } finally { syncing = false; }
+			};
+			productUpdatesJob = new CronClass('*/15 * * * *', { protect: true }, sync);
+			void sync();
+		}
+		return { cleanupJob, trialJob, helpmonksJob, whiteLabelJob, deletionJob, productUpdatesJob };
 	}
 }
