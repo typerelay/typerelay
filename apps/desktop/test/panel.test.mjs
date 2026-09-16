@@ -172,15 +172,12 @@ test('template fields wait for confirmation, retain literal answers and clear on
  }finally{f.dom.window.close();}
 });
 
-test('manual sync displays progress and completion without opening or dismissing the panel',async()=>{
+test('manual sync relies on notifications without adding panel status',async()=>{
  const f=await Fixture.create();try{
-  f.panel.invoke=async(name)=>{if(name==='sync_now')f.callbacks['sync-status']({payload:'Starting to sync…'});};
+  f.panel.status.textContent='';
   await f.dom.window.document.querySelector('#sync').onclick();
-  assert.equal(f.panel.status.textContent,'Starting to sync…');
-  f.callbacks['sync-status']({payload:'Sync successful'});
-  assert.equal(f.panel.status.textContent,'Sync successful');
-  f.callbacks['sync-status']({payload:'Sync failed. Check your connection and TypeRelay sync status.'});
-  assert.match(f.panel.status.textContent,/Sync failed/);
+  assert.ok(f.calls.some(call=>call.name==='sync_now'));
+  assert.equal(f.panel.status.textContent,'');
   assert.ok(!f.calls.some(call=>call.name==='dismiss'));
  }finally{f.dom.window.close();}
 });
@@ -204,5 +201,13 @@ test('authentication handoff does not reopen settings over the browser',async()=
   assert.ok(f.calls.some(call=>call.name==='connect'));
   assert.equal(f.calls.filter(call=>call.name==='set_settings_view').length,before);
   assert.equal(f.panel.status.textContent,'Connected');
+ }finally{f.dom.window.close();}
+});
+
+test('search loupe is right aligned and title bar has no shortcut badge',async()=>{
+ const f=await Fixture.create();try{
+  const style=f.dom.window.getComputedStyle(f.dom.window.document.querySelector('.search-icon'));
+  assert.equal(style.right,'0.85rem');assert.equal(style.left,'auto');
+  assert.equal(f.dom.window.document.querySelector('.shortcut-key'),null);
  }finally{f.dom.window.close();}
 });

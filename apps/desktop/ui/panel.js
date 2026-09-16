@@ -32,7 +32,6 @@ class Panel {
 		document.querySelector('#disconnect').onclick=()=>this.action(async()=>{await this.invoke('disconnect');this.status.textContent='Disconnected';await this.settings(true);});
 		document.querySelector('#sync').onclick=()=>this.action(async()=>{await this.invoke('sync_now');});
 		document.querySelector('#enroll-form').onsubmit=event=>{event.preventDefault();this.action(async()=>{const names=[...document.querySelectorAll('#local-libraries input:checked')].map(input=>input.value);if(!names.length)throw Error('Select local libraries first');await this.invoke('enroll',{names});await this.settings(true);this.status.textContent='Upload queued';});};
-		window.__TAURI__.event.listen('sync-status',event=>this.status.textContent=String(event.payload));
 		window.__TAURI__.event.listen('panel-error',event=>this.status.textContent=String(event.payload));
 		window.__TAURI__.event.listen('panel-open',event=>this.open(event.payload));
 		window.addEventListener('focus',()=>{if(document.body.dataset.os==='macos')this.refreshPermissions();});

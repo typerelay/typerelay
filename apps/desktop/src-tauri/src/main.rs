@@ -24,13 +24,11 @@ impl Runtime {
 	#[cfg(any(target_os="windows",target_os="macos"))]
 	fn start_expansion(app:&tauri::AppHandle)->Result<()> {let state=app.state::<Runtime>();if state.expansion_started.swap(true,Ordering::SeqCst){return Ok(());}let result=(||{let requests=platform::ExpansionSession::start(state.root.join("snippets"),state.root.join("settings.yml"))?;let handle=app.clone();std::thread::spawn(move||for request in requests{if let Err(error)=Runtime::expand(&handle,request){let message=format!("Expansion failed: {error:#}");*handle.state::<Runtime>().status.lock().unwrap()=message.clone();let _=handle.notification().builder().title("TypeRelay").body(&message).show();}});Ok(())})();if result.is_err(){state.expansion_started.store(false,Ordering::SeqCst);}result}
     fn hide_on_focus_loss()->bool { cfg!(not(target_os="linux")) }
-    fn sync_notice(app:&tauri::AppHandle,message:&str) {
-        *app.state::<Runtime>().status.lock().unwrap()=message.into();
-        let _=app.emit("sync-status",message);
+    fn sync_notice(_app:&tauri::AppHandle,message:&str) {
         #[cfg(target_os="linux")]
         if let Err(error)=notify_rust::Notification::new().appname("TypeRelay").summary("TypeRelay").body(message).show(){eprintln!("TypeRelay sync notification unavailable: {error}");}
         #[cfg(not(target_os="linux"))]
-        if let Err(error)=app.notification().builder().title("TypeRelay").body(message).show(){eprintln!("TypeRelay sync notification unavailable: {error}");}
+        if let Err(error)=_app.notification().builder().title("TypeRelay").body(message).show(){eprintln!("TypeRelay sync notification unavailable: {error}");}
     }
     fn quit(app:&tauri::AppHandle) {
         if app.state::<Runtime>().busy.load(Ordering::SeqCst) {let _=app.emit("panel-error","Insertion is finishing; try Quit again in a moment");return;}
