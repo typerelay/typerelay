@@ -16,15 +16,15 @@ Switch to the intended account first. Owners and admins can rename the account, 
 
 ## Connected devices
 
-This list contains your active desktop connections for the selected account. Revoking a device prevents it from refreshing credentials or syncing again. It does not delete the machine’s local SQLite data.
+This list contains your active desktop and CLI/TUI connections for the selected account. Each row shows client type, operating system, connection time and last authenticated activity in your browser’s local timezone. Older connections display Unknown for metadata they did not report. Revoking a device prevents it from refreshing credentials or syncing again. It does not delete the machine’s local SQLite data.
 
 Hosted Free accounts can connect one machine. Pro trials, Pro and Team allow unlimited connected machines subject to platform safety limits. Stored extra device grants stop syncing after a downgrade until the account upgrades or the active Free-plan device is revoked.
 
 ## Access tokens
 
-Create named personal access tokens for the API or MCP with a 1–365 day expiry and only the scopes needed. The secret is shown once. Tokens belong to you and the selected account; their scopes never override your library permissions.
+Create named personal access tokens for the API or MCP with a 1–365 day expiry (default 90), or set expiry to 0 for a token that never expires. Select only the scopes needed. The secret is shown once. Tokens belong to you and the selected account; their scopes never override your library permissions.
 
-Hosted API and MCP access require an active Pro trial, Pro or Team plan. Existing tokens remain stored after a downgrade but cannot authenticate. Creating or revoking tokens requires a recent sign-in.
+Hosted API and MCP access require an active Pro trial, Pro or Team plan. Existing tokens remain stored after a downgrade but cannot authenticate. Viewing, creating or revoking tokens requires a sign-in within the last 15 minutes. If prompted, use **Sign in** to authenticate in a new tab, then **Retry** in the original Settings tab; your form input stays in place.
 
 ## Subscription and white-label
 
