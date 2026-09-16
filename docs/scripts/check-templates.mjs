@@ -12,22 +12,21 @@ try {
 	await page.getByRole('button', { name: 'Open library Templates', exact: true }).click();
 	await page.getByRole('button', { name: 'Edit', exact: true }).first().click();
 	await page.locator('#snippet-type').waitFor({ state: 'visible' });
-	assert.equal(await page.locator('#snippet-type').inputValue(), 'template');
+	assert.equal(await page.locator('#snippet-type').inputValue(), 'plain_text');
 	await page.locator('[data-variable="name"]').waitFor({ state: 'visible' });
 	await page.locator('[data-variable="name"] [data-vfield="label"]').fill('Person');
-	await page.locator('#copy-code').click();
+	await page.locator('#record-form button[type=submit]').click();
+	await page.locator('#form-modal').waitFor({ state: 'hidden' });
+	await page.getByRole('button', { name: 'Fill and copy', exact: true }).first().click();
 	await page.locator('#template-fill').waitFor({ state: 'visible' });
 	await page.getByLabel('Person *', { exact: true }).fill('private-answer-{{key:enter}}');
 	await page.getByRole('button', { name: 'Copy filled text', exact: true }).click();
 	await page.waitForFunction(() => typeof window.copiedTemplate === 'string');
 	assert.ok((await page.evaluate(() => window.copiedTemplate)).startsWith('Hi private-answer-{{key:enter}} '));
-	await page.locator('#form-modal').waitFor({ state: 'visible' });
-	await page.locator('#record-form button[type=submit]').click();
-	await page.locator('#form-modal').waitFor({ state: 'hidden' });
 	await page.getByRole('button', { name: 'Edit', exact: true }).first().click();
 	await page.locator('[data-variable="name"] [data-vfield="label"]').waitFor({ state: 'visible' });
 	assert.equal(await page.locator('[data-variable="name"] [data-vfield="label"]').inputValue(), 'Person');
 	assert.ok(!bodies.some(body => body.includes('private-answer-')), 'Entered answers must never be uploaded');
 	await page.screenshot({ path: '/artifacts/template-editor.png' });
-	console.log('Template web editor, WASM preview, local-only literal answers, metadata save and fill/copy passed');
+	console.log('Text variables, local-only literal answers, metadata save and fill/copy passed');
 } finally { await browser.close(); }

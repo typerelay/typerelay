@@ -1,26 +1,25 @@
-#template-options.mb-4(hidden data-variables=JSON.stringify((snippet && snippet.content && snippet.content.variables) || {}))
-	p.small.text-muted.mb-3 Write a field such as {{my_name}} in the expansion, then save. You’ll be asked for its value when you use the snippet. No setup below is required.
-	.row.align-items-center.mb-3(data-template-mutation)
-		.col
-			label.form-label(for="variable-kind") Add variable (optional)
-			select#variable-kind.form-select.form-select-sm
-				option(value="custom") Text field
-				option(value="date") Date
-				option(value="time") Time
-				option(value="timestamp") Timestamp
-				option(value="key:enter") Enter keypress
-		.col
-			label.form-label(for="variable-name") New field name
-			input#variable-name.form-control.form-control-sm(autocomplete="off")
-		.col-auto
-			button#insert-variable.btn.btn-outline-secondary.btn-sm(type="button") Insert
-	p.small.text-muted.mb-3 Use Insert to add another variable, or type it directly above. Repeated names reuse one answer. Enter keypress sends an actual Enter to the target app.
-	h6.small.fw-bold.mb-2 Field options (optional)
-	p.small.text-muted.mb-3 Defaults work as-is. These settings control the prompt; enter the actual answer when using the snippet.
-	#variable-definitions
-	p#template-error.text-danger(role="status")
-	label.form-label Preview
-	pre#template-preview.small
+- var snippetVariables = (snippet && snippet.content && snippet.content.variables) || {}
+details#template-options.mb-4(hidden data-variables=JSON.stringify(snippetVariables) open=Object.keys(snippetVariables).length > 0)
+	summary.fw-bold Variables
+	.template-variable-body.mt-3
+		.row.align-items-end.g-2.mb-3(data-template-mutation)
+			.col-md-4
+				label.form-label(for="variable-kind") Type
+				select#variable-kind.form-select.form-select-sm
+					option(value="custom") Text field
+					option(value="date") Date
+					option(value="time") Time
+					option(value="timestamp") Timestamp
+					option(value="key:enter") Enter keypress
+			.col
+				label.form-label(for="variable-name") Name
+				input#variable-name.form-control.form-control-sm(autocomplete="off")
+			.col-auto
+				button#insert-variable.btn.btn-outline-secondary.btn-sm(type="button") Insert
+		p.small.text-muted.mb-3 Insert a value that TypeRelay asks for when the snippet is used.
+		#variable-definitions
+		p#template-error.text-danger.mb-0(role="status")
+		pre#template-preview.small.mb-0(hidden)
 	template#variable-definition
 		fieldset.mb-3(data-variable)
 			legend.h6

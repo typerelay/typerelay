@@ -30,9 +30,9 @@ Uploaded and remote images are normalized, privately cached and synchronized as 
 
 Rich text supports the complete template-variable system. User answers remain literal and are escaped according to their text, link or HTML context. Enter actions must appear on their own line between rich-text blocks.
 
-## Templates
+## Variables
 
-Choose **Template** only when the expansion needs dates, prompted fields or explicit Enter actions. Text and Code keep double-brace placeholder text literal. See [Template variables](./templates).
+Text and Rich text support prompted fields, dates and explicit Enter actions through the collapsed **Variables** section. Code keeps double-brace text literal. See [Template variables](./templates).
 
 ## Copy, move and Trash
 

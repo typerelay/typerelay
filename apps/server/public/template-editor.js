@@ -6,7 +6,7 @@ export class TemplateEditor {
 		const area = document.querySelector('#replace');
 		if (!area) return;
 		const root = document.querySelector('#template-options');
-		root.hidden = !['template', 'rich_text'].includes(document.querySelector('#snippet-type').value);
+		root.hidden = document.querySelector('#snippet-type').value === 'code';
 		if (area !== this.area) {
 			this.area = area; this.variables = JSON.parse(root.dataset.variables); this.names = '';
 			area.addEventListener('input', () => this.preview());
@@ -19,11 +19,11 @@ export class TemplateEditor {
 				if (document.querySelector('#snippet-type').value === 'rich_text' && this.client.richView) this.client.richView.insertText('{{' + name + '}}'); else { area.setRangeText('{{' + name + '}}', area.selectionStart, area.selectionEnd, 'end'); area.focus(); area.dispatchEvent(new Event('input', { bubbles: true })); }
 			};
 		}
-		if (!root.hidden) this.preview();
+		if (!root.hidden && (root.open || document.querySelector('#snippet-type').value === 'rich_text')) this.preview();
 	}
 	async content() { if (document.querySelector('#snippet-type').value === 'rich_text') { const result = await RichTextRuntime.render({ markdown: this.client.richView?.content() || this.area.value, variables: this.variables }, {}, true); this.variables = result.variables; return { variables: result.variables }; } return (await TemplateRuntime.render({ text: this.area.value, variables: this.variables }, {}, true)).template; }
 	async preview() {
-		if (!this.area?.isConnected || !['template', 'rich_text'].includes(document.querySelector('#snippet-type').value)) return;
+		if (!this.area?.isConnected || document.querySelector('#snippet-type').value === 'code') return;
 		const sequence = ++this.sequence;
 		try {
 			const rich = document.querySelector('#snippet-type').value === 'rich_text';

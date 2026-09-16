@@ -44,9 +44,8 @@ if kind === 'snippet' || kind === 'conflict'
 		.col-md-3
 			label.form-label.fw-bold(for="snippet-type") Type
 			select#snippet-type.form-select.form-select-sm.mb-3(name="type")
-				option(value="plain_text" selected=!snippet || (snippet.content && snippet.content.type) === 'plain_text') Text
+				option(value="plain_text" selected=!snippet || ['plain_text', 'template'].includes(snippet.content && snippet.content.type)) Text
 				option(value="code" selected=snippet && (snippet.content && snippet.content.type) === 'code') Code
-				option(value="template" selected=snippet && (snippet.content && snippet.content.type) === 'template') Template
 				option(value="rich_text" selected=snippet && (snippet.content && snippet.content.type) === 'rich_text') Rich text
 	label.form-label.fw-bold(for="trigger") Abbreviation (optional)
 	.input-group.input-group-sm.mb-4
@@ -54,7 +53,6 @@ if kind === 'snippet' || kind === 'conflict'
 		input#trigger.form-control.form-control-sm(name="trigger" value=snippet ? snippet.trigger : '' pattern="[a-z0-9\\-]{1,63}" autocapitalize="off" spellcheck="false")
 	label.form-label.fw-bold(for="replace") Expansion
 	textarea#replace.form-control.form-control-sm.mb-4(name="replace" rows="8")= '\n' + (snippet ? snippet.replace : '')
-	include template-editor
 	include rich-editor
 	#code-editor.mb-3
 	#code-options.mb-3(hidden=!snippet || (snippet.content && snippet.content.type) !== 'code')
@@ -74,7 +72,7 @@ if kind === 'snippet' || kind === 'conflict'
 					each width in [2, 4, 8]
 						option(value=width selected=width === 4)= width
 		p.small.text-muted Tab indents; Shift+Tab outdents. Press Escape then Tab to leave the editor. Existing whitespace stays unchanged.
-	button#copy-code.btn.btn-outline-secondary.btn-sm.mb-3(type="button") Copy
+	include template-editor
 	if kind === 'snippet' && snippet
 		details.snippet-advanced.mb-3
 			summary.small.mb-3 Advanced

@@ -2,7 +2,7 @@
 
 <div v-pre>
 
-Choose **Template** for plain output or **Rich text** for formatted output. Text and Code remain literal, including braces in source code.
+Variables are built into **Text** and **Rich text**. Open **Variables** in the editor, insert a field, and TypeRelay asks for its value when the snippet is used. **Code** remains literal, including braces in source code.
 
 ```text
 Hi {{name}},
@@ -31,12 +31,12 @@ Answers are literal: entering `{{key:enter}}` as an answer cannot create a keypr
 
 In the desktop panel, complete the fields and choose **Insert**. Ctrl+Enter also confirms; Escape cancels. On Omarchy, a prompted abbreviation is removed before the form opens. Cancel inserts nothing and does not restore it. If the panel is unavailable, the abbreviation remains unchanged. Date/time-only templates expand without a form.
 
-In the TUI, F9 cycles Text, Code, Template and Rich text. F11 opens the variable picker/settings; Ctrl+S inserts the chosen variable and F4 saves settings for an existing variable without inserting another reference. F10 fills/copies with rich clipboard formats when applicable. Tab or F2 changes fields; Ctrl+T inserts a tab in a value; Ctrl+S copies the filled result.
+In the TUI, F9 cycles Text, Code and Rich text. F11 opens the variable picker/settings for Text or Rich text; Ctrl+S inserts the chosen variable and F4 saves settings for an existing variable without inserting another reference. F10 fills/copies with rich clipboard formats when applicable. Tab or F2 changes fields; Ctrl+T inserts a tab in a value; Ctrl+S copies the filled result.
 
 ## Literal braces and compatibility
 
 Escape a placeholder opener as `\{{` to produce literal `{{`. Use `\\` for a literal backslash. Other backslashes remain unchanged. Templates permit up to 64 fields and 64 Enter actions; rendered text retains the existing 65,536-byte limit.
 
-Templates and rich text require matching desktop/server sync protocol **6**. Existing stored Text and Code snippets do not change. YAML export/import preserves template variables. Rich records use `{version: 2, type: "rich_text", markdown, text, assets, variables}`; `text` and `assets` are derived rather than trusted from callers.
+Variable-enabled text and rich text require matching desktop/server sync protocol **6**. Legacy `template` records remain compatible and appear as Text. YAML export/import preserves variables. Rich records use `{version: 2, type: "rich_text", markdown, text, assets, variables}`; `text` and `assets` are derived rather than trusted from callers.
 
 </div>
