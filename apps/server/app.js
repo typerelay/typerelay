@@ -81,7 +81,7 @@ export class Server {
 			const accounts = (await Account.find({ _id: { $in: memberships.map(member => member.account) } }).lean()).filter(account => !req.boundAccount || String(account._id) === req.boundAccount);
 			res.render('authorize', { accounts, request: req.query });
 		});
-		app.post('/oauth/authorize', async (req, res) => { Support.assert(req.session.user, 'Sign in required', 401); res.redirect(await Auth.authorize(req.session.user, req.body)); });
+		app.post('/oauth/authorize', async (req, res) => { Support.assert(req.session.user, 'Sign in required', 401); const callback=await Auth.authorize(req.session.user,req.body);if(callback.startsWith('typerelay://'))return res.render('desktop-callback',{callback});res.redirect(callback); });
 		app.get('/', async (req, res) => {
 			if (!req.session.user) { if (req.query.invite) req.session.return_to = '/?invite=' + encodeURIComponent(req.query.invite); return res.render('login'); }
 			const memberships = await Member.find({ user: req.session.user }).lean();
