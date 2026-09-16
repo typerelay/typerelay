@@ -53,10 +53,11 @@ export class RichEditor {
 		field.hidden = true; host.hidden = false; toolbar.hidden = false;
 		toolbar.addEventListener('mousedown', event => { if (event.target.closest('button')) event.preventDefault(); });
 		toolbar.addEventListener('click', event => this.command(event).catch(error => options.onError?.(error)));
-		host.addEventListener('paste', event => { if ([...(event.clipboardData?.files || [])].some(file => file.type.startsWith('image/'))) { event.preventDefault(); this.files(event.clipboardData.files).catch(error => options.onError?.(error)); } });
+		host.addEventListener('paste', event => { const files = this.clipboardFiles(event.clipboardData); if (files.length) { event.preventDefault(); this.files(files).catch(error => options.onError?.(error)); } });
 		host.addEventListener('drop', event => { if ([...(event.dataTransfer?.files || [])].some(file => file.type.startsWith('image/'))) { event.preventDefault(); this.files(event.dataTransfer.files).catch(error => options.onError?.(error)); } });
 		this.refresh();
 	}
+	clipboardFiles(data) { const files = [...(data?.files || [])]; if (!files.some(file => file.type.startsWith('image/'))) for (const item of data?.items || []) { const file = item.kind === 'file' && item.type.startsWith('image/') ? item.getAsFile() : null; if (file) files.push(file); } return files.filter(file => file.type.startsWith('image/')); }
 	async files(files) { for (const file of files || []) if (file.type.startsWith('image/')) { const asset = await this.options.upload(file); this.editor.chain().focus().setImage({ src: `typerelay-asset:${asset.id}`, alt: file.name }).run(); } }
 	async command(event) {
 		const button = event.target.closest('[data-rich-command]'); if (!button || this.options.readonly) return;

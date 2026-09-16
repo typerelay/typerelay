@@ -104,6 +104,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 #template-options .form-check-inline { margin-right: 1rem; }
 .rich-toolbar { padding: .5rem; border: .0625rem solid var(--bs-border-color); border-bottom: 0; border-radius: .375rem .375rem 0 0; background: var(--bs-tertiary-bg); }
 .rich-toolbar .rich-icon-button { display: inline-flex; width: 2rem; min-width: 2rem; height: 2rem; align-items: center; justify-content: center; padding: 0; line-height: 1; }
+.rich-toolbar-icon { width: 1rem; height: 1rem; fill: none; stroke: currentcolor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
 .rich-toolbar .rich-icon-button.dropdown-toggle::after { margin-left: .15rem; }
 .rich-toolbar .btn-light { border-color: var(--bs-border-color); background: var(--bs-body-bg); }
 .rich-toolbar .btn-light:hover, .rich-toolbar .btn-light.active { border-color: var(--bs-primary); background: color-mix(in srgb, var(--bs-primary) 12%, var(--bs-body-bg)); color: var(--bs-primary); }

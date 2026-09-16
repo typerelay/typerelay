@@ -24,6 +24,10 @@ test('TipTap rich editor round-trips GFM, raw HTML, asset images and source mode
 	try {
 		assert.equal(field.parentElement.id, 'rich-options');
 		assert.equal(field.previousElementSibling.id, 'rich-toolbar');
+		assert.equal(document.querySelectorAll('[data-rich-command="link"] svg, [data-rich-command="image"] svg').length, 2);
+		assert.equal(document.querySelector('[data-rich-command="source"]').classList.contains('ms-2'), true);
+		const pasted = new dom.window.File(['image'], 'paste.png', { type: 'image/png' });
+		assert.deepEqual(editor.clipboardFiles({ files: [], items: [{ kind: 'file', type: 'image/png', getAsFile: () => pasted }, { kind: 'string', type: 'text/plain', getAsFile: () => null }] }), [pasted]);
 		const roundTrip = editor.content();
 		assert.match(roundTrip, /# Heading/);
 		assert.match(roundTrip, /\| A\s+\| B\s+\|/);

@@ -15,8 +15,14 @@
 		.btn-group.btn-group-sm(role="group" aria-label="Lists")
 			button.btn.btn-light.rich-icon-button(type="button" data-rich-command="bulletList" aria-label="Bulleted list" title="Bulleted list") •≡
 			button.btn.btn-light.rich-icon-button(type="button" data-rich-command="orderedList" aria-label="Numbered list" title="Numbered list") 1≡
-		button.btn.btn-light.btn-sm.rich-icon-button(type="button" data-rich-command="link" aria-label="Link" title="Link") ⛓︎
-		button.btn.btn-light.btn-sm.rich-icon-button(type="button" data-rich-command="image" aria-label="Image" title="Image") ▧
+		button.btn.btn-light.btn-sm.rich-icon-button(type="button" data-rich-command="link" aria-label="Link" title="Link")
+			svg.rich-toolbar-icon(viewBox="0 0 16 16" aria-hidden="true")
+				path(d="M6.5 9.5l3-3M6 5H4a3 3 0 0 0 0 6h2M10 5h2a3 3 0 1 1 0 6h-2")
+		button.btn.btn-light.btn-sm.rich-icon-button(type="button" data-rich-command="image" aria-label="Image" title="Image")
+			svg.rich-toolbar-icon(viewBox="0 0 16 16" aria-hidden="true")
+				rect(x="2" y="2" width="12" height="12" rx="1")
+				circle(cx="5.5" cy="5.5" r="1")
+				path(d="M3 12l3.5-3.5 2.5 2L10.5 9l2.5 3")
 		.dropdown
 			button.btn.btn-light.btn-sm.rich-icon-button.dropdown-toggle(type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Insert" title="Insert") ＋
 			ul.dropdown-menu
@@ -40,7 +46,7 @@
 			button.btn.btn-light.rich-icon-button(type="button" data-rich-command="undo" aria-label="Undo" title="Undo") ↶
 			button.btn.btn-light.rich-icon-button(type="button" data-rich-command="redo" aria-label="Redo" title="Redo") ↷
 			button.btn.btn-light.rich-icon-button(type="button" data-rich-command="clear" aria-label="Clear formatting" title="Clear formatting") T×
-			button.btn.btn-light.rich-icon-button(type="button" data-rich-command="source" aria-label="Edit Markdown" title="Edit Markdown") M↓
+		button.btn.btn-light.btn-sm.rich-icon-button.ms-2(type="button" data-rich-command="source" aria-label="Edit Markdown" title="Edit Markdown") M↓
 		input.visually-hidden(type="file" accept="image/png,image/jpeg,image/webp,image/gif" data-rich-image-file)
 	#rich-editor.rich-editor-surface
 	template#rich-image-html-template
