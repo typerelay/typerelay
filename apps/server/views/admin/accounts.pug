@@ -1,0 +1,44 @@
+extends layout
+block content
+	.d-flex.align-items-center.justify-content-between.mb-5
+		h1 Accounts
+		.d-flex
+			a.btn.btn-outline-secondary.btn-sm.me-3(href="/admin/api/users.csv") Export users
+			button.btn.btn-primary.btn-sm(type="button" data-admin-form="/admin/api/accounts/new/form") Create account
+	form.row.align-items-center.g-3.mb-5(method="get" action="/admin")
+		.col-md-5
+			label.form-label(for="q") Account name, ID, or owner email
+			input#q.form-control.form-control-sm(name="q" value=query.q)
+		.col-md-2
+			label.form-label(for="status") Status
+			select#status.form-select.form-select-sm(name="status")
+				option(value="") All
+				each value in ['active','suspended','deleting','failed']
+					option(value=value selected=query.status === value)= value
+		.col-md-2
+			label.form-label(for="plan") Billing plan
+			select#plan.form-select.form-select-sm(name="plan")
+				option(value="") All
+				each value in ['free','pro','team']
+					option(value=value selected=query.plan === value)= value
+		.col-md-3.align-self-end
+			button.btn.btn-outline-primary.btn-sm(type="submit") Search / refresh
+	p.text-muted
+		span#account-total= total
+		span  accounts
+	.table-responsive
+		table.table.table-hover.align-middle.bg-body
+			thead
+				tr
+					each heading in ['Account / owner','Billing / effective plan','Status','Users','Snippets','Libraries','Devices','Created','Actions']
+						th(scope="col")= heading
+			tbody#admin-accounts
+				each account in accounts
+					include ../ajax/admin-account
+	p#account-empty.text-muted(hidden=accounts.length > 0) No accounts match these filters.
+	.d-flex.align-items-center.gap-3.mt-3
+		if page > 1
+			a.btn.btn-outline-secondary.btn-sm(href='/admin?' + new URLSearchParams(Object.assign({},query,{page:page-1})).toString()) Previous
+		span Page #{page} of #{Math.max(1,pages)}
+		if page < pages
+			a.btn.btn-outline-secondary.btn-sm(href='/admin?' + new URLSearchParams(Object.assign({},query,{page:page+1})).toString()) Next

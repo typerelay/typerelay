@@ -1,3 +1,4 @@
+import { AccountAccess } from './account_access.js';
 import { Account, Member, User } from '../model/index.js';
 
 export class Helpmonks {
@@ -37,11 +38,12 @@ export class Helpmonks {
 		const limit = options.limit || 25;
 		const summary = { checked: 0, enrolled: 0, retrying: 0, failed: 0, configured: true };
 		for (let index = 0; index < limit; index++) {
-			const account = await accountModel.findOneAndUpdate({ 'billing.helpmonks_sequence.status': 'pending', 'billing.helpmonks_sequence.attempts': { $lt: maxAttempts }, 'billing.helpmonks_sequence.next_attempt_at': { $lte: now } }, { $inc: { 'billing.helpmonks_sequence.attempts': 1 }, $set: { 'billing.helpmonks_sequence.next_attempt_at': new Date(now.getTime() + retryDelay) } }, { returnDocument: 'after' }).lean();
+			const account = await accountModel.findOneAndUpdate({ ...AccountAccess.available, 'billing.helpmonks_sequence.status': 'pending', 'billing.helpmonks_sequence.attempts': { $lt: maxAttempts }, 'billing.helpmonks_sequence.next_attempt_at': { $lte: now } }, { $inc: { 'billing.helpmonks_sequence.attempts': 1 }, $set: { 'billing.helpmonks_sequence.next_attempt_at': new Date(now.getTime() + retryDelay) } }, { returnDocument: 'after' }).lean();
 			if (!account) break;
 			summary.checked++;
 			try {
-				const contactId = await Helpmonks.enroll(await Helpmonks.owner(account._id, options), config, options);
+				const enroll = async () => Helpmonks.enroll(await Helpmonks.owner(account._id, options), config, options);
+				const contactId = options.accountModel ? await enroll() : await AccountAccess.run(account._id, enroll);
 				await accountModel.updateOne({ _id: account._id }, { $set: { 'billing.helpmonks_sequence.status': 'completed', 'billing.helpmonks_sequence.contact_id': contactId, 'billing.helpmonks_sequence.enrolled_at': now, 'billing.helpmonks_sequence.last_error': '' } });
 				summary.enrolled++;
 			} catch (error) {

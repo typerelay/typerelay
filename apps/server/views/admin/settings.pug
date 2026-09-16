@@ -1,0 +1,49 @@
+extends layout
+block content
+	h1.mb-5 Settings
+	section.mb-5
+		h2.h4 Integration status
+		.row
+			each configured, key in status
+				.col-md-4.mb-3
+					span.text-capitalize.me-1 #{key.replaceAll('_',' ')}:
+					strong= configured ? 'Configured' : 'Not configured'
+	section.mb-5
+		h2.h4 Managani
+		form(data-admin-settings="managani")
+			.row.align-items-center
+				.col-md-3.mb-3
+					label.form-label(for="managani-enabled") Tracking and widget
+					select#managani-enabled.form-select.form-select-sm(name="enabled")
+						option(value="false" selected=!managani.enabled) Disabled
+						option(value="true" selected=managani.enabled) Enabled
+				.col-md-5.mb-3
+					label.form-label(for="managani-url") Base URL
+					input#managani-url.form-control.form-control-sm(type="url" name="base_url" value=managani.base_url)
+				.col-md-4.mb-3
+					label.form-label(for="managani-key") Public site key
+					input#managani-key.form-control.form-control-sm(name="site_key" value=managani.site_key)
+			.mb-3
+				label.form-label(for="managani-secret") Replace server secret (blank keeps current)
+				input#managani-secret.form-control.form-control-sm(type="password" name="site_secret" autocomplete="new-password")
+				span#secret-status.form-text= managani.site_secret_configured ? 'Secret configured' : 'No secret configured'
+			.form-check.mb-3
+				input#clear-secret.form-check-input.h-20px.w-30px(type="checkbox" name="clear_site_secret")
+				label.form-check-label(for="clear-secret") Clear stored secret
+			.d-flex.justify-content-end
+				button.btn.btn-primary.btn-sm(type="submit") Save Managani
+	section.mb-5
+		h2.h4 Custom code
+		p.text-muted Trusted JavaScript and CSS for signed-in application pages only. Admin, sign-in, and OAuth pages are excluded.
+		form(data-admin-settings="custom-code")
+			.mb-3
+				label.form-label(for="custom-js") JavaScript (without script tags)
+				textarea#custom-js.form-control.form-control-sm.font-monospace(name="js" rows="8" maxlength="50000")= customCode.js
+			.mb-3
+				label.form-label(for="custom-css") CSS (without style tags)
+				textarea#custom-css.form-control.form-control-sm.font-monospace(name="css" rows="8" maxlength="50000")= customCode.css
+			.mb-3
+				label.form-label(for="custom-origins") Allowed external origins (one per line)
+				textarea#custom-origins.form-control.form-control-sm(name="origins" rows="3")= customCode.origins.join('\n')
+			.d-flex.justify-content-end
+				button.btn.btn-primary.btn-sm(type="submit") Save custom code

@@ -20,6 +20,9 @@ x-environment: &environment
   MCP_HEAVY_TOOL_PER_MINUTE: "${MCP_HEAVY_TOOL_PER_MINUTE:-30}"
   MCP_TOOL_CONCURRENCY: "${MCP_TOOL_CONCURRENCY:-3}"
   MCP_HEAVY_TOOL_CONCURRENCY: "${MCP_HEAVY_TOOL_CONCURRENCY:-1}"
+  SYSADMIN_EMAIL: "${SYSADMIN_EMAIL:-}"
+  SYSADMIN_PASSWORD: "${SYSADMIN_PASSWORD:-}"
+  GIT_ENCRYPTION_KEY: "${GIT_ENCRYPTION_KEY:-}"
   SESSION_SECRET: ${SESSION_SECRET}
   JWT_SECRET: ${JWT_SECRET}
   SMTP_FROM: ${SMTP_FROM}
@@ -37,6 +40,8 @@ x-app: &app
   image: ghcr.io/typerelay/typerelay:latest
   environment: *environment
   restart: unless-stopped
+  volumes:
+    - typerelay-server:/data
 
 services:
   app:
@@ -111,4 +116,5 @@ services:
     restart: unless-stopped
 
 volumes:
+  typerelay-server:
   mongo_data:

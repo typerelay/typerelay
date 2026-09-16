@@ -22,6 +22,9 @@ x-env: &env
   API_BASE_URL: http://app:3040
   SMTP_SERVERS: ${SMTP_SERVERS}
   SMTP_FROM: ${SMTP_FROM}
+  SYSADMIN_EMAIL: "${SYSADMIN_EMAIL:-}"
+  SYSADMIN_PASSWORD: "${SYSADMIN_PASSWORD:-}"
+  GIT_ENCRYPTION_KEY: "${GIT_ENCRYPTION_KEY:-}"
   SESSION_SECRET: ${SESSION_SECRET}
   JWT_SECRET: ${JWT_SECRET}
   ENABLE_SIGNUP: "${ENABLE_SIGNUP:-true}"
@@ -93,6 +96,8 @@ services:
       <<: *env
       TYPERELAY_APP: scheduler
       SERVER_MODE: scheduler
+      WHITE_LABEL_ASSETS_DIR: /data/white-label
+      STRIPE_TEAM_PRICE_ID: "${STRIPE_TEAM_PRICE_ID:-}"
       TYPERELAY_HOSTED_EDITION: "${TYPERELAY_HOSTED_EDITION:-false}"
       BILLING_ENABLED: "${BILLING_ENABLED:-false}"
       WHITE_LABEL_ENABLED: "${WHITE_LABEL_ENABLED:-false}"
@@ -100,6 +105,8 @@ services:
       CLOUDFLARE_API_TOKEN: "${CLOUDFLARE_API_TOKEN:-}"
       CLOUDFLARE_ZONE_ID: "${CLOUDFLARE_ZONE_ID:-}"
     restart: unless-stopped
+    volumes:
+      - typerelay-server:/data
     deploy:
       replicas: 1
     depends_on:

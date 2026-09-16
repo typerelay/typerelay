@@ -1,0 +1,53 @@
+form(data-admin-account=(account && account.id) || '')
+	if account
+		input(type="hidden" name="revision" value=account.revision)
+		p.text-muted Account ID: #{account.id}
+		.row.mb-5
+			each value, key in account.usage
+				.col-6.col-md-3.mb-3
+					span.text-capitalize.me-1 #{key.replaceAll('_',' ')}:
+					strong= value
+		p Domain: #{account.domain.hostname || 'None'} — #{account.domain.state}
+		p Billing: #{account.plan} / #{account.billing_status}. Effective plan: #{account.effective_plan}.
+		if account.owner_accounts > 1
+			p.alert.alert-warning This owner belongs to #{account.owner_accounts} accounts. Editing their name or email affects every account.
+	fieldset(disabled=!!(account && account.deletion))
+		.row
+			.col-md-6.mb-3
+				label.form-label(for="account-name") Account name
+				input#account-name.form-control.form-control-sm(name="name" value=(account && account.name) required maxlength="100")
+			if !account || account.owner
+				.col-md-6.mb-3
+					label.form-label(for="owner-name") Owner name
+					input#owner-name.form-control.form-control-sm(name="owner_name" value=(account && account.owner && account.owner.name) required maxlength="100")
+				.col-md-6.mb-3
+					label.form-label(for="owner-email") Owner email
+					input#owner-email.form-control.form-control-sm(type="email" name="owner_email" value=(account && account.owner && account.owner.email) required)
+			if account
+				.col-md-6.mb-3
+					label.form-label(for="account-active") Access
+					select#account-active.form-select.form-select-sm(name="is_active")
+						option(value="true" selected=account.status === 'active') Active
+						option(value="false" selected=account.status !== 'active') Suspended
+		if account
+			h3.h5.mt-3 Admin overrides
+			p.text-muted Overrides do not change Stripe charges. Blank inherits; zero means unlimited. Lower limits preserve existing data.
+			.row.align-items-center.mb-5
+				.col-md-4.mb-3
+					label.form-label(for="override-plan") Complimentary plan
+					select#override-plan.form-select.form-select-sm(name="override_plan")
+						option(value="") Inherit
+						each value in ['free','pro','team']
+							option(value=value selected=account.override.plan === value)= value
+				each key in ['people','snippets','libraries','machines']
+					.col-md-2.mb-3
+						label.form-label.text-capitalize(for='limit-' + key)= key
+						input.form-control.form-control-sm(id='limit-' + key name='limit_' + key type="number" min="0" step="1" value=(account.override.limits && account.override.limits[key] != null ? account.override.limits[key] : ''))
+			if account.members && account.members.length
+				h3.h5 Members
+				ul.list-group.mb-5
+					each member in account.members
+						li.list-group-item #{(member.user && member.user.name) || 'Deleted user'} — #{(member.user && member.user.email) || ''} (#{member.role})
+		.d-flex.justify-content-between
+			button.btn.btn-outline-secondary.btn-sm(type="button" data-bs-dismiss="modal") Cancel
+			button.btn.btn-primary.btn-sm(type="submit")= account ? 'Save' : 'Create account'

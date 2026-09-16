@@ -1,0 +1,7 @@
+extends layout
+block content
+	h1.mb-5 Email Templates
+	p.text-muted Plain-text transactional messages. Links and expiration remain managed by Type Relay.
+	#admin-templates.list-group
+		each template in templates
+			include ../ajax/admin-template

@@ -1,0 +1,18 @@
+form(data-admin-template=template.key)
+	.mb-3
+		label.form-label(for="template-subject") Subject
+		input#template-subject.form-control.form-control-sm(name="subject" value=template.subject required maxlength="200")
+	.mb-3
+		label.form-label(for="template-text") Message
+		textarea#template-text.form-control.form-control-sm(name="text" rows="8" required maxlength="20000")= template.text
+	p.text-muted Required variable: {{url}}
+	.mb-5
+		button.btn.btn-outline-secondary.btn-sm(type="button" data-template-preview=template.key) Preview unsaved message
+		pre#template-preview.mt-3.text-wrap
+	.mb-5
+		label.form-label(for="test-email") Test recipient
+		input#test-email.form-control.form-control-sm(type="email" name="test_email")
+		button.btn.btn-outline-secondary.btn-sm.mt-3(type="button" data-template-test=template.key) Send saved template
+	.d-flex.justify-content-between
+		button.btn.btn-outline-secondary.btn-sm(type="button" data-bs-dismiss="modal") Cancel
+		button.btn.btn-primary.btn-sm(type="submit") Save

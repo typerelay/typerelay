@@ -3,10 +3,15 @@ import mongoose from 'mongoose';
 const objectid = mongoose.Schema.Types.ObjectId;
 const mixed = mongoose.Schema.Types.Mixed;
 const asset = new mongoose.Schema({ url: String, storage_key: { type: String, select: false }, mime_type: String, size: Number, width: Number, height: Number, updated_at: Date }, { _id: false });
-const User = mongoose.model('User', new mongoose.Schema({ email: { type: String, unique: true }, name: String, password: { type: String, select: false }, totp_secret: { type: String, select: false }, totp_enabled: { type: Boolean, default: false }, totp_step: { type: Number, select: false }, auth_version: { type: Number, default: 0 } }, { timestamps: true }));
+const User = mongoose.model('User', new mongoose.Schema({ email: { type: String, unique: true }, name: String, password: { type: String, select: false }, totp_secret: { type: String, select: false }, totp_enabled: { type: Boolean, default: false }, totp_step: { type: Number, select: false }, auth_version: { type: Number, default: 0 }, activity_sequence: { type: Number, default: 0 } }, { timestamps: true }));
 const Passkey = mongoose.model('Passkey', new mongoose.Schema({ user: { type: objectid, index: true }, credential_id: { type: String, unique: true }, public_key: { type: String, select: false }, counter: Number, transports: [String], name: String }, { timestamps: true }));
 const accountSchema = new mongoose.Schema({
 	name: String,
+	is_active: { type: Boolean, default: true },
+	admin_revision: { type: Number, default: 0 },
+	activity_sequence: { type: Number, default: 0 },
+	admin_override: { plan: { type: String, enum: ['free', 'pro', 'team', null], default: null }, limits: { people: { type: Number, default: null }, snippets: { type: Number, default: null }, libraries: { type: Number, default: null }, machines: { type: Number, default: null } } },
+	deletion: { requested_at: Date, stage: String, error: String, users: [objectid], grants: [objectid], lease: String, lease_until: Date },
 	sequence: { type: Number, default: 0 },
 	plan: { type: String, enum: ['free', 'pro', 'team'], default: 'free' },
 	billing: {
@@ -53,6 +58,7 @@ const accountSchema = new mongoose.Schema({
 }, { timestamps: true });
 accountSchema.index({ 'white_label.hostname': 1 }, { unique: true, partialFilterExpression: { 'white_label.hostname': { $type: 'string', $gt: '' } } });
 accountSchema.index({ 'billing.helpmonks_sequence.status': 1, 'billing.helpmonks_sequence.next_attempt_at': 1 });
+accountSchema.index({ 'deletion.requested_at': 1, 'deletion.stage': 1 });
 const Account = mongoose.model('Account', accountSchema);
 const membership = new mongoose.Schema({ account: objectid, user: objectid, role: { type: String, enum: ['owner', 'admin', 'member'] } });
 membership.index({ account: 1, user: 1 }, { unique: true });
@@ -88,6 +94,10 @@ export const Integration = mongoose.model('Integration', new mongoose.Schema({ a
 export const OAuthClient = mongoose.model('OAuthClient', new mongoose.Schema({ client_id: { type: String, unique: true }, name: String, redirects: [String] }));
 export const IntegrationToken = mongoose.model('IntegrationToken', new mongoose.Schema({ hash: { type: String, unique: true }, grant: objectid, resource: String, expires: Date }, { timestamps: true }));
 export const ApiAudit = mongoose.model('ApiAudit', new mongoose.Schema({ account: objectid, user: objectid, credential: objectid, operation: String, status: Number, expires: { type: Date, expires: 0 } }, { timestamps: true }));
+export const SystemSetting = mongoose.model('SystemSetting', new mongoose.Schema({ key: { type: String, unique: true }, value: mixed, revision: { type: Number, default: 0 } }, { timestamps: true }));
+export const AdminAudit = mongoose.model('AdminAudit', new mongoose.Schema({ account: objectid, actor: String, operation: String, status: Number }, { timestamps: true }));
+export const AccountLease = mongoose.model('AccountLease', new mongoose.Schema({ account: { type: objectid, index: true }, token: { type: String, unique: true }, expires: { type: Date, expires: 0 } }));
+for (const model of [Group, Ticket, Library, Device, Conflict, ApiAudit, AdminAudit]) model.schema.index({ account: 1 });
 IntegrationToken.schema.index({ expires: 1 }, { expireAfterSeconds: 0 });
 Ticket.schema.index({ expires: 1 }, { expireAfterSeconds: 0 });
 Integration.schema.index({ hash: 1 }, { unique: true, sparse: true });

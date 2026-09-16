@@ -1,4 +1,7 @@
 import express from 'express';
+import { Admin } from './admin.js';
+import { AdminSettings } from './services/admin_settings.js';
+import { AccountAccess } from './services/account_access.js';
 import pug from 'pug';
 import session from 'express-session';
 import MongoStore from 'connect-mongo';
@@ -38,6 +41,7 @@ export class Server {
 		app.use((req, res, next) => { res.locals.styleNonce = Support.token(); next(); });
 		app.use('/docs', helmet({ contentSecurityPolicy: false }), express.static(process.env.DOCS_DIR || '/docs', { extensions: ['html'] }));
 		app.use(helmet({ contentSecurityPolicy: { directives: { 'upgrade-insecure-requests': Auth.origin.startsWith('https:') ? [] : null, 'script-src': ["'self'", "'wasm-unsafe-eval'"], 'style-src': ["'self'", (req, res) => "'nonce-" + res.locals.styleNonce + "'"], 'style-src-attr': ["'unsafe-inline'"], 'img-src': ["'self'", 'data:'] } } }));
+		app.use(AccountAccess.middleware);
 		app.post('/billing/webhook', express.raw({ type: 'application/json' }), async (req, res) => { Support.assert(req.headers['stripe-signature'], 'Missing Stripe-Signature', 400); try { await Billing.handleWebhook(req.body, req.headers['stripe-signature']); res.json({ received: true }); } catch (error) { error.status ||= 400; throw error; } });
 		app.use(express.json({ limit: '12mb' }), express.urlencoded({ extended: false, limit: '32kb' }));
 		app.use('/assets/generated', express.static('/data/editor'));
@@ -61,6 +65,8 @@ export class Server {
 			if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !['/oauth/token', '/integrations/token', '/integrations/register'].includes(req.path) && !req.headers.authorization) Support.assert((req.headers['x-csrf-token'] || req.body?._csrf) === req.session.csrf, 'Session expired; reload and retry', 403);
 			next();
 		});
+		Admin.mount(app);
+		app.use(AdminSettings.middleware);
 		app.get('/health', (req, res) => res.json({ ok: true }));
 		const authLimit = rateLimit({ windowMs: 900000, limit: 30, message: { error: 'Too many sign-in attempts; try again later.' } });
 		Security.mount(app, authLimit);
@@ -86,13 +92,16 @@ export class Server {
 			if (!req.session.user) { if (req.query.invite) req.session.return_to = '/?invite=' + encodeURIComponent(req.query.invite); return res.render('login'); }
 			const memberships = await Member.find({ user: req.session.user }).lean();
 			const records = await Account.find({ _id: { $in: memberships.map(member => member.account) } }).lean();
-			const accounts = records.filter(account => Billing.entitlements(account).plan === 'team' || memberships.find(member => String(member.account) === String(account._id))?.role === 'owner');
+			const accounts = records.filter(account => account.is_active !== false && !account.deletion?.requested_at && (Billing.entitlements(account).plan === 'team' || memberships.find(member => String(member.account) === String(account._id))?.role === 'owner'));
 			const account = accounts.find(account => String(account._id) === (req.boundAccount || req.query.account)) || (!req.boundAccount ? accounts[0] : null);
 			Support.assert(account, 'Account access denied', 403);
 			const ctx = await Support.context(req.session.user, String(account._id));
+			req.ctx = ctx;
 			res.locals.whiteLabel = WhiteLabel.public(account);
 			const usage = await Billing.usage(account._id);
-			res.render('app', { integrationScopes: Auth.scopes, importFormats: Libraries.importFormats, accounts, account, ctx, libraries: await Libraries.list(ctx), team: await Team.list(ctx), profile: await User.findById(ctx.user).lean(), ...Billing.locals(account, ctx, usage), whiteLabelSettings: WhiteLabel.serialize(account) });
+			const profile = await User.findById(ctx.user).lean();
+			await AdminSettings.application(req, res, profile, ctx);
+			res.render('app', { integrationScopes: Auth.scopes, importFormats: Libraries.importFormats, accounts, account, ctx, libraries: await Libraries.list(ctx), team: await Team.list(ctx), profile, ...Billing.locals(account, ctx, usage), whiteLabelSettings: WhiteLabel.serialize(account) });
 		});
 		app.get('/snippet-assets/:account/:id', async (req, res) => { const ctx = await Support.context(req.session.user, req.params.account); const asset = await Assets.get(ctx, req.params.id, true); res.set({ 'Content-Type': asset.mime_type, 'Content-Length': String(asset.size), ETag: `"${asset.id}"`, 'Cache-Control': 'private, max-age=31536000, immutable' }).send(asset.data); });
 		app.use('/api/v1', (req, res) => res.status(426).json({ error: 'Upgrade TypeRelay: rich text requires sync protocol 6', protocol: 6 }));
@@ -143,8 +152,8 @@ export class Server {
 		app.delete('/api/v2/white-label/domain', async (req, res) => { Support.assert(Support.admin(req.ctx), 'Admin required', 403); Server.whiteLabelResult(res, await WhiteLabel.remove(req.ctx.account)); });
 		app.post('/api/v2/white-label/assets/:kind', async (req, res) => {
 			Support.assert(Support.admin(req.ctx), 'Admin required', 403);
-			await mkdir(WhiteLabel.temporaryRoot(), { recursive: true });
-			const form = formidable({ uploadDir: WhiteLabel.temporaryRoot(), keepExtensions: true, maxFileSize: WhiteLabel.maximumFileSize, minFileSize: 1, allowEmptyFiles: false, multiples: false });
+			await mkdir(WhiteLabel.temporaryRoot(req.ctx.account), { recursive: true });
+			const form = formidable({ uploadDir: WhiteLabel.temporaryRoot(req.ctx.account), keepExtensions: true, maxFileSize: WhiteLabel.maximumFileSize, minFileSize: 1, allowEmptyFiles: false, multiples: false });
 			let file;
 			try {
 				const [, files] = await form.parse(req);

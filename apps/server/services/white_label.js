@@ -1,3 +1,4 @@
+import { AccountAccess } from './account_access.js';
 import { resolveCname } from 'node:dns/promises';
 import { mkdir, rename, rm, stat } from 'node:fs/promises';
 import { domainToASCII } from 'node:url';
@@ -22,7 +23,7 @@ export class WhiteLabel {
 	static enabled() { return Billing.hosted() && process.env.WHITE_LABEL_ENABLED === 'true'; }
 	static cnameTarget() { return String(process.env.WHITE_LABEL_CNAME_TARGET || 'custom.typerelay.com').trim().toLowerCase().replace(/\.$/, ''); }
 	static assetsRoot() { return resolve(process.env.WHITE_LABEL_ASSETS_DIR || '/data/white-label'); }
-	static temporaryRoot() { return join(WhiteLabel.assetsRoot(), '_tmp'); }
+	static temporaryRoot(accountId = null) { return accountId ? join(WhiteLabel.assetsRoot(), String(accountId), '_tmp') : join(WhiteLabel.assetsRoot(), '_tmp'); }
 
 	static error(status, message, code = 'white_label_error', details = null) {
 		const error = new Error(message);
@@ -185,8 +186,8 @@ export class WhiteLabel {
 		if (!detected || !WhiteLabel.imageTypes.has(detected.mime)) throw WhiteLabel.error(400, 'Upload a PNG, JPG, WebP, AVIF, GIF, or ICO image', 'asset_invalid');
 		const directory = join(WhiteLabel.assetsRoot(), String(accountId), kind);
 		const filename = `${kind}-${randomUUID()}.png`;
-		await mkdir(WhiteLabel.temporaryRoot(), { recursive: true });
-		const temporary = join(WhiteLabel.temporaryRoot(), filename);
+		await mkdir(WhiteLabel.temporaryRoot(accountId), { recursive: true });
+		const temporary = join(WhiteLabel.temporaryRoot(accountId), filename);
 		await sharp(file.filepath, { pages: 1, animated: false }).resize({ ...config, withoutEnlargement: true, background: { r: 0, g: 0, b: 0, alpha: 0 } }).png().toFile(temporary);
 		const metadata = await sharp(temporary).metadata();
 		const info = await stat(temporary);
@@ -224,7 +225,7 @@ export class WhiteLabel {
 			if (!WhiteLabel.enabled()) return next();
 			const hostname = WhiteLabel.requestHostname(req);
 			if (WhiteLabel.platformHostname(hostname)) return next();
-			const account = await Account.findOne({ 'white_label.hostname': hostname, 'white_label.state': 'active' }).lean();
+			const account = await Account.findOne({ ...AccountAccess.available, 'white_label.hostname': hostname, 'white_label.state': 'active' }).lean();
 			if (!account || Billing.entitlements(account).plan !== 'team') return res.status(404).send('Custom domain is not configured.');
 			req.boundAccount = String(account._id);
 			res.locals.whiteLabel = WhiteLabel.public(account);
@@ -235,13 +236,15 @@ export class WhiteLabel {
 	static async reconcile(options = {}) {
 		if (!WhiteLabel.enabled()) return { checked: 0, updated: 0, failed: 0 };
 		const now = options.now || new Date();
-		const accounts = await Account.find({ 'white_label.hostname': { $gt: '' }, $or: [{ 'white_label.next_check_at': { $lte: now } }, { 'white_label.next_check_at': null }] }).select('+white_label.cloudflare_hostname_id +billing.stripe_customer_id +billing.stripe_subscription_id').sort({ 'white_label.next_check_at': 1, _id: 1 }).limit(options.limit || 100).lean();
+		const accounts = await Account.find({ ...AccountAccess.available, 'white_label.hostname': { $gt: '' }, $or: [{ 'white_label.next_check_at': { $lte: now } }, { 'white_label.next_check_at': null }] }).select('+white_label.cloudflare_hostname_id +billing.stripe_customer_id +billing.stripe_subscription_id').sort({ 'white_label.next_check_at': 1, _id: 1 }).limit(options.limit || 100).lean();
 		const result = { checked: accounts.length, updated: 0, failed: 0 };
 		for (const account of accounts) {
 			try {
+				await AccountAccess.run(account._id, async () => {
 				if (Billing.entitlements(account, now).plan !== 'team') await WhiteLabel.disable(account, options);
 				else if (['pending_dns', 'disabled_by_plan'].includes(account.white_label.state) || !account.white_label.cloudflare_hostname_id) await WhiteLabel.verify(account._id, options);
 				else await WhiteLabel.refresh(account._id, options);
+				});
 				result.updated++;
 			} catch { result.failed++; }
 		}

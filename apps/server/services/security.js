@@ -1,5 +1,6 @@
 // Adapted from Streamient auth routes, profile/security views and passkey_service (AGPL-3.0).
 import bcrypt from 'bcryptjs';
+import { AdminSettings } from './admin_settings.js';
 import { generateSecret, generateURI, verifySync } from 'otplib';
 import QRCode from 'qrcode';
 import { generateRegistrationOptions, verifyRegistrationResponse, generateAuthenticationOptions, verifyAuthenticationResponse } from '@simplewebauthn/server';
@@ -61,8 +62,11 @@ export class Security {
 	}
 	static async issue(email, kind, data, path, subject) {
 		const token = Support.token();
-		await Ticket.create({ hash: Support.hash(token), kind, email, data, expires: new Date(Date.now() + 900000) });
-		await Auth.mail.sendMail({ to: email, subject, text: Auth.origin + path + '?token=' + token });
+		await mongoose.connection.transaction(async session => {
+			if (data.user) { const user = await User.updateOne({ _id: data.user }, { $inc: { activity_sequence: 1 } }, { session }); Support.assert(user.matchedCount, 'User no longer exists', 409); }
+			await Ticket.create([{ hash: Support.hash(token), kind, email, data, expires: new Date(Date.now() + 900000) }], { session });
+		});
+		await AdminSettings.send(kind, email, { url: Auth.origin + path + '?token=' + token });
 	}
 	static async profile(req) {
 		const name = Support.text(req.body.name);

@@ -1,0 +1,34 @@
+doctype html
+html(lang="en")
+	head
+		meta(charset="utf-8")
+		meta(name="viewport" content="width=device-width, initial-scale=1")
+		meta(name="csrf-token" content=csrf)
+		title Type Relay Admin
+		link(rel="icon" href="/assets/favicon.ico")
+		link(rel="stylesheet" href="/vendor/bootstrap/css/bootstrap.min.css")
+		link(rel="stylesheet" href="/vendor/sweetalert2/sweetalert2.min.css")
+		link(rel="stylesheet" href="/assets/admin.css")
+		script(src="/vendor/bootstrap/js/bootstrap.bundle.min.js" defer)
+		script(src="/vendor/sweetalert2/sweetalert2.min.js" defer)
+		script(src="/assets/admin.js" type="module")
+	body.bg-body-tertiary
+		nav.navbar.navbar-expand.navbar-dark.bg-dark.mb-5
+			.container-fluid.flex-wrap.gap-3
+				a.navbar-brand(href="/admin") Type Relay Admin
+				if adminEmail
+					.navbar-nav.flex-wrap.me-auto
+						a.nav-link(href="/admin") Accounts
+						a.nav-link(href="/admin/email-templates") Email Templates
+						a.nav-link(href="/admin/audit-logs") Audit Logs
+						a.nav-link(href="/admin/settings") Settings
+					button.btn.btn-outline-light.btn-sm(type="button" data-admin-logout) Sign out
+		main.container-fluid.px-4.pb-5
+			block content
+		#admin-modal.modal.fade(tabindex="-1" aria-labelledby="admin-modal-title")
+			.modal-dialog.modal-xl.modal-dialog-scrollable
+				.modal-content
+					.modal-header
+						h2#admin-modal-title.modal-title.h5 Details
+						button.btn-close(type="button" data-bs-dismiss="modal" aria-label="Close")
+					#admin-modal-body.modal-body

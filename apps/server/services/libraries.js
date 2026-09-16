@@ -1,3 +1,4 @@
+import { AccountAccess } from './account_access.js';
 import { parse as parseCsv } from 'csv-parse/sync';
 import { parseDocument } from 'htmlparser2';
 import { DOMParser } from '@xmldom/xmldom';
@@ -455,9 +456,10 @@ export class Libraries {
 	}
 	static async cleanup() {
 		const summary = { libraries: 0, snippets: 0 };
-		for (const account of await Account.find({}).select('_id').lean()) {
+		for (const account of await Account.find(AccountAccess.available).select('_id').lean()) {
 			const purged = await mongoose.connection.transaction(async session => {
-				await Account.updateOne({ _id: account._id }, { $inc: { sequence: 1 } }, { session });
+				const locked = await Account.updateOne({ _id: account._id, ...AccountAccess.available }, { $inc: { sequence: 1 } }, { session });
+				if (!locked.matchedCount) return { libraries: 0, snippets: 0 };
 				const now = new Date();
 				const libraries = await Library.find({ account: account._id, state: 'trashed', expires_at: { $lte: now } }).session(session).lean();
 				for (const library of libraries) await Libraries.purge(library, null, session);

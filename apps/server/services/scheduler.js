@@ -1,3 +1,4 @@
+import { AdminAccounts } from './admin_accounts.js';
 import { Cron } from 'croner';
 import { Libraries } from './libraries.js';
 import { Billing } from './billing.js';
@@ -5,7 +6,7 @@ import { WhiteLabel } from './white_label.js';
 import { Helpmonks } from './helpmonks.js';
 
 export class Scheduler {
-	static start({ CronClass = Cron, cleanup = () => Libraries.cleanup(), expireTrials = () => Billing.runTrialExpiry(), enrollTrialUsers = () => Helpmonks.enrollTrialUsers(), reconcileWhiteLabel = () => WhiteLabel.reconcile(), logger = console } = {}) {
+	static start({ CronClass = Cron, cleanup = () => Libraries.cleanup(), expireTrials = () => Billing.runTrialExpiry(), enrollTrialUsers = () => Helpmonks.enrollTrialUsers(), reconcileWhiteLabel = () => WhiteLabel.reconcile(), purgeAccounts = () => AdminAccounts.recover(), logger = console } = {}) {
 		let running = false;
 		const cleanupJob = new CronClass('30 2 * * *', { protect: true }, async () => {
 			if (running) return;
@@ -28,6 +29,7 @@ export class Scheduler {
 		const whiteLabelJob = new CronClass('*/5 * * * *', { protect: true }, async () => {
 			try { const summary = await reconcileWhiteLabel(); if (summary.checked) logger.log(`White-label reconciliation complete: checked ${summary.checked}, updated ${summary.updated}, failed ${summary.failed}`); } catch (error) { logger.error(`White-label reconciliation failed: ${error.message}`); }
 		});
-		return { cleanupJob, trialJob, helpmonksJob, whiteLabelJob };
+		const deletionJob = new CronClass('* * * * *', { protect: true }, async () => { try { await purgeAccounts(); } catch (error) { logger.error('Account deletion recovery failed'); } });
+		return { cleanupJob, trialJob, helpmonksJob, whiteLabelJob, deletionJob };
 	}
 }

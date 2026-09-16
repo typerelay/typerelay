@@ -1,0 +1,7 @@
+.list-group-item.d-flex.align-items-center.justify-content-between(id='template-' + template.key)
+	div
+		h2.h6= template.name
+		span.text-muted= template.subject
+	div
+		button.btn.btn-outline-primary.btn-sm.me-3(type="button" data-admin-form='/admin/api/email-templates/' + template.key + '/form') Edit
+		button.btn.btn-outline-secondary.btn-sm(type="button" data-template-reset=template.key) Reset

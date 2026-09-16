@@ -3,6 +3,7 @@ import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { fileTypeFromBuffer } from 'file-type';
 import sharp from 'sharp';
+import { AccountAccess } from './account_access.js';
 import { SnippetAsset } from '../model/index.js';
 import { Support } from './support.js';
 
@@ -41,7 +42,7 @@ export class Assets {
 	}
 	static async save(ctx,asset,sourceUrl='') {
 		const update = { $setOnInsert: { account: ctx.account, ...asset, last_referenced_at: new Date() }, ...(sourceUrl ? { $addToSet: { source_urls: sourceUrl } } : {}) };
-		await SnippetAsset.updateOne({ account: ctx.account, id: asset.id }, update, { upsert: true });
+		await AccountAccess.write(ctx.account, session => SnippetAsset.updateOne({ account: ctx.account, id: asset.id }, update, { upsert: true, session }));
 		return Assets.metadata({ ...asset, source_urls: sourceUrl ? [sourceUrl] : [] });
 	}
 	static async get(ctx, id, includeData = false) {

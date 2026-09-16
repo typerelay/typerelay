@@ -1,0 +1,24 @@
+tr(id='account-' + account.id data-account-id=account.id data-revision=account.revision data-status=account.status data-plan=account.plan data-name=account.name data-owner-email=(account.owner && account.owner.email))
+	td
+		button.btn.btn-link.btn-sm.p-0(type="button" data-admin-form='/admin/api/accounts/' + account.id + '/form')= account.name
+		div.small.text-muted= account.id
+		div.small= (account.owner && account.owner.email) || 'No owner'
+	td
+		div #{account.plan} / #{account.effective_plan}
+		div.small.text-muted= account.billing_status
+	td
+		span.badge(class=account.status === 'active' ? 'text-bg-success' : account.status === 'failed' ? 'text-bg-danger' : 'text-bg-secondary')= account.status
+		if account.deletion
+			div.small= account.deletion.stage
+			if account.deletion.error
+				div.small.text-danger= account.deletion.error
+	td= account.usage.users
+	td= account.usage.snippets
+	td= account.usage.libraries
+	td= account.usage.devices
+	td.small= account.createdAt ? new Date(account.createdAt).toISOString().slice(0,10) : '—'
+	td.text-nowrap
+		if account.status === 'failed'
+			button.btn.btn-outline-warning.btn-sm(type="button" data-admin-retry=account.id) Retry purge
+		else if account.status !== 'deleting'
+			button.btn.btn-outline-danger.btn-sm(type="button" data-admin-delete=account.id) Delete

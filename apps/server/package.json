@@ -20,6 +20,7 @@
     "@codemirror/state": "^6.7.4",
     "@codemirror/view": "^6.43.11",
     "@managani/cache": "0.1.5",
+    "@managani/node": "0.1.2",
     "@tiptap/core": "^3.31.3",
     "@tiptap/extension-image": "^3.31.3",
     "@tiptap/extension-heading": "^3.31.3",

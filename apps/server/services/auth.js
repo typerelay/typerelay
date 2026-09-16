@@ -1,5 +1,7 @@
 // Account membership and PKCE patterns adapted from Streamient (AGPL-3.0).
 import nodemailer from 'nodemailer';
+import { AdminSettings } from './admin_settings.js';
+import { AccountAccess } from './account_access.js';
 import { scopes } from '../api/catalog.js';
 import { createHash } from 'node:crypto';
 import { mongoose, User, Account, Member, Ticket, Device, Integration, IntegrationToken, OAuthClient } from '../model/index.js';
@@ -41,9 +43,14 @@ export class Auth {
 		Support.assert(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email), 'Enter a valid email');
 		const token = Support.token();
 		const origin = options.origin || Auth.origin;
+		if (options.account) { await AccountAccess.acquire(options.account); AccountAccess.assert(await Account.findById(options.account).lean()); }
 		const data = { ...(name ? { name: Support.text(name) } : {}), ...(options.account ? { account: String(options.account) } : {}), origin };
-		await Ticket.create({ hash: Support.hash(token), kind: 'login', email, data, expires: new Date(Date.now() + 900000) });
-		await Auth.mail.sendMail({ to: email, subject: 'Sign in to TypeRelay', text: origin + '/auth/callback?token=' + token });
+		await mongoose.connection.transaction(async session => {
+			if (options.account) await AccountAccess.fence(options.account, session);
+			await User.updateOne({ email }, { $inc: { activity_sequence: 1 } }, { session });
+			await Ticket.create([{ hash: Support.hash(token), kind: 'login', email, ...(options.account ? { account: options.account } : {}), data, expires: new Date(Date.now() + 900000) }], { session });
+		});
+		await AdminSettings.send(name ? 'signup' : 'login', email, { url: origin + '/auth/callback?token=' + token });
 	}
 	static async consume(token) {
 		let user;
@@ -52,6 +59,7 @@ export class Auth {
 			const ticket = await Ticket.findOneAndDelete({ hash: Support.hash(Support.text(token, 256)), kind: 'login', expires: { $gt: new Date() } }, { session }).lean();
 			Support.assert(ticket, 'Link expired or already used', 401);
 			user = await User.findOne({ email: ticket.email }).session(session).lean();
+			if (ticket.data?.account) AccountAccess.assert(await Account.findById(ticket.data.account).session(session).lean());
 			if (ticket.data?.account) Support.assert(user && await Member.exists({ account: ticket.data.account, user: user._id }).session(session), 'Account access denied', 403);
 			if (!user) {
 				[user] = await User.create([{ email: ticket.email, name: ticket.data?.name || ticket.email.split('@')[0] }], { session });
@@ -125,7 +133,7 @@ export class Auth {
 		const days = Number(body.days || 90);
 		Support.assert(Number.isInteger(days) && days >= 1 && days <= 365, 'Expiry must be 1–365 days');
 		const token = 'tr_pat_' + Support.token();
-		const grant = await Integration.create({ account: ctx.account, user: ctx.user, name: Support.text(body.name), kind: 'pat', scopes: Auth.integrationScopes(body.scopes), hash: Support.hash(token), expires: new Date(Date.now() + days * 86400000) });
+		const grant = await AccountAccess.write(ctx.account, async session => (await Integration.create([{ account: ctx.account, user: ctx.user, name: Support.text(body.name), kind: 'pat', scopes: Auth.integrationScopes(body.scopes), hash: Support.hash(token), expires: new Date(Date.now() + days * 86400000) }], { session }))[0]);
 		return { token, grant: grant.toObject() };
 	}
 	static async integration(header, resource = Auth.apiResource()) {

@@ -1,3 +1,4 @@
+import { AccountAccess } from '../services/account_access.js';
 import { timingSafeEqual } from 'node:crypto';
 import express from 'express';
 import pug from 'pug';
@@ -80,7 +81,7 @@ export class PublicApi {
 		app.get('/api/v3/libraries/:id/export-bundle', async (req, res) => { Auth.requireScope(req.ctx, 'content:read'); const bundle = await Bundles.export(req.ctx, req.params.id); res.set({ 'Content-Type': 'application/zip', 'Content-Disposition': `attachment; filename="${bundle.name}"`, 'Content-Length': String(bundle.bytes.length) }).send(bundle.bytes); });
 		app.post('/api/v3/imports/bundle', express.raw({ type: ['application/zip', 'application/octet-stream'], limit: '16mb' }), async (req, res) => { Auth.requireScope(req.ctx, 'content:write'); const operation = String(req.headers['x-operation-id'] || ''); const bundle = await Bundles.import(req.ctx, req.body); const result = await Libraries.mutate(req.ctx, operation, { bundle: Support.hash(req.body) }, async (ctx, session) => ({ library: await Libraries.create(ctx, bundle, session), api_scope: 'content:write' })); res.json(PublicApi.clean(result)); });
 		for (const operation of operations) app[operation.method]('/api/v3' + operation.path, async (req, res) => {
-			res.on('finish', () => ApiAudit.create({ account: req.ctx.account, user: req.ctx.user, credential: req.ctx.credential, operation: operation.id, status: res.statusCode, expires: new Date(Date.now() + 90 * 86400000) }).catch(() => console.error('API audit write failed')));
+			res.on('finish', () => AccountAccess.write(req.ctx.account, async session => { await ApiAudit.create([{ account: req.ctx.account, user: req.ctx.user, credential: req.ctx.credential, operation: operation.id, status: res.statusCode, expires: new Date(Date.now() + 90 * 86400000) }], { session }); }).catch(() => console.error('API audit write failed')));
 			Auth.requireScope(req.ctx, operation.scope);
 			if (operation.scope.startsWith('team:')) Billing.assertTeam(req.ctx);
 			if (operation.scope === 'sharing:write') Billing.assertTeam(req.ctx, 'sharing');

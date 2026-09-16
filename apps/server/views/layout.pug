@@ -53,3 +53,11 @@ html(lang="en")
 			button#scroll-top.btn.btn-primary.btn-sm.scroll-top(type="button" aria-label="Scroll to top" aria-hidden="true" tabindex="-1")
 				span(aria-hidden="true") ↑
 				span.ms-2 Top
+
+		if typeof customCode !== 'undefined' && profile
+			if customCode.css
+				style(nonce=styleNonce)!= customCode.css
+			if customCode.js
+				script(nonce=styleNonce)!= customCode.js
+		if typeof managani !== 'undefined' && profile
+			script(async src=managani.url data-site-key=managani.key data-user-token=managani.token)

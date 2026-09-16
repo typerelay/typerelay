@@ -1,3 +1,5 @@
+import { AdminSettings } from './admin_settings.js';
+import { AccountAccess } from './account_access.js';
 import { Member, Group, User, Ticket, Account, Device } from '../model/index.js';
 import { Support } from './support.js';
 import { Auth } from './auth.js';
@@ -15,8 +17,9 @@ export class Team {
 		email = Support.text(email, 254).toLowerCase();
 		Support.assert(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email), 'Invalid email');
 		const token = Support.token();
-		const invitation = await Ticket.create({ hash: Support.hash(token), kind: 'invite', email, account: ctx.account, expires: new Date(Date.now() + 7 * 86400000) });
-		await Auth.mail.sendMail({ to: email, subject: 'Join your TypeRelay team', text: Auth.origin + '/?invite=' + token });
+		let invitation;
+		await AccountAccess.write(ctx.account, async session => { [invitation] = await Ticket.create([{ hash: Support.hash(token), kind: 'invite', email, account: ctx.account, expires: new Date(Date.now() + 7 * 86400000) }], { session }); });
+		await AdminSettings.send('invite', email, { url: Auth.origin + '/?invite=' + token });
 		return { invited: email, invitation: String(invitation._id) };
 	}
 	static async accept(ctx, token, session) {
@@ -24,6 +27,8 @@ export class Team {
 		const ticket = await Ticket.findOneAndDelete({ hash: Support.hash(token), kind: 'invite', email: user.email, expires: { $gt: new Date() } }, { session }).lean();
 		Support.assert(ticket, 'Invitation invalid, expired, or for another email');
 		const account = await Account.findById(ticket.account).session(session).lean();
+		AccountAccess.assert(account);
+		await User.updateOne({ _id: ctx.user }, { $inc: { activity_sequence: 1 } }, { session });
 		await Billing.assertSeatCapacity({ account: String(ticket.account), entitlements: Billing.entitlements(account) }, 1, session);
 		await Member.updateOne({ account: ticket.account, user: ctx.user }, { $setOnInsert: { role: 'member' } }, { upsert: true, session });
 		await Support.change(ticket.account, null, 'membership', session);

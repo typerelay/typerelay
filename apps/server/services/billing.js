@@ -1,4 +1,5 @@
 import Stripe from 'stripe';
+import { AccountAccess } from './account_access.js';
 import pug from 'pug';
 import { randomBytes } from 'node:crypto';
 import { Account, Device, Library, Member, Snippet, Ticket, User } from '../model/index.js';
@@ -41,6 +42,16 @@ export class Billing {
 	}
 
 	static entitlements(account, now = new Date()) {
+		const base = Billing.baseEntitlements(account, now);
+		const override = account?.admin_override;
+		const result = override?.plan ? { ...Billing.plans[override.plan], plan: override.plan, billing_enabled: base.billing_enabled, trial: false } : { ...base };
+		result.limits = { ...result.limits };
+		for (const key of ['people', 'snippets', 'libraries', 'machines']) if (Number.isSafeInteger(override?.limits?.[key]) && override.limits[key] >= 0) result.limits[key] = override.limits[key];
+		result.admin_override = Boolean(override?.plan || Object.values(override?.limits || {}).some(value => value !== null && value !== undefined));
+		result.machine_override = override?.limits?.machines != null;
+		return result;
+	}
+	static baseEntitlements(account, now = new Date()) {
 		if (!Billing.enabled()) return { ...Billing.plans.team, plan: 'team', trial: false, billing_enabled: false, limits: { people: 0, snippets: 0, libraries: 0, machines: 0 } };
 		const billing = account?.billing || {};
 		const trialEnds = billing.trial_ends_at ? new Date(billing.trial_ends_at) : null;
@@ -65,11 +76,13 @@ export class Billing {
 	static async account(id, session = null, secrets = false) {
 		let query = Account.findById(id).session(session || null);
 		if (secrets) query = query.select('+billing.stripe_customer_id +billing.stripe_subscription_id +billing.stripe_free_subscription_id +billing.scheduled_change.schedule_id +white_label.cloudflare_hostname_id +white_label.logo.storage_key +white_label.favicon.storage_key +white_label.login_logo.storage_key');
-		return query.lean();
+		const account = await query.lean();
+		if (account) AccountAccess.assert(account);
+		return account;
 	}
 
 	static assertCapability(ctx, capability, message = '') {
-		if (!Billing.enabled() || ctx?.entitlements?.capabilities?.[capability]) return;
+		if (ctx?.entitlements?.capabilities?.[capability]) return;
 		throw Billing.error(403, message || `${Billing.plans.team.name} or Pro access required`, 'plan_required', { capability, upgrade_url: '/#settings-subscription' });
 	}
 
@@ -89,24 +102,25 @@ export class Billing {
 
 	static assertLimit(ctx, resource, current, increase = 1) {
 		const limit = ctx?.entitlements?.limits?.[resource] || 0;
-		if (!Billing.enabled() || !limit || current + increase <= limit) return;
-		throw Billing.error(409, `${Billing.plans.free.name} allows ${limit} ${resource}`, 'plan_limit', { resource, limit, usage: current, upgrade_url: '/#settings-subscription' });
+		if (!limit || current + increase <= limit) return;
+		throw Billing.error(409, `Account allows ${limit} ${resource}`, 'plan_limit', { resource, limit, usage: current, upgrade_url: '/#settings-subscription' });
 	}
 
 	static async assertResourceIncrease(ctx, resource, increase, session = null) {
-		if (!increase || !Billing.enabled()) return;
+		if (!increase) return;
 		const usage = await Billing.usage(ctx.account, session);
 		Billing.assertLimit(ctx, resource, usage[resource], increase);
 	}
 
 	static async assertDeviceEnrollment(ctx, session = null) {
-		if (!Billing.enabled() || !ctx.entitlements.limits.machines) return;
+		if (!ctx.entitlements.limits.machines) return;
 		const count = await Device.countDocuments({ account: ctx.account, user: ctx.user, revoked: false }).session(session || null);
 		Billing.assertLimit(ctx, 'machines', count, 1);
 	}
 
 	static async assertDevice(ctx, device, session = null) {
-		if (!Billing.enabled() || !ctx.entitlements.limits.machines) return;
+		if (!ctx.entitlements.limits.machines) return;
+		if (ctx.entitlements.machine_override) return;
 		const primary = await Device.findOne({ account: ctx.account, user: ctx.user, revoked: false }).sort({ createdAt: 1, _id: 1 }).select('_id').session(session || null).lean();
 		if (!primary || String(primary._id) === String(device._id || device)) return;
 		throw Billing.error(403, 'Free allows one connected machine', 'plan_limit', { resource: 'machines', limit: 1, upgrade_url: '/#settings-subscription' });
@@ -116,6 +130,7 @@ export class Billing {
 		Billing.assertTeam(ctx);
 		const account = await Billing.account(ctx.account, session);
 		const usage = await Billing.usage(ctx.account, session);
+		if (account?.admin_override?.plan || account?.admin_override?.limits?.people != null) { Billing.assertLimit(ctx, 'people', usage.people + usage.invitations, increase); return; }
 		const capacity = Math.max(Billing.plans.team.seats, Number(account?.billing?.seat_quantity) || Billing.plans.team.seats);
 		if (usage.people + usage.invitations + increase <= capacity) return;
 		throw Billing.error(409, `Team has ${capacity} purchased seats`, 'plan_limit', { resource: 'people', limit: capacity, usage: usage.people + usage.invitations, upgrade_url: '/#settings-subscription' });
@@ -147,6 +162,7 @@ export class Billing {
 	}
 
 	static async ensureFreeSubscription(account, user = null, options = {}) {
+		if (account?.deletion?.requested_at || account?.is_active === false) return null;
 		if (!Billing.enabled() || !process.env.STRIPE_SECRET_KEY || !Billing.priceId('free')) return null;
 		account = account?.billing?.stripe_customer_id !== undefined ? account : await Billing.account(account._id || account, null, true);
 		if (!account || account.billing?.stripe_free_subscription_id) return account?.billing?.stripe_free_subscription_id || null;
@@ -170,6 +186,9 @@ export class Billing {
 	}
 
 	static async initializeAccount(account, user, options = {}) {
+		return AccountAccess.run(account._id || account, () => Billing.provisionBilling(account, user, options));
+	}
+	static async provisionBilling(account, user, options = {}) {
 		if (!Billing.enabled() || !process.env.STRIPE_SECRET_KEY) return null;
 		account = await Billing.account(account._id || account, null, true);
 		await Billing.ensureCustomer(account, user, options);
@@ -190,6 +209,7 @@ export class Billing {
 		if (!price) throw Billing.error(503, `${Billing.plans[plan].name} Stripe Price is not configured`, 'billing_unavailable');
 		const seats = Billing.checkoutSeats(plan, input.seats);
 		const account = await Billing.account(accountId, null, true);
+		if (account) await AccountAccess.acquire(account._id);
 		if (account.billing?.stripe_subscription_id && ['active', 'past_due', 'trialing'].includes(account.billing.status) && account.billing.trial_source !== 'no_card') throw Billing.error(409, 'Use subscription management to change an active plan', 'subscription_active');
 		const stripe = options.stripe || Billing.stripe();
 		const customer = await Billing.ensureCustomer(account, user, { stripe });
@@ -214,6 +234,7 @@ export class Billing {
 
 	static async portal(accountId, returnUrl, options = {}) {
 		const account = await Billing.account(accountId, null, true);
+		if (account) await AccountAccess.acquire(account._id);
 		const user = options.user || await Billing.owner(accountId);
 		const stripe = options.stripe || Billing.stripe();
 		const customer = account.billing?.stripe_customer_id || await Billing.ensureCustomer(account, user, { stripe });
@@ -230,6 +251,7 @@ export class Billing {
 		const member = accountId ? await Member.exists({ account: accountId, user: userId }) : null;
 		if (!member) throw Billing.error(403, 'Checkout account access denied', 'billing_mismatch');
 		const account = await Billing.account(accountId, null, true);
+		if (account) await AccountAccess.acquire(account._id);
 		if (String(checkout.customer?.id || checkout.customer) !== String(account.billing?.stripe_customer_id) || String(checkout.client_reference_id) !== String(account._id)) throw Billing.error(409, 'Checkout ownership mismatch', 'billing_mismatch');
 		const subscription = await stripe.subscriptions.retrieve(checkout.subscription.id || checkout.subscription);
 		await Billing.applySubscription(account, subscription, { stripe });
@@ -257,6 +279,7 @@ export class Billing {
 
 	static async change(accountId, input = {}, options = {}) {
 		const account = await Billing.account(accountId, null, true);
+		if (account) await AccountAccess.acquire(account._id);
 		const target = ['pro', 'team'].includes(input.plan) ? input.plan : null;
 		if (!target) throw Billing.error(400, 'Choose Pro or Team', 'invalid_plan');
 		const seats = Billing.checkoutSeats(target, input.seats);
@@ -287,6 +310,7 @@ export class Billing {
 	static async startTrial(accountId, now = new Date()) {
 		if (!Billing.enabled()) throw Billing.error(404, 'Billing is not available', 'not_found');
 		const account = await Billing.account(accountId, null, true);
+		if (account) await AccountAccess.acquire(account._id);
 		if (!account || Billing.entitlements(account, now).plan !== 'free' || account.billing?.trial_started_at) throw Billing.error(409, 'The Pro trial is no longer available', 'trial_unavailable');
 		const ends = new Date(now.getTime() + Billing.trialDays() * 86400000);
 		const result = await Account.updateOne({ _id: accountId, plan: { $in: ['free', null] }, 'billing.trial_started_at': null, $or: [{ 'billing.status': { $in: ['incomplete', 'trial_expired', 'canceled'] } }, { 'billing.status': { $exists: false } }] }, { $set: { plan: 'free', 'billing.status': 'trialing', 'billing.trial_source': 'no_card', 'billing.trial_started_at': now, 'billing.trial_ends_at': ends, 'billing.status_changed_at': now, 'billing.helpmonks_sequence.status': 'pending', 'billing.helpmonks_sequence.attempts': 0, 'billing.helpmonks_sequence.next_attempt_at': now, 'billing.helpmonks_sequence.last_error': '', 'billing.helpmonks_sequence.contact_id': '', 'billing.helpmonks_sequence.enrolled_at': null } });
@@ -296,7 +320,7 @@ export class Billing {
 
 	static async runTrialExpiry(now = new Date(), options = {}) {
 		const accountModel = options.accountModel || Account;
-		const result = await accountModel.updateMany({ plan: 'free', 'billing.status': 'trialing', 'billing.trial_source': 'no_card', 'billing.trial_ends_at': { $lte: now } }, { $set: { 'billing.status': 'trial_expired', 'billing.status_changed_at': now } });
+		const result = await accountModel.updateMany({ ...AccountAccess.available, plan: 'free', 'billing.status': 'trialing', 'billing.trial_source': 'no_card', 'billing.trial_ends_at': { $lte: now } }, { $set: { 'billing.status': 'trial_expired', 'billing.status_changed_at': now } });
 		return { expired: result.modifiedCount || 0 };
 	}
 
@@ -319,7 +343,7 @@ export class Billing {
 		if (account.billing?.scheduled_change?.plan === plan && Number(account.billing.scheduled_change.seat_quantity) === Number(item.quantity || 1)) Object.assign(update, { 'billing.scheduled_change': null });
 		await Account.updateOne({ _id: account._id }, { $set: update });
 		Object.assign(account, { plan: update.plan, billing: { ...account.billing, status, price_id: item.price.id, seat_quantity: Number(item.quantity || 1), stripe_subscription_id: subscription.id } });
-		if (update.plan !== 'team') {
+		if (Billing.entitlements(account).plan !== 'team') {
 			const { WhiteLabel } = await import('./white_label.js');
 			await WhiteLabel.disable(account, options).catch(error => console.error(`White-label disable after downgrade failed: ${error.message}`));
 		}
@@ -343,7 +367,12 @@ export class Billing {
 		const event = options.event || stripe.webhooks.constructEvent(rawBody, signature, process.env.STRIPE_WEBHOOK_SECRET);
 		const object = event.data.object;
 		const account = await Billing.findWebhookAccount(object);
-		if (!account) return { handled: false };
+		if (!account || account.deletion?.requested_at) return { handled: false };
+		return AccountAccess.run(account._id, () => Billing.processWebhook(account, event, stripe), true);
+	}
+
+	static async processWebhook(account, event, stripe) {
+		const object = event.data.object;
 		if (event.type === 'checkout.session.completed' && object.subscription) {
 			const subscription = await stripe.subscriptions.retrieve(object.subscription.id || object.subscription);
 			if (!Billing.isFreeSubscription(subscription)) { await Billing.applySubscription(account, subscription, { stripe }); await Billing.cancelFreeSubscription(account, { stripe }); }

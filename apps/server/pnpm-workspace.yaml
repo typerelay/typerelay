@@ -1,5 +1,9 @@
 allowBuilds:
   cbor-extract: false
   esbuild: true
+  protobufjs: false
+  vue-demi: false
 overrides:
   hashery: 3.0.1
+  vitepress-openapi: 0.2.4
+  '@types/node@^22.0.0': 22.20.2
