@@ -1,29 +1,53 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import managani from '@managani/node';
+import { Parser } from 'htmlparser2';
+import pug from 'pug';
+import { emailTemplates } from '../config/email_templates.js';
 import { mongoose, Account, SystemSetting, User, AdminAudit, ApiAudit } from '../model/index.js';
 import { Support } from './support.js';
 import { Auth } from './auth.js';
 
 export class AdminSettings {
-	static templates = {
-		login: { name: 'Sign in', subject: 'Sign in to Type Relay', text: '{{url}}', variables: ['url'] },
-		signup: { name: 'Verify signup', subject: 'Verify your Type Relay account', text: '{{url}}', variables: ['url'] },
-		'email-change': { name: 'Verify email change', subject: 'Confirm your Type Relay email address', text: '{{url}}', variables: ['url'] },
-		'password-reset': { name: 'Password reset', subject: 'Reset your Type Relay password', text: '{{url}}', variables: ['url'] },
-		invite: { name: 'Team invitation', subject: 'Join your Type Relay team', text: '{{url}}', variables: ['url'] },
-	};
+	static templates = emailTemplates;
 	static async get(key, fallback = {}) { return (await SystemSetting.findOne({ key }).lean())?.value ?? fallback; }
 	static async set(key, value) { await SystemSetting.updateOne({ key }, { $set: { value }, $inc: { revision: 1 } }, { upsert: true }); return value; }
 	static validateTemplate(key, input) {
 		const template = AdminSettings.templates[key]; Support.assert(template, 'Unknown template', 404);
 		Support.assert(typeof input.subject === 'string' && input.subject.trim() && input.subject.length <= 200 && !/[\r\n]/.test(input.subject), 'Enter a subject up to 200 characters');
 		Support.assert(typeof input.text === 'string' && input.text.length <= 20000 && input.text.includes('{{url}}'), 'Message must include {{url}} and be at most 20,000 characters');
-		for (const match of (input.subject + input.text).matchAll(/{{\s*([^{}]+)\s*}}/g)) Support.assert(template.variables.includes(match[1].trim()), 'Unknown template variable: ' + match[1]);
-		return { subject: input.subject.trim(), text: input.text };
+		const html = input.html ?? '';
+		Support.assert(typeof html === 'string' && html.length <= 50000 && (!html.trim() || html.includes('{{url}}')), 'HTML must include {{url}} and be at most 50,000 characters');
+		for (const match of (input.subject + input.text + html).matchAll(/{{\s*([^{}]+)\s*}}/g)) Support.assert(template.variables.includes(match[1].trim()), 'Unknown template variable: ' + match[1]);
+		return { subject: input.subject.trim(), text: input.text, html: html.trim() };
 	}
-	static async template(key) { Support.assert(AdminSettings.templates[key], 'Unknown template', 404); return { key, ...AdminSettings.templates[key], ...await AdminSettings.get('email.' + key) }; }
-	static render(template, variables) { return Object.fromEntries(['subject', 'text'].map(field => [field, template[field].replace(/{{\s*(\w+)\s*}}/g, (_, key) => String(variables[key] || ''))])); }
-	static async send(key, to, variables) { return Auth.mail.sendMail({ to, ...AdminSettings.render(await AdminSettings.template(key), variables) }); }
+	static plainText(html) {
+		let text = ''; let link = ''; let ignored = 0;
+		const parser = new Parser({ onopentag: (name, attributes) => { if (['script', 'style'].includes(name)) ignored++; if (ignored) return; if (name === 'a') link = attributes.href || ''; if (name === 'br') text += '\n'; if (name === 'li') text += '\n- '; }, ontext: value => { if (!ignored) text += value; }, onclosetag: name => { if (['script', 'style'].includes(name)) { ignored = Math.max(0, ignored - 1); return; } if (ignored) return; if (name === 'a' && link) { text += ': ' + link; link = ''; } if (['p', 'div', 'ul', 'ol', 'h1', 'h2', 'h3'].includes(name)) text += '\n\n'; } }, { decodeEntities: true });
+		parser.end(html);
+		return text.replace(/\n{3,}/g, '\n\n').trim();
+	}
+	static async template(key) {
+		const defaults = AdminSettings.templates[key]; Support.assert(defaults, 'Unknown template', 404);
+		const stored = await AdminSettings.get('email.' + key);
+		const placeholder = stored.text?.trim() === '{{url}}' && !stored.html;
+		const text = typeof stored.text === 'string' && !placeholder ? stored.text : AdminSettings.plainText(defaults.html);
+		const html = placeholder ? defaults.html : typeof stored.html === 'string' ? stored.html : typeof stored.text === 'string' ? '' : defaults.html;
+		return { key, ...defaults, subject: stored.subject || defaults.subject, text, html };
+	}
+	static escape(value) { return String(value).replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]); }
+	static render(template, variables) {
+		const result = Object.fromEntries(['subject', 'text', ...(template.html ? ['html'] : [])].map(field => [field, template[field].replace(/{{\s*(\w+)\s*}}/g, (_, key) => field === 'html' ? AdminSettings.escape(variables[key] ?? '') : String(variables[key] ?? ''))]));
+		result.subject = result.subject.replace(/[\r\n]+/g, ' ');
+		return result;
+	}
+	static samples() { return { url: Auth.origin + '/example-link', name: 'Alex', inviterName: 'Sam', tenantName: 'Example team' }; }
+	static preview(template) { const result = AdminSettings.render(template, AdminSettings.samples()); return { ...result, preview_html: pug.renderFile('./views/ajax/admin-email-preview.pug', { message: result }) }; }
+	static async send(key, to, variables) {
+		const template = await AdminSettings.template(key);
+		const values = { ...variables };
+		if (template.variables.includes('name') && !values.name) values.name = (await User.findOne({ email: to }).select('name').lean())?.name || 'there';
+		return Auth.mail.sendMail({ to, ...AdminSettings.render(template, values) });
+	}
 	static key() { const raw = process.env.GIT_ENCRYPTION_KEY || ''; const key = /^[a-f0-9]{64}$/i.test(raw) ? Buffer.from(raw, 'hex') : Buffer.from(raw); Support.assert(key.length === 32, 'Configure GIT_ENCRYPTION_KEY with 32 bytes or 64 hex characters', 503); return key; }
 	static encrypt(value) { const iv = randomBytes(12); const cipher = createCipheriv('aes-256-gcm', AdminSettings.key(), iv); const data = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]); return [iv, cipher.getAuthTag(), data].map(item => item.toString('hex')).join(':'); }
 	static decrypt(value) { const [iv, tag, data] = value.split(':').map(item => Buffer.from(item, 'hex')); const cipher = createDecipheriv('aes-256-gcm', AdminSettings.key(), iv); cipher.setAuthTag(tag); return Buffer.concat([cipher.update(data), cipher.final()]).toString('utf8'); }

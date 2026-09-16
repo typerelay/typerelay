@@ -50,7 +50,7 @@ export class Auth {
 			await User.updateOne({ email }, { $inc: { activity_sequence: 1 } }, { session });
 			await Ticket.create([{ hash: Support.hash(token), kind: 'login', email, ...(options.account ? { account: options.account } : {}), data, expires: new Date(Date.now() + 900000) }], { session });
 		});
-		await AdminSettings.send(name ? 'signup' : 'login', email, { url: origin + '/auth/callback?token=' + token });
+		await AdminSettings.send(name ? 'signup' : 'login', email, { url: origin + '/auth/callback?token=' + token, name: data.name });
 	}
 	static async consume(token) {
 		let user;

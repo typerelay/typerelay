@@ -60,13 +60,13 @@ export class Security {
 		await Security.verifyCode(user, req.body.code);
 		return Security.establish(req, user._id, true);
 	}
-	static async issue(email, kind, data, path, subject) {
+	static async issue(email, kind, data, path, name) {
 		const token = Support.token();
 		await mongoose.connection.transaction(async session => {
 			if (data.user) { const user = await User.updateOne({ _id: data.user }, { $inc: { activity_sequence: 1 } }, { session }); Support.assert(user.matchedCount, 'User no longer exists', 409); }
 			await Ticket.create([{ hash: Support.hash(token), kind, email, data, expires: new Date(Date.now() + 900000) }], { session });
 		});
-		await AdminSettings.send(kind, email, { url: Auth.origin + path + '?token=' + token });
+		await AdminSettings.send(kind, email, { url: Auth.origin + path + '?token=' + token, name });
 	}
 	static async profile(req) {
 		const name = Support.text(req.body.name);
@@ -75,7 +75,7 @@ export class Security {
 		if (email !== user.email) {
 			Security.fresh(req);
 			Support.assert(!await User.exists({ email }), 'Email address unavailable', 409);
-			await Security.issue(email, 'email-change', { user: String(user._id), old: user.email, version: user.auth_version || 0 }, '/auth/email', 'Confirm your TypeRelay email address');
+			await Security.issue(email, 'email-change', { user: String(user._id), old: user.email, version: user.auth_version || 0 }, '/auth/email', name);
 		}
 		await User.updateOne({ _id: user._id }, { $set: { name } });
 		return { name, email: user.email, pending_email: email !== user.email ? email : null };
@@ -103,7 +103,7 @@ export class Security {
 	static async forgot(email) {
 		email = Security.email(email);
 		const user = await User.findOne({ email }).lean();
-		if (user) await Security.issue(email, 'password-reset', { user: String(user._id), version: user.auth_version || 0 }, '/auth/reset-password', 'Reset your TypeRelay password');
+		if (user) await Security.issue(email, 'password-reset', { user: String(user._id), version: user.auth_version || 0 }, '/auth/reset-password', user.name);
 		return { message: 'If an account exists, a password reset link has been sent.' };
 	}
 	static async redeemReset(req) {

@@ -3,11 +3,19 @@ form(data-admin-template=template.key)
 		label.form-label(for='template-subject-' + template.key) Subject
 		input.form-control.form-control-sm(id='template-subject-' + template.key name="subject" value=template.subject required maxlength="200")
 	.mb-3
-		label.form-label(for='template-text-' + template.key) Message
-		textarea.form-control.form-control-sm(id='template-text-' + template.key name="text" rows="12" required maxlength="20000")= template.text
-	p.text-muted Required variable: {{url}}
+		label.form-label(for='template-html-' + template.key) HTML body
+		textarea.form-control.form-control-sm.font-monospace(id='template-html-' + template.key name="html" rows="12" maxlength="50000" spellcheck="false")= template.html || ''
+		div.form-text Leave blank to send only the plain-text message.
+	.mb-3
+		label.form-label(for='template-text-' + template.key) Plain-text fallback
+		textarea.form-control.form-control-sm(id='template-text-' + template.key name="text" rows="8" required maxlength="20000")= template.text
+	p.text-muted Both bodies must include {{url}} when supplied. Available variables:
+	.d-flex.flex-wrap.gap-2.mb-3
+		each variable in template.variables || ['url']
+			code= '{{' + variable + '}}'
 	.mb-5
 		button.btn.btn-outline-secondary.btn-sm(type="button" data-template-preview=template.key) Preview unsaved message
+		iframe.admin-email-preview.border.rounded.mt-3.w-100(title='HTML preview: ' + template.name sandbox="" referrerpolicy="no-referrer" data-template-preview-frame hidden)
 		pre.mt-3.text-wrap(data-template-preview-output)
 	.mb-5
 		label.form-label(for='test-email-' + template.key) Test recipient

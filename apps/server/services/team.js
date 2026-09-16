@@ -19,7 +19,8 @@ export class Team {
 		const token = Support.token();
 		let invitation;
 		await AccountAccess.write(ctx.account, async session => { [invitation] = await Ticket.create([{ hash: Support.hash(token), kind: 'invite', email, account: ctx.account, expires: new Date(Date.now() + 7 * 86400000) }], { session }); });
-		await AdminSettings.send('invite', email, { url: Auth.origin + '/?invite=' + token });
+		const [inviter, account] = await Promise.all([User.findById(ctx.user).select('name').lean(), Account.findById(ctx.account).select('name').lean()]);
+		await AdminSettings.send('invite', email, { url: Auth.origin + '/?invite=' + token, inviterName: inviter?.name || 'Your team', tenantName: account?.name || 'your team' });
 		return { invited: email, invitation: String(invitation._id) };
 	}
 	static async accept(ctx, token, session) {

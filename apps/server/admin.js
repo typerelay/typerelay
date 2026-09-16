@@ -69,8 +69,8 @@ export class Admin {
 			Support.assert(AdminSettings.templates[req.params.key], 'Unknown template', 404); await AdminSettings.set('email.' + req.params.key, {}); await AdminSettings.audit(res.locals.adminEmail, 'email-template.reset');
 			res.json(await Admin.templateResult(req.params.key));
 		});
-		router.post('/api/email-templates/:key/preview', (req, res) => res.json(AdminSettings.render(AdminSettings.validateTemplate(req.params.key, req.body), { url: Auth.origin + '/example-link' })));
-		router.post('/api/email-templates/:key/test', rateLimit({ windowMs: 60000, limit: 10 }), async (req, res) => { await AdminSettings.send(req.params.key, Security.email(req.body.email), { url: Auth.origin + '/example-link' }); await AdminSettings.audit(res.locals.adminEmail, 'email-template.test'); res.json({ message: 'Test email sent' }); });
+		router.post('/api/email-templates/:key/preview', (req, res) => res.json(AdminSettings.preview(AdminSettings.validateTemplate(req.params.key, req.body))));
+		router.post('/api/email-templates/:key/test', rateLimit({ windowMs: 60000, limit: 10 }), async (req, res) => { await AdminSettings.send(req.params.key, Security.email(req.body.email), AdminSettings.samples()); await AdminSettings.audit(res.locals.adminEmail, 'email-template.test'); res.json({ message: 'Test email sent' }); });
 		router.get('/settings', async (req, res) => res.render('admin/settings', { managani: await AdminSettings.managani(), customCode: await AdminSettings.customCode(), status: AdminSettings.status() }));
 		router.get('/api/settings', async (req, res) => res.json({ managani: await AdminSettings.managani(), custom_code: await AdminSettings.customCode(), status: AdminSettings.status() }));
 		router.put('/api/settings/managani', async (req, res) => { const settings = await AdminSettings.saveManagani(req.body); await AdminSettings.audit(res.locals.adminEmail, 'settings.managani'); res.json({ settings }); });

@@ -9,6 +9,6 @@ block content
 			each template, index in templates
 				section(id='templates-panel-' + template.key role="tabpanel" aria-labelledby='templates-nav-' + template.key data-admin-panel-content=template.key hidden=index !== 0)
 					h2.mb-3= template.name
-					p.text-muted.mb-5 Plain-text transactional message. Links and expiration remain managed by Type Relay.
+					p.text-muted.mb-5 HTML email with a plain-text fallback. Links and expiration remain managed by Type Relay.
 					- const inline = true
 					include ../ajax/admin-template-form
