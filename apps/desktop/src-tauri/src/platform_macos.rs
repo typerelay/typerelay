@@ -32,7 +32,7 @@ impl NativeNotifications {
         receiver.recv_timeout(Duration::from_secs(2)).ok()
     }
     pub fn open_settings()->Result<()> {let status=Command::new("/usr/bin/open").arg("x-apple.systempreferences:com.apple.preference.notifications").status()?;ensure!(status.success(),"Could not open Notifications settings");Ok(())}
-    pub fn show(message:&str)->Result<()> {
+    pub fn show(message:&str,error:bool)->Result<()> {
         use objc2::{AnyThread,runtime::ProtocolObject};
         use objc2_foundation::{NSError,NSString};
         use objc2_user_notifications::{UNAuthorizationOptions,UNMutableNotificationContent,UNNotificationRequest,UNUserNotificationCenter};
@@ -43,7 +43,7 @@ impl NativeNotifications {
         center.requestAuthorizationWithOptions_completionHandler(UNAuthorizationOptions::Alert,&block2::RcBlock::new(move|granted:objc2::runtime::Bool,error:*mut NSError|{let result=if error.is_null(){Ok(granted.as_bool())}else{Err(unsafe{&*error}.localizedDescription().to_string())};let _=sender.send(result);}));
         let granted=receiver.recv_timeout(Duration::from_secs(60)).context("Notification permission request timed out")?.map_err(anyhow::Error::msg)?;
         ensure!(granted,"Enable TypeRelay notifications in System Settings → Notifications");
-        let content=UNMutableNotificationContent::new();content.setTitle(&NSString::from_str("TypeRelay"));content.setBody(&NSString::from_str(message));
+        let content=UNMutableNotificationContent::new();content.setTitle(&NSString::from_str(if error{"TypeRelay — Error"}else{"TypeRelay"}));content.setBody(&NSString::from_str(message));
         let request=UNNotificationRequest::requestWithIdentifier_content_trigger(&NSString::from_str(&uuid::Uuid::new_v4().to_string()),&content,None);
         let(sender,receiver)=std::sync::mpsc::sync_channel(1);
         center.addNotificationRequest_withCompletionHandler(&request,Some(&block2::RcBlock::new(move|error:*mut NSError|{let result=if error.is_null(){Ok(())}else{Err(unsafe{&*error}.localizedDescription().to_string())};let _=sender.send(result);} )));

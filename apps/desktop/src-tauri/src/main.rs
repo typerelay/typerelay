@@ -8,8 +8,7 @@ use std::{sync::{Mutex,atomic::{AtomicBool,Ordering}},path::PathBuf};
 use tauri::{Manager,Emitter};
 use typerelay_client::{panel::{Panel,PanelSettings,Hit},editor::Paths,database::Database,sync::Sync};
 use tauri_plugin_autostart::ManagerExt as _;
-#[cfg(not(target_os="linux"))]
-use tauri_plugin_notification::NotificationExt;
+use tauri_plugin_dialog::DialogExt;
 #[cfg(not(target_os="linux"))]
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
@@ -24,16 +23,18 @@ impl Runtime {
 	#[cfg(target_os="macos")]
 	fn update_permission_status(&self,accessibility:bool,input_monitoring:bool) {let message=Self::permission_message(accessibility,input_monitoring);let mut status=self.status.lock().unwrap();if let Some(message)=message{*status=message.into();}else if status.starts_with("TypeRelay needs Accessibility")||status.starts_with("TypeRelay needs Input Monitoring"){status.clear();}}
 	#[cfg(any(target_os="windows",target_os="macos"))]
-	fn start_expansion(app:&tauri::AppHandle)->Result<()> {let state=app.state::<Runtime>();if state.expansion_started.swap(true,Ordering::SeqCst){return Ok(());}let result=(||{let requests=platform::ExpansionSession::start(state.root.join("snippets"),state.root.join("settings.yml"))?;let handle=app.clone();std::thread::spawn(move||for request in requests{if let Err(error)=Runtime::expand(&handle,request){let message=format!("Expansion failed: {error:#}");*handle.state::<Runtime>().status.lock().unwrap()=message.clone();let _=handle.notification().builder().title("TypeRelay").body(&message).show();}});Ok(())})();if result.is_err(){state.expansion_started.store(false,Ordering::SeqCst);}result}
+	fn start_expansion(app:&tauri::AppHandle)->Result<()> {let state=app.state::<Runtime>();if state.expansion_started.swap(true,Ordering::SeqCst){return Ok(());}let result=(||{let requests=platform::ExpansionSession::start(state.root.join("snippets"),state.root.join("settings.yml"))?;let handle=app.clone();std::thread::spawn(move||for request in requests{if let Err(error)=Runtime::expand(&handle,request){let message=format!("Expansion failed: {error:#}");Runtime::notice(&handle,&message,true);}});Ok(())})();if result.is_err(){state.expansion_started.store(false,Ordering::SeqCst);}result}
     fn hide_on_focus_loss()->bool { cfg!(not(target_os="linux")) }
-    fn sync_notice(_app:&tauri::AppHandle,message:&str,running:bool) {
-        let _=_app.emit("sync-notice",json!({"running":running}));
+    fn notice(app:&tauri::AppHandle,message:&str,error:bool) {
         #[cfg(target_os="macos")]
-        if let Err(error)=platform::NativeNotifications::show(message){let message=format!("Native notification unavailable: {error:#}");eprintln!("{message}");*_app.state::<Runtime>().status.lock().unwrap()=message.clone();let _=_app.emit("panel-error",message);}
-        #[cfg(target_os="linux")]
-        if let Err(error)=notify_rust::Notification::new().appname("TypeRelay").summary("TypeRelay").body(message).show(){eprintln!("TypeRelay sync notification unavailable: {error}");}
-        #[cfg(target_os="windows")]
-        if let Err(error)=_app.notification().builder().title("TypeRelay").body(message).show(){eprintln!("TypeRelay sync notification unavailable: {error}");}
+        let result=platform::NativeNotifications::show(message,error);
+        #[cfg(any(target_os="linux",target_os="windows"))]
+        let result={let mut notice=notify_rust::Notification::new();notice.appname("TypeRelay").summary(if error{"TypeRelay — Error"}else{"TypeRelay"}).body(message);if error{notice.urgency(notify_rust::Urgency::Critical).timeout(notify_rust::Timeout::Never).action("dismiss","Dismiss");}#[cfg(target_os="windows")]notice.app_id(&app.config().identifier);notice.show().map(|_|()).map_err(anyhow::Error::from)};
+        if let Err(failure)=result{eprintln!("TypeRelay notification unavailable: {failure:#}");app.dialog().message(format!("{message}\n\nNative notifications are unavailable: {failure:#}")).title("TypeRelay").kind(tauri_plugin_dialog::MessageDialogKind::Error).show(|_|{});}
+    }
+    fn sync_notice(app:&tauri::AppHandle,message:&str,running:bool) {
+        let _=app.emit("sync-notice",json!({"running":running}));
+        Self::notice(app,message,message.starts_with("Sync failed")||message.contains("need attention"));
     }
     fn quit(app:&tauri::AppHandle) {
         if app.state::<Runtime>().busy.load(Ordering::SeqCst) {let _=app.emit("panel-error","Insertion is finishing; try Quit again in a moment");return;}
@@ -224,6 +225,12 @@ fn set_settings_view(app:tauri::AppHandle,enabled:bool){app.state::<Runtime>().s
 #[tauri::command]
 fn dismiss(app:tauri::AppHandle){set_prompt_view(app.clone(),false);Runtime::hide(&app);}
 #[tauri::command]
+async fn notify(app:tauri::AppHandle,message:String,error:bool)->std::result::Result<(),String>{
+    if message.trim().is_empty(){return Ok(());}
+    let message=message.chars().take(4096).collect::<String>();
+    tauri::async_runtime::spawn_blocking(move||Runtime::notice(&app,&message,error)).await.map_err(|e|e.to_string())
+}
+#[tauri::command]
 fn sync_now(app:tauri::AppHandle)->std::result::Result<(),String>{
     if app.state::<Runtime>().syncing.swap(true,Ordering::SeqCst) {return Ok(());}
     std::thread::spawn(move||{
@@ -261,11 +268,11 @@ fn save_settings(app:tauri::AppHandle,config:PanelSettings)->std::result::Result
 }
 #[tauri::command]
 async fn connect(app:tauri::AppHandle,url:String)->std::result::Result<(),String> {
-    *app.state::<Runtime>().status.lock().unwrap()="Complete sign-in in your browser…".into();
+    app.state::<Runtime>().status.lock().unwrap().clear();
     app.state::<Runtime>().settings.store(false,Ordering::SeqCst);Runtime::hide(&app);
     let root=app.state::<Runtime>().root.clone();
     let result=tauri::async_runtime::spawn_blocking(move ||Sync::new(root.clone(),root.join("snippets")).and_then(|sync|sync.connect(&url,true,true)).map_err(|e|e.to_string())).await.map_err(|e|e.to_string())?;
-    *app.state::<Runtime>().status.lock().unwrap()=match &result{Ok(())=>"Connected".into(),Err(error)=>error.clone()};
+    app.state::<Runtime>().status.lock().unwrap().clear();
     app.state::<Runtime>().settings.store(true,Ordering::SeqCst);Runtime::open(&app,true);result
 }
 #[tauri::command]
@@ -306,7 +313,7 @@ fn main() {
     if std::env::args().any(|a|a=="clipboard-serve") {let _=typerelay_client::clipboard::PasteJob::serve_restored();return;}
 	let builder=tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app,args,_|{let callback=Runtime::receive_callback(&args);if args.iter().any(|arg|arg=="--uninstall"){let _=app.autolaunch().disable();Runtime::quit(app);}else if args.iter().any(|arg|arg=="--quit"){Runtime::quit(app);}else if !callback&&!args.iter().any(|arg|arg=="--background"){Runtime::open(app,false);}})).plugin(tauri_plugin_deep_link::init()).plugin(tauri_plugin_autostart::Builder::new().args(["--background"]).build()).plugin(tauri_plugin_dialog::init()).plugin(tauri_plugin_updater::Builder::new().build());
     #[cfg(not(target_os="linux"))]
-    let builder=builder.plugin(tauri_plugin_notification::init()).plugin(tauri_plugin_global_shortcut::Builder::new().build());
+    let builder=builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());
     let result=builder.setup(|app| {
         #[cfg(target_os="macos")]
         app.set_activation_policy(tauri::ActivationPolicy::Accessory);
@@ -351,7 +358,7 @@ fn main() {
     }).on_window_event(|window,event|match event {
         tauri::WindowEvent::CloseRequested{api,..}=>{api.prevent_close();set_prompt_view(window.app_handle().clone(),false);Runtime::hide(window.app_handle());},
         tauri::WindowEvent::Focused(false)if Runtime::hide_on_focus_loss() && !window.app_handle().state::<Runtime>().busy.load(Ordering::SeqCst) && !window.app_handle().state::<Runtime>().settings.load(Ordering::SeqCst) && !window.app_handle().state::<Runtime>().prompting.load(Ordering::SeqCst)=> {Runtime::hide(window.app_handle());},_=>()
-    }).invoke_handler(tauri::generate_handler![initialize,search,insert,copy_snippet,prepare_template,set_prompt_view,set_settings_view,dismiss,sync_now,save_settings,connect,disconnect,libraries,enroll,open_accessibility_settings,open_input_monitoring_settings,open_notification_settings,open_tui,open_web_app]).run(tauri::generate_context!());
+    }).invoke_handler(tauri::generate_handler![initialize,search,insert,copy_snippet,prepare_template,set_prompt_view,set_settings_view,dismiss,notify,sync_now,save_settings,connect,disconnect,libraries,enroll,open_accessibility_settings,open_input_monitoring_settings,open_notification_settings,open_tui,open_web_app]).run(tauri::generate_context!());
     if let Err(error)=result {eprintln!("TypeRelay panel: {error}");std::process::exit(1);}
 }
 

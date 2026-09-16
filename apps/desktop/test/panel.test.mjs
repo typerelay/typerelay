@@ -68,12 +68,12 @@ test('settings mode reaches native focus policy from tray and Back',async()=>{
 test('missing insertion target hint stays out of search and settings',async()=>{
  const f=await Fixture.create();try{
 	await f.panel.open({settings:false,theme:{os:'windows'},status:'Choose another application first'});
-	assert.equal(f.panel.status.textContent,'');
+	assert.equal((f.panel.lastStatus||''),'');
 	await f.panel.open({settings:true,theme:{os:'windows'},status:'Choose another app first'});
-	assert.equal(f.panel.status.textContent,'');
+	assert.equal((f.panel.lastStatus||''),'');
 	f.panel.invoke=async(name)=>name==='initialize'?{config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},theme:{os:'macos'},settings:true,accessibility:true,input_monitoring:true,status:'Choose an application to insert into'}:null;
 	f.dom.window.document.body.dataset.os='macos';f.dom.window.dispatchEvent(new f.dom.window.Event('focus'));await new Promise(resolve=>setTimeout(resolve,0));
-	assert.equal(f.panel.status.textContent,'');
+	assert.equal((f.panel.lastStatus||''),'');
  }finally{f.dom.window.close();}
 });
 
@@ -135,13 +135,13 @@ test('returning from macOS settings identifies the remaining missing permission'
 	assert.equal(f.dom.window.document.querySelector('#accessibility-state').textContent,'Approved');
 	assert.equal(f.dom.window.document.querySelector('#open-accessibility').hidden,true);
 	assert.equal(f.dom.window.document.querySelector('#input-monitoring-card').hidden,false);
-	assert.match(f.panel.status.textContent,/needs Input Monitoring/);
+	assert.match((f.panel.lastStatus||''),/needs Input Monitoring/);
 	f.panel.invoke=async(name)=>name==='initialize'?{config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},theme:{os:'macos'},settings:true,accessibility:true,input_monitoring:true,status:''}:null;
 	f.dom.window.dispatchEvent(new f.dom.window.Event('focus'));await new Promise(resolve=>setTimeout(resolve,0));
 	assert.equal(f.dom.window.document.querySelector('#input-monitoring-card').hidden,false);
 	assert.equal(f.dom.window.document.querySelector('#input-monitoring-state').textContent,'Approved');
 	assert.equal(f.dom.window.document.querySelector('#open-input-monitoring').hidden,true);
-	assert.equal(f.panel.status.textContent,'');
+	assert.equal((f.panel.lastStatus||''),'');
  }finally{f.dom.window.close();}
 });
 
@@ -155,7 +155,7 @@ test('returning from macOS Privacy settings refreshes permissions without a rela
 	assert.equal(f.dom.window.document.querySelector('#accessibility-state').textContent,'Approved');
 	assert.equal(f.dom.window.document.querySelector('#input-monitoring-card').hidden,false);
 	assert.equal(f.dom.window.document.querySelector('#input-monitoring-state').textContent,'Approved');
-	assert.equal(f.panel.status.textContent,'');
+	assert.equal((f.panel.lastStatus||''),'');
  }finally{f.dom.window.close();}
 });
 
@@ -174,10 +174,10 @@ test('template fields wait for confirmation, retain literal answers and clear on
 
 test('manual sync relies on notifications without adding panel status',async()=>{
  const f=await Fixture.create();try{
-  f.panel.status.textContent='';
+  f.panel.lastStatus='';
   await f.dom.window.document.querySelector('#sync').onclick();
   assert.ok(f.calls.some(call=>call.name==='sync_now'));
-  assert.equal(f.panel.status.textContent,'');
+  assert.equal((f.panel.lastStatus||''),'');
   assert.ok(!f.calls.some(call=>call.name==='dismiss'));
  }finally{f.dom.window.close();}
 });
@@ -228,6 +228,32 @@ for(const os of ['macos','windows','linux'])test(`${os} search gear opens native
  }finally{f.dom.window.close();}
 });
 
+test('empty upload selection reports a native error without adding a footer or reloading settings',async()=>{
+ const f=await Fixture.create();try{
+  await f.panel.settings(true);f.panel.settingsPage('sync');const before=f.calls.length;
+  f.dom.window.document.querySelector('#enroll-form').requestSubmit();await new Promise(resolve=>setTimeout(resolve,0));
+  const calls=f.calls.slice(before);assert.deepEqual(JSON.parse(JSON.stringify(calls)),[{name:'notify',args:{message:'Select local libraries first',error:true}}]);
+  assert.equal(f.dom.window.document.querySelector('#status'),null);assert.equal(f.dom.window.document.querySelector('#settings-sync').hidden,false);
+ }finally{f.dom.window.close();}
+});
+
+test('native statuses deduplicate snapshots while explicit repeated errors remain visible',async()=>{
+ const f=await Fixture.create();try{
+  await f.panel.reportStatus('Permission required');await f.panel.reportStatus('Permission required');
+  assert.equal(f.calls.filter(call=>call.name==='notify').length,1);
+  await f.panel.action(async()=>{throw Error('Try again');});await f.panel.action(async()=>{throw Error('Try again');});
+  assert.equal(f.calls.filter(call=>call.name==='notify'&&call.args.message==='Try again'&&call.args.error).length,2);
+  await f.panel.notify('Settings saved');assert.equal(f.calls.filter(call=>call.name==='notify').at(-1).args.error,false);
+ }finally{f.dom.window.close();}
+});
+
+test('notification transport failure does not recursively send more notifications',async()=>{
+ const f=await Fixture.create();try{
+  let attempts=0;f.dom.window.console.error=()=>{};f.panel.invoke=async name=>{if(name==='notify'){attempts++;throw Error('unavailable');}};
+  await f.panel.action(async()=>{throw Error('Original error');});assert.equal(attempts,1);assert.equal(f.panel.busy,false);
+ }finally{f.dom.window.close();}
+});
+
 test('notification settings show permission and remain reachable when enabled',async()=>{
  const f=await Fixture.create();try{
   const config={shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false};
@@ -247,7 +273,7 @@ test('connected clients can disconnect without dismissing the panel',async()=>{
   const button=f.dom.window.document.querySelector('#disconnect');assert.equal(button.hidden,false);assert.equal(button.disabled,false);
   button.click();await new Promise(resolve=>setTimeout(resolve,0));
   assert.ok(f.calls.some(call=>call.name==='disconnect'));
-  assert.equal(f.panel.status.textContent,'Disconnected');
+  assert.equal((f.panel.lastStatus||''),'Disconnected');
   assert.ok(!f.calls.some(call=>call.name==='dismiss'));
   f.panel.configure({config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},connected:false,accessibility:false,input_monitoring:false});assert.equal(button.hidden,false);assert.equal(button.disabled,false);
  }finally{f.dom.window.close();}
@@ -259,7 +285,7 @@ test('authentication handoff does not reopen settings over the browser',async()=
   f.dom.window.document.querySelector('#connect-form').requestSubmit();await new Promise(resolve=>setTimeout(resolve,0));
   assert.ok(f.calls.some(call=>call.name==='connect'));
   assert.equal(f.calls.filter(call=>call.name==='set_settings_view').length,before);
-  assert.equal(f.panel.status.textContent,'Connected');
+  assert.equal((f.panel.lastStatus||''),'Connected');
  }finally{f.dom.window.close();}
 });
 

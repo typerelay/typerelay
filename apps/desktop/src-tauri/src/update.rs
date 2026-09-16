@@ -27,11 +27,8 @@ fn message(app: &AppHandle, title: &str, body: impl Into<String>, buttons: Messa
     app.dialog().message(body).title(title).buttons(buttons).blocking_show()
 }
 
-fn notify_available(_app: &AppHandle, version: &str) {
-    #[cfg(target_os="linux")]
-    if let Err(error)=notify_rust::Notification::new().appname("TypeRelay").summary("TypeRelay update available").body(&format!("TypeRelay {version} is available. Use the tray menu to install it.")).show(){eprintln!("TypeRelay update notification unavailable: {error}");}
-    #[cfg(not(target_os="linux"))]
-	if let Err(error)=tauri_plugin_notification::NotificationExt::notification(_app).builder().title("TypeRelay update available").body(format!("TypeRelay {version} is available. Use the tray menu to install it.")).show(){eprintln!("TypeRelay update notification unavailable: {error}");}
+fn notify_available(app: &AppHandle, version: &str) {
+    let app=app.clone();let message=format!("TypeRelay {version} is available. Use the tray menu to install it.");std::thread::spawn(move||crate::Runtime::notice(&app,&message,false));
 }
 
 #[cfg(target_os="linux")]
