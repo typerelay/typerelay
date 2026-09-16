@@ -25,6 +25,13 @@ unsafe impl Send for NativeNotificationDelegate {}
 unsafe impl Sync for NativeNotificationDelegate {}
 pub struct NativeNotifications;
 impl NativeNotifications {
+    pub fn allowed()->Option<bool> {
+        use objc2_user_notifications::{UNAuthorizationStatus,UNNotificationSetting,UNNotificationSettings,UNUserNotificationCenter};
+        let(sender,receiver)=std::sync::mpsc::sync_channel(1);
+        UNUserNotificationCenter::currentNotificationCenter().getNotificationSettingsWithCompletionHandler(&block2::RcBlock::new(move|settings:std::ptr::NonNull<UNNotificationSettings>|{let settings=unsafe{settings.as_ref()};let _=sender.send(settings.authorizationStatus()==UNAuthorizationStatus::Authorized&&settings.alertSetting()==UNNotificationSetting::Enabled);}));
+        receiver.recv_timeout(Duration::from_secs(2)).ok()
+    }
+    pub fn open_settings()->Result<()> {let status=Command::new("/usr/bin/open").arg("x-apple.systempreferences:com.apple.preference.notifications").status()?;ensure!(status.success(),"Could not open Notifications settings");Ok(())}
     pub fn show(message:&str)->Result<()> {
         use objc2::{AnyThread,runtime::ProtocolObject};
         use objc2_foundation::{NSError,NSString};

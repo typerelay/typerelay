@@ -199,6 +199,19 @@ for(const os of ['macos','windows','linux'])test(`${os} native sync events updat
  }finally{f.dom.window.close();}
 });
 
+test('notification settings show permission and remain reachable when enabled',async()=>{
+ const f=await Fixture.create();try{
+  const config={shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false};
+  const state=f.dom.window.document.querySelector('#notifications-state');
+  const button=f.dom.window.document.querySelector('#open-notifications');
+  f.panel.configure({config,notifications:false});assert.equal(state.textContent,'Disabled');assert.equal(button.hidden,false);
+  button.click();await new Promise(resolve=>setTimeout(resolve,0));assert.ok(f.calls.some(call=>call.name==='open_notification_settings'));
+  const invoke=f.panel.invoke;f.panel.invoke=async(name,args)=>name==='initialize'?{config,notifications:true,status:''}:invoke(name,args);
+  await f.panel.refreshPermissions();assert.equal(state.textContent,'Enabled');assert.equal(button.hidden,false);
+  f.panel.configure({config,notifications:null});assert.equal(state.textContent,'Unavailable');
+ }finally{f.dom.window.close();}
+});
+
 test('connected clients can disconnect without dismissing the panel',async()=>{
  const f=await Fixture.create();try{
   f.panel.configure({config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},connected:true,accessibility:false,input_monitoring:false});
