@@ -90,6 +90,7 @@ impl Sync {
         let url = url::Url::parse(server)?;
         ensure!(url.scheme() == "https" || (url.scheme() == "http" && matches!(url.host_str(), Some("localhost" | "127.0.0.1"))), "Use HTTPS (HTTP is permitted only on loopback)");
         ensure!(url.path() == "/" && url.query().is_none() && url.fragment().is_none() && url.username().is_empty(), "Use the server origin without a path or credentials");
+        let mut settings = crate::settings::SettingsStore::open(self.root.join("settings.yml"))?; let prefix=settings.settings.trigger_prefix.clone();settings.save(server,&prefix)?;
         let listener = if app_callback { None } else { let listener = TcpListener::bind("127.0.0.1:0")?; listener.set_nonblocking(true)?; Some(listener) };
         let redirect = listener.as_ref().map(|listener|format!("http://127.0.0.1:{}/callback",listener.local_addr().unwrap().port())).unwrap_or_else(||"typerelay://oauth/callback".into());
         let callback_path = self.path("oauth-callback"); let _ = fs::remove_file(&callback_path);
@@ -111,7 +112,6 @@ impl Sync {
                 let params:BTreeMap<_,_>=callback.query_pairs().into_owned().collect();
                 ensure!(params.get("state")==Some(&state),"Invalid desktop callback state");
                 let tokens = Self::response(self.client.post(format!("{server}/oauth/token")).json(&json!({"grant_type":"authorization_code","client_id":"typerelay-desktop","code":params.get("code"),"redirect_uri":redirect,"code_verifier":verifier})).send()?)?;
-                let mut settings = crate::settings::SettingsStore::open(self.root.join("settings.yml"))?; let prefix=settings.settings.trigger_prefix.clone();settings.save(server,&prefix)?;
                 self.secret(&Credentials { server: server.into(), access_token: tokens["access_token"].as_str().context("Missing token")?.into(), refresh_token: tokens["refresh_token"].as_str().context("Missing token")?.into() })?;return Ok(());
             }
             let Some(listener)=&listener else {std::thread::sleep(Duration::from_millis(100));continue;};
@@ -119,9 +119,6 @@ impl Sync {
                 Ok((mut stream, _)) => {
                     let Some(params) = Self::callback(&mut stream, &state, Duration::from_secs(2))? else { continue; };
                     let tokens = Self::response(self.client.post(format!("{server}/oauth/token")).json(&json!({"grant_type":"authorization_code","client_id":"typerelay-desktop","code":params.get("code"),"redirect_uri":redirect,"code_verifier":verifier})).send()?)?;
-                    let mut settings = crate::settings::SettingsStore::open(self.root.join("settings.yml"))?;
-                    let prefix = settings.settings.trigger_prefix.clone();
-                    settings.save(server, &prefix)?;
                     self.secret(&Credentials { server: server.into(), access_token: tokens["access_token"].as_str().context("Missing token")?.into(), refresh_token: tokens["refresh_token"].as_str().context("Missing token")?.into() })?;
                     stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 37\r\nConnection: close\r\n\r\nTypeRelay connected. Close this tab.\n")?;
                     println!("Connected. Enroll selected files with: typerelay enroll FILE.yml");

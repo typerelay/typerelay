@@ -28,7 +28,7 @@ class Panel {
 		document.querySelector('#empty-sync').onclick=()=>this.action(async()=>{await this.settings(true);this.settingsPage('sync');});
 		document.querySelector('#empty-web').onclick=()=>this.action(()=>this.invoke('open_web_app'));
 		document.querySelector('#empty-tui').onclick=()=>this.action(()=>this.invoke('open_tui'));
-		document.querySelector('#connect-form').onsubmit=event=>{event.preventDefault();this.action(async()=>{this.status.textContent='Complete sign-in in your browser…';await this.invoke('connect',{url:document.querySelector('#server').value});this.status.textContent='Connected';await this.settings(true);});};
+		document.querySelector('#connect-form').onsubmit=event=>{event.preventDefault();this.action(async()=>{this.status.textContent='Complete sign-in in your browser…';await this.invoke('connect',{url:document.querySelector('#server').value});this.status.textContent='Connected';});};
 		document.querySelector('#disconnect').onclick=()=>this.action(async()=>{await this.invoke('disconnect');this.status.textContent='Disconnected';await this.settings(true);});
 		document.querySelector('#sync').onclick=()=>this.action(async()=>{await this.invoke('sync_now');});
 		document.querySelector('#enroll-form').onsubmit=event=>{event.preventDefault();this.action(async()=>{const names=[...document.querySelectorAll('#local-libraries input:checked')].map(input=>input.value);if(!names.length)throw Error('Select local libraries first');await this.invoke('enroll',{names});await this.settings(true);this.status.textContent='Upload queued';});};

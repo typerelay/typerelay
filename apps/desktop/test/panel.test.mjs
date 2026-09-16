@@ -196,3 +196,13 @@ test('connected clients can disconnect without dismissing the panel',async()=>{
   f.panel.configure({config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},connected:false,accessibility:false,input_monitoring:false});assert.equal(button.hidden,true);
  }finally{f.dom.window.close();}
 });
+
+test('authentication handoff does not reopen settings over the browser',async()=>{
+ const f=await Fixture.create();try{
+  const before=f.calls.filter(call=>call.name==='set_settings_view').length;
+  f.dom.window.document.querySelector('#connect-form').requestSubmit();await new Promise(resolve=>setTimeout(resolve,0));
+  assert.ok(f.calls.some(call=>call.name==='connect'));
+  assert.equal(f.calls.filter(call=>call.name==='set_settings_view').length,before);
+  assert.equal(f.panel.status.textContent,'Connected');
+ }finally{f.dom.window.close();}
+});

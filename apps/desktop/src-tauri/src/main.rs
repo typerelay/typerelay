@@ -254,8 +254,10 @@ fn save_settings(app:tauri::AppHandle,config:PanelSettings)->std::result::Result
 }
 #[tauri::command]
 async fn connect(app:tauri::AppHandle,url:String)->std::result::Result<(),String> {
+    app.state::<Runtime>().settings.store(false,Ordering::SeqCst);Runtime::hide(&app);
     let root=app.state::<Runtime>().root.clone();
-    tauri::async_runtime::spawn_blocking(move ||Sync::new(root.clone(),root.join("snippets")).and_then(|sync|sync.connect(&url,true,true)).map_err(|e|e.to_string())).await.map_err(|e|e.to_string())?
+    let result=tauri::async_runtime::spawn_blocking(move ||Sync::new(root.clone(),root.join("snippets")).and_then(|sync|sync.connect(&url,true,true)).map_err(|e|e.to_string())).await.map_err(|e|e.to_string())?;
+    if let Err(error)=&result{*app.state::<Runtime>().status.lock().unwrap()=error.clone();app.state::<Runtime>().settings.store(true,Ordering::SeqCst);Runtime::open(&app,true);}result
 }
 #[tauri::command]
 async fn disconnect(app:tauri::AppHandle)->std::result::Result<(),String> {
