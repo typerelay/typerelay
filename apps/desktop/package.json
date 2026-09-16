@@ -14,5 +14,8 @@
     "@tauri-apps/cli": "^2",
     "jsdom": "^26.1.0",
     "pug": "^3.0.3"
+  },
+  "dependencies": {
+    "sweetalert2": "^11.26.25"
   }
 }

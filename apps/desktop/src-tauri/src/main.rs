@@ -26,7 +26,10 @@ impl Runtime {
 	#[cfg(any(target_os="windows",target_os="macos"))]
 	fn start_expansion(app:&tauri::AppHandle)->Result<()> {let state=app.state::<Runtime>();if state.expansion_started.swap(true,Ordering::SeqCst){return Ok(());}let result=(||{let requests=platform::ExpansionSession::start(state.root.join("snippets"),state.root.join("settings.yml"))?;let handle=app.clone();std::thread::spawn(move||for request in requests{if let Err(error)=Runtime::expand(&handle,request){let message=format!("Expansion failed: {error:#}");*handle.state::<Runtime>().status.lock().unwrap()=message.clone();let _=handle.notification().builder().title("TypeRelay").body(&message).show();}});Ok(())})();if result.is_err(){state.expansion_started.store(false,Ordering::SeqCst);}result}
     fn hide_on_focus_loss()->bool { cfg!(not(target_os="linux")) }
-    fn sync_notice(_app:&tauri::AppHandle,message:&str) {
+    fn sync_notice(_app:&tauri::AppHandle,message:&str,running:bool) {
+        let visible=_app.get_webview_window("panel").is_some_and(|window|window.is_visible().unwrap_or(false));
+        let _=_app.emit("sync-notice",json!({"message":message,"running":running,"visible":visible}));
+        if visible{return;}
         #[cfg(target_os="linux")]
         if let Err(error)=notify_rust::Notification::new().appname("TypeRelay").summary("TypeRelay").body(message).show(){eprintln!("TypeRelay sync notification unavailable: {error}");}
         #[cfg(not(target_os="linux"))]
@@ -220,7 +223,7 @@ fn dismiss(app:tauri::AppHandle){set_prompt_view(app.clone(),false);Runtime::hid
 fn sync_now(app:tauri::AppHandle)->std::result::Result<(),String>{
     if app.state::<Runtime>().syncing.swap(true,Ordering::SeqCst) {return Ok(());}
     std::thread::spawn(move||{
-        Runtime::sync_notice(&app,"Starting to sync…");
+        Runtime::sync_notice(&app,"Starting to sync…",true);
         let root=app.state::<Runtime>().root.clone();
         let result=(||->Result<String>{
             anyhow::ensure!(root.join("sync/credentials.json").exists(),"Authenticate in TypeRelay settings first");
@@ -238,7 +241,7 @@ fn sync_now(app:tauri::AppHandle)->std::result::Result<(),String>{
             Ok(if conflicts>0 || rejected {"Sync completed — some changes need attention. Review the web app or TUI for details.".into()}else{"Sync successful".into()})
         })();
         let message=match result {Ok(message)=>message,Err(error)=>{let _=Paths::atomic_write(&root.join("sync/status"),format!("Sync: {error:#}").as_bytes(),false);if !root.join("sync/credentials.json").exists(){"Sync failed — authenticate in TypeRelay settings first.".into()}else{"Sync failed. Check your connection and TypeRelay sync status.".into()}}};
-        Runtime::sync_notice(&app,&message);
+        Runtime::sync_notice(&app,&message,false);
         app.state::<Runtime>().syncing.store(false,Ordering::SeqCst);
     });
     Ok(())

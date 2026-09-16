@@ -182,6 +182,24 @@ test('manual sync relies on notifications without adding panel status',async()=>
  }finally{f.dom.window.close();}
 });
 
+for(const os of ['macos','windows','linux'])test(`${os} sync reports progress and outcomes without reloading settings`,async()=>{
+ const f=await Fixture.create();try{
+  const notices=[];f.dom.window.Swal={fire:notice=>notices.push(notice),close:()=>{}};
+  f.dom.window.document.body.dataset.os=os;
+  const button=f.dom.window.document.querySelector('#sync');
+  const server=f.dom.window.document.querySelector('#server');server.value='https://example.test';server.focus();
+  const before=f.calls.length;
+  f.callbacks['sync-notice']({payload:{message:'Starting to sync…',running:true,visible:true}});
+  assert.equal(button.disabled,true);assert.equal(button.textContent,'Syncing…');assert.equal(notices.at(-1).icon,'info');
+  for(const [message,icon] of [['Sync successful','success'],['Sync completed — some changes need attention.','warning'],['Sync failed. Check your connection.','error']]){
+   f.callbacks['sync-notice']({payload:{message,running:false,visible:true}});
+   assert.equal(button.disabled,false);assert.equal(button.textContent,'Sync now');assert.equal(notices.at(-1).title,message);assert.equal(notices.at(-1).icon,icon);
+  }
+  assert.equal(f.calls.length,before);assert.equal(server.value,'https://example.test');assert.equal(f.dom.window.document.activeElement,server);
+  f.callbacks['sync-notice']({payload:{message:'Sync successful',running:false,visible:false}});assert.equal(notices.length,4);
+ }finally{f.dom.window.close();}
+});
+
 test('connected clients can disconnect without dismissing the panel',async()=>{
  const f=await Fixture.create();try{
   f.panel.configure({config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},connected:true,accessibility:false,input_monitoring:false});

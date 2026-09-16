@@ -33,6 +33,7 @@ class Panel {
 		document.querySelector('#sync').onclick=()=>this.action(async()=>{await this.invoke('sync_now');});
 		document.querySelector('#enroll-form').onsubmit=event=>{event.preventDefault();this.action(async()=>{const names=[...document.querySelectorAll('#local-libraries input:checked')].map(input=>input.value);if(!names.length)throw Error('Select local libraries first');await this.invoke('enroll',{names});await this.settings(true);this.status.textContent='Upload queued';});};
 		window.__TAURI__.event.listen('panel-error',event=>this.status.textContent=String(event.payload));
+		window.__TAURI__.event.listen('sync-notice',event=>{const {message,running,visible}=event.payload;const button=document.querySelector('#sync');button.disabled=running;button.textContent=running?'Syncing…':'Sync now';if(visible)window.Swal.fire({toast:true,position:'bottom',title:message,icon:running?'info':message.startsWith('Sync failed')?'error':message.includes('attention')?'warning':'success',showConfirmButton:false,timer:running?undefined:6000,timerProgressBar:!running});else if(!running)window.Swal.close();});
 		window.__TAURI__.event.listen('panel-open',event=>this.open(event.payload));
 		window.addEventListener('focus',()=>{if(document.body.dataset.os==='macos')this.refreshPermissions();});
 		this.invoke('initialize').then(value=>{this.configure(value);this.open(value);}).catch(error=>this.status.textContent=String(error));
