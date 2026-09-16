@@ -15,6 +15,8 @@ use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 struct Runtime { root:PathBuf, target:Mutex<Option<platform::Target>>, last:Mutex<Option<platform::Target>>, erase:Mutex<usize>, busy:AtomicBool, syncing:AtomicBool, prompting:AtomicBool, prompt_hit:Mutex<Option<Hit>>, settings:AtomicBool, status:Mutex<String>, #[cfg(any(target_os="windows",target_os="macos"))] expansion_started:AtomicBool, #[cfg(target_os="linux")] registration:Mutex<Option<typerelay_client::desktop::Registration>> }
 impl Runtime {
+	fn callback_argument(args:&[String])->Option<&str>{args.iter().find(|arg|arg.starts_with("typerelay://oauth/callback?code=")).map(String::as_str)}
+	fn receive_callback(args:&[String])->bool{let Some(url)=Self::callback_argument(args)else{return false;};Paths::config_dir().and_then(|root|Sync::receive_callback(&root,url).map(|_|())).is_ok()}
 	#[cfg(target_os="macos")]
 	fn permission_message(accessibility:bool,input_monitoring:bool)->Option<&'static str> {match(accessibility,input_monitoring){(false,false)=>Some("TypeRelay needs Input Monitoring, then Accessibility. Open Settings to allow both."),(false,true)=>Some("TypeRelay needs Accessibility. Open Settings to allow it."),(true,false)=>Some("TypeRelay needs Input Monitoring. Open Settings to allow it."),(true,true)=>None}}
 	#[cfg(target_os="macos")]
@@ -290,10 +292,11 @@ fn main() {
 
     #[cfg(target_os="linux")]
     if std::env::args().any(|a|a=="clipboard-serve") {let _=typerelay_client::clipboard::PasteJob::serve_restored();return;}
-	let builder=tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app,args,_|{if args.iter().any(|arg|arg=="--uninstall"){let _=app.autolaunch().disable();Runtime::quit(app);}else if args.iter().any(|arg|arg=="--quit"){Runtime::quit(app);}else if !args.iter().any(|arg|arg.starts_with("typerelay://"))&&!args.iter().any(|arg|arg=="--background"){Runtime::open(app,false);}})).plugin(tauri_plugin_deep_link::init()).plugin(tauri_plugin_autostart::Builder::new().args(["--background"]).build()).plugin(tauri_plugin_dialog::init()).plugin(tauri_plugin_updater::Builder::new().build());
+	let builder=tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app,args,_|{let callback=Runtime::receive_callback(&args);if args.iter().any(|arg|arg=="--uninstall"){let _=app.autolaunch().disable();Runtime::quit(app);}else if args.iter().any(|arg|arg=="--quit"){Runtime::quit(app);}else if !callback&&!args.iter().any(|arg|arg=="--background"){Runtime::open(app,false);}})).plugin(tauri_plugin_deep_link::init()).plugin(tauri_plugin_autostart::Builder::new().args(["--background"]).build()).plugin(tauri_plugin_dialog::init()).plugin(tauri_plugin_updater::Builder::new().build());
     #[cfg(not(target_os="linux"))]
     let builder=builder.plugin(tauri_plugin_notification::init()).plugin(tauri_plugin_global_shortcut::Builder::new().build());
     let result=builder.setup(|app| {
+		Runtime::receive_callback(&std::env::args().collect::<Vec<_>>());
         #[cfg(target_os="macos")]
         app.set_activation_policy(tauri::ActivationPolicy::Accessory);
         let root=Paths::config_dir()?; Database::open(&root.join("snippets"))?;
@@ -346,4 +349,6 @@ mod tests {
     use super::*;
     #[test]
     fn search_panel_ignores_compositor_focus_loss() { assert!(!Runtime::hide_on_focus_loss()); }
+	#[test]
+	fn desktop_callback_is_selected_from_instance_arguments(){let args=vec!["typerelay-panel".into(),"typerelay://oauth/callback?code=one&state=two".into()];assert_eq!(Runtime::callback_argument(&args),Some("typerelay://oauth/callback?code=one&state=two"));}
 }
