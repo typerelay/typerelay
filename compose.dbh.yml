@@ -1,6 +1,16 @@
+x-dbh-ca-environment: &dbh-ca-environment
+  NODE_EXTRA_CA_CERTS: /usr/local/share/ca-certificates/dbh-caddy-root.crt
+
+x-dbh-ca-volumes: &dbh-ca-volumes
+  - "${DBH_CADDY_CA}:/usr/local/share/ca-certificates/dbh-caddy-root.crt:ro"
+
 services:
   app:
+    # Keep MagicDNS for private hosts and use a fallback for public provider/package DNS.
+    dns:
+      - 1.1.1.1
     ports: !override []
+    environment: *dbh-ca-environment
     networks:
       default:
       dbh_proxy:
@@ -9,7 +19,11 @@ services:
           - "${DBH_PROFILE}-typerelay-server"
 
   mcp:
+    # Keep MagicDNS for private hosts and use a fallback for public provider/package DNS.
+    dns:
+      - 1.1.1.1
     ports: !override []
+    environment: *dbh-ca-environment
     networks:
       default:
       dbh_proxy:
@@ -18,5 +32,5 @@ services:
 
 networks:
   dbh_proxy:
-    name: "${DBH_PROXY_NETWORK}"
+    name: "${DBH_INTERNAL_NETWORK}"
     external: true
