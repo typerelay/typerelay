@@ -92,10 +92,10 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 }
 
 #replace { min-height: 12rem; resize: vertical; }
+.snippet-label { margin-bottom: .25rem; font-size: .9rem; font-weight: 400; }
 .snippet-advanced { display: block; clear: both; }
 .snippet-advanced > summary { cursor: pointer; }
 #template-options { font-size: .75rem; }
-#template-options > summary { cursor: pointer; color: var(--bs-secondary-color); }
 #template-options .small { font-size: .75rem; }
 #template-options .form-label { font-size: .75rem; margin-bottom: .25rem; }
 #template-options .form-control, #template-options .form-select, #template-options .btn { font-size: .75rem; min-height: 1.75rem; padding-top: .15rem; padding-bottom: .15rem; }

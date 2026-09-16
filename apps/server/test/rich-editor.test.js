@@ -8,7 +8,11 @@ test('TipTap rich editor round-trips GFM, raw HTML, asset images and source mode
 	const html = pug.renderFile('./views/ajax/form.pug', { kind: 'snippet', snippet: { title: 'Rich', trigger: 'rich', replace: markdown, content: { type: 'rich_text', markdown, variables: {} } }, library: { _id: 'one', name: 'Rich', permissions: { edit: true } }, destinations: [] });
 	const dom = new JSDOM('<div id="workspace" data-account="account"></div>' + html, { pretendToBeVisual: true });
 	assert.deepEqual([...dom.window.document.querySelectorAll('#snippet-type option')].map(option => option.textContent), ['Text', 'Code', 'Rich text']);
-	assert.ok(dom.window.document.querySelector('#rich-options').compareDocumentPosition(dom.window.document.querySelector('#template-options')) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING);
+	assert.deepEqual([...dom.window.document.querySelectorAll('.row.align-items-center.g-3 > div > .snippet-label')].map(label => label.textContent), ['Abbreviation', 'Title (optional)', 'Type']);
+	assert.equal(dom.window.document.querySelectorAll('.snippet-label').length, 4);
+	assert.equal(dom.window.document.querySelector('#template-options > .input-group') !== null, true);
+	assert.ok(dom.window.document.querySelector('#template-options').compareDocumentPosition(dom.window.document.querySelector('#replace')) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING);
+	assert.ok(dom.window.document.querySelector('#template-options').compareDocumentPosition(dom.window.document.querySelector('#rich-options')) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING);
 	assert.equal(dom.window.document.querySelector('#copy-code'), null);
 	for (const key of ['window', 'document', 'MutationObserver', 'HTMLElement', 'Node', 'Event', 'navigator', 'getComputedStyle']) Object.defineProperty(globalThis, key, { configurable: true, value: dom.window[key] });
 	globalThis.requestAnimationFrame = callback => setTimeout(callback, 0);

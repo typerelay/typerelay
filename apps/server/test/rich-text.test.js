@@ -51,7 +51,9 @@ test('RTF imports formatting, paragraphs, Unicode and embedded pictures as rich 
 test('rich editor is Pug-backed and contains the complete document controls', () => {
 	const form = readFileSync(new URL('../views/ajax/form.pug', import.meta.url), 'utf8');
 	const toolbar = readFileSync(new URL('../views/ajax/rich-editor.pug', import.meta.url), 'utf8');
+	const app = readFileSync(new URL('../views/app.pug', import.meta.url), 'utf8');
 	assert.match(form, /option\(value="rich_text"/);
 	assert.match(form, /include rich-editor/);
+	assert.match(app, /#form-modal[\s\S]*?\.modal-dialog\.modal-xl\.modal-dialog-scrollable/);
 	for (const command of ['bold', 'italic', 'underline', 'strike', 'taskList', 'blockquote', 'codeBlock', 'horizontalRule', 'link', 'image', 'refreshImage', 'table', 'html', 'source']) assert.match(toolbar, new RegExp(`data-rich-command="${command}"`));
 });

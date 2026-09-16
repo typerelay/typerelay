@@ -19,7 +19,7 @@ export class TemplateEditor {
 				if (document.querySelector('#snippet-type').value === 'rich_text' && this.client.richView) this.client.richView.insertText('{{' + name + '}}'); else { area.setRangeText('{{' + name + '}}', area.selectionStart, area.selectionEnd, 'end'); area.focus(); area.dispatchEvent(new Event('input', { bubbles: true })); }
 			};
 		}
-		if (!root.hidden && (root.open || document.querySelector('#snippet-type').value === 'rich_text')) this.preview();
+		if (!root.hidden && (Object.keys(this.variables).length || document.querySelector('#snippet-type').value === 'rich_text')) this.preview();
 	}
 	async content() { if (document.querySelector('#snippet-type').value === 'rich_text') { const result = await RichTextRuntime.render({ markdown: this.client.richView?.content() || this.area.value, variables: this.variables }, {}, true); this.variables = result.variables; return { variables: result.variables }; } return (await TemplateRuntime.render({ text: this.area.value, variables: this.variables }, {}, true)).template; }
 	async preview() {
@@ -27,7 +27,9 @@ export class TemplateEditor {
 		const sequence = ++this.sequence;
 		try {
 			const rich = document.querySelector('#snippet-type').value === 'rich_text';
-			const result = rich ? await RichTextRuntime.render({ markdown: this.client.richView?.content() || this.area.value, variables: this.variables }, {}, true) : await TemplateRuntime.render({ text: this.area.value, variables: this.variables }, {}, true);
+			const source = rich ? this.client.richView?.content() || this.area.value : this.area.value;
+			if (!source) { document.querySelector('#template-preview').textContent = ''; document.querySelector('#template-error').textContent = ''; return; }
+			const result = rich ? await RichTextRuntime.render({ markdown: source, variables: this.variables }, {}, true) : await TemplateRuntime.render({ text: source, variables: this.variables }, {}, true);
 			if (sequence !== this.sequence || !this.area.isConnected) return;
 			this.variables = rich ? result.variables : result.template.variables;
 			const names = JSON.stringify(Object.keys(this.variables));
