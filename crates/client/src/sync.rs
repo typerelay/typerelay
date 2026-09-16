@@ -27,8 +27,13 @@ impl Sync {
     pub fn new(root: PathBuf, directory: PathBuf) -> Result<Self> {
         fs::create_dir_all(root.join("sync"))?;
         fs::create_dir_all(&directory)?;
-        Ok(Self { root, directory, client: reqwest::blocking::Client::builder().timeout(Duration::from_secs(15)).redirect(reqwest::redirect::Policy::none()).build()? })
+        let mut builder=reqwest::blocking::Client::builder().timeout(Duration::from_secs(15)).redirect(reqwest::redirect::Policy::none());
+        #[cfg(target_os="linux")]
+        if let Some(home)=std::env::var_os("HOME"){let database=PathBuf::from(home).join(".pki/nssdb");let certutil=Path::new("/usr/bin/certutil");if database.is_dir()&&certutil.is_file(){let database=format!("sql:{}",database.display());if let Ok(output)=std::process::Command::new(certutil).args(["-L","-d",&database]).output(){for nickname in Self::trusted_nss_nicknames(&String::from_utf8_lossy(&output.stdout)).into_iter().take(64){if let Ok(output)=std::process::Command::new(certutil).args(["-L","-d",&database,"-n",&nickname,"-a"]).output()&&output.status.success()&&let Ok(certificate)=reqwest::Certificate::from_pem(&output.stdout){builder=builder.add_root_certificate(certificate);}}}}}
+        Ok(Self { root, directory, client: builder.build()? })
     }
+    #[cfg(target_os="linux")]
+    fn trusted_nss_nicknames(list:&str)->Vec<String>{list.lines().filter_map(|line|{let line=line.trim();let(index,trust)=line.char_indices().rev().find(|(_,character)|character.is_whitespace()).map(|(index,_)|(index,line[index..].trim()))?;if trust.split(',').next().is_some_and(|flags|flags.contains('C')){Some(line[..index].trim().into())}else{None}}).collect()}
     fn path(&self, name: &str) -> PathBuf { self.root.join("sync").join(name) }
     fn lock(&self) -> Result<fs::File> {
         let file = fs::OpenOptions::new().create(true).truncate(false).read(true).write(true).open(self.path("worker.lock"))?;
@@ -273,5 +278,11 @@ mod tests {
         assert!(!Sync::receive_callback(root.path(),"https://example.test/callback?code=x").unwrap());
         assert!(Sync::receive_callback(root.path(),"typerelay://oauth/callback?code=x&state=y").unwrap());
         assert_eq!(fs::read_to_string(root.path().join("sync/oauth-callback")).unwrap(),"typerelay://oauth/callback?code=x&state=y");
+    }
+    #[cfg(target_os="linux")]
+    #[test]
+    fn only_ssl_trusted_nss_certificates_are_loaded() {
+        let list="Certificate Nickname  Trust Attributes\n\nDBH Caddy Local Authority  C,,\nEmail only  ,C,\nUntrusted  ,,,\n";
+        assert_eq!(Sync::trusted_nss_nicknames(list),vec!["DBH Caddy Local Authority"]);
     }
 }
