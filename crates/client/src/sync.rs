@@ -5,7 +5,7 @@ use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, fs, io::{Read, Write}, net::TcpListener, path::{Path, PathBuf}, time::{Duration, Instant}};
+use std::{collections::BTreeMap, fs, io::{ErrorKind, Read, Write}, net::{TcpListener, TcpStream}, path::{Path, PathBuf}, time::{Duration, Instant}};
 use uuid::Uuid;
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Credentials { pub server: String, pub access_token: String, pub refresh_token: String }
@@ -46,6 +46,17 @@ impl Sync {
         let value: Value = response.json()?;
         if !status.is_success() { return Err(ServerError { status: status.as_u16(), message: if status.as_u16()==426 {"Server and client versions must match: rich text requires sync protocol 6".into()}else{value["error"].as_str().unwrap_or("Request failed").into()} }.into()); }
         Ok(value)
+    }
+    fn callback(stream: &mut TcpStream, state: &str, timeout: Duration) -> Result<Option<BTreeMap<String, String>>> {
+        stream.set_read_timeout(Some(timeout))?;
+        let mut buffer = [0u8; 8192];
+        let length = match stream.read(&mut buffer) { Ok(0) => return Ok(None), Ok(length) => length, Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => return Ok(None), Err(error) => return Err(error.into()) };
+        let Ok(request) = std::str::from_utf8(&buffer[..length]) else { return Ok(None); };
+        let target = request.lines().next().unwrap_or("").split_whitespace().nth(1).unwrap_or("/");
+        let Ok(callback) = url::Url::parse(&format!("http://127.0.0.1{target}")) else { return Ok(None); };
+        let params: BTreeMap<_, _> = callback.query_pairs().into_owned().collect();
+        if callback.path() != "/callback" || params.get("state").map(String::as_str) != Some(state) { let _ = stream.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"); return Ok(None); }
+        Ok(Some(params))
     }
     fn request(&self, credentials: &mut Credentials, method: reqwest::Method, path: &str, body: Option<&Value>) -> Result<Value> {
         let send = |credentials: &Credentials| {
@@ -96,14 +107,7 @@ impl Sync {
             ensure!(Instant::now() < deadline, "Browser sign-in timed out");
             match listener.accept() {
                 Ok((mut stream, _)) => {
-                    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
-                    let mut buffer = [0u8; 8192];
-                    let length = stream.read(&mut buffer)?;
-                    let request = std::str::from_utf8(&buffer[..length])?;
-                    let target = request.lines().next().unwrap_or("").split_whitespace().nth(1).unwrap_or("/");
-                    let callback = url::Url::parse(&format!("http://127.0.0.1{target}"))?;
-                    let params: BTreeMap<_, _> = callback.query_pairs().into_owned().collect();
-                    if callback.path() != "/callback" || params.get("state") != Some(&state) { let _ = stream.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"); continue; }
+                    let Some(params) = Self::callback(&mut stream, &state, Duration::from_secs(2))? else { continue; };
                     let tokens = Self::response(self.client.post(format!("{server}/oauth/token")).json(&json!({"grant_type":"authorization_code","client_id":"typerelay-desktop","code":params.get("code"),"redirect_uri":redirect,"code_verifier":verifier})).send()?)?;
                     let mut settings = crate::settings::SettingsStore::open(self.root.join("settings.yml"))?;
                     let prefix = settings.settings.trigger_prefix.clone();
@@ -247,5 +251,12 @@ mod tests {
         sync.disconnect().unwrap();
         assert!(!root.path().join("sync/credentials.json").exists());
         assert_eq!(Database::open(&directory).unwrap().meta("cursor").unwrap(), Some(json!(0)));
+    }
+    #[test]
+    fn idle_browser_connection_does_not_cancel_callback_listener() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let _client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut stream, _) = listener.accept().unwrap();
+        assert_eq!(Sync::callback(&mut stream, "expected", Duration::from_millis(10)).unwrap(), None);
     }
 }
