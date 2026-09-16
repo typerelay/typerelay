@@ -1,4 +1,5 @@
 import pathlib
+import tomllib
 import unittest
 
 
@@ -10,6 +11,7 @@ class ComposeLayoutTests(unittest.TestCase):
         cls.production = (cls.root / "compose.prod.yml").read_text()
         cls.dbh = (cls.root / "compose.dbh.yml").read_text()
         cls.dbh_run = (cls.root / ".codex" / "dbh-run.toml").read_text()
+        cls.dbh_run_config = tomllib.loads(cls.dbh_run)
 
     def test_development_uses_dbh_services_and_source_mounts(self):
         self.assertIn("DEV_TYPERELAY_MONGODB_URI", self.development)
@@ -52,6 +54,8 @@ class ComposeLayoutTests(unittest.TestCase):
     def test_dbh_defines_required_development_environment(self):
         for name in ["DEV_TYPERELAY_MONGODB_URI", "MEMCACHED_SERVERS", "SMTP_SERVERS", "SMTP_FROM", "SESSION_SECRET", "JWT_SECRET"]:
             self.assertIn(f"{name} =", self.dbh_run)
+        for value in self.dbh_run_config["environment"].values():
+            value.format(profile="n", repo="typerelay")
 
 
 if __name__ == "__main__":
