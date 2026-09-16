@@ -10,7 +10,7 @@ class Fixture {
   const calls=[];const callbacks={};const pending=[];
   const style=dom.window.document.createElement('style');style.textContent=await readFile('ui/panel.css','utf8');dom.window.document.head.append(style);
   dom.window.HTMLElement.prototype.scrollIntoView=()=>{};
-  dom.window.__TAURI__={core:{invoke:async(name,args)=>{calls.push({name,args});if(name==='initialize')return{config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},theme:{os:'linux'},settings:false,accessibility:false,input_monitoring:false};if(name==='search')return new Promise(resolve=>pending.push({query:args.query,resolve}));if(name==='libraries')return[];if(name==='prepare_template')return{fields:[],steps:[{kind:'text',text:'Literal'}],text:'Literal',enter_actions:0,template:{text:'Literal',variables:{}}};return null;}},event:{listen:(name,callback)=>{callbacks[name]=callback;}}};
+  dom.window.__TAURI__={core:{invoke:async(name,args)=>{calls.push({name,args});if(name==='initialize')return{config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},theme:{os:'linux'},settings:false,accessibility:false,input_monitoring:false,empty:false};if(name==='search')return new Promise(resolve=>pending.push({query:args.query,resolve}));if(name==='libraries')return[];if(name==='prepare_template')return{fields:[],steps:[{kind:'text',text:'Literal'}],text:'Literal',enter_actions:0,template:{text:'Literal',variables:{}}};return null;}},event:{listen:(name,callback)=>{callbacks[name]=callback;}}};
   dom.window.eval((await readFile('ui/panel.js','utf8')).replace('new Panel();','window.panel = new Panel();'));
   await new Promise(resolve=>setTimeout(resolve,0));
   return {dom,panel:dom.window.panel,calls,pending,callbacks};
@@ -74,6 +74,23 @@ test('missing insertion target hint stays out of search and settings',async()=>{
 	f.panel.invoke=async(name)=>name==='initialize'?{config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},theme:{os:'macos'},settings:true,accessibility:true,input_monitoring:true,status:'Choose an application to insert into'}:null;
 	f.dom.window.document.body.dataset.os='macos';f.dom.window.dispatchEvent(new f.dom.window.Event('focus'));await new Promise(resolve=>setTimeout(resolve,0));
 	assert.equal(f.panel.status.textContent,'');
+ }finally{f.dom.window.close();}
+});
+
+test('empty desktop offers sync, web app and TUI with the production server default',async()=>{
+ const f=await Fixture.create();try{
+	const value={settings:false,theme:{os:'linux'},config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},accessibility:true,input_monitoring:true,empty:true};f.panel.configure(value);await f.panel.open(value);
+	assert.equal(f.dom.window.document.querySelector('#empty-state').hidden,false);
+	assert.match(f.dom.window.document.querySelector('#empty-state').textContent,/no snippets yet/);
+	assert.equal(f.dom.window.document.querySelector('#hint').hidden,true);
+	assert.equal(f.dom.window.document.querySelector('#server').value,'https://app.typerelay.com');
+	f.dom.window.document.querySelector('#empty-web').click();await new Promise(resolve=>setTimeout(resolve,0));f.dom.window.document.querySelector('#empty-tui').click();await new Promise(resolve=>setTimeout(resolve,0));
+	assert.ok(f.calls.some(call=>call.name==='open_web_app'));
+	assert.ok(f.calls.some(call=>call.name==='open_tui'));
+	f.dom.window.document.querySelector('#empty-sync').click();await new Promise(resolve=>setTimeout(resolve,0));
+	assert.equal(f.dom.window.document.body.dataset.view,'settings');
+	assert.equal(f.dom.window.document.querySelector('#settings-sync').hidden,false);
+	f.panel.configure({...value,empty:false});assert.equal(f.dom.window.document.querySelector('#empty-state').hidden,true);
  }finally{f.dom.window.close();}
 });
 

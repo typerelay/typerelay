@@ -40,6 +40,9 @@ test('macOS startup requests both permissions and offers settings and TUI launch
 	assert.match(main, /accessibility&&input_monitoring&&let Err\(error\)=Runtime::start_expansion/);
 	assert.match(main, /Runtime::open\(app\.handle\(\),missing_permissions\)/);
 	assert.match(main, /open_input_monitoring_settings/);
+	assert.match(main, /snapshot\.is_empty\(\)/);
+	assert.match(shared, /open_web_app[\s\S]*https:\/\/app\.typerelay\.com/);
+	assert.match(platform, /open_url[\s\S]*\/usr\/bin\/open/);
 	assert.match(platform, /with_file_name\("typerelay-tui"\)/);
 	assert.match(platform, /CGEvent::new_keyboard_event/);
 	assert.match(platform, /KeyCode::ANSI_V/);
@@ -75,4 +78,11 @@ test('local macOS build uses the configured Developer ID identity', async () => 
 	const release = await fs.readFile(path.join(root, 'scripts/release-panel.mjs'), 'utf8');
 	assert.match(release, /options\.mode === 'macos'\) nativeTools=await NativeTools\.stage\(options\.target/);
 	assert.ok(release.indexOf("options.mode === 'macos') nativeTools=await NativeTools.stage") < release.indexOf("PanelRelease.run('pnpm', build"));
+});
+
+test('Omarchy empty-state actions open the web app and installed TUI', async () => {
+	const platform = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/platform_linux.rs'), 'utf8');
+	assert.match(platform, /Command::new\("xdg-open"\)/);
+	assert.match(platform, /Command::new\("foot"\)/);
+	assert.match(platform, /with_file_name\("typerelay-tui"\)/);
 });

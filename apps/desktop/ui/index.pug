@@ -19,6 +19,12 @@ html(lang="en")
 					span.search-icon(aria-hidden="true")
 					label.visually-hidden(for="query") Search snippets
 					input#query(type="search" autocomplete="off" spellcheck="false" aria-controls="results")
+				#empty-state(hidden)
+					p Hey there, you have no snippets yet. Connect to your server to sync, create your first snippet in the TypeRelay web app, or use TypeRelay TUI.
+					.empty-actions
+						button#empty-sync.link-button(type="button") Sync snippets
+						button#empty-web.link-button(type="button") TypeRelay web app
+						button#empty-tui.link-button(type="button") TypeRelay TUI
 				p#hint Type an abbreviation or part of a snippet.
 				ul#results(role="listbox" aria-label="Snippets")
 				footer
@@ -92,7 +98,7 @@ html(lang="en")
 					.settings-list
 						form#connect-form.setting-section
 							label(for="server") Sync server URL
-							input#server(type="url" required)
+							input#server(type="url" value="https://app.typerelay.com" required)
 							.form-actions
 								button#sync.secondary(type="button") Sync now
 								button.primary(type="submit") Authenticate

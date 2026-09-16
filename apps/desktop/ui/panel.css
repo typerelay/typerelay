@@ -7,3 +7,4 @@ body[data-os=macos] main{padding-top:.9rem}body[data-os=macos] .titlebar{positio
 .shortcut-control{width:21rem}.shortcut-control input{width:13rem;flex:0 0 13rem}
 .status-pill[data-allowed=true]{display:inline-block;color:#145c2e;background:#d9f7df;border-color:#68b77b}
 @media(prefers-color-scheme:dark){.status-pill[data-allowed=true]{color:#c9f7d5;background:#194c2a;border-color:#3f8f57}}
+#empty-state{max-width:29rem;margin:3.5rem auto 0;text-align:center;color:var(--secondary)}#empty-state p{margin:0 0 .8rem;line-height:1.45}.empty-actions{display:flex;justify-content:center;flex-wrap:wrap;gap:.35rem 1rem}.link-button{min-height:0;padding:.15rem;border:0;background:transparent;box-shadow:none;color:var(--accent);text-decoration:underline;text-underline-offset:.15rem}.link-button:hover{background:transparent}

@@ -160,6 +160,7 @@ impl Runtime {
 #[tauri::command]
 fn initialize(app:tauri::AppHandle)->std::result::Result<Value,String> {
     let state=app.state::<Runtime>(); let settings=Panel::settings(&state.root).map_err(|e|e.to_string())?;
+		let empty=Database::open(&state.root.join("snippets")).and_then(|db|db.snapshot()).map(|snapshot|snapshot.is_empty()).unwrap_or(false);
 		#[cfg(target_os="macos")]
 		let (accessibility,input_monitoring)=Runtime::permissions();
 		#[cfg(not(target_os="macos"))]
@@ -168,7 +169,7 @@ fn initialize(app:tauri::AppHandle)->std::result::Result<Value,String> {
 		let input_monitoring=platform::input_monitoring(false);
 		#[cfg(target_os="macos")]
 		{state.update_permission_status(accessibility,input_monitoring);if accessibility&&input_monitoring{match Runtime::start_expansion(&app){Ok(())=>{let mut status=state.status.lock().unwrap();if status.starts_with("TypeRelay could not start Input Monitoring"){status.clear();}},Err(error)=>*state.status.lock().unwrap()=format!("TypeRelay could not start Input Monitoring: {error:#}")}}}
-		Ok(json!({"config":settings,"prompt":state.prompt_hit.lock().unwrap().clone(),"server":typerelay_client::settings::SettingsStore::open(state.root.join("settings.yml")).ok().map(|s|s.settings.sync_url).unwrap_or_default(),"theme":Runtime::theme(),"settings":state.settings.load(Ordering::SeqCst),"status":*state.status.lock().unwrap(),"update":app.state::<update::UpdateState>().value(),"accessibility":accessibility,"input_monitoring":input_monitoring}))
+		Ok(json!({"config":settings,"prompt":state.prompt_hit.lock().unwrap().clone(),"server":typerelay_client::settings::SettingsStore::open(state.root.join("settings.yml")).ok().map(|s|s.settings.sync_url).unwrap_or_default(),"theme":Runtime::theme(),"settings":state.settings.load(Ordering::SeqCst),"status":*state.status.lock().unwrap(),"update":app.state::<update::UpdateState>().value(),"accessibility":accessibility,"input_monitoring":input_monitoring,"empty":empty}))
 }
 #[tauri::command]
 async fn search(app:tauri::AppHandle,query:String)->std::result::Result<Vec<Hit>,String> {
@@ -269,6 +270,8 @@ fn open_accessibility_settings()->std::result::Result<(),String>{platform::open_
 fn open_input_monitoring_settings()->std::result::Result<(),String>{platform::open_input_monitoring_settings().map_err(|e|e.to_string())}
 #[tauri::command]
 fn open_tui()->std::result::Result<(),String>{platform::open_tui().map_err(|e|e.to_string())}
+#[tauri::command]
+fn open_web_app()->std::result::Result<(),String>{platform::open_web_app().map_err(|e|e.to_string())}
 fn main() {
     if std::env::args().any(|a|a=="--version"){println!("typerelay-panel {}",env!("CARGO_PKG_VERSION"));return;}
     #[cfg(target_os="macos")]
@@ -328,7 +331,7 @@ fn main() {
     }).on_window_event(|window,event|match event {
         tauri::WindowEvent::CloseRequested{api,..}=>{api.prevent_close();set_prompt_view(window.app_handle().clone(),false);Runtime::hide(window.app_handle());},
         tauri::WindowEvent::Focused(false)if Runtime::hide_on_focus_loss() && !window.app_handle().state::<Runtime>().busy.load(Ordering::SeqCst) && !window.app_handle().state::<Runtime>().settings.load(Ordering::SeqCst) && !window.app_handle().state::<Runtime>().prompting.load(Ordering::SeqCst)=> {Runtime::hide(window.app_handle());},_=>()
-    }).invoke_handler(tauri::generate_handler![initialize,search,insert,copy_snippet,prepare_template,set_prompt_view,set_settings_view,dismiss,sync_now,save_settings,connect,libraries,enroll,open_accessibility_settings,open_input_monitoring_settings,open_tui]).run(tauri::generate_context!());
+    }).invoke_handler(tauri::generate_handler![initialize,search,insert,copy_snippet,prepare_template,set_prompt_view,set_settings_view,dismiss,sync_now,save_settings,connect,libraries,enroll,open_accessibility_settings,open_input_monitoring_settings,open_tui,open_web_app]).run(tauri::generate_context!());
     if let Err(error)=result {eprintln!("TypeRelay panel: {error}");std::process::exit(1);}
 }
 
