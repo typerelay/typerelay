@@ -17,6 +17,7 @@ export class Admin {
 	}
 	static fingerprint() { return Support.hash((process.env.SYSADMIN_EMAIL || '') + '\0' + (process.env.SYSADMIN_PASSWORD || '')); }
 	static fragment(account) { return { account, id: account.id, revision: account.revision, html: pug.renderFile('./views/ajax/admin-account.pug', { account }) }; }
+	static async templateResult(key) { const template = await AdminSettings.template(key); return { id: key, template, html: pug.renderFile('./views/ajax/admin-template.pug', { template }) }; }
 	static mount(app) {
 		const router = Router();
 		router.use((req, res, next) => {
@@ -62,11 +63,11 @@ export class Admin {
 		router.put('/api/email-templates/:key', async (req, res) => {
 			await AdminSettings.set('email.' + req.params.key, AdminSettings.validateTemplate(req.params.key, req.body));
 			await AdminSettings.audit(res.locals.adminEmail, 'email-template.update');
-			res.json({ id: req.params.key, html: pug.renderFile('./views/ajax/admin-template.pug', { template: await AdminSettings.template(req.params.key) }) });
+			res.json(await Admin.templateResult(req.params.key));
 		});
 		router.post('/api/email-templates/:key/reset', async (req, res) => {
 			Support.assert(AdminSettings.templates[req.params.key], 'Unknown template', 404); await AdminSettings.set('email.' + req.params.key, {}); await AdminSettings.audit(res.locals.adminEmail, 'email-template.reset');
-			res.json({ id: req.params.key, html: pug.renderFile('./views/ajax/admin-template.pug', { template: await AdminSettings.template(req.params.key) }) });
+			res.json(await Admin.templateResult(req.params.key));
 		});
 		router.post('/api/email-templates/:key/preview', (req, res) => res.json(AdminSettings.render(AdminSettings.validateTemplate(req.params.key, req.body), { url: Auth.origin + '/example-link' })));
 		router.post('/api/email-templates/:key/test', rateLimit({ windowMs: 60000, limit: 10 }), async (req, res) => { await AdminSettings.send(req.params.key, Security.email(req.body.email), { url: Auth.origin + '/example-link' }); await AdminSettings.audit(res.locals.adminEmail, 'email-template.test'); res.json({ message: 'Test email sent' }); });

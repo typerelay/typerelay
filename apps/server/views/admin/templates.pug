@@ -1,7 +1,14 @@
 extends layout
+include navigation
 block content
 	h1.mb-5 Email Templates
-	p.text-muted Plain-text transactional messages. Links and expiration remain managed by Type Relay.
-	#admin-templates.list-group
-		each template in templates
-			include ../ajax/admin-template
+	.row.align-items-start(data-admin-panels="templates")
+		.col-md-3.col-lg-2
+			+panelNavigation('templates', templates)
+		.col-md-9.col-lg-10.admin-section-content
+			each template, index in templates
+				section(id='templates-panel-' + template.key role="tabpanel" aria-labelledby='templates-nav-' + template.key data-admin-panel-content=template.key hidden=index !== 0)
+					h2.mb-3= template.name
+					p.text-muted.mb-5 Plain-text transactional message. Links and expiration remain managed by Type Relay.
+					- const inline = true
+					include ../ajax/admin-template-form

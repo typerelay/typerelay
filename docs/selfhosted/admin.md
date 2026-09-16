@@ -6,6 +6,8 @@ Development Compose, including dbh, uses `SYSADMIN_EMAIL=sysadmin@localhost` and
 
 ## Accounts
 
+Use the left sidebar to switch account statuses. Email Templates and Settings also use left-side navigation; switching their panels preserves unsaved edits. Email templates edit directly in the right-hand pane. Audit Logs keeps its filter/table layout.
+
 Search by name, account ID, or owner email. Filter by billing plan or active, suspended, deleting, and failed state. Results contain 50 accounts per page. User counts represent memberships; active snippet counts exclude snippets inside trashed libraries. Details include trash, groups, invitations, credentials, assets, storage bytes, members, and custom-domain state.
 
 Create accounts with an owner name/email. Existing users are reused without changing their credentials or name. Billing initialization and the owner sign-in email run after database provisioning; delivery/setup failures appear as warnings. Editing a shared owner's identity affects every account they belong to. Email changes invalidate existing browser authentication and pending verification links.

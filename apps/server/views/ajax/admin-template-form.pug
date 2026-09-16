@@ -1,18 +1,23 @@
 form(data-admin-template=template.key)
 	.mb-3
-		label.form-label(for="template-subject") Subject
-		input#template-subject.form-control.form-control-sm(name="subject" value=template.subject required maxlength="200")
+		label.form-label(for='template-subject-' + template.key) Subject
+		input.form-control.form-control-sm(id='template-subject-' + template.key name="subject" value=template.subject required maxlength="200")
 	.mb-3
-		label.form-label(for="template-text") Message
-		textarea#template-text.form-control.form-control-sm(name="text" rows="8" required maxlength="20000")= template.text
+		label.form-label(for='template-text-' + template.key) Message
+		textarea.form-control.form-control-sm(id='template-text-' + template.key name="text" rows="12" required maxlength="20000")= template.text
 	p.text-muted Required variable: {{url}}
 	.mb-5
 		button.btn.btn-outline-secondary.btn-sm(type="button" data-template-preview=template.key) Preview unsaved message
-		pre#template-preview.mt-3.text-wrap
+		pre.mt-3.text-wrap(data-template-preview-output)
 	.mb-5
-		label.form-label(for="test-email") Test recipient
-		input#test-email.form-control.form-control-sm(type="email" name="test_email")
+		label.form-label(for='test-email-' + template.key) Test recipient
+		input.form-control.form-control-sm(id='test-email-' + template.key type="email" name="test_email")
 		button.btn.btn-outline-secondary.btn-sm.mt-3(type="button" data-template-test=template.key) Send saved template
 	.d-flex.justify-content-between
-		button.btn.btn-outline-secondary.btn-sm(type="button" data-bs-dismiss="modal") Cancel
+		div
+			if typeof inline !== 'undefined' && inline
+				button.btn.btn-outline-secondary.btn-sm(type="reset") Cancel
+			else
+				button.btn.btn-outline-secondary.btn-sm(type="button" data-bs-dismiss="modal") Cancel
+			button.btn.btn-outline-warning.btn-sm.ms-3(type="button" data-template-reset=template.key) Reset to default
 		button.btn.btn-primary.btn-sm(type="submit") Save

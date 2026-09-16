@@ -2,6 +2,31 @@ export class AdminUI {
 	static versions = new Map();
 	static deleted = new Set();
 	static polling = false;
+	static selectPanel(tab, updateHash = true) {
+		const group = tab.closest('[data-admin-panels]');
+		for (const item of group.querySelectorAll('[data-admin-panel]')) { const selected = item === tab; item.classList.toggle('active', selected); item.setAttribute('aria-selected', String(selected)); item.tabIndex = selected ? 0 : -1; }
+		for (const panel of group.querySelectorAll('[data-admin-panel-content]')) panel.hidden = panel.id !== tab.getAttribute('aria-controls');
+		if (updateHash) history.replaceState(null, '', '#' + group.dataset.adminPanels + '-' + tab.dataset.adminPanel);
+	}
+	static restorePanel() {
+		for (const group of document.querySelectorAll('[data-admin-panels]')) {
+			const tabs = [...group.querySelectorAll('[data-admin-panel]')];
+			const tab = tabs.find(item => location.hash === '#' + group.dataset.adminPanels + '-' + item.dataset.adminPanel) || tabs[0];
+			if (tab) AdminUI.selectPanel(tab, false);
+		}
+	}
+	static panelKeys(event) {
+		const tab = event.target.closest('[data-admin-panel]');
+		if (!tab || !['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+		event.preventDefault();
+		const tabs = [...tab.closest('[role="tablist"]').querySelectorAll('[data-admin-panel]')];
+		const index = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (tabs.indexOf(tab) + (event.key === 'ArrowDown' ? 1 : -1) + tabs.length) % tabs.length;
+		AdminUI.selectPanel(tabs[index]); tabs[index].focus();
+	}
+	static templateSaved(form, template, reset = false) {
+		for (const key of ['subject', 'text']) { form.elements[key].defaultValue = template[key]; if (reset) form.elements[key].value = template[key]; }
+		if (reset) form.querySelector('[data-template-preview-output]').textContent = '';
+	}
 	static async request(path, method = 'GET', body) {
 		const response = await fetch(path, { method, headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]').content }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
 		if (!response.ok) { const error = await response.json().catch(() => ({})); throw new Error(error.error || 'Request failed'); }
@@ -64,7 +89,10 @@ export class AdminUI {
 				if (!id && AdminUI.matches(result.account)) { const total = document.getElementById('account-total'); if (total) total.textContent = Number(total.textContent) + 1; }
 				if (result.warnings?.length) await Swal.fire({ icon: 'warning', title: 'Account created', text: result.warnings.join(' ') }); else AdminUI.toast('Account saved');
 			} else if (form.hasAttribute('data-admin-template')) {
-				const result = await AdminUI.request('/admin/api/email-templates/' + form.dataset.adminTemplate, 'PUT', body); AdminUI.replace('template-' + result.id, result.html); AdminUI.modal().hide(); AdminUI.toast('Template saved');
+				const result = await AdminUI.request('/admin/api/email-templates/' + form.dataset.adminTemplate, 'PUT', body);
+				AdminUI.templateSaved(form, result.template || body);
+				if (form.closest('#admin-modal')) AdminUI.modal().hide();
+				AdminUI.toast('Template saved');
 			} else {
 				const section = form.dataset.adminSettings;
 				if (section === 'managani') { body.enabled = body.enabled === 'true'; body.clear_site_secret = body.clear_site_secret === 'on'; }
@@ -77,7 +105,8 @@ export class AdminUI {
 	}
 	static async click(event) {
 		const button = event.target.closest('button'); if (!button) return;
-		if (button.dataset.adminForm) await AdminUI.busy(button, async () => { document.getElementById('admin-modal-body').innerHTML = await AdminUI.request(button.dataset.adminForm); document.getElementById('admin-modal-title').textContent = button.dataset.adminForm.includes('email-templates') ? 'Email template' : button.dataset.adminForm.includes('/new/') ? 'Create account' : 'Account details'; AdminUI.modal().show(); });
+		if (button.dataset.adminPanel) AdminUI.selectPanel(button);
+		else if (button.dataset.adminForm) await AdminUI.busy(button, async () => { document.getElementById('admin-modal-body').innerHTML = await AdminUI.request(button.dataset.adminForm); document.getElementById('admin-modal-title').textContent = button.dataset.adminForm.includes('email-templates') ? 'Email template' : button.dataset.adminForm.includes('/new/') ? 'Create account' : 'Account details'; AdminUI.modal().show(); });
 		else if (button.hasAttribute('data-admin-logout')) await AdminUI.busy(button, async () => { const result = await AdminUI.request('/admin/logout', 'POST', {}); location.assign(result.redirect); });
 		else if (button.dataset.adminDelete) await AdminUI.busy(button, async () => {
 			const id = button.dataset.adminDelete; const { account } = await AdminUI.request('/admin/api/accounts/' + id);
@@ -85,10 +114,10 @@ export class AdminUI {
 			if (confirmation.isConfirmed) { AdminUI.update(await AdminUI.request('/admin/api/accounts/' + id, 'DELETE', { confirmation: confirmation.value })); AdminUI.toast('Purge queued'); }
 		});
 		else if (button.dataset.adminRetry) await AdminUI.busy(button, async () => { AdminUI.update(await AdminUI.request('/admin/api/accounts/' + button.dataset.adminRetry + '/deletion/retry', 'POST', {})); AdminUI.toast('Purge retry queued'); });
-		else if (button.dataset.templateReset) await AdminUI.busy(button, async () => { const choice = await Swal.fire({ title: 'Restore default template?', icon: 'question', showCancelButton: true, reverseButtons: true }); if (choice.isConfirmed) { const result = await AdminUI.request('/admin/api/email-templates/' + button.dataset.templateReset + '/reset', 'POST', {}); AdminUI.replace('template-' + result.id, result.html); AdminUI.toast('Template reset'); } });
-		else if (button.dataset.templatePreview) await AdminUI.busy(button, async () => { const result = await AdminUI.request('/admin/api/email-templates/' + button.dataset.templatePreview + '/preview', 'POST', Object.fromEntries(new FormData(button.form))); document.getElementById('template-preview').textContent = result.subject + '\n\n' + result.text; });
+		else if (button.dataset.templateReset) await AdminUI.busy(button, async () => { const choice = await Swal.fire({ title: 'Restore default template?', icon: 'question', showCancelButton: true, reverseButtons: true }); if (choice.isConfirmed) { const result = await AdminUI.request('/admin/api/email-templates/' + button.dataset.templateReset + '/reset', 'POST', {}); AdminUI.templateSaved(button.form, result.template, true); AdminUI.toast('Template reset'); } });
+		else if (button.dataset.templatePreview) await AdminUI.busy(button, async () => { const result = await AdminUI.request('/admin/api/email-templates/' + button.dataset.templatePreview + '/preview', 'POST', Object.fromEntries(new FormData(button.form))); button.form.querySelector('[data-template-preview-output]').textContent = result.subject + '\n\n' + result.text; });
 		else if (button.dataset.templateTest) await AdminUI.busy(button, async () => { await AdminUI.request('/admin/api/email-templates/' + button.dataset.templateTest + '/test', 'POST', { email: button.form.elements.test_email.value }); AdminUI.toast('Test email sent'); });
 	}
-	static start() { document.addEventListener('submit', AdminUI.submit); document.addEventListener('click', AdminUI.click); if (document.getElementById('admin-accounts')) setInterval(AdminUI.poll, 3000); }
+	static start() { document.addEventListener('submit', AdminUI.submit); document.addEventListener('click', AdminUI.click); document.addEventListener('keydown', AdminUI.panelKeys); window.addEventListener('hashchange', AdminUI.restorePanel); AdminUI.restorePanel(); if (document.getElementById('admin-accounts')) setInterval(AdminUI.poll, 3000); }
 }
 AdminUI.start();
