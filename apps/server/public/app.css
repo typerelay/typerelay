@@ -55,6 +55,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 
 .snippet { cursor: pointer; }
 .snippet-expansion { font-size: .825rem; }
+.snippet > .snippet-expansion, .snippet > .rich-snippet-preview { margin-inline-start: 2.25rem; }
 .snippet .btn-sm { font-size: .7rem; padding: .1rem .35rem; line-height: 1.25; }
 .snippet:focus-visible { outline: .125rem solid #a15c40; outline-offset: .125rem; }
 

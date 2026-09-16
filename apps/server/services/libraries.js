@@ -32,7 +32,7 @@ export class Libraries {
 	static view(ctx, library) { return { ...library, _id: String(library._id), deleted: library.state !== 'active', permissions: Support.access(ctx, library) }; }
 	static async hydrate(library, session) {
 		const entries = await Snippet.find({ library: library._id, state: { $ne: 'purged' } }).sort({ position: 1, id: 1 }).session(session || null).lean();
-		return { ...library, snippets: entries.filter(entry => entry.state === 'active').map(Libraries.entry), records: entries.map(Libraries.entry) };
+		return { ...library, snippets: entries.filter(entry => entry.state === 'active').sort((a, b) => (new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0))).map(Libraries.entry), records: entries.map(Libraries.entry) };
 	}
 	static async get(ctx, id, session, includeTrash = false) {
 		const library = await Library.findOne({ _id: Support.id(id), account: ctx.account }).session(session || null).lean();

@@ -93,13 +93,14 @@ class TypeRelay {
 	}
 	async bundle(file) { const response = await fetch('/api/v2/import/bundle', { method: 'POST', headers: { 'Content-Type': 'application/zip', 'X-CSRF-Token': document.querySelector('meta[name=csrf-token]').content, 'X-Account-Id': this.account || '', 'X-Operation-Id': this.formOperation }, body: file }); const result = await response.json(); if (!response.ok) throw new Error(result.error); return result; }
 	fragment(html) { const template = document.createElement('template'); template.innerHTML = html; for (const time of template.content.querySelectorAll('time[data-local-time]')) time.textContent = new Date(time.dateTime).toLocaleString(); return template.content.firstElementChild; }
-	update(selector, container, html) {
+	update(selector, container, html, before) {
 		const old = document.querySelector(selector);
 		const next = this.fragment(html);
 		const outerFocused = old === document.activeElement;
 		const focused = old?.contains(document.activeElement) ? [...old.querySelectorAll('button,input,select,textarea,a')].indexOf(document.activeElement) : -1;
 		const scroll = { x: window.scrollX, y: window.scrollY };
 		if (old) old.replaceWith(next); else document.querySelector(container).append(next);
+		if (before !== undefined) document.querySelector(container).insertBefore(next, before);
 		if (outerFocused) next.focus({ preventScroll: true });
 		else if (focused >= 0) next.querySelectorAll('button,input,select,textarea,a')[focused]?.focus({ preventScroll: true });
 		if (window.scrollX !== scroll.x || window.scrollY !== scroll.y) window.scrollTo(scroll.x, scroll.y);
@@ -131,9 +132,14 @@ class TypeRelay {
 			document.querySelector('[data-add-snippet]').hidden = !library.permissions.edit;
 			const ids = new Set(library.snippets.map(snippet => snippet.id));
 			document.querySelectorAll('[data-snippet]').forEach(node => { if (!ids.has(node.dataset.snippet)) node.remove(); });
-			for (const fragment of result.fragments) {
+			let before = null;
+			const fragments = new Map(result.fragments.map(fragment => [fragment.id, fragment]));
+			for (const snippet of [...library.snippets].reverse()) {
+				const fragment = fragments.get(snippet.id);
+				if (!fragment) continue;
 				const node = document.querySelector('[data-snippet="' + fragment.id + '"]');
-				if (!node || Number(node.dataset.revision) < fragment.revision || prior?.permissions.edit !== library.permissions.edit) this.update('[data-snippet="' + fragment.id + '"]', '#snippets', fragment.html);
+				if (!node || Number(node.dataset.revision) < fragment.revision || prior?.permissions.edit !== library.permissions.edit) this.update('[data-snippet="' + fragment.id + '"]', '#snippets', fragment.html, before);
+				before = document.querySelector('[data-snippet="' + fragment.id + '"]');
 			}
 		}
 		document.querySelector('[data-id="' + library._id + '"]')?.classList.toggle('active-library', this.selected === library._id);
