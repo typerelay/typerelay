@@ -98,6 +98,23 @@ test('actual desktop browser PKCE flow writes private credentials and settings',
 		assert.ok((await readFile(join(root, 'typerelay/settings.yml'), 'utf8')).includes(Fixture.origin));
 	} finally { child.kill(); await completed.catch(() => {}); }
 });
+test('desktop scheme approval permits the browser redirect and exchanges its PKCE code', async () => {
+	const verifier = Support.token();
+	const request = { client_id: 'typerelay-desktop', redirect_uri: 'typerelay://oauth/callback', code_challenge: createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256', state: randomUUID(), account: Fixture.account };
+	const page = await Fixture.request('/oauth/authorize?' + new URLSearchParams(request));
+	assert.equal(page.status, 200);
+	assert.match(page.headers.get('content-security-policy'), /(?:^|;)form-action 'self' typerelay:;/);
+	const approval = await Fixture.request('/oauth/authorize', 'POST', request);
+	assert.equal(approval.status, 302);
+	const callback = new URL(approval.headers.get('location'));
+	assert.equal(callback.protocol, 'typerelay:');
+	assert.equal(callback.searchParams.get('state'), request.state);
+	const exchange = await Fixture.request('/oauth/token', 'POST', { grant_type: 'authorization_code', client_id: request.client_id, redirect_uri: request.redirect_uri, code_verifier: verifier, code: callback.searchParams.get('code') });
+	assert.equal(exchange.status, 200);
+	assert.equal((await Auth.bearer((await exchange.json()).access_token)).account, Fixture.account);
+	const home = await Fixture.request('/');
+	assert.match(home.headers.get('content-security-policy'), /(?:^|;)form-action 'self';/);
+});
 test('SQLite two-device edits, conflict recovery and generated YAML isolation', async () => {
 	const yaml = '# original comments\nmatches:\n- trigger: alpha\n  replace: First\n- trigger: beta\n  replace: Second\n';
 	await writeFile(join(Fixture.one.snippets, 'mine.yml'), yaml);

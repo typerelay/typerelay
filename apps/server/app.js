@@ -76,7 +76,7 @@ export class Server {
 		app.get('/oauth/authorize', async (req, res) => {
 			if (!req.session.user) { req.session.return_to = req.originalUrl; return res.render('login', { returnTo: req.originalUrl }); }
 			const redirect = new URL(Auth.redirect(req.query.redirect_uri));
-			if (redirect.protocol === 'http:') res.setHeader('Content-Security-Policy', String(res.getHeader('Content-Security-Policy')).replace("form-action 'self'", "form-action 'self' " + redirect.origin));
+			res.setHeader('Content-Security-Policy', String(res.getHeader('Content-Security-Policy')).replace("form-action 'self'", "form-action 'self' " + (redirect.protocol === 'typerelay:' ? redirect.protocol : redirect.origin)));
 			const memberships = await Member.find({ user: req.session.user }).lean();
 			const accounts = (await Account.find({ _id: { $in: memberships.map(member => member.account) } }).lean()).filter(account => !req.boundAccount || String(account._id) === req.boundAccount);
 			res.render('authorize', { accounts, request: req.query });
