@@ -281,6 +281,7 @@ fn open_tui()->std::result::Result<(),String>{platform::open_tui().map_err(|e|e.
 fn open_web_app()->std::result::Result<(),String>{platform::open_web_app().map_err(|e|e.to_string())}
 fn main() {
     if std::env::args().any(|a|a=="--version"){println!("typerelay-panel {}",env!("CARGO_PKG_VERSION"));return;}
+	let arguments=std::env::args().collect::<Vec<_>>();if Runtime::receive_callback(&arguments){return;}
     #[cfg(target_os="macos")]
     if std::env::args().any(|a|a=="--accessibility-status"){println!("{}",if platform::accessibility(false){"allowed"}else{"required"});return;}
     #[cfg(target_os="macos")]
@@ -296,7 +297,6 @@ fn main() {
     #[cfg(not(target_os="linux"))]
     let builder=builder.plugin(tauri_plugin_notification::init()).plugin(tauri_plugin_global_shortcut::Builder::new().build());
     let result=builder.setup(|app| {
-		Runtime::receive_callback(&std::env::args().collect::<Vec<_>>());
         #[cfg(target_os="macos")]
         app.set_activation_policy(tauri::ActivationPolicy::Accessory);
         let root=Paths::config_dir()?; Database::open(&root.join("snippets"))?;
