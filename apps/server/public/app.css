@@ -103,17 +103,19 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 #template-options fieldset { padding: .75rem; border: .0625rem solid var(--bs-border-color); border-radius: .375rem; }
 #template-options .form-check-inline { margin-right: 1rem; }
 .rich-toolbar { padding: .5rem; border: .0625rem solid var(--bs-border-color); border-bottom: 0; border-radius: .375rem .375rem 0 0; background: var(--bs-tertiary-bg); }
-.rich-toolbar .rich-heading { width: 7.5rem; }
+.rich-toolbar .rich-icon-button { display: inline-flex; width: 2rem; min-width: 2rem; height: 2rem; align-items: center; justify-content: center; padding: 0; line-height: 1; }
+.rich-toolbar .rich-icon-button.dropdown-toggle::after { margin-left: .15rem; }
 .rich-toolbar .btn-light { border-color: var(--bs-border-color); background: var(--bs-body-bg); }
 .rich-toolbar .btn-light:hover, .rich-toolbar .btn-light.active { border-color: var(--bs-primary); background: color-mix(in srgb, var(--bs-primary) 12%, var(--bs-body-bg)); color: var(--bs-primary); }
 .rich-editor-surface { min-height: 18rem; padding: .75rem; overflow: auto; border: .0625rem solid var(--bs-border-color); border-radius: 0 0 .375rem .375rem; background: var(--bs-body-bg); }
+#rich-options > #replace { min-height: 18rem; margin-bottom: 0 !important; border-radius: 0 0 .375rem .375rem; font-family: var(--bs-font-monospace); }
 .rich-editor-surface .tiptap { min-height: 16.5rem; outline: 0; }
 .rich-editor-surface .tiptap > :last-child { margin-bottom: 0; }
 .rich-editor-surface .tiptap table { width: 100%; border-collapse: collapse; }
 .rich-editor-surface .tiptap th, .rich-editor-surface .tiptap td { padding: .35rem .5rem; border: .0625rem solid var(--bs-border-color); }
 .rich-editor-surface .tiptap img { max-width: 100%; height: auto; }
 .rich-editor-surface .rich-raw-html { padding: .75rem; border-radius: .25rem; background: var(--bs-tertiary-bg); color: var(--bs-code-color); white-space: pre-wrap; }
-@media (max-width: 48rem) { .rich-toolbar .ms-auto { margin-left: 0 !important; } }
+#rich-image-modal { z-index: 1070; }
 
 .white-label-preview { display: block; max-width: 100%; max-height: 5rem; object-fit: contain; }
 @media (max-width: 48rem) { #billing-nav-action { display: none; } }

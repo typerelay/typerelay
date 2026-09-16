@@ -15,15 +15,18 @@ test('TipTap rich editor round-trips GFM, raw HTML, asset images and source mode
 	globalThis.cancelAnimationFrame = clearTimeout;
 	const { RichEditor } = await import('../browser/rich-editor.js');
 	const field = document.querySelector('#replace');
+	const originalParent = field.parentNode;
 	const editor = new RichEditor(field, document.querySelector('#rich-editor'), document.querySelector('#rich-toolbar'), { readonly: false, onError: error => { throw error; } });
 	try {
+		assert.equal(field.parentElement.id, 'rich-options');
+		assert.equal(field.previousElementSibling.id, 'rich-toolbar');
 		const roundTrip = editor.content();
 		assert.match(roundTrip, /# Heading/);
 		assert.match(roundTrip, /\| A\s+\| B\s+\|/);
 		assert.match(roundTrip, /data-custom="kept"/);
 		assert.match(roundTrip, new RegExp('typerelay-asset:' + 'a'.repeat(64)));
-		editor.toggleSource(); assert.equal(field.hidden, false); field.value += '\n\n**Source edit**'; editor.toggleSource(); assert.match(editor.content(), /\*\*Source edit\*\*/);
+		editor.toggleSource(); assert.equal(field.hidden, false); assert.equal(field.previousElementSibling.id, 'rich-toolbar'); field.value += '\n\n**Source edit**'; editor.toggleSource(); assert.match(editor.content(), /\*\*Source edit\*\*/);
 		editor.editor.chain().focus().setTextSelection({ from: 1, to: 8 }).toggleUnderline().setTextAlign('center').run(); const formatted = editor.content(); assert.match(formatted, /<u>|text-decoration|underline/); assert.match(formatted, /text-align|align=/);
 		editor.setReadonly(true); assert.equal(editor.editor.isEditable, false);
-	} finally { editor.destroy(); dom.window.close(); }
+	} finally { editor.destroy(); assert.equal(field.parentNode, originalParent); dom.window.close(); }
 });

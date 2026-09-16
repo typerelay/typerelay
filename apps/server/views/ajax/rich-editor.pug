@@ -1,22 +1,24 @@
 #rich-options.mb-3(hidden=!snippet || (snippet.content && snippet.content.type) !== 'rich_text')
-	#rich-toolbar.rich-toolbar.d-flex.flex-wrap.align-items-center.gap-2(role="toolbar" aria-label="Rich-text formatting")
-		select.form-select.form-select-sm.rich-heading(data-rich-heading aria-label="Heading")
-			option(value="") Paragraph
-			each level in [1, 2, 3, 4, 5, 6]
-				option(value=level)= 'Heading ' + level
-		.btn-group.btn-group-sm(role="group" aria-label="Text formatting")
-			button.btn.btn-light(type="button" data-rich-command="bold" aria-label="Bold" title="Bold") B
-			button.btn.btn-light.fst-italic(type="button" data-rich-command="italic" aria-label="Italic" title="Italic") I
-			button.btn.btn-light.text-decoration-underline(type="button" data-rich-command="underline" aria-label="Underline" title="Underline") U
-			button.btn.btn-light.text-decoration-line-through(type="button" data-rich-command="strike" aria-label="Strike" title="Strike") S
-			button.btn.btn-light.font-monospace(type="button" data-rich-command="code" aria-label="Inline code" title="Inline code") &lt;/&gt;
-		.btn-group.btn-group-sm(role="group" aria-label="Lists")
-			button.btn.btn-light(type="button" data-rich-command="bulletList" aria-label="Bulleted list" title="Bulleted list") • List
-			button.btn.btn-light(type="button" data-rich-command="orderedList" aria-label="Numbered list" title="Numbered list") 1. List
-		button.btn.btn-light.btn-sm(type="button" data-rich-command="link") Link
-		button.btn.btn-light.btn-sm(type="button" data-rich-command="image") Image
+	#rich-toolbar.rich-toolbar.d-flex.flex-wrap.align-items-center.gap-1(role="toolbar" aria-label="Rich-text formatting")
 		.dropdown
-			button.btn.btn-light.btn-sm.dropdown-toggle(type="button" data-bs-toggle="dropdown" aria-expanded="false") Insert
+			button.btn.btn-light.btn-sm.rich-icon-button.dropdown-toggle(type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Paragraph and heading" title="Paragraph and heading") ¶
+			ul.dropdown-menu
+				li: button.dropdown-item(type="button" data-rich-command="paragraph") Paragraph
+				each level in [1, 2, 3, 4, 5, 6]
+					li: button.dropdown-item(type="button" data-rich-command='heading-' + level)= 'Heading ' + level
+		.btn-group.btn-group-sm(role="group" aria-label="Text formatting")
+			button.btn.btn-light.rich-icon-button.fw-bold(type="button" data-rich-command="bold" aria-label="Bold" title="Bold") B
+			button.btn.btn-light.rich-icon-button.fst-italic(type="button" data-rich-command="italic" aria-label="Italic" title="Italic") I
+			button.btn.btn-light.rich-icon-button.text-decoration-underline(type="button" data-rich-command="underline" aria-label="Underline" title="Underline") U
+			button.btn.btn-light.rich-icon-button.text-decoration-line-through(type="button" data-rich-command="strike" aria-label="Strike" title="Strike") S
+			button.btn.btn-light.rich-icon-button.font-monospace(type="button" data-rich-command="code" aria-label="Inline code" title="Inline code") &lt;&gt;
+		.btn-group.btn-group-sm(role="group" aria-label="Lists")
+			button.btn.btn-light.rich-icon-button(type="button" data-rich-command="bulletList" aria-label="Bulleted list" title="Bulleted list") •≡
+			button.btn.btn-light.rich-icon-button(type="button" data-rich-command="orderedList" aria-label="Numbered list" title="Numbered list") 1≡
+		button.btn.btn-light.btn-sm.rich-icon-button(type="button" data-rich-command="link" aria-label="Link" title="Link") ⛓︎
+		button.btn.btn-light.btn-sm.rich-icon-button(type="button" data-rich-command="image" aria-label="Image" title="Image") ▧
+		.dropdown
+			button.btn.btn-light.btn-sm.rich-icon-button.dropdown-toggle(type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Insert" title="Insert") ＋
 			ul.dropdown-menu
 				li: button.dropdown-item(type="button" data-rich-command="refreshImage") Refresh selected image
 				li: button.dropdown-item(type="button" data-rich-command="taskList") Task list
@@ -26,19 +28,19 @@
 				li: button.dropdown-item(type="button" data-rich-command="table") Table
 				li: button.dropdown-item(type="button" data-rich-command="html") Raw HTML
 		.dropdown
-			button.btn.btn-light.btn-sm.dropdown-toggle(type="button" data-bs-toggle="dropdown" aria-expanded="false") Align
+			button.btn.btn-light.btn-sm.rich-icon-button.dropdown-toggle(type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Alignment" title="Alignment") ≡
 			ul.dropdown-menu
 				each alignment in ['left', 'center', 'right', 'justify']
 					li: button.dropdown-item.text-capitalize(type="button" data-rich-command='align-' + alignment)= alignment
 		.btn-group.btn-group-sm(data-rich-table-tools hidden role="group" aria-label="Table editing")
-			button.btn.btn-light(type="button" data-rich-command="row") + row
-			button.btn.btn-light(type="button" data-rich-command="column") + column
-			button.btn.btn-light.text-danger(type="button" data-rich-command="deleteTable") Delete table
-		.ms-auto.btn-group.btn-group-sm(role="group" aria-label="Editing")
-			button.btn.btn-light(type="button" data-rich-command="undo" aria-label="Undo" title="Undo") ↶
-			button.btn.btn-light(type="button" data-rich-command="redo" aria-label="Redo" title="Redo") ↷
-			button.btn.btn-light(type="button" data-rich-command="clear") Clear
-			button.btn.btn-light(type="button" data-rich-command="source") Markdown
+			button.btn.btn-light.rich-icon-button(type="button" data-rich-command="row" aria-label="Add table row" title="Add table row") ↕+
+			button.btn.btn-light.rich-icon-button(type="button" data-rich-command="column" aria-label="Add table column" title="Add table column") ↔+
+			button.btn.btn-light.rich-icon-button.text-danger(type="button" data-rich-command="deleteTable" aria-label="Delete table" title="Delete table") ▦×
+		.btn-group.btn-group-sm(role="group" aria-label="Editing")
+			button.btn.btn-light.rich-icon-button(type="button" data-rich-command="undo" aria-label="Undo" title="Undo") ↶
+			button.btn.btn-light.rich-icon-button(type="button" data-rich-command="redo" aria-label="Redo" title="Redo") ↷
+			button.btn.btn-light.rich-icon-button(type="button" data-rich-command="clear" aria-label="Clear formatting" title="Clear formatting") T×
+			button.btn.btn-light.rich-icon-button(type="button" data-rich-command="source" aria-label="Edit Markdown" title="Edit Markdown") M↓
 		input.visually-hidden(type="file" accept="image/png,image/jpeg,image/webp,image/gif" data-rich-image-file)
 	#rich-editor.rich-editor-surface
 	template#rich-image-html-template

@@ -50,6 +50,8 @@ class TypeRelay {
 			if (event.target.hasAttribute('data-white-label-file') && event.target.files[0]) await this.whiteLabelUpload(event.target).catch(error => this.toast(error.message, 'error'));
 		});
 		document.querySelector('#form-modal')?.addEventListener('hidden.bs.modal', () => {
+			const modal = document.querySelector('#form-modal');
+			if (modal.dataset.preserveEditor === 'true') { delete modal.dataset.preserveEditor; return; }
 			this.codeVersion = (this.codeVersion || 0) + 1; this.codeView?.destroy(); this.codeView = null; this.richView?.destroy(); this.richView = null;
 			if (this.returnSettings) { this.returnSettings = false; bootstrap.Modal.getOrCreateInstance(document.querySelector('#settings')).show(); }
 		});
