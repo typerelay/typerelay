@@ -41,6 +41,38 @@ before(async () => {
 });
 after(async () => { await mongoose.connection.dropDatabase(); await mongoose.disconnect(); });
 
+test('editing and explicitly saving legacy snippets updates sort order while sync retries remain idempotent', async () => {
+	let { library } = await Fixture.create(Fixture.owner);
+	await Snippet.updateMany({ library: library._id }, { $unset: { createdAt: 1, updatedAt: 1 } }, { timestamps: false });
+	library = Libraries.view(Fixture.owner, await Libraries.get(Fixture.owner, library._id));
+	const edited = library.snippets[1];
+	const sibling = library.snippets[0];
+	const operation = randomUUID();
+	const changes = [Fixture.change(edited, 'Updated expansion')];
+	const result = await Fixture.upload(Fixture.owner, library, changes, operation);
+	assert.equal(result.library.snippets[0].id, edited.id);
+	assert.equal(result.library.snippets[0].revision, edited.revision + 1);
+	assert.ok(result.library.snippets[0].updatedAt instanceof Date);
+	const stored = await Snippet.findOne({ id: edited.id }).lean();
+	assert.equal(stored.content.text, 'Updated expansion');
+	assert.equal(+stored.updatedAt, +result.library.snippets[0].updatedAt);
+	assert.equal((await Snippet.findOne({ id: sibling.id }).lean()).updatedAt, undefined);
+	const retry = await Fixture.upload(Fixture.owner, library, changes, operation);
+	assert.equal(+retry.library.snippets[0].updatedAt, +stored.updatedAt);
+	const saved = result.library.snippets.find(snippet => snippet.id === sibling.id);
+	const untouched = await Fixture.upload(Fixture.owner, result.library, [Fixture.change(saved, saved.replace)]);
+	assert.equal(untouched.library.snippets[0].id, edited.id, 'Background sync of identical content must not reorder');
+	const explicitSave = [{ ...Fixture.change(saved, saved.replace), touch: true }];
+	const saveOperation = randomUUID();
+	const touched = await Fixture.upload(Fixture.owner, untouched.library, explicitSave, saveOperation);
+	assert.equal(touched.library.snippets[0].id, sibling.id, 'Explicit Save must move unchanged content to the top');
+	assert.equal(touched.library.snippets[0].revision, sibling.revision + 1);
+	assert.ok(touched.library.snippets[0].updatedAt > stored.updatedAt);
+	const saveRetry = await Fixture.upload(Fixture.owner, untouched.library, explicitSave, saveOperation);
+	assert.equal(+saveRetry.library.snippets[0].updatedAt, +touched.library.snippets[0].updatedAt);
+
+});
+
 test('private libraries remain hidden from admins and other accounts', async () => {
 	const { library } = await Fixture.create(Fixture.member);
 	assert.equal((await Libraries.get(Fixture.member, library._id)).name, 'Test');

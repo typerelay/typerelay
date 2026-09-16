@@ -31,6 +31,16 @@ test('snippet edits and creates reorder individual rows without reloading or los
 		assert.equal(document.activeElement.dataset.editSnippet, 'new');
 		assert.equal(document.querySelector('[data-select-snippet="old"]').checked, true);
 		assert.equal(document.querySelector('[data-snippet="new"] pre').textContent, 'Edited');
+		client.request = async (path, method, body) => {
+			assert.equal(path, 'libraries/one/snippets');
+			assert.equal(method, 'POST');
+			assert.equal(body.changes[0].touch, true, 'Explicit web Save must touch unchanged content');
+			return result;
+		};
+		client.poll = async () => {};
+		await client.snippet('new', { trigger: 'new', replace: 'Edited' });
+		assert.equal(document.querySelector('#snippets'), container);
+
 		const created = { id: 'created', trigger: 'created', replace: 'Created', revision: 1 };
 		await client.apply({ library: { ...updated, revision: 3, snippets: [created, ...updated.snippets] }, html: result.html, fragments: [{ id: created.id, revision: 1, html: pug.renderFile('./views/ajax/snippet.pug', { library, snippet: created }) }, ...result.fragments] });
 		assert.deepEqual([...container.children].map(node => node.dataset.snippet), ['created', 'new', 'old']);
