@@ -190,7 +190,7 @@ test('connected clients can disconnect without dismissing the panel',async()=>{
   assert.ok(f.calls.some(call=>call.name==='disconnect'));
   assert.equal(f.panel.status.textContent,'Disconnected');
   assert.ok(!f.calls.some(call=>call.name==='dismiss'));
-  f.panel.configure({config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},connected:false,accessibility:false,input_monitoring:false});assert.equal(button.hidden,false);assert.equal(button.disabled,true);
+  f.panel.configure({config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},connected:false,accessibility:false,input_monitoring:false});assert.equal(button.hidden,false);assert.equal(button.disabled,false);
  }finally{f.dom.window.close();}
 });
 

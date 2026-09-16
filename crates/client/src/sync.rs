@@ -203,8 +203,7 @@ impl Sync {
     }
     pub fn disconnect(&self) -> Result<()> {
         let _lock = self.lock()?;
-        let mut credentials = self.credentials()?;
-        let _ = self.request(&mut credentials, reqwest::Method::DELETE, "connection", None);
+        if let Ok(mut credentials)=self.credentials(){let _=self.request(&mut credentials,reqwest::Method::DELETE,"connection",None);}
         let db = Database::open(&self.directory)?;
         let transaction = db.connection.unchecked_transaction()?;
         db.connection.execute("UPDATE libraries SET synced=0", [])?;
@@ -212,7 +211,7 @@ impl Sync {
         for (seq, operation) in db.pending()? { db.recover_operation(&operation)?; db.connection.execute("DELETE FROM outbox WHERE seq=?1", [seq])?; }
         db.set_meta("cursor", &json!(0))?;
         transaction.commit()?;
-        fs::remove_file(self.path("credentials.json"))?;
+        match fs::remove_file(self.path("credentials.json")){Ok(())=>(),Err(error)if error.kind()==ErrorKind::NotFound=>(),Err(error)=>return Err(error.into())}
         Ok(())
     }
     pub fn editable(_root: &Path, directory: &Path, name: &str) -> Result<()> { let db = Database::open(directory)?; db.editable(&db.editor(name)?.id) }
@@ -264,6 +263,7 @@ mod tests {
         sync.disconnect().unwrap();
         assert!(!root.path().join("sync/credentials.json").exists());
         assert_eq!(Database::open(&directory).unwrap().meta("cursor").unwrap(), Some(json!(0)));
+        sync.disconnect().unwrap();
     }
     #[test]
     fn idle_browser_connection_does_not_cancel_callback_listener() {
