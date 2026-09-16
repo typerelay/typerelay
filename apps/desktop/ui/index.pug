@@ -5,8 +5,6 @@ html(lang="en")
 		meta(name="viewport" content="width=device-width, initial-scale=1")
 		title TypeRelay
 		link(rel="stylesheet" href="panel.css")
-		link(rel="stylesheet" href="sweetalert2.min.css")
-		script(src="sweetalert2.min.js" defer)
 		script(src="panel.js" defer)
 	body
 		main
@@ -106,8 +104,8 @@ html(lang="en")
 									button#disconnect.secondary(type="button") Disconnect
 									button.primary(type="submit") Authenticate
 						form#enroll-form.setting-section
-							h3 Local libraries
-							p Upload selected local libraries as private libraries.
+							h3 Libraries available to upload
+							p Only unsynced local libraries appear here. Synced libraries remain available in search and the TUI.
 							div#local-libraries
 							.form-actions
 								span

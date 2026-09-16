@@ -48,3 +48,5 @@ core-graphics = { version = "0.25", features = ["elcapitan"] }
 core-foundation = "0.10"
 foreign-types = "0.5"
 enigo = "0.6"
+objc2-user-notifications = "0.3"
+block2 = "0.6"

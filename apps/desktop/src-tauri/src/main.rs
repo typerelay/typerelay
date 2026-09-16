@@ -27,12 +27,12 @@ impl Runtime {
 	fn start_expansion(app:&tauri::AppHandle)->Result<()> {let state=app.state::<Runtime>();if state.expansion_started.swap(true,Ordering::SeqCst){return Ok(());}let result=(||{let requests=platform::ExpansionSession::start(state.root.join("snippets"),state.root.join("settings.yml"))?;let handle=app.clone();std::thread::spawn(move||for request in requests{if let Err(error)=Runtime::expand(&handle,request){let message=format!("Expansion failed: {error:#}");*handle.state::<Runtime>().status.lock().unwrap()=message.clone();let _=handle.notification().builder().title("TypeRelay").body(&message).show();}});Ok(())})();if result.is_err(){state.expansion_started.store(false,Ordering::SeqCst);}result}
     fn hide_on_focus_loss()->bool { cfg!(not(target_os="linux")) }
     fn sync_notice(_app:&tauri::AppHandle,message:&str,running:bool) {
-        let visible=_app.get_webview_window("panel").is_some_and(|window|window.is_visible().unwrap_or(false));
-        let _=_app.emit("sync-notice",json!({"message":message,"running":running,"visible":visible}));
-        if visible{return;}
+        let _=_app.emit("sync-notice",json!({"running":running}));
+        #[cfg(target_os="macos")]
+        if let Err(error)=platform::NativeNotifications::show(message){let message=format!("Native notification unavailable: {error:#}");eprintln!("{message}");*_app.state::<Runtime>().status.lock().unwrap()=message.clone();let _=_app.emit("panel-error",message);}
         #[cfg(target_os="linux")]
         if let Err(error)=notify_rust::Notification::new().appname("TypeRelay").summary("TypeRelay").body(message).show(){eprintln!("TypeRelay sync notification unavailable: {error}");}
-        #[cfg(not(target_os="linux"))]
+        #[cfg(target_os="windows")]
         if let Err(error)=_app.notification().builder().title("TypeRelay").body(message).show(){eprintln!("TypeRelay sync notification unavailable: {error}");}
     }
     fn quit(app:&tauri::AppHandle) {

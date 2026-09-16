@@ -6,7 +6,43 @@ use objc2_app_kit::{NSWorkspace,NSRunningApplication,NSApplicationActivationOpti
 use std::{ffi::{c_void,CString},mem,process::Command,sync::{Arc,Mutex,mpsc::{Receiver,SyncSender,sync_channel}},time::{Duration,Instant}};
 use typerelay_client::{database::DatabaseSnapshot,settings::SettingsStore};
 use typerelay_core::{Engine,Expansion,Input};
+use objc2_foundation::NSObjectProtocol;
+use objc2_user_notifications::UNUserNotificationCenterDelegate;
 type Ref = *const c_void;
+objc2::define_class!(
+    #[unsafe(super(objc2_foundation::NSObject))]
+    struct NativeNotificationDelegate;
+    unsafe impl NSObjectProtocol for NativeNotificationDelegate {}
+    unsafe impl UNUserNotificationCenterDelegate for NativeNotificationDelegate {
+        #[unsafe(method(userNotificationCenter:willPresentNotification:withCompletionHandler:))]
+        fn present(&self,_center:&objc2_user_notifications::UNUserNotificationCenter,_notification:&objc2_user_notifications::UNNotification,completion:&block2::DynBlock<dyn Fn(objc2_user_notifications::UNNotificationPresentationOptions)>) {
+            completion.call((objc2_user_notifications::UNNotificationPresentationOptions::Banner|objc2_user_notifications::UNNotificationPresentationOptions::List,));
+        }
+    }
+);
+// The delegate has no mutable state; UserNotifications calls it on its own queue.
+unsafe impl Send for NativeNotificationDelegate {}
+unsafe impl Sync for NativeNotificationDelegate {}
+pub struct NativeNotifications;
+impl NativeNotifications {
+    pub fn show(message:&str)->Result<()> {
+        use objc2::{AnyThread,runtime::ProtocolObject};
+        use objc2_foundation::{NSError,NSString};
+        use objc2_user_notifications::{UNAuthorizationOptions,UNMutableNotificationContent,UNNotificationRequest,UNUserNotificationCenter};
+        static DELEGATE:std::sync::OnceLock<objc2::rc::Retained<NativeNotificationDelegate>>=std::sync::OnceLock::new();
+        let delegate=DELEGATE.get_or_init(||unsafe{objc2::msg_send![NativeNotificationDelegate::alloc(),init]});
+        let center=UNUserNotificationCenter::currentNotificationCenter();center.setDelegate(Some(ProtocolObject::from_ref(&**delegate)));
+        let(sender,receiver)=std::sync::mpsc::sync_channel(1);
+        center.requestAuthorizationWithOptions_completionHandler(UNAuthorizationOptions::Alert,&block2::RcBlock::new(move|granted:objc2::runtime::Bool,error:*mut NSError|{let result=if error.is_null(){Ok(granted.as_bool())}else{Err(unsafe{&*error}.localizedDescription().to_string())};let _=sender.send(result);}));
+        let granted=receiver.recv_timeout(Duration::from_secs(60)).context("Notification permission request timed out")?.map_err(anyhow::Error::msg)?;
+        ensure!(granted,"Enable TypeRelay notifications in System Settings → Notifications");
+        let content=UNMutableNotificationContent::new();content.setTitle(&NSString::from_str("TypeRelay"));content.setBody(&NSString::from_str(message));
+        let request=UNNotificationRequest::requestWithIdentifier_content_trigger(&NSString::from_str(&uuid::Uuid::new_v4().to_string()),&content,None);
+        let(sender,receiver)=std::sync::mpsc::sync_channel(1);
+        center.addNotificationRequest_withCompletionHandler(&request,Some(&block2::RcBlock::new(move|error:*mut NSError|{let result=if error.is_null(){Ok(())}else{Err(unsafe{&*error}.localizedDescription().to_string())};let _=sender.send(result);} )));
+        receiver.recv_timeout(Duration::from_secs(10)).context("Notification delivery timed out")?.map_err(anyhow::Error::msg)
+    }
+}
 #[link(name="ApplicationServices",kind="framework")]
 unsafe extern "C" { fn AXIsProcessTrusted() -> bool; fn AXUIElementCreateApplication(pid:i32)->Ref; fn AXUIElementCopyAttributeValue(element:Ref,attribute:Ref,value:*mut Ref)->i32; fn AXUIElementPerformAction(element:Ref,action:Ref)->i32; fn AXValueGetValue(value:Ref,kind:i32,result:*mut c_void)->bool; fn CGEventSourceKeyState(source:i32,key:u16)->bool; fn CGEventKeyboardGetUnicodeString(event:core_graphics::sys::CGEventRef,max:usize,actual:*mut usize,buffer:*mut u16); }
 #[link(name="IOKit",kind="framework")]

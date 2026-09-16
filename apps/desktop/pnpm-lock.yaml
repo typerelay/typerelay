@@ -108,10 +108,6 @@ settings:
 importers:
 
   .:
-    dependencies:
-      sweetalert2:
-        specifier: ^11.26.25
-        version: 11.26.25
     devDependencies:
       '@tauri-apps/cli':
         specifier: ^2
@@ -484,9 +480,6 @@ packages:
   supports-preserve-symlinks-flag@1.0.0:
     resolution: {integrity: sha512-ot0WnXS9fgdkgIcePe6RHNk1WA8+muPa6cSjeR3V8K27q9BB1rTE3R1p7Hv0z1ZyAc8s6Vvv8DIyWf681MAt0w==}
     engines: {node: '>= 0.4'}
-
-  sweetalert2@11.26.25:
-    resolution: {integrity: sha512-+hunCOJdJ6FLj04T9YSLvvZXRjsvIkTeTKP2e4VF8CaBias961BTnWiSFAy7F/CM5eq3QK2Rraoc5Gzftslvkg==}
 
   symbol-tree@3.2.4:
     resolution: {integrity: sha512-9QNk5KwDF+Bvz+PyObkmSYjI5ksVUYtjW7AU22r2NKcfLJcXp96hkDWU3+XndOsUb+AQ9QhfzfCT2O+CNWT5Tw==}
@@ -925,8 +918,6 @@ snapshots:
       xmlchars: 2.2.0
 
   supports-preserve-symlinks-flag@1.0.0: {}
-
-  sweetalert2@11.26.25: {}
 
   symbol-tree@3.2.4: {}
 

@@ -8,6 +8,8 @@ use anyhow::ensure;
 #[cfg(target_os = "windows")]
 #[path = "platform_windows.rs"] mod native;
 pub use native::{Target,fallback_allowed};
+#[cfg(target_os="macos")]
+pub use native::NativeNotifications;
 #[cfg(any(target_os = "windows",target_os = "macos"))]
 pub use native::{ExpansionRequest, ExpansionSession};
 
