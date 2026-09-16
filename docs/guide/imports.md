@@ -26,10 +26,10 @@ TypeRelay does not execute imported scripts, formulas, macros or vendor commands
 The web **New library** form can also validate and import TypeRelay YAML. On a desktop, use:
 
 ```fish
-typerelay import ./snippets.yml --name "Imported"
+typerelay import yaml ./snippets.yml --name "Imported"
 typerelay export "Imported" ./imported-export.yml
 typerelay export "Imported" ./imported.typerelay.zip
-typerelay import ./imported.typerelay.zip --name "Imported bundle"
+typerelay import bundle ./imported.typerelay.zip --name "Imported bundle"
 ```
 
 Export refuses to overwrite an existing destination. Use YAML for snippets without binary assets and a `.typerelay.zip` bundle for complete rich libraries. Editing an export does not synchronize changes or alter the SQLite database. Import it as a new library if you want those changes in TypeRelay.
