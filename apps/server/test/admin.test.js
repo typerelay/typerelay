@@ -106,6 +106,9 @@ test('templates validate, preview safely, send through existing mail flow and re
 	assert.match(signup.html, /Thanks for signing up for Type Relay/); assert.match(signup.text, /15 minutes/);
 	await AdminSettings.set('email.signup', { subject: 'Custom subject', text: '{{url}}' });
 	assert.match((await AdminSettings.template('signup')).html, /Thanks for signing up/); assert.equal((await AdminSettings.template('signup')).subject, 'Custom subject');
+	await AdminSettings.set('email.signup', { subject: 'Deliberately minimal', text: '{{url}}', html: '' });
+	assert.equal((await AdminSettings.template('signup')).text, '{{url}}'); assert.equal((await AdminSettings.template('signup')).html, '');
+	await AdminSettings.set('email.signup', {});
 	await Fixture.json('/admin/api/email-templates/login', 'PUT', { subject: 'Hello {{bad}}', text: '{{url}}' }, 400);
 	await Fixture.json('/admin/api/email-templates/login', 'PUT', { subject: 'Hello', text: 'Open {{url}}' });
 	const preview = await Fixture.json('/admin/api/email-templates/login/preview', 'POST', { subject: 'Hello', text: 'Open {{url}}' }); assert.match(preview.text, /example-link/);

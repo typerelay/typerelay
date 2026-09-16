@@ -29,7 +29,7 @@ export class AdminSettings {
 	static async template(key) {
 		const defaults = AdminSettings.templates[key]; Support.assert(defaults, 'Unknown template', 404);
 		const stored = await AdminSettings.get('email.' + key);
-		const placeholder = stored.text?.trim() === '{{url}}' && !stored.html;
+		const placeholder = stored.text?.trim() === '{{url}}' && !Object.hasOwn(stored, 'html');
 		const text = typeof stored.text === 'string' && !placeholder ? stored.text : AdminSettings.plainText(defaults.html);
 		const html = placeholder ? defaults.html : typeof stored.html === 'string' ? stored.html : typeof stored.text === 'string' ? '' : defaults.html;
 		return { key, ...defaults, subject: stored.subject || defaults.subject, text, html };
