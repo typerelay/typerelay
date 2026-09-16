@@ -57,16 +57,18 @@ test('template editor saves and resets only the selected form, preserving other 
 	try {
 		const ids = [...document.querySelectorAll('[id]')].map(node => node.id); assert.equal(ids.length, new Set(ids).size);
 		const login = document.querySelector('[data-admin-template="login"]'); const invite = document.querySelector('[data-admin-template="invite"]');
-		login.elements.subject.value = 'Saved subject'; invite.elements.text.value = 'Keep this invitation draft {{url}}';
+		login.elements.subject.value = 'Saved subject'; login.elements.html.value = '<p>Saved {{url}}</p>'; invite.elements.text.value = 'Keep this invitation draft {{url}}'; invite.elements.html.value = '<p>Invitation draft {{url}}</p>';
 		await AdminUI.click({ target: document.getElementById('templates-nav-invite') }); await AdminUI.click({ target: document.getElementById('templates-nav-login') });
 		assert.equal(login.elements.subject.value, 'Saved subject');
-		const calls = []; dom.window.fetch = async (path, options) => { calls.push([path, options.method]); return { ok: true, headers: new Headers({ 'content-type': 'application/json' }), json: async () => ({ id: 'login', template: { subject: path.endsWith('/reset') ? 'Default subject' : 'Saved subject', text: '{{url}}' } }) }; };
+		const calls = []; dom.window.fetch = async (path, options) => { calls.push([path, options.method]); return { ok: true, headers: new Headers({ 'content-type': 'application/json' }), json: async () => ({ id: 'login', template: { subject: path.endsWith('/reset') ? 'Default subject' : 'Saved subject', text: '{{url}}', html: path.endsWith('/reset') ? '<p>Default {{url}}</p>' : '<p>Saved {{url}}</p>' } }) }; };
 		await AdminUI.submit({ target: login, submitter: login.querySelector('[type="submit"]'), preventDefault() {} });
 		assert.equal(document.querySelector('[data-admin-template="login"]'), login); assert.equal(invite.elements.text.value, 'Keep this invitation draft {{url}}');
-		login.elements.subject.value = 'Discard this change'; login.reset(); assert.equal(login.elements.subject.value, 'Saved subject');
+		login.elements.subject.value = 'Discard this change'; login.elements.html.value = '<p>Discard HTML</p>'; login.reset(); assert.equal(login.elements.subject.value, 'Saved subject'); assert.equal(login.elements.html.value, '<p>Saved {{url}}</p>');
 		dom.window.Swal.fire = async () => ({ isConfirmed: true });
 		await AdminUI.click({ target: login.querySelector('[data-template-reset]') });
 		assert.equal(login.elements.subject.value, 'Default subject'); assert.equal(invite.elements.text.value, 'Keep this invitation draft {{url}}');
+		assert.equal(login.elements.html.value, '<p>Default {{url}}</p>'); assert.equal(invite.elements.html.value, '<p>Invitation draft {{url}}</p>');
+		const frame = login.querySelector('[data-template-preview-frame]'); assert.equal(frame.getAttribute('sandbox'), ''); assert.equal(frame.hidden, true);
 		assert.equal(document.getElementById('templates-panel-login').hidden, false);
 		assert.deepEqual(calls, [['/admin/api/email-templates/login', 'PUT'], ['/admin/api/email-templates/login/reset', 'POST']]);
 	} finally { dom.window.close(); }

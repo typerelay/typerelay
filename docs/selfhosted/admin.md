@@ -20,7 +20,9 @@ The user export contains one row per membership and escapes CSV formula prefixes
 
 ## Email templates and settings
 
-Edit the subject and plain-text body for sign-in, signup verification, email changes, password resets, and invitations. `{{url}}` is required in each body. Preview uses an inert example URL; test-send uses the saved template. Reset restores built-in defaults. Token generation and expiration remain unchanged.
+Mailtwine-style defaults cover sign-in, signup verification, email changes, password resets, and invitations, with Type Relay branding and matching expiry times (15 minutes for authentication links; 7 days for invitations). Edit the subject, HTML body, and plain-text fallback. `{{url}}` is required in each non-empty body; other available variables appear below the editor. HTML variables are escaped. Leave HTML blank for plain-text-only delivery.
+
+Preview uses sample names and an inert example URL in a sandboxed frame that blocks scripts, forms, and remote resources. Test-send uses the saved template. Reset restores built-in defaults. Genuine saved customizations remain intact; old link-only placeholder bodies automatically use the complete defaults. Token generation and expiration remain unchanged.
 
 The Managani integration uses `@managani/node`, with base URL, public site key, enable/disable, and a masked server secret. Set `GIT_ENCRYPTION_KEY` to 32 bytes or 64 hexadecimal characters before saving a secret. Secrets use AES-256-GCM; back up the key alongside deployment secrets. A blank replacement keeps the current secret; clearing is explicit. Managani failures do not fail application requests.
 
@@ -54,8 +56,8 @@ These endpoints use the admin session cookie, not public API authentication. Mut
 | GET | `/admin/api/users.csv` | User membership export |
 | GET | `/admin/api/accounts/new/form`, `/admin/api/accounts/:id/form` | Pug form fragments |
 | GET | `/admin/api/email-templates/:key/form` | Template form fragment |
-| PUT | `/admin/api/email-templates/:key` | Save `subject` and `text` |
-| POST | `/admin/api/email-templates/:key/preview` | Render supplied subject/text with example variables |
+| PUT | `/admin/api/email-templates/:key` | Save `subject`, `text`, and optional `html` |
+| POST | `/admin/api/email-templates/:key/preview` | Render supplied subject/text/html with example variables and a sandboxed preview document |
 | POST | `/admin/api/email-templates/:key/test` | Send saved template to `email` |
 | POST | `/admin/api/email-templates/:key/reset` | Restore default |
 | GET | `/admin/api/settings` | Masked integration settings, custom code, configuration status |

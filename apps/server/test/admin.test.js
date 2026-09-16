@@ -15,6 +15,7 @@ import { Billing } from '../services/billing.js';
 import { Auth } from '../services/auth.js';
 import { Support } from '../services/support.js';
 import { Assets } from '../services/assets.js';
+import { Team } from '../services/team.js';
 
 class Fixture {
 	static origin = 'http://127.0.0.1:3195';
@@ -101,12 +102,26 @@ test('overrides survive webhook updates and never change billing fields', async 
 });
 
 test('templates validate, preview safely, send through existing mail flow and reset', async () => {
+	const signup = await AdminSettings.template('signup');
+	assert.match(signup.html, /Thanks for signing up for Type Relay/); assert.match(signup.text, /15 minutes/);
+	await AdminSettings.set('email.signup', { subject: 'Custom subject', text: '{{url}}' });
+	assert.match((await AdminSettings.template('signup')).html, /Thanks for signing up/); assert.equal((await AdminSettings.template('signup')).subject, 'Custom subject');
 	await Fixture.json('/admin/api/email-templates/login', 'PUT', { subject: 'Hello {{bad}}', text: '{{url}}' }, 400);
 	await Fixture.json('/admin/api/email-templates/login', 'PUT', { subject: 'Hello', text: 'Open {{url}}' });
 	const preview = await Fixture.json('/admin/api/email-templates/login/preview', 'POST', { subject: 'Hello', text: 'Open {{url}}' }); assert.match(preview.text, /example-link/);
 	await Fixture.json('/admin/api/email-templates/login/test', 'POST', { email: 'test@example.test' }); assert.equal(Fixture.emails.at(-1).subject, 'Hello');
 	await Auth.login('owner@example.test'); assert.equal(Fixture.emails.at(-1).subject, 'Hello'); assert.match(Fixture.emails.at(-1).text, /auth\/callback\?token=/);
+	assert.equal(Fixture.emails.at(-1).html, undefined, 'Preserve existing plain-text customizations');
 	await Fixture.json('/admin/api/email-templates/login/reset', 'POST', {}); assert.equal((await AdminSettings.template('login')).subject, 'Sign in to Type Relay');
+	await Auth.login('owner@example.test'); assert.match(Fixture.emails.at(-1).html, /<a href=/); assert.match(Fixture.emails.at(-1).text, /15 minutes/);
+	const defaults = await AdminSettings.template('signup');
+	await Fixture.json('/admin/api/email-templates/signup', 'PUT', { subject: defaults.subject, text: defaults.text, html: defaults.html });
+	const htmlPreview = await Fixture.json('/admin/api/email-templates/signup/preview', 'POST', defaults); assert.match(htmlPreview.html, /Hi Alex/); assert.match(htmlPreview.preview_html, /Content-Security-Policy/);
+	await Fixture.json('/admin/api/email-templates/signup/test', 'POST', { email: 'test@example.test' }); assert.match(Fixture.emails.at(-1).html, /Hi Alex/);
+	await Auth.login('new-signup@example.test', 'New <Name>'); assert.match(Fixture.emails.at(-1).html, /New &lt;Name&gt;/); assert.match(Fixture.emails.at(-1).text, /New <Name>/);
+	const account = await M.Account.findOne({ name: '=Formula' }).lean(); const owner = await M.User.findOne({ email: 'owner@example.test' }).lean();
+	await Team.invite(await Support.context(String(owner._id), String(account._id)), 'invited@example.test');
+	assert.match(Fixture.emails.at(-1).subject, /Changed shared name invited you to join =Formula on Type Relay/); assert.match(Fixture.emails.at(-1).html, /Hi there/); assert.match(Fixture.emails.at(-1).text, /7 days/);
 });
 
 test('settings encrypt and mask secrets; custom code only enters authenticated app CSP', async () => {

@@ -35,13 +35,14 @@ class Browser {
 }
 class Fixture {
 	static origin = 'http://127.0.0.1:3150'; static server; static mails = [];
+	static mailUrl(mail) { const match = mail.text.match(/https?:\/\/[^\s]+/); assert.ok(match, 'Email contains an action URL'); return new URL(match[0]); }
 	static async account() {
 		const browser = new Browser();
 		await browser.page();
 		const email = randomUUID() + '@example.test';
 		await browser.json('/auth/signup', 'POST', { name: 'Original Name', email });
 		const mail = Fixture.mails.findLast(mail => mail.to === email);
-		await browser.call(new URL(mail.text).pathname + new URL(mail.text).search);
+		await browser.call(Fixture.mailUrl(mail).pathname + Fixture.mailUrl(mail).search);
 		await browser.page();
 		return { browser, email, user: await User.findOne({ email }).lean() };
 	}
@@ -107,7 +108,7 @@ test('signup, generated password, password login, OAuth continuation and recover
 	await login.page('/');
 	assert.ok(login.account);
 	await login.json('/auth/forgot-password', 'POST', { email });
-	const reset = new URL(Fixture.mails.findLast(mail => mail.subject.startsWith('Reset')).text);
+	const reset = Fixture.mailUrl(Fixture.mails.findLast(mail => mail.subject.startsWith('Reset')));
 	const fresh = (await login.json('/auth/reset-password', 'POST', { token: reset.searchParams.get('token') })).password;
 	assert.notEqual(fresh, password);
 	await login.json('/auth/reset-password', 'POST', { token: reset.searchParams.get('token') }, 400);
@@ -122,7 +123,7 @@ test('profile name updates incrementally, email requires confirmation and cannot
 	assert.equal(result.pending_email, replacement);
 	assert.equal((await User.findById(user._id).lean()).email, email);
 	assert.match(result.avatar, /UN/);
-	const confirm = new URL(Fixture.mails.findLast(mail => mail.to === replacement).text);
+	const confirm = Fixture.mailUrl(Fixture.mails.findLast(mail => mail.to === replacement));
 	const anonymous = new Browser(); await anonymous.page();
 	await anonymous.json('/auth/email', 'POST', { token: confirm.searchParams.get('token') }, 401);
 	await browser.json('/auth/email', 'POST', { token: confirm.searchParams.get('token') });
