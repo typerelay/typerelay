@@ -22,7 +22,39 @@ block content
 				#editor.card.p-4
 					h2.fw-bold Select a library
 					p.text-muted Import YAML or create your first library.
-				#conflicts.mt-3
+		#conflicts.mt-3
+		#rich-image-modal.modal.fade(tabindex="-1" aria-label="Add rich-text image" data-bs-backdrop="static" data-bs-keyboard="false")
+			.modal-dialog.modal-lg.modal-dialog-scrollable
+				.modal-content
+					.modal-header
+						h2.modal-title.h5.fw-bold Add image
+						button.btn-close(type="button" data-bs-dismiss="modal" aria-label="Close")
+					form#rich-image-form
+						.modal-body
+							label.form-label(for="rich-image-file") Upload image
+							input#rich-image-file.form-control.form-control-sm.mb-3(type="file" accept="image/png,image/jpeg,image/webp,image/gif")
+							label.form-label(for="rich-image-url") Or remote image URL
+							input#rich-image-url.form-control.form-control-sm.mb-3(type="url")
+							.row.align-items-center
+								.col-md-6
+									label.form-label(for="rich-image-alt") Alt text
+									input#rich-image-alt.form-control.form-control-sm.mb-3(maxlength="500")
+								.col-md-6
+									label.form-label(for="rich-image-title") Title
+									input#rich-image-title.form-control.form-control-sm.mb-3(maxlength="500")
+							.row.align-items-center
+								.col-md-6
+									label.form-label(for="rich-image-placement") Placement
+									select#rich-image-placement.form-select.form-select-sm.mb-3
+										option(value="inline") Inline
+										option(value="block") Block
+								.col-md-6
+									label.form-label(for="rich-image-width") Display width
+									input#rich-image-width.form-control.form-control-sm.mb-3(type="number" min="32" max="2048" value="640")
+							p.small.text-muted.mb-0 Remote images are cached privately for reliable offline insertion.
+						.modal-footer.justify-content-between
+							button.btn.btn-outline-secondary.btn-sm(type="button" data-bs-dismiss="modal") Cancel
+							button.btn.btn-primary.btn-sm(type="submit") Add image
 		#settings.modal.fade(tabindex="-1" aria-label="Settings" data-bs-backdrop="static" data-bs-keyboard="false")
 			.modal-dialog.modal-xl.modal-dialog-scrollable.settings-dialog
 				.modal-content

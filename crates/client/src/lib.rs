@@ -26,3 +26,5 @@ pub mod panel;
 pub mod panel_ipc;
 
 pub mod templates;
+pub mod clipboard_payload;
+pub mod assets;

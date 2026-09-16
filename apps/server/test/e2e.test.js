@@ -410,7 +410,7 @@ test('web AJAX updates only affected snippets; preserves panel, filter and multi
 	await client.form('snippet', { library: library._id }, () => {});
 	assert.equal(dom.window.document.querySelector('#record-form button[type="submit"]').disabled, false);
 	const trigger = dom.window.document.querySelector('#trigger');
-	assert.equal(trigger.parentElement.querySelector('.input-group-text').textContent, ',');
+	assert.equal(trigger.parentElement.querySelector('.input-group-text').textContent, ';');
 	trigger.value = ',,my-test';
 	trigger.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
 	assert.equal(trigger.value, 'my-test');
@@ -454,7 +454,7 @@ test('web AJAX updates only affected snippets; preserves panel, filter and multi
 	assert.equal(dom.window.document.querySelector('#editor'), panel);
 	const list = dom.window.document.querySelector('#libraries');
 	assert.ok(list.compareDocumentPosition(dom.window.document.querySelector('#import-menu')) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING);
-	assert.equal(dom.window.document.querySelectorAll('[data-import-format]').length, 5);
+	assert.equal(dom.window.document.querySelectorAll('[data-import-format]').length, 6);
 	await client.onClick({ target: dom.window.document.querySelector('[data-import-format="textexpander"]') });
 	const importFile = dom.window.document.querySelector('#import-file');
 	assert.equal(importFile.accept, '.csv');
@@ -580,7 +580,27 @@ test('two offline clients retain templates and conflicts; protocol 4 is rejected
 	const conflict=await Conflict.findOne({library:library._id,resolved:false}).lean();assert.ok(conflict);assert.equal(conflict.local.content.type,'template');assert.equal(conflict.local.content.variables.name.label,'Customer');
 	assert.equal((await Libraries.get(ctx,library._id)).snippets[0].content.variables.name.default,'Nitai');
 	const credential=JSON.parse(await readFile(join(one.config,'sync/credentials.json'),'utf8'));
-	const rejected=await fetch(Fixture.origin+'/api/v2/sync',{headers:{Authorization:'Bearer '+credential.access_token,'X-TypeRelay-Sync-Protocol':'4'}});assert.equal(rejected.status,426);assert.equal((await rejected.json()).protocol,5);
+	const rejected=await fetch(Fixture.origin+'/api/v2/sync',{headers:{Authorization:'Bearer '+credential.access_token,'X-TypeRelay-Sync-Protocol':'4'}});assert.equal(rejected.status,426);assert.equal((await rejected.json()).protocol,6);
+});
+test('rich text, templates and binary assets sync without embedding bytes in library JSON', async () => {
+	const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
+	const upload = await fetch(Fixture.origin + '/api/v2/assets', { method: 'POST', headers: { Cookie: Fixture.cookie, 'Content-Type': 'image/png', 'X-CSRF-Token': Fixture.csrf, 'X-Account-Id': Fixture.account }, body: png });
+	assert.equal(upload.status, 200); const asset = await upload.json();
+	const markdown = `# Welcome **{{name}}**\n\n| A | B |\n|---|---|\n| C | D |\n\n<u onclick="bad()">underlined</u>\n\n<img src="typerelay-asset:${asset.id}" alt="Dot" width="64">\n\n{{key:enter}}\n\nDone`;
+	const content = { version: 2, type: 'rich_text', markdown, variables: { name: { label: 'Name', default: 'Nitai', required: true, multiline: false } } };
+	const { library } = await Fixture.json('libraries', 'POST', { name: 'Rich sync', snippets: [{ id: randomUUID(), title: 'Rich', trigger: 'rich', content }] });
+	const stored = library.snippets[0].content;
+	assert.equal(stored.version, 2); assert.equal(stored.type, 'rich_text'); assert.deepEqual(stored.assets, [asset.id]); assert.match(stored.text, /Welcome/); assert.doesNotMatch(JSON.stringify(library), /iVBOR/);
+	await Fixture.cli(Fixture.one, 'sync'); await Fixture.cli(Fixture.two, 'sync');
+	for (const device of [Fixture.one, Fixture.two]) { const state = await Fixture.state(device); const entry = state.libraries.find(item => item._id === library._id).records[0]; assert.equal(entry.content.markdown, markdown); assert.deepEqual(entry.content.assets, [asset.id]); }
+	const rendered = await (await Fixture.request('/api/v2/editor/' + library._id + '?format=json')).json();
+	assert.match(rendered.html, /<table>/); assert.match(rendered.html, /<u>underlined<\/u>/); assert.doesNotMatch(rendered.html, /onclick|<script/);
+	const exported = await Fixture.request('/api/v2/libraries/' + library._id + '/export-bundle'); assert.equal(exported.status, 200); const bundle = Buffer.from(await exported.arrayBuffer()); assert.equal(bundle.subarray(0, 2).toString(), 'PK');
+	const importedResponse = await fetch(Fixture.origin + '/api/v2/import/bundle', { method: 'POST', headers: { Cookie: Fixture.cookie, 'Content-Type': 'application/zip', 'X-CSRF-Token': Fixture.csrf, 'X-Account-Id': Fixture.account, 'X-Operation-Id': randomUUID() }, body: bundle });
+	const imported = await importedResponse.json(); assert.equal(importedResponse.status, 200, JSON.stringify(imported)); assert.equal(imported.library.snippets[0].content.markdown, markdown); assert.deepEqual(imported.library.snippets[0].content.assets, [asset.id]);
+	const credential = JSON.parse(await readFile(join(Fixture.one.config, 'sync/credentials.json'), 'utf8'));
+	const rejected = await fetch(Fixture.origin + '/api/v2/sync', { headers: { Authorization: 'Bearer ' + credential.access_token, 'X-TypeRelay-Sync-Protocol': '5' } });
+	assert.equal(rejected.status, 426); assert.equal((await rejected.json()).protocol, 6);
 });
 test('CSRF rejects writes, logout invalidates session', async () => {
 	const response = await fetch(Fixture.origin + '/api/v2/libraries', { method: 'POST', headers: { Cookie: Fixture.cookie, 'Content-Type': 'application/json', 'X-Account-Id': Fixture.account }, body: JSON.stringify({ name: 'Blocked' }) });

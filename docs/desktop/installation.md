@@ -1,6 +1,6 @@
 # Installation
 
-Install only an artifact whose version, platform and architecture match the release announcement. The engine, panel and TUI must use the same version; desktop/server sync requires protocol 5. Test artifacts may be unsigned. Production releases should be signed, and macOS releases notarized.
+Install only an artifact whose version, platform and architecture match the release announcement. The engine, panel and TUI must use the same version; desktop/server sync requires protocol 6. Test artifacts may be unsigned. Production releases should be signed, and macOS releases notarized.
 
 ## Omarchy/Hyprland
 

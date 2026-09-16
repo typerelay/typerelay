@@ -8,11 +8,12 @@ Imports always create private libraries and never replace a matching name. A num
 
 | Format | Status | Notes |
 | --- | --- | --- |
-| TypeRelay YAML | Supported | Preserves Text, Code, Template variables, titles, abbreviations and code language |
+| TypeRelay bundle | Supported | ZIP manifest plus deduplicated images; preserves rich Markdown, raw HTML, variables, asset hashes and remote-source metadata |
+| TypeRelay YAML | Supported | Preserves Text, Rich text without images, Code, Template variables, titles, abbreviations and code language |
 | SnippetsLab JSON library export | Supported | Folders become libraries; fragments become separate snippets; tags, smart groups, shortcuts, pinning and notes are omitted with warnings |
 | TextExpander CSV | Beta | Requires `abbreviation` and `snippet` headers; optional `label`; native `.textexpander` files are unsupported |
-| Text Blaze JSON | Beta | Recognized folder exports; styled HTML becomes plain text and omits images/styles |
-| TypeIt4Me XML | Beta | Recognized XML/plist sets only; binary archives and RTF are unsupported |
+| Text Blaze JSON | Beta | Recognized folder exports; supported HTML becomes Rich text and remote images are cached when committed |
+| TypeIt4Me XML | Beta | Recognized XML/plist sets; embedded RTF formatting and PNG/JPEG pictures become Rich text; binary archives remain unsupported |
 
 Beta vendor formats vary between application versions. Review the preview, especially folder names, line breaks and abbreviations.
 
@@ -27,6 +28,8 @@ The web **New library** form can also validate and import TypeRelay YAML. On a d
 ```fish
 typerelay import ./snippets.yml --name "Imported"
 typerelay export "Imported" ./imported-export.yml
+typerelay export "Imported" ./imported.typerelay.zip
+typerelay import ./imported.typerelay.zip --name "Imported bundle"
 ```
 
-Export refuses to overwrite an existing destination. Exported YAML is a portable snapshot; editing it does not synchronize changes or alter the SQLite database. Import the edited file as a new library if you want those changes in TypeRelay.
+Export refuses to overwrite an existing destination. Use YAML for snippets without binary assets and a `.typerelay.zip` bundle for complete rich libraries. Editing an export does not synchronize changes or alter the SQLite database. Import it as a new library if you want those changes in TypeRelay.

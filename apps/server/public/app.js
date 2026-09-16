@@ -1,5 +1,6 @@
 import { TemplateEditor, TemplateFill } from './template-editor.js';
 import { Abbreviation } from './abbreviation.js';
+import { RichTextRuntime } from './rich-text-runtime.js';
 class TypeRelay {
 	account = document.querySelector('#workspace')?.dataset.account;
 	libraries = new Map();
@@ -49,7 +50,7 @@ class TypeRelay {
 			if (event.target.hasAttribute('data-white-label-file') && event.target.files[0]) await this.whiteLabelUpload(event.target).catch(error => this.toast(error.message, 'error'));
 		});
 		document.querySelector('#form-modal')?.addEventListener('hidden.bs.modal', () => {
-			this.codeVersion = (this.codeVersion || 0) + 1; this.codeView?.destroy(); this.codeView = null;
+			this.codeVersion = (this.codeVersion || 0) + 1; this.codeView?.destroy(); this.codeView = null; this.richView?.destroy(); this.richView = null;
 			if (this.returnSettings) { this.returnSettings = false; bootstrap.Modal.getOrCreateInstance(document.querySelector('#settings')).show(); }
 		});
 		document.querySelector('#trash')?.addEventListener('show.bs.modal', () => this.loadTrash().catch(error => this.toast(error.message, 'error')));
@@ -85,6 +86,7 @@ class TypeRelay {
 		if (!response.ok) { const result = await response.json(); const error = new Error(result.error); Object.assign(error, result); throw error; }
 		return response.json();
 	}
+	async bundle(file) { const response = await fetch('/api/v2/import/bundle', { method: 'POST', headers: { 'Content-Type': 'application/zip', 'X-CSRF-Token': document.querySelector('meta[name=csrf-token]').content, 'X-Account-Id': this.account || '', 'X-Operation-Id': this.formOperation }, body: file }); const result = await response.json(); if (!response.ok) throw new Error(result.error); return result; }
 	fragment(html) { const template = document.createElement('template'); template.innerHTML = html; return template.content.firstElementChild; }
 	update(selector, container, html) {
 		const old = document.querySelector(selector);
@@ -238,15 +240,31 @@ class TypeRelay {
 		});
 
 	}
-	async snippetValue(fields) { const template = fields.get('type') === 'template' ? await this.templateEditor.content() : null; return { trigger: fields.get('trigger') || null, title: fields.get('title') || '', content: { version: 1, type: fields.get('type') || 'plain_text', text: fields.get('replace'), ...(template ? { variables: template.variables } : {}), ...(fields.get('type') === 'code' ? { language: fields.get('language') || 'plain_text' } : {}) } }; }
+	async snippetValue(fields) { const type = fields.get('type') || 'plain_text'; const template = ['template', 'rich_text'].includes(type) ? await this.templateEditor.content() : null; if (type === 'rich_text') return { trigger: fields.get('trigger') || null, title: fields.get('title') || '', content: { version: 2, type, markdown: this.richView?.content() || fields.get('replace'), variables: template?.variables || {} } }; return { trigger: fields.get('trigger') || null, title: fields.get('title') || '', content: { version: 1, type, text: fields.get('replace'), ...(template ? { variables: template.variables } : {}), ...(type === 'code' ? { language: fields.get('language') || 'plain_text' } : {}) } }; }
+	async assetFile(file) { const response = await fetch('/api/v2/assets', { method: 'POST', headers: { 'Content-Type': file.type, 'X-CSRF-Token': document.querySelector('meta[name=csrf-token]').content, 'X-Account-Id': this.account || '' }, body: file }); if (!response.ok) throw new Error((await response.json()).error); return response.json(); }
+	async richAssets(content) { const first = await RichTextRuntime.render(content, {}, true); const assets = {}; for (const id of first.assets) { const response = await fetch('/api/v2/assets/' + id, { headers: { 'X-Account-Id': this.account || '' } }); if (!response.ok) throw new Error('Could not load rich-text image'); const blob = await response.blob(); assets[id] = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(blob); }); } return assets; }
+	async copyRich(content, values = {}) { const assets = await this.richAssets(content); const rendered = await RichTextRuntime.render(content, values, false, new Date(), assets); try { await navigator.clipboard.write([new ClipboardItem({ 'text/plain': new Blob([rendered.text], { type: 'text/plain' }), 'text/html': new Blob([rendered.html], { type: 'text/html' }) })]); } catch { await navigator.clipboard.writeText(rendered.text); this.toast('This browser copied the plain-text fallback'); } return rendered; }
 	async codeEditor() {
 		this.templateEditor.attach();
-		if (document.querySelector('#copy-code')) document.querySelector('#copy-code').textContent = document.querySelector('#snippet-type').value === 'template' ? 'Fill and copy' : 'Copy';
+		if (document.querySelector('#copy-code')) document.querySelector('#copy-code').textContent = ['template', 'rich_text'].includes(document.querySelector('#snippet-type').value) ? 'Fill and copy' : 'Copy';
 		const version = this.codeVersion = (this.codeVersion || 0) + 1;
 		if (!document.querySelector('#snippet-type')) return;
 		const code = document.querySelector('#snippet-type').value === 'code';
+		const rich = document.querySelector('#snippet-type').value === 'rich_text';
 		document.querySelector('#code-options').hidden = !code;
-		if (!code) { this.codeView?.destroy(); this.codeView = null; return; }
+		document.querySelector('#rich-options').hidden = !rich;
+		if (!code) { this.codeView?.destroy(); this.codeView = null; }
+		if (!rich) { this.richView?.destroy(); this.richView = null; }
+		if (rich) {
+			const { RichEditor } = await import('./generated/rich-editor.js');
+			if (version !== this.codeVersion || !document.querySelector('#snippet-type')) return;
+			if (!this.richView) {
+				this.richView = new RichEditor(document.querySelector('#replace'), document.querySelector('#rich-editor'), document.querySelector('#rich-toolbar'), { readonly: !!this.codeReadonly, upload: file => this.assetFile(file), remote: url => this.request('assets/remote', 'POST', { url }), refresh: id => this.request('assets/' + id + '/refresh', 'POST', {}), onError: error => this.toast(error.message, 'error') });
+				document.querySelector('[data-rich-image-file]').addEventListener('change', async event => { const file = event.target.files[0]; if (!file) return; try { const asset = await this.assetFile(file); this.richView.editor.chain().focus().setImage({ src: 'typerelay-asset:' + asset.id, alt: file.name }).run(); } catch (error) { this.toast(error.message, 'error'); } finally { event.target.value = ''; } });
+			}
+			return;
+		}
+		if (!code) return;
 		const { CodeEditor } = await import('./generated/code-editor.js');
 		if (version !== this.codeVersion || !document.querySelector('#snippet-type')) return;
 		const selector = document.querySelector('#code-language');
@@ -269,7 +287,7 @@ class TypeRelay {
 			} else await this.snippet(id, value, library);
 		});
 		if (!library.permissions.edit) {
-			this.codeReadonly = true; this.codeView?.setReadonly(true);
+			this.codeReadonly = true; this.codeView?.setReadonly(true); this.richView?.setReadonly(true);
 			document.querySelectorAll('[data-vfield],#insert-variable,#variable-kind,#variable-name').forEach(field => field.disabled = true);
 			document.querySelectorAll('#form-fields select').forEach(field => { field.disabled = true; });
 			document.querySelector('#form-title').textContent = 'Snippet · Read-only';
@@ -278,7 +296,7 @@ class TypeRelay {
 		}
 	}
 	async form(kind, params, submit) {
-		this.codeView?.destroy(); this.codeView = null; this.codeReadonly = false;
+		this.codeView?.destroy(); this.codeView = null; this.richView?.destroy(); this.richView = null; this.codeReadonly = false;
 		document.querySelector('#form-title').textContent = ({ library: 'Library', snippet: 'Snippet', group: 'Group', conflict: 'Resolve conflict', move: 'Move snippets', snippetslab: 'Import SnippetsLab', import: 'Import snippets' })[kind];
 		document.querySelector('#form-fields').replaceChildren();
 		const template = document.createElement('template');
@@ -451,17 +469,18 @@ class TypeRelay {
 		}
 		const data = button.dataset;
 		const library = this.libraries.get(this.selected);
-		if (button.dataset.copySnippet) { const library = this.libraries.get(this.selected); const entry = library.snippets.find(item => item.id === button.dataset.copySnippet); if (entry.content.type === 'template') return this.templateFill.open(entry.content, async () => { const current = await this.request('library-view/' + library._id); if (!current.library.snippets.some(item => item.id === entry.id && item.revision === entry.revision)) throw new Error('Snippet changed; reopen it before copying.'); }); await navigator.clipboard.writeText(entry.replace); return this.toast('Copied'); }
-		if (button.id === 'copy-code') { if (document.querySelector('#snippet-type').value === 'template') return this.templateFill.open(await this.templateEditor.content()); await navigator.clipboard.writeText(document.querySelector('#replace').value); return this.toast('Copied'); }
+		if (button.dataset.copySnippet) { const library = this.libraries.get(this.selected); const entry = library.snippets.find(item => item.id === button.dataset.copySnippet); if (['template', 'rich_text'].includes(entry.content.type)) return this.templateFill.open(entry.content, async () => { const current = await this.request('library-view/' + library._id); if (!current.library.snippets.some(item => item.id === entry.id && item.revision === entry.revision)) throw new Error('Snippet changed; reopen it before copying.'); }); await navigator.clipboard.writeText(entry.replace); return this.toast('Copied'); }
+		if (button.id === 'copy-code') { const type = document.querySelector('#snippet-type').value; if (type === 'template') return this.templateFill.open(await this.templateEditor.content()); if (type === 'rich_text') { const content = (await this.snippetValue(new FormData(document.querySelector('#record-form')))).content; return this.templateFill.open(content); } await navigator.clipboard.writeText(document.querySelector('#replace').value); return this.toast('Copied'); }
 		if (button.dataset.importFormat) { this.importSource = null; this.importFormat = button.dataset.importFormat; return this.form('import', { format: this.importFormat }, async () => {
 			const selected = [...document.querySelectorAll('[data-import-key]:checked')].map(input => ({ key: input.dataset.importKey, trigger: Abbreviation.normalize(document.querySelector('[data-import-trigger="' + input.dataset.importKey + '"]').value) }));
 			await this.applyBatch(await this.request('import/' + this.importFormat, 'POST', { source: this.importSource, filename: this.importFilename, selected }), false);
 		}); }
 		if (button.id === 'preview-import') {
 			const file = document.querySelector('#import-file').files[0];
-			if (!file || file.size > 8 * 1048576) throw new Error('Choose an export up to 8 MiB');
+			if (!file || file.size > (this.importFormat === 'typerelay' ? 16 : 8) * 1048576) throw new Error('Choose an export within the size limit');
 			button.disabled = true; document.querySelector('#record-form button[type=submit]').disabled = true;
 			try {
+				if (this.importFormat === 'typerelay') { await this.apply(await this.bundle(file)); bootstrap.Modal.getInstance(document.querySelector('#form-modal')).hide(); this.toast('Bundle imported'); return; }
 				this.importSource = await file.text(); this.importFilename = file.name;
 				const preview = await this.request('import/' + this.importFormat + '/preview', 'POST', { source: this.importSource, filename: this.importFilename });
 				document.querySelector('#import-preview').replaceChildren(this.fragment(preview.html));

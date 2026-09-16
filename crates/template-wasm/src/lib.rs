@@ -19,4 +19,14 @@ impl WasmTemplate {
         let address = Box::into_raw(buffer).cast::<u8>() as u32;
         ((address as u64) << 32) | length as u64
     }
+    /// # Safety
+    /// The input must be an initialized buffer allocated in this module memory.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn rich_text_render(ptr: *const u8, len: usize) -> u64 {
+        let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
+        let output = typerelay_core::rich_text::RichText::json(std::str::from_utf8(bytes).unwrap_or(""));
+        let length = output.len(); let buffer = output.into_bytes().into_boxed_slice();
+        let address = Box::into_raw(buffer).cast::<u8>() as u32;
+        ((address as u64) << 32) | length as u64
+    }
 }

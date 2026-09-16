@@ -25,7 +25,7 @@ export class ApiRateLimit {
 	}
 	static isUpload(request) {
 		if (ApiRateLimit.isBulkLibraryCreate(request)) return true;
-		return String(request.method || '').toUpperCase() === 'POST' && /^\/imports\/[^/]+(?:\/preview)?$/.test(ApiRateLimit.getRequestPath(request));
+		return String(request.method || '').toUpperCase() === 'POST' && (/^\/imports\/[^/]+(?:\/preview)?$/.test(ApiRateLimit.getRequestPath(request)) || /^\/assets(?:\/remote)?$/.test(ApiRateLimit.getRequestPath(request)));
 	}
 	static isExpensive(request) {
 		const method = String(request.method || '').toUpperCase();

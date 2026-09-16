@@ -3,14 +3,14 @@ use crate::{editor::Paths, panel::{Hit, Panel}};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{io::{Read,Write}, collections::BTreeMap};
-use typerelay_core::template::Step;
+use crate::clipboard_payload::ClipboardStep;
 use std::{fs, os::unix::{fs::PermissionsExt, net::{UnixDatagram,UnixListener,UnixStream}}, path::PathBuf, sync::{Arc, atomic::{AtomicBool, Ordering}, mpsc}, time::Duration};
 
 #[derive(Serialize, Deserialize)]
 pub struct Request { pub hit: Hit, pub target: String, pub created_ms: u128, #[serde(default)] pub values: BTreeMap<String,String>, #[serde(default)] pub clock:Option<(i64,i32)>, #[serde(default)] pub generation:Option<u64>, #[serde(default)] pub erase: usize, #[serde(default)] pub prepare: bool }
 #[derive(Serialize,Deserialize)]
 pub struct Prompt { pub hit: Hit, pub target: String, pub erase: usize, pub generation:u64, pub created_ms:u128 }
-pub struct Insertion { pub deadline: std::time::Instant, pub step: Step, pub erase: usize, pub generation: Option<u64>, pub target: String, pub reply: mpsc::Sender<std::result::Result<u64, String>> }
+pub struct Insertion { pub deadline: std::time::Instant, pub step: ClipboardStep, pub erase: usize, pub generation: Option<u64>, pub target: String, pub reply: mpsc::Sender<std::result::Result<u64, String>> }
 pub struct PanelPresence(PathBuf);
 impl Drop for PanelPresence { fn drop(&mut self) { let _=fs::remove_file(&self.0); } }
 pub struct PanelIpc;
@@ -33,8 +33,8 @@ impl PanelIpc {
     pub fn prompt(prompt: Prompt) -> bool {
         Self::directory().and_then(|root| { let pid=fs::read_to_string(root.join("ready"))?.parse::<u32>()?; anyhow::ensure!(Self::owns_window(pid),"Panel is not running"); let socket=UnixDatagram::unbound()?; socket.set_nonblocking(true)?; socket.send_to(&serde_json::to_vec(&prompt)?,root.join("events.sock"))?; Ok(()) }).is_ok()
     }
-    pub fn execute(tx: &mpsc::SyncSender<Insertion>, hit: &Hit, target: &str, steps: Vec<Step>, erase: usize, generation: Option<u64>) -> Result<()> {
-        let steps = if steps.is_empty() { vec![Step::Text {text:String::new()}] } else { steps };
+    pub fn execute(tx: &mpsc::SyncSender<Insertion>, hit: &Hit, target: &str, steps: Vec<ClipboardStep>, erase: usize, generation: Option<u64>) -> Result<()> {
+		let steps = if steps.is_empty() { vec![ClipboardStep::Payload(crate::clipboard_payload::ClipboardPayload::text(String::new()))] } else { steps };
         let mut expected_generation=generation;
         for (index, step) in steps.into_iter().enumerate() {
             Panel::content(&Paths::config_dir()?.join("snippets"),hit)?;
@@ -59,7 +59,7 @@ impl PanelIpc {
                     let request:Request=serde_json::from_slice(&bytes)?;
                     let now=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis();
                     anyhow::ensure!(now>=request.created_ms && now-request.created_ms<2000 && request.erase<=64,"Insertion request expired or invalid");
-                    let steps=if request.prepare { Panel::content(&Paths::config_dir()?.join("snippets"),&request.hit)?; vec![] } else { Panel::render_at(&Paths::config_dir()?.join("snippets"),&request.hit,request.values,false,request.clock.unwrap_or_else(crate::templates::Templates::clock))?.steps };
+					let steps=if request.prepare { Panel::content(&Paths::config_dir()?.join("snippets"),&request.hit)?; vec![] } else { Panel::steps_at(&Paths::config_dir()?.join("snippets"),&request.hit,request.values,false,request.clock.unwrap_or_else(crate::templates::Templates::clock))? };
                     anyhow::ensure!(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis().saturating_sub(request.created_ms)<2000,"Insertion preparation expired; nothing inserted");
                     Self::execute(&background,&request.hit,&request.target,steps,request.erase,request.generation)
                 })().map_err(|error|error.to_string());

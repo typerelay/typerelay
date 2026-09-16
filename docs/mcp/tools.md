@@ -12,6 +12,7 @@ Tools call the public API and preserve its permissions and revisions.
 - [update_snippet](/api/operations/update_snippet) — Edit snippet (`content:write`).
 - [batch_snippets](/api/operations/batch_snippets) — Move or trash snippets atomically (`content:write`).
 - [search_snippets](/api/operations/search_snippets) — Search accessible snippets (`content:read`).
+- [get_asset_metadata](/api/operations/get_asset_metadata) — Get rich-text asset metadata (`content:read`).
 - [export_library](/api/operations/export_library) — Export library as YAML (`content:read`).
 - [preview_import](/api/operations/preview_import) — Preview import (`content:write`).
 - [commit_import](/api/operations/commit_import) — Import into new private libraries (`content:write`).

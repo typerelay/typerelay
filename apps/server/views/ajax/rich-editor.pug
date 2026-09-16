@@ -1,0 +1,40 @@
+#rich-options.mb-3(hidden=!snippet || (snippet.content && snippet.content.type) !== 'rich_text')
+	#rich-toolbar.d-flex.flex-wrap.align-items-center.gap-2.mb-2(role="toolbar" aria-label="Rich-text formatting")
+		select.form-select.form-select-sm.rich-heading(data-rich-heading aria-label="Heading")
+			option(value="") Paragraph
+			each level in [1, 2, 3, 4, 5, 6]
+				option(value=level)= 'Heading ' + level
+		.btn-group.btn-group-sm(role="group" aria-label="Text formatting")
+			button.btn.btn-outline-secondary(type="button" data-rich-command="bold" aria-label="Bold") B
+			button.btn.btn-outline-secondary(type="button" data-rich-command="italic" aria-label="Italic") I
+			button.btn.btn-outline-secondary(type="button" data-rich-command="underline" aria-label="Underline") U
+			button.btn.btn-outline-secondary(type="button" data-rich-command="strike" aria-label="Strike") S
+			button.btn.btn-outline-secondary(type="button" data-rich-command="code" aria-label="Inline code") Code
+		.btn-group.btn-group-sm(role="group" aria-label="Lists and blocks")
+			button.btn.btn-outline-secondary(type="button" data-rich-command="bulletList") Bullets
+			button.btn.btn-outline-secondary(type="button" data-rich-command="orderedList") Numbers
+			button.btn.btn-outline-secondary(type="button" data-rich-command="taskList") Tasks
+			button.btn.btn-outline-secondary(type="button" data-rich-command="blockquote") Quote
+			button.btn.btn-outline-secondary(type="button" data-rich-command="codeBlock") Block code
+			button.btn.btn-outline-secondary(type="button" data-rich-command="horizontalRule") Rule
+		.btn-group.btn-group-sm(role="group" aria-label="Alignment")
+			each alignment in ['left', 'center', 'right', 'justify']
+				button.btn.btn-outline-secondary(type="button" data-rich-command='align-' + alignment)= alignment
+		.btn-group.btn-group-sm(role="group" aria-label="Insert")
+			button.btn.btn-outline-secondary(type="button" data-rich-command="link") Link
+			button.btn.btn-outline-secondary(type="button" data-rich-command="image") Image
+			button.btn.btn-outline-secondary(type="button" data-rich-command="refreshImage") Refresh image
+			button.btn.btn-outline-secondary(type="button" data-rich-command="table") Table
+			button.btn.btn-outline-secondary(type="button" data-rich-command="row") + row
+			button.btn.btn-outline-secondary(type="button" data-rich-command="column") + column
+			button.btn.btn-outline-secondary(type="button" data-rich-command="deleteTable") Delete table
+			button.btn.btn-outline-secondary(type="button" data-rich-command="html") HTML
+		.btn-group.btn-group-sm(role="group" aria-label="Editing")
+			button.btn.btn-outline-secondary(type="button" data-rich-command="undo") Undo
+			button.btn.btn-outline-secondary(type="button" data-rich-command="redo") Redo
+			button.btn.btn-outline-secondary(type="button" data-rich-command="clear") Clear
+			button.btn.btn-outline-secondary(type="button" data-rich-command="source") Source
+		input.visually-hidden(type="file" accept="image/png,image/jpeg,image/webp,image/gif" data-rich-image-file)
+	#rich-editor.form-control.form-control-sm
+	template#rich-image-html-template
+		img

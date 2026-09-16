@@ -21,29 +21,32 @@ pub fn open_web_app()->Result<()> {native::open_url("https://app.typerelay.com")
 pub fn release_modifiers()->Result<()> {native::release_modifiers()}
 
 pub fn copy(text: String) -> Result<()> {
+	copy_payload(typerelay_client::clipboard_payload::ClipboardPayload::text(text))
+}
+pub fn copy_payload(payload:typerelay_client::clipboard_payload::ClipboardPayload)->Result<()> {
     #[cfg(target_os = "linux")]
-    { typerelay_client::clipboard::PasteJob::copy_text(text) }
+	{ typerelay_client::clipboard::PasteJob::copy_payload(payload) }
     #[cfg(not(target_os = "linux"))]
-    { use clipboard_rs::Clipboard; clipboard_rs::ClipboardContext::new().map_err(|e|anyhow::anyhow!("{e}"))?.set_text(text).map_err(|e|anyhow::anyhow!("{e}")) }
+	{ use clipboard_rs::{Clipboard,ClipboardContent};let context=clipboard_rs::ClipboardContext::new().map_err(|e|anyhow::anyhow!("{e}"))?;let mut contents=vec![ClipboardContent::Text(payload.plain)];if let Some(html)=payload.html{contents.push(ClipboardContent::Html(html));}if let Some(rtf)=payload.rtf{contents.push(ClipboardContent::Rtf(rtf));}context.set(contents).map_err(|e|anyhow::anyhow!("{e}")) }
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn paste(target: &Target, erase: usize, text: Option<String>) -> Result<()> {
+pub fn paste(target: &Target, erase: usize, payload: Option<typerelay_client::clipboard_payload::ClipboardPayload>) -> Result<()> {
     use std::time::{Duration, Instant};
     let deadline = Instant::now() + Duration::from_secs(2);
     while native::keys_down() { ensure!(Instant::now() < deadline, "Release shortcut keys before inserting"); std::thread::sleep(Duration::from_millis(10)); }
     ensure!(target.focused()?, "Original window lost focus; nothing inserted");
     #[cfg(target_os="windows")]
-    if target.replace_text(erase,text.as_deref().unwrap_or("\n"))?{return Ok(());}
-    let mut clipboard=None;let has_text=text.is_some();
-    if let Some(text)=text {
+	if payload.as_ref().is_none_or(|value|value.html.is_none()&&value.rtf.is_none())&&target.replace_text(erase,payload.as_ref().map(|value|value.plain.as_str()).unwrap_or("\n"))?{return Ok(());}
+	let mut clipboard=None;let has_text=payload.is_some();
+	if let Some(payload)=payload {
         #[cfg(target_os="windows")]
         let preserve=!native::remote_session();
         #[cfg(target_os="macos")]
         let preserve=true;
-        if !preserve{copy(text)?;}else{match native::ClipboardLease::publish(text.clone()){Ok(lease)=>clipboard=Some(lease),Err(_error)=>{
+		if !preserve{copy_payload(payload.clone())?;}else{match native::ClipboardLease::publish(payload.clone()){Ok(lease)=>clipboard=Some(lease),Err(_error)=>{
         #[cfg(target_os="windows")]
-        {copy(text)?;}
+		{copy_payload(payload)?;}
         #[cfg(not(target_os="windows"))]
         {return Err(_error);}
     }}}

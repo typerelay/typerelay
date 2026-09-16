@@ -81,4 +81,4 @@ Local disconnect revokes the current device, removes its credentials, marks sync
 
 ## Compatibility
 
-Desktop and server must both support sync protocol 5. A mismatch stops sync with an upgrade message before content is exchanged. Upgrade the engine, TUI and panel together on Omarchy.
+Desktop and server must both support sync protocol 6. A mismatch stops sync with an upgrade message before content is exchanged. Upgrade the engine, TUI and panel together on Omarchy. Rich-text image manifests sync with library records; authenticated binary transfers are deduplicated and completed before a changed snapshot becomes active.

@@ -25,7 +25,7 @@ On macOS, confirm Accessibility for focus restoration/insertion; Input Monitorin
 
 Check the server origin, network connection, selected account, plan/device limit and current library permission. The URL must be an HTTPS origin without a path, except loopback HTTP for development.
 
-Read-only libraries cannot upload edits. After access revocation, the next successful sync removes the library from active search and expansion and preserves unsent edits in recovery. Resolve same-snippet conflicts in the web app. If the server reports protocol 5 is required, upgrade the engine, TUI and panel together.
+Read-only libraries cannot upload edits. After access revocation, the next successful sync removes the library from active search and expansion and preserves unsent edits in recovery. Resolve same-snippet conflicts in the web app. If the server reports protocol 6 is required, upgrade the engine, TUI and panel together.
 
 Use **Settings → Connected devices** to confirm the device is still active. A revoked device must disconnect locally and authenticate again if access should be restored.
 

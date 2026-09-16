@@ -72,7 +72,7 @@ impl Cli {
             Commands::Connect { server, no_browser } => { let server = server.unwrap_or(typerelay_client::settings::SettingsStore::open(root.join("settings.yml"))?.settings.sync_url); typerelay_client::sync::Sync::new(root.clone(), root.join("snippets"))?.connect(&server, !no_browser)?; },
             Commands::Enroll { filename } => typerelay_client::sync::Sync::new(root.clone(), root.join("snippets"))?.enroll(&filename)?,
             Commands::Sync => typerelay_client::sync::Sync::new(root.clone(), root.join("snippets"))?.cycle()?,
-            Commands::Import { source, name } => { typerelay_client::database::Database::open(&root.join("snippets"))?.import(&name, &std::fs::read_to_string(source)?)?; },
+			Commands::Import { source, name } => {let db=typerelay_client::database::Database::open(&root.join("snippets"))?;if source.to_string_lossy().ends_with(".typerelay.zip"){db.import_bundle(&name,&source)?;}else{db.import(&name,&std::fs::read_to_string(source)?)?;}},
             Commands::Export { name, destination } => typerelay_client::database::Database::open(&root.join("snippets"))?.export(&name, &destination)?,
             Commands::DatabaseEdit { name, trigger, text, trash } => { let db = typerelay_client::database::Database::open(&root.join("snippets"))?; let file = db.editor(&name)?; let index = file.entries.iter().position(|entry|entry.trigger == trigger); anyhow::ensure!(!trash || index.is_some(), "Snippet missing"); db.edit(&file, index, if trash { None } else { Some(config::Match { trigger, replace: text.ok_or_else(||anyhow::anyhow!("Text required"))?, ..index.map(|i|file.entries[i].clone()).unwrap_or_default() }) })?; },
             Commands::DatabaseBatch { source, destination, triggers } => {

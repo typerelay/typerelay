@@ -3,15 +3,17 @@ import { parseDocument } from 'htmlparser2';
 import { DOMParser } from '@xmldom/xmldom';
 import { Abbreviation } from '../public/abbreviation.js';
 import { randomUUID } from 'node:crypto';
-import { mongoose, Library, Snippet, Operation, Conflict, Account, Change, Member, Group } from '../model/index.js';
+import { mongoose, Library, Snippet, SnippetAsset, Operation, Conflict, Account, Change, Member, Group } from '../model/index.js';
 import { Support, Yaml } from './support.js';
 import { Billing } from './billing.js';
+import { RichText } from './rich_text.js';
 
 export class Libraries {
 	static retention = 30 * 86400000;
 	static trashFields(actor, now = new Date()) { return { state: 'trashed', trashed_at: now, expires_at: new Date(+now + Libraries.retention), trashed_by: actor }; }
 	static content(value) {
-		const content = value?.content || { version: 1, type: value?.type || 'plain_text', language: value?.language || 'plain_text', text: value?.replace, variables: value?.variables };
+		const content = value?.content || (value?.type === 'rich_text' ? { version: 2, type: 'rich_text', markdown: value?.replace, variables: value?.variables || {} } : { version: 1, type: value?.type || 'plain_text', language: value?.language || 'plain_text', text: value?.replace, variables: value?.variables });
+		if (content.version === 2 && content.type === 'rich_text') return RichText.content(content);
 		Support.assert(content.version === 1 && ['plain_text', 'code', 'template'].includes(content.type) && typeof content.text === 'string', 'Unsupported snippet content');
 		Support.assert(content.type !== 'code' || (typeof content.language === 'string' && content.language.length > 0 && content.language.length <= 100 && !/[\x00-\x1f\x7f]/.test(content.language)), 'Invalid language');
 		return { version: 1, type: content.type, text: content.text.replaceAll('\r\n', '\n'), ...(content.type === 'code' ? { language: content.language } : {}), ...(content.type === 'template' ? { variables: content.variables || {} } : {}) };
@@ -22,8 +24,10 @@ export class Libraries {
 		Support.assert(entry?.trigger == null || typeof entry.trigger === 'string', 'Invalid abbreviation');
 		return { trigger: Abbreviation.normalize(entry?.trigger) || null, title: entry?.title || '', content: Libraries.content(entry) };
 	}
-	static yaml(entry) { const value = Libraries.value(entry); return { trigger: value.trigger, title: value.title, replace: value.content.text, type: value.content.type, language: value.content.language || 'plain_text', variables: value.content.variables || {} }; }
-	static entry(snippet) { return { ...snippet, replace: snippet.content?.text }; }
+	static async prepared(ctx,entry){if(entry?.content?.type==='rich_text')return{...entry,content:await RichText.prepare(ctx,entry.content)};if(entry?.type==='rich_text')return{...entry,content:await RichText.prepare(ctx,{version:2,type:'rich_text',markdown:entry.replace,variables:entry.variables||{}})};return entry;}
+	static yaml(entry) { const value = Libraries.value(entry); return { trigger: value.trigger, title: value.title, replace: value.content.text, type: value.content.type === 'rich_text' ? 'plain_text' : value.content.type, language: value.content.language || 'plain_text', variables: value.content.type === 'rich_text' ? {} : (value.content.variables || {}) }; }
+	static exportEntry(entry){const value=Libraries.value(entry);if(value.content.type==='rich_text'){Support.assert(!value.content.assets.length,'Export rich text with images as a TypeRelay bundle',409);return{trigger:value.trigger,title:value.title,replace:value.content.markdown,type:'rich_text',variables:value.content.variables};}return Libraries.yaml(value);}
+	static entry(snippet) { if(snippet.content?.type==='rich_text'){const assets=Object.fromEntries((snippet.content.assets||[]).map(id=>[id,`/snippet-assets/${snippet.account}/${id}`]));return{...snippet,replace:snippet.content.markdown,rich_html:RichText.render({...snippet.content,assets}).html};}return { ...snippet, replace: snippet.content?.text }; }
 	static view(ctx, library) { return { ...library, _id: String(library._id), deleted: library.state !== 'active', permissions: Support.access(ctx, library) }; }
 	static async hydrate(library, session) {
 		const entries = await Snippet.find({ library: library._id, state: { $ne: 'purged' } }).sort({ position: 1, id: 1 }).session(session || null).lean();
@@ -38,10 +42,22 @@ export class Libraries {
 		const libraries = await Library.find({ account: ctx.account, state: 'active' }).session(session || null).lean();
 		return Promise.all(libraries.filter(library => Support.access(ctx, library).read).map(async library => Libraries.view(ctx, await Libraries.hydrate(library, session))));
 	}
-	static async validate(entries) {
-		return Yaml.validate(entries.map(Libraries.yaml));
+	static async validate(entries, ctx = null, session = null) {
+		const values = entries.map(Libraries.value);
+		await Yaml.validate(values.map(Libraries.yaml));
+		if (!ctx) return;
+		const ids = [...new Set(values.flatMap(value => value.content.type === 'rich_text' ? value.content.assets : []))];
+		if (!ids.length) return;
+		const assets = await SnippetAsset.find({ account: ctx.account, id: { $in: ids } }).select('id size').session(session || null).lean();
+		Support.assert(assets.length === ids.length, 'Rich text references a missing image asset', 422);
+		const sizes = new Map(assets.map(asset => [asset.id, asset.size]));
+		for (const value of values.filter(value => value.content.type === 'rich_text')) {
+			Support.assert(value.content.assets.reduce((total, id) => total + sizes.get(id), 0) <= 8 * 1048576, 'Rich-text images exceed 8 MiB', 422);
+		}
+		await SnippetAsset.updateMany({ account: ctx.account, id: { $in: ids } }, { $set: { last_referenced_at: new Date() } }, { session: session || null });
 	}
 	static importFormats = {
+		typerelay: { name: 'TypeRelay bundle', accept: '.typerelay.zip,.zip', instructions: 'Choose a TypeRelay bundle containing snippets.yml and its deduplicated image assets.', beta: false },
 		yaml: { name: 'TypeRelay YAML', accept: '.yml,.yaml', instructions: 'Choose a TypeRelay YAML export.', beta: false },
 		snippetslab: { name: 'SnippetsLab', accept: '.json', instructions: 'In SnippetsLab, use Library → Export → JSON.', beta: false },
 		textexpander: { name: 'TextExpander', accept: '.csv', instructions: 'On TextExpander.com, open Import/Export → Export and download a group as CSV. Native .textexpander files are not supported.', beta: true },
@@ -145,14 +161,13 @@ export class Libraries {
 				const original = record.trigger ?? record.shortcut ?? record.abbreviation ?? record.abbr ?? null;
 				const entry = { key: groupIndex + ':' + index, folder: String(groupIndex), name: group.name.replaceAll('/', '∕').replaceAll('\\', '∖').slice(0, 85), title: record.title ?? record.name ?? record.label ?? '', original_trigger: original, trigger: Abbreviation.normalize(original) || null, warnings: [] };
 				let text = record.text ?? record.body ?? record.snippet ?? record.replace ?? record.plainText ?? record.content ?? record.clip;
-				if (record.html && format === 'textblaze') { const converted = Libraries.htmlText(record.html); text = converted.trim() || typeof text !== 'string' ? converted : text; entry.warnings.push('Converted rich text to plain text; styling and images omitted.'); }
-				if (record.html && typeof text === 'string' && !text.trim()) entry.error = 'No readable text found; image-only HTML cannot be imported.';
-				if (typeof text === 'string' && /^\{\\rtf/i.test(text)) entry.error = 'RTF content is not supported by this beta importer; export plain text instead.';
+				if (record.html && format === 'textblaze') { const rich = RichText.content({ version: 2, type: 'rich_text', markdown: record.html, variables: {} }); text = rich.text; entry.content = rich; entry.warnings.push('Imported HTML as rich text; remote images are cached when the import is committed.'); }
+				if (typeof text === 'string' && /^\{\\rtf/i.test(text)) { const rich = RichText.content({ version: 2, type: 'rich_text', markdown: RichText.rtf(text), variables: {} }); text = rich.text; entry.content = rich; entry.warnings.push('Imported RTF as rich text; embedded images are cached when committed.'); }
 				if (typeof text !== 'string') { entry.error = 'No readable text found; images/binary content cannot be imported.'; text = ''; }
 				const dynamic = format !== 'yaml' && (/\{(?:[a-z][a-z0-9_-]*(?=[:;}])|=)/i.test(text) || /%[A-Za-z]|%\{|[⊢⊣]|\{\{|\$\|\$/.test(text) || /script|macro/i.test(String(record.type || record.kind || '')));
 				entry.review = dynamic;
 				if (dynamic) { entry.title = (entry.title || original || 'Imported snippet') + ' (Needs review)'; entry.trigger = null; entry.warnings.push('Unsupported commands preserved literally. No abbreviation is assigned.'); }
-				entry.content = format === 'yaml' ? Libraries.content(record) : { version: 1, type: dynamic ? 'code' : 'plain_text', text: text.replaceAll('\r\n', '\n'), ...(dynamic ? { language: 'plain_text' } : {}) };
+				entry.content ||= format === 'yaml' ? Libraries.content(record) : { version: 1, type: dynamic ? 'code' : 'plain_text', text: text.replaceAll('\r\n', '\n'), ...(dynamic ? { language: 'plain_text' } : {}) };
 				try { await Libraries.validate([{ ...entry, trigger: null }]); } catch (error) { entry.error ||= error.message; }
 				if (entry.trigger && (typeof entry.trigger !== 'string' || !/^[a-z0-9-]{1,63}$/.test(entry.trigger))) entry.trigger_error = 'Correct or clear this abbreviation before importing.';
 				entries.push(entry);
@@ -220,8 +235,9 @@ export class Libraries {
 		return { libraries };
 	}
 	static async create(ctx, body, session) {
-		const entries = body.yaml !== undefined ? (await Yaml.run(body.yaml)).matches : (body.snippets || []);
-		await Libraries.validate(entries);
+		const sourceEntries = body.yaml !== undefined ? (await Yaml.run(body.yaml)).matches : (body.snippets || []);
+		const entries=[];for(const entry of sourceEntries)entries.push(await Libraries.prepared(ctx,entry));
+		await Libraries.validate(entries, ctx, session);
 		await Billing.assertResourceIncrease(ctx, 'libraries', 1, session);
 		await Billing.assertResourceIncrease(ctx, 'snippets', entries.length, session);
 		const [library] = await Library.create([{ account: ctx.account, creator: ctx.user, name: Support.text(body.name), shared: false, editable: false, members: [], groups: [], revision: 1, state: 'active' }], { session });
@@ -300,8 +316,8 @@ export class Libraries {
 			const server = await Snippet.findOne({ account: ctx.account, id: change.id }).session(session).lean();
 			Support.assert(!server || Support.equal(server.library, library._id), 'Snippet moved to another library; review your changes', 409);
 			Support.assert(server?.state !== 'purged', 'Snippet was permanently purged; it cannot be restored', 410);
-			const local = change.value === null ? null : Libraries.value(change.value, server?.content);
-			if (local) await Libraries.validate([local]);
+			const local = change.value === null ? null : Libraries.value(await Libraries.prepared(ctx,change.value), server?.content);
+			if (local) await Libraries.validate([local], ctx, session);
 			if (server?.state === 'active' && library.state === 'active' && Libraries.same(server, local)) continue;
 			if (server?.state === 'trashed' && local === null) continue;
 			if (library.state !== 'active' || server?.state === 'trashed' || (server?.revision ?? null) !== (change.base_revision ?? null)) {
@@ -317,7 +333,7 @@ export class Libraries {
 				await Snippet.updateOne({ _id: server._id }, { $set: Libraries.trashFields(ctx.user, now), $inc: { revision: 1 } }, { session });
 			}
 		}
-		await Libraries.validate(await Snippet.find({ library: library._id, state: 'active' }).session(session).lean());
+		await Libraries.validate(await Snippet.find({ library: library._id, state: 'active' }).session(session).lean(), ctx, session);
 		if (before) {
 			const after = await Billing.usage(ctx.account, session);
 			Billing.assertLimit(ctx, 'snippets', before.snippets, Math.max(0, after.snippets - before.snippets));
@@ -351,12 +367,12 @@ export class Libraries {
 			let position = (last?.position ?? -1) + 1;
 			for (const record of selected) {
 				const item = body.items.find(item => item.id === record.id);
-				const change = item.value === undefined ? {} : Libraries.value(item.value, record.content);
+				const change = item.value === undefined ? {} : Libraries.value(await Libraries.prepared(ctx,item.value), record.content);
 				await Snippet.updateOne({ _id: record._id }, { $set: { library: destination._id, position: position++, ...change }, $inc: { revision: 1 } }, { session });
 				await Conflict.updateMany({ account: ctx.account, library: source._id, snippet: record.id }, { $set: { library: destination._id } }, { session });
 			}
 			const entries = await Snippet.find({ library: destination._id, state: 'active' }).session(session).lean();
-			await Libraries.validate(entries);
+			await Libraries.validate(entries, ctx, session);
 			Support.assert(Buffer.byteLength(JSON.stringify(entries)) <= 1048576, 'Destination exceeds the library size limit');
 			for (const library of [source, destination]) {
 				await Library.updateOne({ _id: library._id }, { $inc: { revision: 1 } }, { session });
@@ -384,7 +400,7 @@ export class Libraries {
 		const libraries = await Libraries.list(ctx, session);
 		Support.assert(libraries.length <= 256, 'Active libraries exceed the engine limit', 409);
 		const entries = libraries.flatMap(library => library.snippets);
-		await Libraries.validate(entries);
+		await Libraries.validate(entries, ctx, session);
 		Support.assert(Buffer.byteLength(JSON.stringify(entries)) <= 8 * 1048576, 'Active snippets exceed the engine limit', 409);
 		for (const library of libraries) Support.assert(Buffer.byteLength(JSON.stringify(library.snippets)) <= 1048576, 'Library exceeds the engine limit', 409);
 	}
@@ -453,6 +469,7 @@ export class Libraries {
 						snippets++;
 					}
 				}
+				const referenced=new Set();const collect=value=>{if(!value||typeof value!=='object')return;if(Array.isArray(value)){for(const item of value)collect(item);return;}if(value.type==='rich_text'&&Array.isArray(value.assets))for(const id of value.assets)referenced.add(id);for(const item of Object.values(value))collect(item);};for(const record of await Snippet.find({account:account._id,state:{$ne:'purged'}}).select('content').session(session).lean())collect(record.content);for(const conflict of await Conflict.find({account:account._id,resolved:false}).select('local base server').session(session).lean())collect(conflict);await SnippetAsset.deleteMany({account:account._id,id:{$nin:[...referenced]},updatedAt:{$lte:new Date(+now-Libraries.retention)}}).session(session);
 				return { libraries: libraries.length, snippets };
 			});
 			summary.libraries += purged.libraries;
@@ -479,7 +496,9 @@ export class Libraries {
 			const candidates = changes.filter(change => visibleIds.has(String(change.library))).flatMap(change => (change.departures || []).map(id => ({ library: String(change.library), id })));
 			const locations = new Map((await Snippet.find({ account: ctx.account, id: { $in: [...new Set(candidates.map(item => item.id))] } }).select('id library').session(session).lean()).map(record => [record.id, String(record.library)]));
 			const departures = [...new Map(candidates.filter(item => locations.has(item.id) && locations.get(item.id) !== item.library).map(item => [item.library + ':' + item.id, item])).values()];
-			result = { protocol: 5, departures, purged, cursor: account.sequence, accessible: visible.map(library => String(library._id)), libraries, tombstones, conflicts, trash: await Libraries.trash(ctx, session) };
+			const assetIds = [...new Set([...libraries.flatMap(library => library.records || []).flatMap(record => record.content?.type === 'rich_text' ? record.content.assets : []), ...conflicts.flatMap(conflict => [conflict.local, conflict.base, conflict.server].flatMap(value => value?.content?.type === 'rich_text' ? value.content.assets : []))])];
+			const assets = assetIds.length ? await SnippetAsset.find({ account: ctx.account, id: { $in: assetIds } }).select('id mime_type size width height animated source_urls').session(session).lean() : [];
+			result = { protocol: 6, departures, purged, cursor: account.sequence, accessible: visible.map(library => String(library._id)), libraries, assets, tombstones, conflicts, trash: await Libraries.trash(ctx, session) };
 		}, { readConcern: { level: 'snapshot' } });
 		return result;
 	}

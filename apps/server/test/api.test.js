@@ -98,7 +98,8 @@ test('revocation and member removal invalidate integrations', async () => {
 });
 test('OpenAPI catalog covers every route and mutation has operation ID', () => {
 	const docs = Object.values(spec.paths).flatMap(path => Object.values(path));
-	assert.deepEqual(docs.map(doc => doc.operationId).sort(), operations.map(operation => operation.id).sort());
+	const direct = ['upload_asset', 'asset_presence', 'download_asset', 'cache_remote_asset', 'refresh_remote_asset', 'export_library_bundle', 'import_library_bundle'];
+	assert.deepEqual(docs.map(doc => doc.operationId).sort(), [...operations.map(operation => operation.id), ...direct].sort());
 	for (const operation of operations.filter(operation => operation.mutation)) assert.ok(ApiSchema.body(operation).required.includes('operation_id'));
 });
 

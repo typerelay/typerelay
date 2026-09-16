@@ -98,7 +98,7 @@ impl ExpansionSession { pub fn start(directory:std::path::PathBuf,settings:std::
 
 pub struct ClipboardLease { context:clipboard_rs::ClipboardContext, saved:Vec<clipboard_rs::ClipboardContent>, marker:Vec<u8>, active:bool }
 impl ClipboardLease {
-    pub fn publish(text:String)->Result<Self> {
+	pub fn publish(payload:typerelay_client::clipboard_payload::ClipboardPayload)->Result<Self> {
         use clipboard_rs::{Clipboard,ClipboardContent,ClipboardContext};
         let board=objc2_app_kit::NSPasteboard::generalPasteboard();
         let count=board.pasteboardItems().map(|items|items.count()).unwrap_or(0);
@@ -110,7 +110,7 @@ impl ClipboardLease {
         for format in formats {let bytes=context.get_buffer(&format).map_err(|e|anyhow::anyhow!("Cannot preserve clipboard: {e}"))?;total+=bytes.len();ensure!(total<=16*1024*1024,"Clipboard too large to preserve; use Copy");saved.push(ClipboardContent::Other(format,bytes));}
         let marker=uuid::Uuid::new_v4().to_string().into_bytes();
         let mut lease=Self{context,saved,marker,active:true};
-        if let Err(error)=lease.context.set(vec![ClipboardContent::Text(text),ClipboardContent::Other("com.typerelay.clipboard-owner".into(),lease.marker.clone())]) {let saved=std::mem::take(&mut lease.saved);let _=lease.context.set(saved);lease.active=false;return Err(anyhow::anyhow!("Clipboard write failed: {error}"));}
+		let mut contents=vec![ClipboardContent::Text(payload.plain),ClipboardContent::Other("com.typerelay.clipboard-owner".into(),lease.marker.clone())];if let Some(html)=payload.html{contents.push(ClipboardContent::Html(html));}if let Some(rtf)=payload.rtf{contents.push(ClipboardContent::Rtf(rtf));}if let Err(error)=lease.context.set(contents){let saved=std::mem::take(&mut lease.saved);let _=lease.context.set(saved);lease.active=false;return Err(anyhow::anyhow!("Clipboard write failed: {error}"));}
         Ok(lease)
     }
     pub fn restore(&mut self)->Result<()> {

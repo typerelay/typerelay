@@ -4,7 +4,7 @@ The pure parser/renderer is `crates/core/src/template.rs`; the thin `crates/temp
 
 Content remains envelope version 1 with `type: template`, source text and variable definitions. Unknown non-reserved identifiers are text fields. Date/time/timestamp and key:enter are reserved. Rendering is one pass: answers and defaults are never parsed as source. The template renderer receives one timestamp and local UTC offset, so evaluation has no IO.
 
-Sync protocol 5 prevents old desktops exchanging records with metadata they cannot retain. Public API routes stay v3. Existing Text/Code remain literal. Browser runtime answers only go to the local WASM module; native answers only go to the local Rust runtime and private IPC. No runtime answers are persisted or synchronized.
+Sync protocol 6 prevents old desktops exchanging rich-text records or assets they cannot retain. Public API routes stay v3. Existing Text/Code remain literal. Browser runtime answers only go to the local WASM module; native answers only go to the local Rust runtime and private IPC. No runtime answers are persisted or synchronized.
 
 Omarchy snapshots retain stable identity/revision and a precomputed prompt flag. Immediate templates render on a worker while following typing is buffered through the existing insertion path. Prompted matches send a PID-validated notification before any erasure. The panel requests preparation using the original event deadline and input generation; only then does it open the fill form. Completion sends a fresh request after confirmation.
 

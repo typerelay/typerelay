@@ -12,6 +12,7 @@ export const operations = [
 	['patch', '/libraries/:id/snippets/:snippet', 'update_snippet', 'content:write', 'Snippets', 'Edit snippet'],
 	['post', '/snippets/batch', 'batch_snippets', 'content:write', 'Snippets', 'Move or trash snippets atomically'],
 	['get', '/search', 'search_snippets', 'content:read', 'Search', 'Search accessible snippets'],
+	['get', '/assets/:id/metadata', 'get_asset_metadata', 'content:read', 'Assets', 'Get rich-text asset metadata'],
 	['get', '/libraries/:id/export', 'export_library', 'content:read', 'Import and export', 'Export library as YAML'],
 	['post', '/imports/:format/preview', 'preview_import', 'content:write', 'Import and export', 'Preview import'],
 	['post', '/imports/:format', 'commit_import', 'content:write', 'Import and export', 'Import into new private libraries'],

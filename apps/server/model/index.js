@@ -66,6 +66,10 @@ snippetSchema.index({ library: 1, id: 1 }, { unique: true });
 snippetSchema.index({ account: 1, id: 1 }, { unique: true });
 snippetSchema.index({ library: 1, trigger: 1 }, { unique: true, partialFilterExpression: { state: 'active', trigger: { $type: 'string', $gt: '' } } });
 const Snippet = mongoose.model('Snippet', snippetSchema);
+const snippetAssetSchema = new mongoose.Schema({ account: objectid, id: String, data: { type: Buffer, select: false }, mime_type: String, size: Number, width: Number, height: Number, animated: Boolean, source_urls: [String], last_referenced_at: Date }, { timestamps: true });
+snippetAssetSchema.index({ account: 1, id: 1 }, { unique: true });
+snippetAssetSchema.index({ account: 1, last_referenced_at: 1 });
+const SnippetAsset = mongoose.model('SnippetAsset', snippetAssetSchema);
 const Migration = mongoose.model('Migration', new mongoose.Schema({ key: { type: String, unique: true }, completed: Boolean }));
 const MigrationBackup = mongoose.model('MigrationBackup', new mongoose.Schema({ key: { type: String, unique: true }, source_collection: String, payload: mixed }));
 const Device = mongoose.model('Device', new mongoose.Schema({ account: objectid, user: objectid, name: String, access: String, access_expires: Date, refresh: String, refresh_expires: Date, revoked: { type: Boolean, default: false } }, { timestamps: true }));
@@ -77,7 +81,7 @@ operation.index({ account: 1, user: 1, operation: 1 }, { unique: true });
 const Operation = mongoose.model('Operation', operation);
 const Conflict = mongoose.model('Conflict', new mongoose.Schema({ account: objectid, library: objectid, user: objectid, snippet: String, local: mixed, base: mixed, server: mixed, resolved: { type: Boolean, default: false } }, { timestamps: true }));
 
-export { mongoose, User, Account, Member, Group, Ticket, Library, Device, Change, Operation, Conflict, Passkey, Snippet, Migration, MigrationBackup };
+export { mongoose, User, Account, Member, Group, Ticket, Library, Device, Change, Operation, Conflict, Passkey, Snippet, SnippetAsset, Migration, MigrationBackup };
 
 // Integration credentials are independent of desktop enrollment.
 export const Integration = mongoose.model('Integration', new mongoose.Schema({ account: objectid, user: objectid, name: String, kind: { type: String, enum: ['pat', 'oauth'] }, scopes: [String], hash: { type: String, select: false }, expires: Date, revoked: { type: Boolean, default: false }, last_used: Date, client: String, resource: String, refresh: { type: String, select: false }, refresh_expires: Date }, { timestamps: true }));

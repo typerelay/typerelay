@@ -16,7 +16,7 @@ The resident app also performs prefix + abbreviation + Space expansion on macOS 
 
 A Template result with text fields opens a fill form. Repeated names share one answer. Enter confirms a single-line form; Ctrl+Enter confirms from multiline fields. Escape cancels. Dates use the confirmation time. Explicit Enter actions run in source order after text insertion; Copy filled text omits them.
 
-A lost original target leaves the filled draft available for Copy and never redirects insertion into another application. Runtime answers are not synchronized or saved. Templates require client/server sync protocol 5.
+A lost original target leaves the filled draft available for Copy and never redirects insertion into another application. Runtime answers are not synchronized or saved. Rich text and templates require client/server sync protocol 6.
 
 For macOS/Windows pilot checks, test a date-only template, repeated and multiline fields, literal answers containing braces, text/Enter/text order, cancellation, a closed original target and clipboard ownership. Builds alone do not mark these platforms runtime-verified.
 

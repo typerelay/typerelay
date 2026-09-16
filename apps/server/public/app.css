@@ -9,6 +9,14 @@ header { border-bottom: .0625rem solid #e7dfd2; }
 .btn-link { color: #74422e; padding: 0; text-decoration: none; }
 button, select, [data-id] { cursor: pointer; }
 textarea { min-height: 12rem; white-space: pre-wrap; }
+.rich-heading { width: auto; }
+#rich-editor { min-height: 16rem; max-height: 34rem; overflow: auto; }
+#rich-editor .tiptap { min-height: 14rem; outline: none; }
+#rich-editor .tiptap table { border-collapse: collapse; width: 100%; }
+#rich-editor .tiptap th, #rich-editor .tiptap td { border: .0625rem solid var(--bs-border-color); padding: .35rem; vertical-align: top; }
+#rich-editor .tiptap img { max-width: 100%; height: auto; }
+#rich-editor .rich-raw-html { white-space: pre-wrap; border: .0625rem dashed var(--bs-border-color); padding: .5rem; }
+#rich-toolbar .active { color: var(--bs-primary); border-color: var(--bs-primary); }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .snippet { border-top: .0625rem solid #e7dfd2; padding: 1rem 0; }
 .form-check-input { height: 1.25rem; width: 1.25rem; flex-shrink: 0; }

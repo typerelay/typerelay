@@ -2,7 +2,7 @@
 
 <div v-pre>
 
-Choose **Template** in the snippet editor. Text and Code remain literal, including braces in source code.
+Choose **Template** for plain output or **Rich text** for formatted output. Text and Code remain literal, including braces in source code.
 
 ```text
 Hi {{name}},
@@ -27,16 +27,16 @@ Answers are literal: entering `{{key:enter}}` as an answer cannot create a keypr
 
 ## Enter actions and copying
 
-`{{key:enter}}` presses Enter in the original application, in order with surrounding text. It can submit a form or run a terminal command. Ordinary newlines and tabs remain editor content, not keypress actions. Copy and **Fill and copy** return text only and explicitly report omitted Enter actions.
+`{{key:enter}}` presses Enter in the original application, in order with surrounding content. In rich text it must occupy its own line between top-level blocks so each surrounding HTML/RTF fragment remains valid. It can submit a form or run a terminal command. Ordinary newlines and tabs remain editor content, not keypress actions. Copy and **Fill and copy** report omitted Enter actions.
 
 In the desktop panel, complete the fields and choose **Insert**. Ctrl+Enter also confirms; Escape cancels. On Omarchy, a prompted abbreviation is removed before the form opens. Cancel inserts nothing and does not restore it. If the panel is unavailable, the abbreviation remains unchanged. Date/time-only templates expand without a form.
 
-In the TUI, F9 cycles Text, Code and Template. F11 opens the variable picker/settings; Ctrl+S inserts the chosen variable and F4 saves settings for an existing variable without inserting another reference. F10 fills/copies. Tab or F2 changes fields; Ctrl+T inserts a tab in a value; Ctrl+S copies the filled result.
+In the TUI, F9 cycles Text, Code, Template and Rich text. F11 opens the variable picker/settings; Ctrl+S inserts the chosen variable and F4 saves settings for an existing variable without inserting another reference. F10 fills/copies with rich clipboard formats when applicable. Tab or F2 changes fields; Ctrl+T inserts a tab in a value; Ctrl+S copies the filled result.
 
 ## Literal braces and compatibility
 
 Escape a placeholder opener as `\{{` to produce literal `{{`. Use `\\` for a literal backslash. Other backslashes remain unchanged. Templates permit up to 64 fields and 64 Enter actions; rendered text retains the existing 65,536-byte limit.
 
-Templates require matching desktop/server sync protocol **5**. Existing stored Text and Code snippets do not change. YAML export/import preserves template variables, while the API and MCP carry them in `{version: 1, type: "template", text, variables}` content envelopes.
+Templates and rich text require matching desktop/server sync protocol **6**. Existing stored Text and Code snippets do not change. YAML export/import preserves template variables. Rich records use `{version: 2, type: "rich_text", markdown, text, assets, variables}`; `text` and `assets` are derived rather than trusted from callers.
 
 </div>

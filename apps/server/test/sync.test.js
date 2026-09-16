@@ -341,7 +341,7 @@ test('beta importers parse CSV, HTML JSON and XML sets with review-only commands
 	await assert.rejects(Libraries.previewImport('textexpander', { source: 'abbreviation,snippet\nx,"bad' }), /Malformed CSV/);
 	const blaze = { folders: [{ name: 'Parent', snippets: [{ name: 'Rich', shortcut: ',html', html: '<p>Hello <b>world</b></p><p>Next<br>line<img src="https://invalid.test/x"></p>' }, { name: 'Dynamic', shortcut: 'form', body: 'Hello {formtext: name=Name}' }], children: [{ name: 'Child', snippets: [{ shortcut: 'child', body: '\tchild  \n' }, { name: 'Image', html: '<img src="x">' }] }] }] };
 	const rich = await Libraries.previewImport('textblaze', { source: blaze });
-	assert.equal(rich.entries[0].content.text, 'Hello world\nNext\nline\n');
+	assert.equal(rich.entries[0].content.type, 'rich_text'); assert.equal(rich.entries[0].content.text, 'Hello world\nNext\nline');
 	assert.ok(rich.entries[0].warnings.length); assert.equal(rich.entries[1].review, true);
 	assert.equal(rich.entries[2].name, 'Parent › Child'); assert.ok(rich.entries[3].error);
 	const xml = '<?xml version="1.0"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>name</key><string>Mac</string><key>clippings</key><array><dict><key>abbr</key><string>,mac</string><key>clip</key><string>\tMac &amp; λ\n</string></dict></array></dict></plist>';

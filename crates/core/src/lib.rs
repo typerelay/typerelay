@@ -1,5 +1,6 @@
 //! Platform-independent matching. Neither keyboard devices nor snippet sources live here.
 pub mod template;
+pub mod rich_text;
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -33,7 +34,8 @@ impl Snapshot {
         Ok(Self { snippets: indexed, templates: BTreeMap::new() })
     }
 
-    pub fn set_template(&mut self, abbreviation: &str, template: template::Template) -> Result<(), String> { let template=template.normalize()?; let prompted=!template.fields()?.is_empty(); self.templates.insert(abbreviation.into(), TemplateExpansion { abbreviation: abbreviation.into(), identity: None, prompted }); Ok(()) }
+    pub fn set_template(&mut self, abbreviation: &str, template: template::Template) -> Result<(), String> { let template=template.normalize()?; let prompted=!template.fields()?.is_empty(); self.templates.insert(abbreviation.into(), TemplateExpansion { abbreviation: abbreviation.into(), identity: None, prompted, rich:false }); Ok(()) }
+    pub fn set_rich(&mut self, abbreviation: &str, prompted: bool) { self.templates.insert(abbreviation.into(), TemplateExpansion { abbreviation: abbreviation.into(), identity: None, prompted, rich:true }); }
     pub fn identify(&mut self, abbreviation: &str, identity: Identity) { if let Some(template) = self.templates.get_mut(abbreviation) { template.identity = Some(identity); } }
     pub fn len(&self) -> usize { self.snippets.len() }
     pub fn is_empty(&self) -> bool { self.snippets.is_empty() }
@@ -45,7 +47,7 @@ pub enum Input { Character(char), Backspace, Space, Cancel }
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Identity { pub id: String, pub library: String, pub revision: i64 }
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TemplateExpansion { pub prompted: bool, pub abbreviation: String, pub identity: Option<Identity> }
+pub struct TemplateExpansion { pub prompted: bool, pub rich: bool, pub abbreviation: String, pub identity: Option<Identity> }
 #[derive(Debug, PartialEq, Eq)]
 pub struct Expansion {
     pub template: Option<TemplateExpansion>,

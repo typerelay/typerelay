@@ -44,12 +44,12 @@ impl Sync {
     fn response(response: reqwest::blocking::Response) -> Result<Value> {
         let status = response.status();
         let value: Value = response.json()?;
-        if !status.is_success() { return Err(ServerError { status: status.as_u16(), message: if status.as_u16()==426 {"Server and client versions must match: templates require sync protocol 5".into()}else{value["error"].as_str().unwrap_or("Request failed").into()} }.into()); }
+        if !status.is_success() { return Err(ServerError { status: status.as_u16(), message: if status.as_u16()==426 {"Server and client versions must match: rich text requires sync protocol 6".into()}else{value["error"].as_str().unwrap_or("Request failed").into()} }.into()); }
         Ok(value)
     }
     fn request(&self, credentials: &mut Credentials, method: reqwest::Method, path: &str, body: Option<&Value>) -> Result<Value> {
         let send = |credentials: &Credentials| {
-            let request = self.client.request(method.clone(), format!("{}/api/v2/{path}", credentials.server)).bearer_auth(&credentials.access_token).header("X-TypeRelay-Sync-Protocol", "5");
+            let request = self.client.request(method.clone(), format!("{}/api/v2/{path}", credentials.server)).bearer_auth(&credentials.access_token).header("X-TypeRelay-Sync-Protocol", "6");
             if let Some(body) = body { request.json(body).send() } else { request.send() }
         };
         let mut response = send(credentials)?;
@@ -62,6 +62,16 @@ impl Sync {
         }
         Self::response(response)
     }
+	fn asset_request(&self,credentials:&Credentials,method:reqwest::Method,id:&str,mime:Option<&str>,body:Option<Vec<u8>>)->Result<reqwest::blocking::Response>{
+		let mut request=self.client.request(method,format!("{}/api/v2/assets/{id}",credentials.server)).bearer_auth(&credentials.access_token).header("X-TypeRelay-Sync-Protocol","6");
+		if let Some(mime)=mime{request=request.header(reqwest::header::CONTENT_TYPE,mime);}
+		if let Some(body)=body{request=request.body(body);}
+		let response=request.send()?;
+		if !response.status().is_success(){let status=response.status();let message=response.text().unwrap_or_default();return Err(ServerError{status:status.as_u16(),message:serde_json::from_str::<Value>(&message).ok().and_then(|value|value["error"].as_str().map(str::to_owned)).unwrap_or_else(||"Asset transfer failed".into())}.into());}
+		Ok(response)
+	}
+	fn download_assets(&self,credentials:&Credentials,db:&Database,response:&Value)->Result<()> {for metadata in response["assets"].as_array().into_iter().flatten(){let id=metadata["id"].as_str().context("Missing asset ID")?;if db.asset(id)?.is_some(){continue;}let bytes=self.asset_request(credentials,reqwest::Method::GET,id,None,None)?.bytes()?.to_vec();ensure!(bytes.len()==metadata["size"].as_u64().context("Missing asset size")? as usize,"Asset size mismatch");ensure!(format!("{:x}",Sha256::digest(&bytes))==id,"Asset hash mismatch");db.put_asset(metadata,&bytes,true)?;}Ok(())}
+	fn upload_assets(&self,credentials:&Credentials,db:&Database)->Result<()> {for (metadata,bytes) in db.pending_assets()?{let id=metadata["id"].as_str().context("Missing asset ID")?;self.asset_request(credentials,reqwest::Method::PUT,id,metadata["mime_type"].as_str(),Some(bytes))?;db.mark_asset_uploaded(id)?;}Ok(())}
     pub fn connect(&self, server: &str, open_browser: bool) -> Result<()> {
         let _lock = self.lock()?;
         ensure!(!self.path("credentials.json").exists(), "Already connected; disconnect before changing accounts");
@@ -139,11 +149,13 @@ impl Sync {
         db.cleanup()?;
         let mut credentials = self.credentials()?;
         self.legacy(&mut credentials, &db)?;
-        let cursor = if db.pending()?.is_empty() && db.meta("sync_protocol")? == Some(json!(5)) { db.meta("cursor")?.and_then(|value| value.as_u64()).unwrap_or(0) } else { 0 };
+        let cursor = if db.pending()?.is_empty() && db.meta("sync_protocol")? == Some(json!(6)) { db.meta("cursor")?.and_then(|value| value.as_u64()).unwrap_or(0) } else { 0 };
         let response = self.request(&mut credentials, reqwest::Method::GET, &format!("sync?cursor={cursor}"), None)?;
-        ensure!(response["protocol"] == 5, "Server upgrade required: sync protocol 5");
+        ensure!(response["protocol"] == 6, "Server upgrade required: sync protocol 6");
+		self.download_assets(&credentials,&db,&response)?;
         db.apply(&response, None)?;
-        db.set_meta("sync_protocol", &json!(5))?;
+        db.set_meta("sync_protocol", &json!(6))?;
+		self.upload_assets(&credentials,&db)?;
         while let Some((seq, operation)) = db.pending()?.into_iter().next() {
             let id = operation["library"].as_str().context("Missing library")?;
             let path = match operation["kind"].as_str() { Some("create") => "libraries".to_owned(), Some("edit") => format!("libraries/{id}/snippets"), Some("trash") => "trash/action".into(), Some("batch") => "snippets/batch".into(), _ => anyhow::bail!("Unknown pending operation") };
@@ -166,8 +178,8 @@ impl Sync {
                 }
             }
         }
-        let cursor = if db.pending()?.is_empty() && db.meta("sync_protocol")? == Some(json!(5)) { db.meta("cursor")?.and_then(|value| value.as_u64()).unwrap_or(0) } else { 0 };
-        db.apply(&self.request(&mut credentials, reqwest::Method::GET, &format!("sync?cursor={cursor}"), None)?, None)?;
+        let cursor = if db.pending()?.is_empty() && db.meta("sync_protocol")? == Some(json!(6)) { db.meta("cursor")?.and_then(|value| value.as_u64()).unwrap_or(0) } else { 0 };
+		let response=self.request(&mut credentials,reqwest::Method::GET,&format!("sync?cursor={cursor}"),None)?;self.download_assets(&credentials,&db,&response)?;db.apply(&response,None)?;
         let conflicts = db.meta("conflicts")?.and_then(|value|value.as_array().map(Vec::len)).unwrap_or(0);
         Paths::atomic_write(&self.path("status"), format!("Synced. {conflicts} conflicts. {} Resolve: {}/", db.meta("last_failure")?.and_then(|value|value.as_str().map(str::to_owned)).unwrap_or_default(), credentials.server).as_bytes(), false)?;
         Ok(())

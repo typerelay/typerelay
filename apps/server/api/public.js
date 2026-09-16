@@ -1,4 +1,5 @@
 import { timingSafeEqual } from 'node:crypto';
+import express from 'express';
 import pug from 'pug';
 import Ajv from 'ajv/dist/2020.js';
 import { ApiSchema } from './openapi.js';
@@ -10,6 +11,8 @@ import { Integration, IntegrationToken, ApiAudit, Member, Account, Device, Confl
 import { operations } from './catalog.js';
 import { Billing } from '../services/billing.js';
 import { ApiRateLimit } from '../rate_limit.js';
+import { Assets } from '../services/assets.js';
+import { Bundles } from '../services/bundles.js';
 
 export class PublicApi {
 	static clean(value) {
@@ -35,7 +38,7 @@ export class PublicApi {
 		const validators = new Map(operations.filter(operation => operation.method !== 'get').map(operation => [operation.id, new Ajv({ strict: false }).compile(ApiSchema.body(operation))]));
 		app.use('/api/v3', (req, res, next) => {
 			const origins = [Auth.origin, 'http://localhost:5173', ...(process.env.API_ALLOWED_ORIGINS || '').split(',')];
-			if (req.headers.origin && origins.includes(req.headers.origin)) { res.set('Access-Control-Allow-Origin', req.headers.origin); res.vary('Origin'); res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type'); res.set('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS'); }
+			if (req.headers.origin && origins.includes(req.headers.origin)) { res.set('Access-Control-Allow-Origin', req.headers.origin); res.vary('Origin'); res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Operation-Id'); res.set('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS'); }
 			if (req.method === 'OPTIONS') return res.sendStatus(204);
 			next();
 		});
@@ -69,6 +72,13 @@ export class PublicApi {
 			if (req.boundAccount) Support.assert(req.ctx.account === req.boundAccount, 'Custom domain account mismatch', 403);
 			next();
 		});
+		app.post('/api/v3/assets', express.raw({ type: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'], limit: '5mb' }), async (req, res) => { Auth.requireScope(req.ctx, 'content:write'); res.json(await Assets.put(req.ctx, req.body)); });
+		app.post('/api/v3/assets/presence', async (req, res) => { Auth.requireScope(req.ctx, 'content:read'); res.json(await Assets.presence(req.ctx, req.body.ids)); });
+		app.get('/api/v3/assets/:id', async (req, res) => { Auth.requireScope(req.ctx, 'content:read'); const asset = await Assets.get(req.ctx, req.params.id, true); res.set({ 'Content-Type': asset.mime_type, 'Content-Length': String(asset.size), ETag: `"${asset.id}"`, 'Cache-Control': 'private, max-age=31536000, immutable' }).send(asset.data); });
+		app.post('/api/v3/assets/remote', async (req, res) => { Auth.requireScope(req.ctx, 'content:write'); res.json(await Assets.remote(req.ctx, req.body.url)); });
+		app.post('/api/v3/assets/:id/refresh', async (req, res) => { Auth.requireScope(req.ctx, 'content:write'); const asset = await Assets.get(req.ctx, req.params.id); Support.assert(asset.source_urls?.length, 'Asset has no remote source', 409); res.json(await Assets.remote(req.ctx, asset.source_urls.at(-1))); });
+		app.get('/api/v3/libraries/:id/export-bundle', async (req, res) => { Auth.requireScope(req.ctx, 'content:read'); const bundle = await Bundles.export(req.ctx, req.params.id); res.set({ 'Content-Type': 'application/zip', 'Content-Disposition': `attachment; filename="${bundle.name}"`, 'Content-Length': String(bundle.bytes.length) }).send(bundle.bytes); });
+		app.post('/api/v3/imports/bundle', express.raw({ type: ['application/zip', 'application/octet-stream'], limit: '16mb' }), async (req, res) => { Auth.requireScope(req.ctx, 'content:write'); const operation = String(req.headers['x-operation-id'] || ''); const bundle = await Bundles.import(req.ctx, req.body); const result = await Libraries.mutate(req.ctx, operation, { bundle: Support.hash(req.body) }, async (ctx, session) => ({ library: await Libraries.create(ctx, bundle, session), api_scope: 'content:write' })); res.json(PublicApi.clean(result)); });
 		for (const operation of operations) app[operation.method]('/api/v3' + operation.path, async (req, res) => {
 			res.on('finish', () => ApiAudit.create({ account: req.ctx.account, user: req.ctx.user, credential: req.ctx.credential, operation: operation.id, status: res.statusCode, expires: new Date(Date.now() + 90 * 86400000) }).catch(() => console.error('API audit write failed')));
 			Auth.requireScope(req.ctx, operation.scope);
@@ -117,7 +127,8 @@ export class PublicApi {
 				const items = (await Libraries.list(ctx)).flatMap(library => library.snippets.filter(snippet => [snippet.trigger, snippet.title, snippet.content.text].some(value => value?.toLowerCase().includes(text))).map(snippet => ({ ...snippet, library_name: library.name })));
 				return PublicApi.page(items, query);
 			}
-			case 'export_library': return Yaml.export((await Libraries.get(ctx, id)).snippets.map(Libraries.yaml));
+			case 'get_asset_metadata': return Assets.metadata(await Assets.get(ctx, id));
+			case 'export_library': return Yaml.export((await Libraries.get(ctx, id)).snippets.map(Libraries.exportEntry));
 			case 'preview_import': return Libraries.previewImport(params.format, body);
 			case 'commit_import': return Libraries.commitImport(ctx, params.format, body, session);
 			case 'list_trash': return PublicApi.page(await Libraries.trash(ctx), query);

@@ -14,7 +14,7 @@ Run `typerelay-tui` to edit the same local SQLite libraries used by the engine a
 | Shift+Up/Down | Extend selection from its anchor |
 | Ctrl+A / Ctrl+D | Select visible matches / clear selection |
 | F3 | Move selected/current snippets to Trash |
-| F4 | Move the current library to Trash |
+| F4 | Move the current library to Trash, or add an image while editing Rich text |
 | F5 | Sync now |
 | F6 | Open prefix and server settings |
 | F7 | Open Trash |
@@ -29,7 +29,7 @@ D confirms a Trash action, M confirms a bulk move, and Enter/Escape cancels the 
 
 Ctrl+S saves the snippet atomically with its queued sync operation. Tab and Shift+Tab move between Title, Abbreviation and Expansion. In Code, Tab inserts a literal tab, F2 or Ctrl+Tab leaves the editor, and Enter continues the current line’s exact indentation. Ctrl+T inserts a literal tab in text/value fields.
 
-F9 cycles Text, Code and Template. The TUI preserves code language metadata but does not select a language or provide syntax highlighting; use the web editor for those options.
+F9 cycles Text, Code, Template and Rich text. Rich text edits canonical Markdown/raw HTML. F12 toggles a styled preview; links use terminal link capabilities where available, and images use Kitty/iTerm2/Sixel or half-block rendering with an alt-text fallback. F4 imports a local path or remote URL with alt text, title and display width. The TUI preserves code language metadata but does not select a language or provide syntax highlighting; use the web editor for those options.
 
 Ctrl+M or F8 chooses another editable library with the same sync status. A save-and-move is one operation. Local-only and synchronized libraries cannot be mixed in an offline move because their server identities differ.
 

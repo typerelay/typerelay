@@ -47,6 +47,7 @@ if kind === 'snippet' || kind === 'conflict'
 				option(value="plain_text" selected=!snippet || (snippet.content && snippet.content.type) === 'plain_text') Text
 				option(value="code" selected=snippet && (snippet.content && snippet.content.type) === 'code') Code
 				option(value="template" selected=snippet && (snippet.content && snippet.content.type) === 'template') Template
+				option(value="rich_text" selected=snippet && (snippet.content && snippet.content.type) === 'rich_text') Rich text
 	label.form-label.fw-bold(for="trigger") Abbreviation (optional)
 	.input-group.input-group-sm.mb-4
 		span.input-group-text(aria-hidden="true") ;
@@ -54,6 +55,7 @@ if kind === 'snippet' || kind === 'conflict'
 	label.form-label.fw-bold(for="replace") Expansion
 	textarea#replace.form-control.form-control-sm.mb-4(name="replace" rows="8")= '\n' + (snippet ? snippet.replace : '')
 	include template-editor
+	include rich-editor
 	#code-editor.mb-3
 	#code-options.mb-3(hidden=!snippet || (snippet.content && snippet.content.type) !== 'code')
 		.row.align-items-center
@@ -109,5 +111,5 @@ if kind === 'snippetslab' || kind === 'import'
 	if importFormat.beta
 		p.small.text-muted Beta: export layouts may vary between app versions. Review the preview before importing.
 	p.small.text-muted Imported libraries are private. Existing libraries are never replaced.
-	button#preview-import.btn.btn-outline-secondary.btn-sm.mb-3(type="button") Preview import
+	button#preview-import.btn.btn-outline-secondary.btn-sm.mb-3(type="button")= importFormat.name === 'TypeRelay bundle' ? 'Import bundle' : 'Preview import'
 	#import-preview

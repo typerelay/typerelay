@@ -6,7 +6,7 @@ use ratatui_textarea::TextArea;
 use typerelay_core::template::{Template,Variable,Rendered,Step};
 use typerelay_client::templates::Templates;
 
-pub enum Outcome { Cancel, Definition { name:String, variable:Option<Variable>, insert:bool }, Copy(Rendered) }
+pub enum Outcome { Cancel, Definition { name:String, variable:Option<Variable>, insert:bool }, Copy { rendered:Rendered, values:BTreeMap<String,String> } }
 pub struct Dialog { template:Template, fill:bool, choosing:bool, names:Vec<String>, labels:Vec<String>, inputs:Vec<TextArea<'static>>, index:usize, name:String, variable:Variable, error:String }
 impl Dialog {
     fn text(value:&str)->TextArea<'static>{TextArea::new(value.split('\n').map(str::to_owned).collect())}
@@ -42,7 +42,7 @@ impl Dialog {
             };return Ok(None)
         }
         if (key.modifiers.contains(KeyModifiers::CONTROL)&&key.code==KeyCode::Char('s'))||key.code==KeyCode::F(4){
-            if self.fill{return Ok(Some(Outcome::Copy(self.render(false)?)))}
+			if self.fill{return Ok(Some(Outcome::Copy{rendered:self.render(false)?,values:self.answers()}))}
             let (name,variable)=self.definition()?;let insert=key.code!=KeyCode::F(4);ensure!(insert||self.template.variables.contains_key(&name),"Insert a new variable first");return Ok(Some(Outcome::Definition{name,variable:Some(variable),insert}))
         }
         if self.labels.is_empty(){return Ok(None)}
@@ -88,7 +88,7 @@ mod tests {
         let mut dialog=Dialog::fill(Template{text:"Hi {{name}} {{name}}{{key:enter}}".into(),variables:BTreeMap::new()}).unwrap();
         assert!(dialog.event(Event::Key(KeyEvent::new(KeyCode::Char('s'),KeyModifiers::CONTROL))).is_none());
         dialog.inputs[0]=Dialog::text("{{date}}");
-        let Some(Outcome::Copy(result))=dialog.event(Event::Key(KeyEvent::new(KeyCode::Char('s'),KeyModifiers::CONTROL))) else{panic!("Expected copy")};
+        let Some(Outcome::Copy{rendered:result,..})=dialog.event(Event::Key(KeyEvent::new(KeyCode::Char('s'),KeyModifiers::CONTROL))) else{panic!("Expected copy")};
         assert_eq!(result.text,"Hi {{date}} {{date}}");assert_eq!(result.enter_actions,1);
     }
     #[test] fn picker_inserts_enter_as_action_and_escape_cancels(){let mut dialog=Dialog::variables(Template{text:"Hello".into(),variables:BTreeMap::new()}).unwrap();dialog.index=4;assert!(matches!(dialog.event(Event::Key(KeyEvent::new(KeyCode::Enter,KeyModifiers::NONE))),Some(Outcome::Definition{variable:None,..})));assert!(matches!(dialog.event(Event::Key(KeyEvent::new(KeyCode::Esc,KeyModifiers::NONE))),Some(Outcome::Cancel)));}

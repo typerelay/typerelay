@@ -2,6 +2,7 @@ div(data-editor=library._id)
 	.d-flex.align-items-center.justify-content-between.gap-3.mb-3
 		h2.h4.fw-bold(data-library-title)= library.name
 		.editor-actions.d-flex.align-items-center.gap-3.ms-auto
+			a.btn.btn-outline-secondary.btn-sm(href='/api/v2/libraries/' + library._id + '/export-bundle' download) Export bundle
 			button.btn.btn-outline-secondary.btn-sm(data-library-settings hidden=!library.permissions.manage) Sharing and settings
 			button.btn.btn-primary.btn-sm(data-add-snippet hidden=!library.permissions.edit) Add snippet
 	.snippet-controls.d-flex.align-items-center.justify-content-between.gap-3.pb-4.mb-3

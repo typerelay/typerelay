@@ -110,12 +110,12 @@ impl Runtime {
             let identity=template.identity.context("Template identity unavailable")?;
             let hit=Hit{id:identity.id,library:identity.library,revision:identity.revision,library_name:String::new(),title:template.abbreviation.clone(),abbreviation:template.abbreviation,preview:String::new()};
             if template.prompted {
-                let state=app.state::<Runtime>();if state.busy.load(Ordering::SeqCst)||state.prompting.load(Ordering::SeqCst){#[cfg(target_os="windows")]platform::paste(&target,0,Some(" ".into()))?;return Ok(());}
+				let state=app.state::<Runtime>();if state.busy.load(Ordering::SeqCst)||state.prompting.load(Ordering::SeqCst){#[cfg(target_os="windows")]platform::paste(&target,0,Some(typerelay_client::clipboard_payload::ClipboardPayload::text(" ".into())))?;return Ok(());}
                 let prompt_app=app.clone();let main_app=prompt_app.clone();let prompt_target=target.clone();prompt_app.run_on_main_thread(move||{let state=main_app.state::<Runtime>();*state.target.lock().unwrap()=Some(prompt_target);*state.erase.lock().unwrap()=expansion.erase;*state.prompt_hit.lock().unwrap()=Some(hit);state.prompting.store(true,Ordering::SeqCst);Runtime::open(&main_app,false);})?;return Ok(());
             }
-            let rendered=Panel::render(&app.state::<Runtime>().root.join("snippets"),&hit,Default::default(),false)?;let mut erase=expansion.erase;
-            for step in rendered.steps {Panel::content(&app.state::<Runtime>().root.join("snippets"),&hit)?;platform::paste(&target,std::mem::take(&mut erase),match step{typerelay_core::template::Step::Text{text}=>Some(text),typerelay_core::template::Step::Enter=>None})?;}
-        } else {platform::paste(&target,expansion.erase,Some(expansion.text))?;}
+			let directory=app.state::<Runtime>().root.join("snippets");let steps=Panel::steps_at(&directory,&hit,Default::default(),false,typerelay_client::templates::Templates::clock())?;let mut erase=expansion.erase;
+			for step in steps {Panel::content(&directory,&hit)?;platform::paste(&target,std::mem::take(&mut erase),match step{typerelay_client::clipboard_payload::ClipboardStep::Payload(payload)=>Some(payload),typerelay_client::clipboard_payload::ClipboardStep::Enter=>None})?;}
+		}else{platform::paste(&target,expansion.erase,Some(typerelay_client::clipboard_payload::ClipboardPayload::text(expansion.text)))?;}
         Ok(())})();
         #[cfg(target_os="macos")]
         if !prompted {let replay=deferred.finish(&target).map(|_|());return result.and(replay);}
@@ -187,12 +187,12 @@ async fn insert(app:tauri::AppHandle,hit:Hit,values:Option<std::collections::BTr
     Runtime::hide(&app);
     let result=tauri::async_runtime::spawn_blocking(move || -> Result<()> {
         let values=values.unwrap_or_default();
-        let rendered=Panel::render_at(&directory,&hit,values.clone(),false,clock)?;
+		let steps=Panel::steps_at(&directory,&hit,values.clone(),false,clock)?;
         target.restore()?;
         #[cfg(target_os="linux")]
-        { let _=rendered; typerelay_client::panel_ipc::PanelIpc::insert(typerelay_client::panel_ipc::Request{hit,values,generation:None,clock:Some(clock),erase:0,prepare:false,target:target.address.clone(),created_ms:std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis()})?; }
+		{ let _=steps; typerelay_client::panel_ipc::PanelIpc::insert(typerelay_client::panel_ipc::Request{hit,values,generation:None,clock:Some(clock),erase:0,prepare:false,target:target.address.clone(),created_ms:std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis()})?; }
         #[cfg(not(target_os="linux"))]
-        { let mut erase=erase;for step in rendered.steps { Panel::content(&directory,&hit)?; platform::paste(&target,std::mem::take(&mut erase),match step { typerelay_core::template::Step::Text{text}=>Some(text),typerelay_core::template::Step::Enter=>None })?; } }
+		{ let mut erase=erase;for step in steps { Panel::content(&directory,&hit)?; platform::paste(&target,std::mem::take(&mut erase),match step { typerelay_client::clipboard_payload::ClipboardStep::Payload(payload)=>Some(payload),typerelay_client::clipboard_payload::ClipboardStep::Enter=>None })?; } }
         Ok(())
     }).await.map_err(|e|e.to_string()).and_then(|r|r.map_err(|e|e.to_string()));
     app.state::<Runtime>().busy.store(false,Ordering::SeqCst);
@@ -203,12 +203,12 @@ async fn insert(app:tauri::AppHandle,hit:Hit,values:Option<std::collections::BTr
 #[tauri::command]
 async fn copy_snippet(app:tauri::AppHandle,hit:Hit,values:Option<std::collections::BTreeMap<String,String>>)->std::result::Result<(),String> {
     let directory=app.state::<Runtime>().root.join("snippets");
-    tauri::async_runtime::spawn_blocking(move ||Panel::render(&directory,&hit,values.unwrap_or_default(),false).and_then(|rendered|platform::copy(rendered.text)).map_err(|e|e.to_string())).await.map_err(|e|e.to_string())?
+	 tauri::async_runtime::spawn_blocking(move ||->Result<()>{let content=Panel::content(&directory,&hit)?;if content["type"]=="rich_text"{let(_,payload)=Panel::rich_payload(&directory,&content,values.unwrap_or_default(),false)?;platform::copy_payload(payload)}else{Panel::render(&directory,&hit,values.unwrap_or_default(),false).and_then(|rendered|platform::copy(rendered.text))}}).await.map_err(|e|e.to_string())?.map_err(|e|e.to_string())
 }
 #[tauri::command]
-async fn prepare_template(app:tauri::AppHandle,hit:Hit,values:Option<std::collections::BTreeMap<String,String>>)->std::result::Result<typerelay_core::template::Rendered,String> {
+async fn prepare_template(app:tauri::AppHandle,hit:Hit,values:Option<std::collections::BTreeMap<String,String>>)->std::result::Result<Value,String> {
     let directory=app.state::<Runtime>().root.join("snippets");
-    tauri::async_runtime::spawn_blocking(move||Panel::render(&directory,&hit,values.unwrap_or_default(),true).map_err(|e|e.to_string())).await.map_err(|e|e.to_string())?
+	 tauri::async_runtime::spawn_blocking(move||->Result<Value>{let content=Panel::content(&directory,&hit)?;if content["type"]=="rich_text"{let(rendered,_)=Panel::rich_payload(&directory,&content,values.unwrap_or_default(),true)?;Ok(serde_json::json!({"template":{"variables":rendered.variables},"fields":rendered.fields,"steps":rendered.steps.iter().map(|step|match step{typerelay_core::rich_text::RichStep::Content{text,..}=>serde_json::json!({"kind":"text","text":text}),typerelay_core::rich_text::RichStep::Enter=>serde_json::json!({"kind":"enter"})}).collect::<Vec<_>>(),"text":rendered.text,"enter_actions":rendered.enter_actions}))}else{Ok(serde_json::to_value(Panel::render(&directory,&hit,values.unwrap_or_default(),true)?)?)}}).await.map_err(|e|e.to_string())?.map_err(|e|e.to_string())
 }
 #[tauri::command]
 fn set_prompt_view(app:tauri::AppHandle,enabled:bool){let state=app.state::<Runtime>();state.prompting.store(enabled,Ordering::SeqCst);if !enabled{state.prompt_hit.lock().unwrap().take();*state.erase.lock().unwrap()=0;}}
