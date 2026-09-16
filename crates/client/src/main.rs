@@ -73,6 +73,7 @@ enum Commands {
     /// Install the Omarchy service and device access.
     Install { #[arg(long)] dry_run: bool },
 	#[cfg(target_os = "linux")]
+	/// Remove the Omarchy installation.
 	Uninstall { #[arg(long)] dry_run: bool },
 	#[cfg(target_os = "linux")]
 	#[command(hide = true)]

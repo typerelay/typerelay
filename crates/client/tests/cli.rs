@@ -24,6 +24,7 @@ fn mutations_report_results_and_sync_errors_do_not_claim_success() {
     let source = temp.path().join("source.yml");
     let yaml = temp.path().join("converted.yml");
     let bundle = temp.path().join("library.typerelay.zip");
+    let other_device = temp.path().join("other-device");
     fs::write(&source, "matches:\n- trigger: ':hello'\n  replace: Hello\n".replace("\n", "
 ")).unwrap();
     for (args, expected) in [
@@ -31,11 +32,12 @@ fn mutations_report_results_and_sync_errors_do_not_claim_success() {
         (vec!["import", "yaml", yaml.to_str().unwrap(), "--name", "Example"], "Imported"),
         (vec!["export", "Example", bundle.to_str().unwrap()], "Exported"),
         (vec!["import", "bundle", bundle.to_str().unwrap(), "--name", "Copy"], "Imported"),
-        (vec!["validate"], "Valid: 2 snippets"),
+        (vec!["validate"], "Valid: 1 snippets"),
         (vec!["trash", "--empty", "--yes"], "Emptied"),
         (vec!["disconnect"], "Disconnected"),
     ] {
-        let output = Command::new(env!("CARGO_BIN_EXE_typerelay")).env("XDG_CONFIG_HOME", temp.path()).args(args).output().unwrap();
+        let config = if args.starts_with(&["import", "bundle"]) { other_device.as_path() } else { temp.path() };
+        let output = Command::new(env!("CARGO_BIN_EXE_typerelay")).env("XDG_CONFIG_HOME", config).args(args).output().unwrap();
         assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
         assert!(String::from_utf8_lossy(&output.stdout).contains(expected), "{}", String::from_utf8_lossy(&output.stdout));
     }
