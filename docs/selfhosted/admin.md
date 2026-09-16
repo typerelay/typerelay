@@ -2,7 +2,7 @@
 
 Open `/admin` on the origin configured by `APP_URL`. System administrators use a separate, eight-hour session. Account owners, desktop credentials, API tokens, and MCP grants cannot authorize admin endpoints. Custom domains cannot serve the admin panel.
 
-Set `SYSADMIN_EMAIL` and `SYSADMIN_PASSWORD` through the deployment's environment/secret manager. Both are required; there are no default credentials. Rotating either invalidates existing admin sessions. Login is limited to ten attempts per fifteen minutes per IP. All admin mutations require the session's CSRF token, including requests with an Authorization header.
+Development Compose, including dbh, uses `SYSADMIN_EMAIL=sysadmin@localhost` and `SYSADMIN_PASSWORD=sysadminpassword`. Production requires both variables through the deployment's environment/secret manager and has no default credentials. Rotating either invalidates existing admin sessions. Login is limited to ten attempts per fifteen minutes per IP. All admin mutations require the session's CSRF token, including requests with an Authorization header.
 
 ## Accounts
 
