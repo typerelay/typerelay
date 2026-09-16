@@ -187,7 +187,7 @@ impl Sync {
     pub fn disconnect(&self) -> Result<()> {
         let _lock = self.lock()?;
         let mut credentials = self.credentials()?;
-        self.request(&mut credentials, reqwest::Method::DELETE, "connection", None)?;
+        let _ = self.request(&mut credentials, reqwest::Method::DELETE, "connection", None);
         let db = Database::open(&self.directory)?;
         let transaction = db.connection.unchecked_transaction()?;
         db.connection.execute("UPDATE libraries SET synced=0", [])?;
@@ -237,5 +237,15 @@ mod tests {
         assert!(!ServerError::rejected(&anyhow::anyhow!("connection refused at http://127.0.0.1:40901"), true));
         assert!(!ServerError::rejected(&ServerError { status: 503, message: "Try again".into() }.into(), true));
         assert!(ServerError::rejected(&ServerError { status: 409, message: "Selection changed".into() }.into(), true));
+    }
+    #[test]
+    fn disconnect_succeeds_when_server_is_unavailable() {
+        let root = tempfile::tempdir().unwrap(); let directory = root.path().join("snippets");
+        let sync = Sync::new(root.path().into(), directory.clone()).unwrap();
+        sync.secret(&Credentials { server: "http://127.0.0.1:9".into(), access_token: "offline".into(), refresh_token: "offline".into() }).unwrap();
+        Database::open(&directory).unwrap().set_meta("cursor", &json!(42)).unwrap();
+        sync.disconnect().unwrap();
+        assert!(!root.path().join("sync/credentials.json").exists());
+        assert_eq!(Database::open(&directory).unwrap().meta("cursor").unwrap(), Some(json!(0)));
     }
 }
