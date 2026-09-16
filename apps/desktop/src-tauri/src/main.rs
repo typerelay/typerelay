@@ -169,7 +169,7 @@ fn initialize(app:tauri::AppHandle)->std::result::Result<Value,String> {
 		let input_monitoring=platform::input_monitoring(false);
 		#[cfg(target_os="macos")]
 		{state.update_permission_status(accessibility,input_monitoring);if accessibility&&input_monitoring{match Runtime::start_expansion(&app){Ok(())=>{let mut status=state.status.lock().unwrap();if status.starts_with("TypeRelay could not start Input Monitoring"){status.clear();}},Err(error)=>*state.status.lock().unwrap()=format!("TypeRelay could not start Input Monitoring: {error:#}")}}}
-		Ok(json!({"config":settings,"prompt":state.prompt_hit.lock().unwrap().clone(),"server":typerelay_client::settings::SettingsStore::open(state.root.join("settings.yml")).ok().map(|s|s.settings.sync_url).unwrap_or_default(),"theme":Runtime::theme(),"settings":state.settings.load(Ordering::SeqCst),"status":*state.status.lock().unwrap(),"update":app.state::<update::UpdateState>().value(),"accessibility":accessibility,"input_monitoring":input_monitoring,"empty":empty}))
+		Ok(json!({"config":settings,"prompt":state.prompt_hit.lock().unwrap().clone(),"server":typerelay_client::settings::SettingsStore::open(state.root.join("settings.yml")).ok().map(|s|s.settings.sync_url).unwrap_or_default(),"connected":state.root.join("sync/credentials.json").exists(),"theme":Runtime::theme(),"settings":state.settings.load(Ordering::SeqCst),"status":*state.status.lock().unwrap(),"update":app.state::<update::UpdateState>().value(),"accessibility":accessibility,"input_monitoring":input_monitoring,"empty":empty}))
 }
 #[tauri::command]
 async fn search(app:tauri::AppHandle,query:String)->std::result::Result<Vec<Hit>,String> {
@@ -258,6 +258,11 @@ async fn connect(app:tauri::AppHandle,url:String)->std::result::Result<(),String
     tauri::async_runtime::spawn_blocking(move ||Sync::new(root.clone(),root.join("snippets")).and_then(|sync|sync.connect(&url,true)).map_err(|e|e.to_string())).await.map_err(|e|e.to_string())?
 }
 #[tauri::command]
+async fn disconnect(app:tauri::AppHandle)->std::result::Result<(),String> {
+    let root=app.state::<Runtime>().root.clone();
+    tauri::async_runtime::spawn_blocking(move ||Sync::new(root.clone(),root.join("snippets")).and_then(|sync|sync.disconnect()).map_err(|e|e.to_string())).await.map_err(|e|e.to_string())?
+}
+#[tauri::command]
 async fn libraries(app:tauri::AppHandle)->std::result::Result<Value,String>{
     let directory=app.state::<Runtime>().root.join("snippets");
     tauri::async_runtime::spawn_blocking(move ||->Result<Value>{let db=Database::open(&directory)?;let mut rows=Vec::new();for library in db.libraries()?{let id=library["_id"].as_str().context("Missing library ID")?;if library["state"]=="active" && !db.synced(id)?{rows.push(json!({"name":library["name"]}));}}Ok(json!(rows))}).await.map_err(|e|e.to_string())?.map_err(|e|e.to_string())
@@ -331,7 +336,7 @@ fn main() {
     }).on_window_event(|window,event|match event {
         tauri::WindowEvent::CloseRequested{api,..}=>{api.prevent_close();set_prompt_view(window.app_handle().clone(),false);Runtime::hide(window.app_handle());},
         tauri::WindowEvent::Focused(false)if Runtime::hide_on_focus_loss() && !window.app_handle().state::<Runtime>().busy.load(Ordering::SeqCst) && !window.app_handle().state::<Runtime>().settings.load(Ordering::SeqCst) && !window.app_handle().state::<Runtime>().prompting.load(Ordering::SeqCst)=> {Runtime::hide(window.app_handle());},_=>()
-    }).invoke_handler(tauri::generate_handler![initialize,search,insert,copy_snippet,prepare_template,set_prompt_view,set_settings_view,dismiss,sync_now,save_settings,connect,libraries,enroll,open_accessibility_settings,open_input_monitoring_settings,open_tui,open_web_app]).run(tauri::generate_context!());
+    }).invoke_handler(tauri::generate_handler![initialize,search,insert,copy_snippet,prepare_template,set_prompt_view,set_settings_view,dismiss,sync_now,save_settings,connect,disconnect,libraries,enroll,open_accessibility_settings,open_input_monitoring_settings,open_tui,open_web_app]).run(tauri::generate_context!());
     if let Err(error)=result {eprintln!("TypeRelay panel: {error}");std::process::exit(1);}
 }
 

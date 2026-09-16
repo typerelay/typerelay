@@ -184,7 +184,7 @@ impl App {
                 self.original_url = self.settings.settings.sync_url.clone();
                 self.original_prefix = self.settings.settings.trigger_prefix.clone();
                 self.screen = if self.file.is_some() { Screen::Browse } else { Screen::Files };
-                self.message("Settings saved. Connect with typerelay connect --server URL.", false);
+                self.message("Settings saved. Connect: typerelay connect --server URL · Disconnect: typerelay disconnect", false);
             }
             Screen::NewFile => {
                 self.file = Some(self.store.create(Self::value(&self.name).trim())?);
@@ -652,7 +652,7 @@ impl App {
                 self.url.set_block(Self::border("URL to sync with", self.editor_focus == 0));
                 self.prefix.set_block(Self::border("Trigger prefix · e.g. , or ;", self.editor_focus == 1));
                 frame.render_widget(&self.url, parts[0]); frame.render_widget(&self.prefix, parts[1]);
-                frame.render_widget(Paragraph::new("Tab switches fields. The prefix is local to this machine.\nConnect with typerelay connect --server URL. F5 requests sync."), parts[2]);
+                frame.render_widget(Paragraph::new("Tab switches fields. The prefix is local to this machine.\nConnect: typerelay connect --server URL · Disconnect: typerelay disconnect · F5 syncs."), parts[2]);
                 self.field_areas.extend([parts[0], parts[1]]); self.form_buttons(frame, parts[3]);
             }
             Screen::Confirm => (),
@@ -902,6 +902,15 @@ mod tests {
         app.file = Some(app.store.create("mine").unwrap()); app.screen = Screen::Browse; app.edit(true).unwrap();
         app.trigger = App::text("invalid space"); app.expansion = App::text("My draft");
         Fixture::key(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL); assert_eq!(app.screen, Screen::Edit); assert!(app.error); assert_eq!(app.draft().replace, "My draft");
+    }
+    #[test]
+    fn sync_settings_show_connect_and_disconnect_commands() {
+        let temp = tempfile::tempdir().unwrap(); let mut app = Fixture::app(temp.path());
+        Fixture::key(&mut app, KeyCode::F(6), KeyModifiers::NONE);
+        let backend = ratatui::backend::TestBackend::new(100, 30); let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let screen = terminal.backend().buffer().content().iter().map(|cell|cell.symbol()).collect::<String>();
+        assert!(screen.contains("typerelay connect --server URL")); assert!(screen.contains("typerelay disconnect"));
     }
     #[test]
     fn renders_and_mouse_opens_new_file() {

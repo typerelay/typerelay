@@ -101,7 +101,9 @@ html(lang="en")
 							input#server(type="url" value="https://app.typerelay.com" required)
 							.form-actions
 								button#sync.secondary(type="button") Sync now
-								button.primary(type="submit") Authenticate
+								span.action-group
+									button#disconnect.secondary(type="button" hidden) Disconnect
+									button.primary(type="submit") Authenticate
 						form#enroll-form.setting-section
 							h3 Local libraries
 							p Upload selected local libraries as private libraries.

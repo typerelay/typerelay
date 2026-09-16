@@ -184,3 +184,15 @@ test('manual sync displays progress and completion without opening or dismissing
   assert.ok(!f.calls.some(call=>call.name==='dismiss'));
  }finally{f.dom.window.close();}
 });
+
+test('connected clients can disconnect without dismissing the panel',async()=>{
+ const f=await Fixture.create();try{
+  f.panel.configure({config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},connected:true,accessibility:false,input_monitoring:false});
+  const button=f.dom.window.document.querySelector('#disconnect');assert.equal(button.hidden,false);
+  button.click();await new Promise(resolve=>setTimeout(resolve,0));
+  assert.ok(f.calls.some(call=>call.name==='disconnect'));
+  assert.equal(f.panel.status.textContent,'Disconnected');
+  assert.ok(!f.calls.some(call=>call.name==='dismiss'));
+  f.panel.configure({config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},connected:false,accessibility:false,input_monitoring:false});assert.equal(button.hidden,true);
+ }finally{f.dom.window.close();}
+});
