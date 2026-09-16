@@ -205,11 +205,11 @@ test('Sync settings retain synced libraries and reconcile only changed rows afte
   const original=f.panel.invoke;f.panel.invoke=async(name,args)=>name==='libraries'?structuredClone(rows):original(name,args);
   await f.panel.refreshLibraries();
   const container=f.dom.window.document.querySelector('#local-libraries');const remote=container.children[0];const local=container.children[1];
-  assert.equal(remote.querySelector('.library-name').textContent,'mysnippets.yml');assert.equal(remote.querySelector('.library-count').textContent,'67 snippets');assert.equal(remote.querySelector('.library-sync-state').textContent,'Synced');assert.equal(remote.querySelector('input').disabled,true);
+  assert.equal(remote.querySelector('.library-name').textContent,'mysnippets.yml (67)');assert.equal(remote.querySelector('.library-sync-state').textContent,'Synced');assert.equal(remote.querySelector('input').disabled,true);
   const checkbox=local.querySelector('input');checkbox.checked=true;checkbox.focus();
   const before=f.calls.length;rows[0].snippets=68;
   await f.callbacks['sync-notice']({payload:{running:false}});
-  assert.equal(container.children[0],remote);assert.equal(container.children[1],local);assert.equal(remote.querySelector('.library-count').textContent,'68 snippets');assert.equal(checkbox.checked,true);assert.equal(f.dom.window.document.activeElement,checkbox);assert.equal(f.calls.length,before);
+  assert.equal(container.children[0],remote);assert.equal(container.children[1],local);assert.equal(remote.querySelector('.library-name').textContent,'mysnippets.yml (68)');assert.equal(checkbox.checked,true);assert.equal(f.dom.window.document.activeElement,checkbox);assert.equal(f.calls.length,before);
   rows[1].synced=true;await f.panel.refreshLibraries();assert.equal(checkbox.checked,false);assert.equal(checkbox.disabled,true);assert.equal(local.querySelector('.library-sync-state').textContent,'Synced');
   const pending=[];f.panel.invoke=async()=>new Promise(resolve=>pending.push(resolve));
   const stale=f.panel.refreshLibraries();const fresh=f.panel.refreshLibraries();pending[1]([rows[1]]);await fresh;pending[0](rows);await stale;

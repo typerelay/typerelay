@@ -11,6 +11,6 @@ body[data-os=macos] main{padding-top:.9rem}body[data-os=macos] .titlebar{positio
 .settings-page .primary{background:color-mix(in srgb,var(--accent) 72%,#000);border-color:color-mix(in srgb,var(--accent) 64%,#000)}.settings-page .primary:hover{background:color-mix(in srgb,var(--accent) 64%,#000)}
 .search-icon{left:auto;right:.85rem}.search-field input{padding-left:.85rem;padding-right:2.45rem}.titlebar>.icon-button{margin-left:auto}
 
-#local-libraries .check{display:flex;align-items:center;gap:.5rem}#local-libraries .library-name{flex:1;min-width:0;overflow-wrap:anywhere}#local-libraries .library-count{white-space:nowrap}#local-libraries .library-sync-state{white-space:nowrap}
+#local-libraries .check{display:flex;align-items:center;gap:.5rem}#local-libraries .library-name{flex:1;min-width:0;overflow-wrap:anywhere}#local-libraries .library-sync-state{white-space:nowrap}
 
 .titlebar>#open-settings{margin-left:auto;font-size:1.25rem;line-height:1}.titlebar>#close{margin-left:0}body[data-view=settings] #open-settings{display:none}
