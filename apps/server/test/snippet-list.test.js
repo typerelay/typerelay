@@ -34,7 +34,7 @@ test('snippet edits and creates reorder individual rows without reloading or los
 		client.request = async (path, method, body) => {
 			assert.equal(path, 'libraries/one/snippets');
 			assert.equal(method, 'POST');
-			assert.equal(body.changes[0].touch, true, 'Explicit web Save must touch unchanged content');
+			assert.equal(Object.hasOwn(body.changes[0], 'touch'), false, 'Web Save must not force an unchanged snippet update');
 			return result;
 		};
 		client.poll = async () => {};

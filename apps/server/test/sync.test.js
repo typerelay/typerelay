@@ -41,7 +41,7 @@ before(async () => {
 });
 after(async () => { await mongoose.connection.dropDatabase(); await mongoose.disconnect(); });
 
-test('editing and explicitly saving legacy snippets updates sort order while sync retries remain idempotent', async () => {
+test('editing legacy snippets updates sort order while unchanged saves and retries preserve timestamps', async () => {
 	let { library } = await Fixture.create(Fixture.owner);
 	await Snippet.updateMany({ library: library._id }, { $unset: { createdAt: 1, updatedAt: 1 } }, { timestamps: false });
 	library = Libraries.view(Fixture.owner, await Libraries.get(Fixture.owner, library._id));
@@ -62,14 +62,13 @@ test('editing and explicitly saving legacy snippets updates sort order while syn
 	const saved = result.library.snippets.find(snippet => snippet.id === sibling.id);
 	const untouched = await Fixture.upload(Fixture.owner, result.library, [Fixture.change(saved, saved.replace)]);
 	assert.equal(untouched.library.snippets[0].id, edited.id, 'Background sync of identical content must not reorder');
-	const explicitSave = [{ ...Fixture.change(saved, saved.replace), touch: true }];
-	const saveOperation = randomUUID();
-	const touched = await Fixture.upload(Fixture.owner, untouched.library, explicitSave, saveOperation);
-	assert.equal(touched.library.snippets[0].id, sibling.id, 'Explicit Save must move unchanged content to the top');
-	assert.equal(touched.library.snippets[0].revision, sibling.revision + 1);
-	assert.ok(touched.library.snippets[0].updatedAt > stored.updatedAt);
-	const saveRetry = await Fixture.upload(Fixture.owner, untouched.library, explicitSave, saveOperation);
-	assert.equal(+saveRetry.library.snippets[0].updatedAt, +touched.library.snippets[0].updatedAt);
+	const unchanged = untouched.library.snippets.find(snippet => snippet.id === sibling.id);
+	assert.equal(unchanged.revision, sibling.revision);
+	assert.equal(unchanged.updatedAt, undefined);
+	const editedAgain = untouched.library.snippets.find(snippet => snippet.id === edited.id);
+	const same = await Fixture.upload(Fixture.owner, untouched.library, [Fixture.change(editedAgain, editedAgain.replace)]);
+	assert.equal(same.library.snippets[0].revision, stored.revision);
+	assert.equal(+same.library.snippets[0].updatedAt, +stored.updatedAt);
 
 });
 

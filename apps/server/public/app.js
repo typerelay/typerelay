@@ -364,7 +364,7 @@ class TypeRelay {
 	async snippet(id, value, snapshot = null) {
 		const library = snapshot || this.libraries.get(this.selected);
 		const previous = library.snippets.find(snippet => snippet.id === id);
-		const result = await this.request('libraries/' + library._id + '/snippets', 'POST', { base_revision: library.revision, changes: [{ id: id || crypto.randomUUID(), base_revision: previous?.revision ?? null, base: previous || null, value, touch: true }] });
+		const result = await this.request('libraries/' + library._id + '/snippets', 'POST', { base_revision: library.revision, changes: [{ id: id || crypto.randomUUID(), base_revision: previous?.revision ?? null, base: previous || null, value }] });
 		await this.apply(result);
 		await this.poll();
 	}

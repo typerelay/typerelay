@@ -319,7 +319,7 @@ export class Libraries {
 			Support.assert(server?.state !== 'purged', 'Snippet was permanently purged; it cannot be restored', 410);
 			const local = change.value === null ? null : Libraries.value(await Libraries.prepared(ctx,change.value), server?.content);
 			if (local) await Libraries.validate([local], ctx, session);
-			if (server?.state === 'active' && library.state === 'active' && Libraries.same(server, local) && change.touch !== true) continue;
+			if (server?.state === 'active' && library.state === 'active' && Libraries.same(server, local)) continue;
 			if (server?.state === 'trashed' && local === null) continue;
 			if (library.state !== 'active' || server?.state === 'trashed' || (server?.revision ?? null) !== (change.base_revision ?? null)) {
 				const [conflict] = await Conflict.create([{ account: ctx.account, library: library._id, user: ctx.user, snippet: change.id, local, base: change.base || null, server: server ? Libraries.entry(server) : null }], { session });
