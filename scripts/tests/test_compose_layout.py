@@ -9,6 +9,7 @@ class ComposeLayoutTests(unittest.TestCase):
         cls.development = (cls.root / "compose.yml").read_text()
         cls.production = (cls.root / "compose.prod.yml").read_text()
         cls.dbh = (cls.root / "compose.dbh.yml").read_text()
+        cls.dbh_run = (cls.root / ".codex" / "dbh-run.toml").read_text()
 
     def test_development_uses_dbh_services_and_source_mounts(self):
         self.assertIn("DEV_TYPERELAY_MONGODB_URI", self.development)
@@ -47,6 +48,10 @@ class ComposeLayoutTests(unittest.TestCase):
         self.assertIn("-typerelay-app", self.dbh)
         self.assertIn("-typerelay-mcp", self.dbh)
         self.assertNotIn("typerelay-mail", self.dbh)
+
+    def test_dbh_defines_required_development_environment(self):
+        for name in ["DEV_TYPERELAY_MONGODB_URI", "MEMCACHED_SERVERS", "SMTP_SERVERS", "SMTP_FROM", "SESSION_SECRET", "JWT_SECRET"]:
+            self.assertIn(f"{name} =", self.dbh_run)
 
 
 if __name__ == "__main__":
