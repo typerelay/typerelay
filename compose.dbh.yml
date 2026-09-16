@@ -6,9 +6,6 @@ x-dbh-ca-volumes: &dbh-ca-volumes
 
 services:
   app:
-    # Keep MagicDNS for private hosts and use a fallback for public provider/package DNS.
-    dns:
-      - 1.1.1.1
     ports: !override []
     environment: *dbh-ca-environment
     volumes: *dbh-ca-volumes
@@ -20,9 +17,6 @@ services:
           - "${DBH_PROFILE}-typerelay-server"
 
   mcp:
-    # Keep MagicDNS for private hosts and use a fallback for public provider/package DNS.
-    dns:
-      - 1.1.1.1
     ports: !override []
     environment: *dbh-ca-environment
     volumes: *dbh-ca-volumes
