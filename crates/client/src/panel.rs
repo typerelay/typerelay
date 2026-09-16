@@ -13,6 +13,11 @@ pub struct PanelSettings { pub shortcut: String, pub launch_at_login: bool }
 impl Default for PanelSettings { fn default() -> Self { Self { shortcut: "Ctrl+Shift+Semicolon".into(), launch_at_login: true } } }
 pub struct Panel;
 impl Panel {
+    pub fn libraries(directory:&Path)->Result<serde_json::Value> {
+        let db=Database::open(directory)?;let transaction=db.connection.unchecked_transaction()?;let mut rows=Vec::new();
+        for library in db.libraries()?{if library["state"]!="active"{continue;}let id=library["_id"].as_str().context("Missing library ID")?;let snippets=db.records(id)?.iter().filter(|record|record["state"]=="active").count();rows.push(serde_json::json!({"id":id,"name":library["name"],"synced":db.synced(id)?,"snippets":snippets}));}
+        transaction.commit()?;Ok(serde_json::json!(rows))
+    }
     pub fn settings(root: &Path) -> Result<PanelSettings> {
         match fs::read(root.join("panel.json")) { Ok(bytes) => Ok(serde_json::from_slice(&bytes)?), Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(PanelSettings::default()), Err(error) => Err(error.into()) }
     }
@@ -75,6 +80,16 @@ impl Panel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn library_inventory_includes_synced_and_local_libraries_with_active_counts() {
+        let dir=tempfile::tempdir().unwrap();let db=Database::open(dir.path()).unwrap();
+        let synced=db.import("mysnippets.yml","matches: [{trigger: rw, replace: First}, {trigger: old, replace: Old}]").unwrap();
+        db.edit(&synced,Some(1),None).unwrap();db.connection.execute("UPDATE libraries SET synced=1 WHERE id=?1",[&synced.id]).unwrap();
+        db.import("test","matches: [{trigger: local, replace: Local}]").unwrap();
+        let rows=Panel::libraries(dir.path()).unwrap();let rows=rows.as_array().unwrap();assert_eq!(rows.len(),2);
+        let row=rows.iter().find(|row|row["id"]==synced.id).unwrap();assert_eq!(row["name"],"mysnippets.yml");assert_eq!(row["synced"],true);assert_eq!(row["snippets"],1);
+        assert_eq!(rows.iter().find(|row|row["name"]=="test").unwrap()["synced"],false);
+    }
     #[test]
     fn search_rank_optional_abbreviation_and_stale_selection() {
         let dir = tempfile::tempdir().unwrap(); let db = Database::open(dir.path()).unwrap();

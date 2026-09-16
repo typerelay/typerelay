@@ -12,6 +12,8 @@ html(lang="en")
 				.brand
 					img(src="icon.svg" alt="" width="24" height="24")
 					h1#window-title TypeRelay
+				button#open-settings.icon-button(type="button" aria-label="Open settings" title="Settings")
+					span(aria-hidden="true") ⚙︎
 				button#close.icon-button(type="button" aria-label="Close TypeRelay") ×
 			section#search-view
 				.search-field
@@ -111,8 +113,8 @@ html(lang="en")
 									button#disconnect.secondary(type="button") Disconnect
 									button.primary(type="submit") Authenticate
 						form#enroll-form.setting-section
-							h3 Libraries available to upload
-							p Only unsynced local libraries appear here. Synced libraries remain available in search and the TUI.
+							h3 Libraries on this device
+							p Synced libraries are available offline. Select local-only libraries to upload.
 							div#local-libraries
 							.form-actions
 								span
@@ -128,7 +130,9 @@ html(lang="en")
 		template#library-template
 			label.check
 				input(type="checkbox")
-				span
+				span.library-name
+				small.library-count
+				span.library-sync-state.status-pill
 
 		template#fill-field
 			div

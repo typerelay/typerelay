@@ -276,7 +276,7 @@ async fn disconnect(app:tauri::AppHandle)->std::result::Result<(),String> {
 #[tauri::command]
 async fn libraries(app:tauri::AppHandle)->std::result::Result<Value,String>{
     let directory=app.state::<Runtime>().root.join("snippets");
-    tauri::async_runtime::spawn_blocking(move ||->Result<Value>{let db=Database::open(&directory)?;let mut rows=Vec::new();for library in db.libraries()?{let id=library["_id"].as_str().context("Missing library ID")?;if library["state"]=="active" && !db.synced(id)?{rows.push(json!({"name":library["name"]}));}}Ok(json!(rows))}).await.map_err(|e|e.to_string())?.map_err(|e|e.to_string())
+    tauri::async_runtime::spawn_blocking(move ||Panel::libraries(&directory).map_err(|e|e.to_string())).await.map_err(|e|e.to_string())?
 }
 #[tauri::command]
 async fn enroll(app:tauri::AppHandle,names:Vec<String>)->std::result::Result<(),String>{let root=app.state::<Runtime>().root.clone();tauri::async_runtime::spawn_blocking(move||->Result<()>{let sync=Sync::new(root.clone(),root.join("snippets"))?;for name in names{sync.enroll(&name)?;}Ok(())}).await.map_err(|e|e.to_string())?.map_err(|e|e.to_string())}
