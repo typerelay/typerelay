@@ -69,7 +69,7 @@ impl Cli {
     fn execute(self) -> Result<()> {
         let root = typerelay_client::editor::Paths::config_dir()?;
         match self.command {
-            Commands::Connect { server, no_browser } => { let server = server.unwrap_or(typerelay_client::settings::SettingsStore::open(root.join("settings.yml"))?.settings.sync_url); typerelay_client::sync::Sync::new(root.clone(), root.join("snippets"))?.connect(&server, !no_browser, true)?; },
+            Commands::Connect { server, no_browser } => { let server = server.unwrap_or(typerelay_client::settings::SettingsStore::open(root.join("settings.yml"))?.settings.sync_url); typerelay_client::sync::Sync::new(root.clone(), root.join("snippets"))?.connect(&server, !no_browser, false)?; },
             Commands::Enroll { filename } => typerelay_client::sync::Sync::new(root.clone(), root.join("snippets"))?.enroll(&filename)?,
             Commands::Sync => typerelay_client::sync::Sync::new(root.clone(), root.join("snippets"))?.cycle()?,
 			Commands::Import { source, name } => {let db=typerelay_client::database::Database::open(&root.join("snippets"))?;if source.to_string_lossy().ends_with(".typerelay.zip"){db.import_bundle(&name,&source)?;}else{db.import(&name,&std::fs::read_to_string(source)?)?;}},
