@@ -64,7 +64,9 @@ export class Auth {
 	}
 	static redirect(uri) {
 		const url = new URL(uri);
-		Support.assert(url.protocol === 'http:' && url.hostname === '127.0.0.1' && url.port && url.pathname === '/callback' && !url.username && !url.password && !url.search && !url.hash, 'Desktop redirect must be an IPv4 loopback /callback URL');
+		const loopback = url.protocol === 'http:' && url.hostname === '127.0.0.1' && url.port && url.pathname === '/callback';
+		const app = url.protocol === 'typerelay:' && url.hostname === 'oauth' && url.pathname === '/callback' && !url.port;
+		Support.assert((loopback || app) && !url.username && !url.password && !url.search && !url.hash, 'Invalid desktop callback URL');
 		return url.href;
 	}
 	static async authorize(user, body) {

@@ -132,6 +132,10 @@ test('PKCE account binding, one-time code, rotating token, device revoke', async
 	await Device.updateOne({ _id: tokens.device }, { $set: { revoked: true } });
 	await assert.rejects(Auth.bearer(rotated.access_token), /revoked/);
 });
+test('desktop PKCE accepts only the registered app callback', () => {
+	assert.equal(Auth.redirect('typerelay://oauth/callback'), 'typerelay://oauth/callback');
+	assert.throws(() => Auth.redirect('typerelay://other/callback'), /Invalid desktop callback/);
+});
 test('membership administration cannot escalate admin to owner or touch owner', async () => {
 	const owner = await Member.findOne({ user: Fixture.owner.user, account: Fixture.account }).lean();
 	await assert.rejects(Libraries.mutate(Fixture.admin, randomUUID(), {}, (ctx, session) => Team.member(ctx, String(owner._id), {}, session)), /Cannot change/);

@@ -27,6 +27,11 @@
     }
   },
   "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["typerelay"]
+      }
+    },
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY3MDE3QTExNTYyQUMyNDUKUldSRndpcFdFWG9COXlxeE15WUJCSmpMMnZab01wMFBHcWxUOHBtMzlmTHpTVExHTlFsK1BYUE8K",
       "endpoints": [

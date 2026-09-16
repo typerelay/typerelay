@@ -83,16 +83,16 @@ impl Sync {
 	}
 	fn download_assets(&self,credentials:&Credentials,db:&Database,response:&Value)->Result<()> {for metadata in response["assets"].as_array().into_iter().flatten(){let id=metadata["id"].as_str().context("Missing asset ID")?;if db.asset(id)?.is_some(){continue;}let bytes=self.asset_request(credentials,reqwest::Method::GET,id,None,None)?.bytes()?.to_vec();ensure!(bytes.len()==metadata["size"].as_u64().context("Missing asset size")? as usize,"Asset size mismatch");ensure!(format!("{:x}",Sha256::digest(&bytes))==id,"Asset hash mismatch");db.put_asset(metadata,&bytes,true)?;}Ok(())}
 	fn upload_assets(&self,credentials:&Credentials,db:&Database)->Result<()> {for (metadata,bytes) in db.pending_assets()?{let id=metadata["id"].as_str().context("Missing asset ID")?;self.asset_request(credentials,reqwest::Method::PUT,id,metadata["mime_type"].as_str(),Some(bytes))?;db.mark_asset_uploaded(id)?;}Ok(())}
-    pub fn connect(&self, server: &str, open_browser: bool) -> Result<()> {
+    pub fn connect(&self, server: &str, open_browser: bool, app_callback: bool) -> Result<()> {
         let _lock = self.lock()?;
         ensure!(!self.path("credentials.json").exists(), "Already connected; disconnect before changing accounts");
         let server = server.trim_end_matches('/');
         let url = url::Url::parse(server)?;
         ensure!(url.scheme() == "https" || (url.scheme() == "http" && matches!(url.host_str(), Some("localhost" | "127.0.0.1"))), "Use HTTPS (HTTP is permitted only on loopback)");
         ensure!(url.path() == "/" && url.query().is_none() && url.fragment().is_none() && url.username().is_empty(), "Use the server origin without a path or credentials");
-        let listener = TcpListener::bind("127.0.0.1:0")?;
-        listener.set_nonblocking(true)?;
-        let redirect = format!("http://127.0.0.1:{}/callback", listener.local_addr()?.port());
+        let listener = if app_callback { None } else { let listener = TcpListener::bind("127.0.0.1:0")?; listener.set_nonblocking(true)?; Some(listener) };
+        let redirect = listener.as_ref().map(|listener|format!("http://127.0.0.1:{}/callback",listener.local_addr().unwrap().port())).unwrap_or_else(||"typerelay://oauth/callback".into());
+        let callback_path = self.path("oauth-callback"); let _ = fs::remove_file(&callback_path);
         let verifier = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
         let state = Uuid::new_v4().simple().to_string();
         let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
@@ -105,6 +105,16 @@ impl Sync {
         let deadline = Instant::now() + Duration::from_secs(300);
         loop {
             ensure!(Instant::now() < deadline, "Browser sign-in timed out");
+            if app_callback && let Ok(callback) = fs::read_to_string(&callback_path) {
+                let _ = fs::remove_file(&callback_path); let callback = url::Url::parse(&callback)?;
+                ensure!(callback.scheme()=="typerelay"&&callback.host_str()==Some("oauth")&&callback.path()=="/callback","Invalid desktop callback");
+                let params:BTreeMap<_,_>=callback.query_pairs().into_owned().collect();
+                ensure!(params.get("state")==Some(&state),"Invalid desktop callback state");
+                let tokens = Self::response(self.client.post(format!("{server}/oauth/token")).json(&json!({"grant_type":"authorization_code","client_id":"typerelay-desktop","code":params.get("code"),"redirect_uri":redirect,"code_verifier":verifier})).send()?)?;
+                let mut settings = crate::settings::SettingsStore::open(self.root.join("settings.yml"))?; let prefix=settings.settings.trigger_prefix.clone();settings.save(server,&prefix)?;
+                self.secret(&Credentials { server: server.into(), access_token: tokens["access_token"].as_str().context("Missing token")?.into(), refresh_token: tokens["refresh_token"].as_str().context("Missing token")?.into() })?;return Ok(());
+            }
+            let Some(listener)=&listener else {std::thread::sleep(Duration::from_millis(100));continue;};
             match listener.accept() {
                 Ok((mut stream, _)) => {
                     let Some(params) = Self::callback(&mut stream, &state, Duration::from_secs(2))? else { continue; };
@@ -122,6 +132,7 @@ impl Sync {
             }
         }
     }
+    pub fn receive_callback(root:&Path,url:&str)->Result<bool>{let callback=url::Url::parse(url)?;if callback.scheme()!="typerelay"||callback.host_str()!=Some("oauth")||callback.path()!="/callback"{return Ok(false);}fs::create_dir_all(root.join("sync"))?;Paths::atomic_write(&root.join("sync/oauth-callback"),url.as_bytes(),false)?;Ok(true)}
     pub fn enroll(&self, name: &str) -> Result<()> {
         let _lock = self.lock()?;
         self.credentials()?;
@@ -258,5 +269,12 @@ mod tests {
         let _client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (mut stream, _) = listener.accept().unwrap();
         assert_eq!(Sync::callback(&mut stream, "expected", Duration::from_millis(10)).unwrap(), None);
+    }
+    #[test]
+    fn registered_app_callback_is_validated_before_delivery() {
+        let root=tempfile::tempdir().unwrap();
+        assert!(!Sync::receive_callback(root.path(),"https://example.test/callback?code=x").unwrap());
+        assert!(Sync::receive_callback(root.path(),"typerelay://oauth/callback?code=x&state=y").unwrap());
+        assert_eq!(fs::read_to_string(root.path().join("sync/oauth-callback")).unwrap(),"typerelay://oauth/callback?code=x&state=y");
     }
 }
