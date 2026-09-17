@@ -55,6 +55,20 @@ impl Mobile {
                 }
                 json!({"queued":true})
             }
+            "trash" => json!(db.trash()?),
+            "trash_action" => {
+                let operation = Self::text(request, "operation_id")?;
+                ensure!((16..=128).contains(&operation.len()) && operation.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'), "Invalid operation ID");
+                let trash_action = Self::text(request, "trash_action")?;
+                ensure!(matches!(trash_action, "restore" | "purge"), "Unknown Trash action");
+                let key = format!("mobile-trash-{operation}");
+                let signature = format!("{:x}", Sha256::digest(serde_json::to_vec(request)?));
+                if let Some(receipt) = db.meta(&key)? { ensure!(receipt["signature"] == signature, "This Trash action already completed for another item."); return Ok(receipt["result"].clone()); }
+                db.trash_action(&request["target"], trash_action)?;
+                let result = json!({"completed":true,"items":db.trash()?});
+                db.set_meta(&key, &json!({"signature":signature,"result":result}))?;
+                result
+            }
             "suspend" => { db.set_meta("keyboard_blocked", &json!(true))?; Self::publish(&db, shared)?; json!({}) },
             "save" => {
                 let operation = Self::text(request, "operation_id")?;
@@ -133,7 +147,7 @@ impl Mobile {
             "draft" => { db.set_meta("mobile_draft", request.get("draft").unwrap_or(&Value::Null))?; json!({}) }
             _ => anyhow::bail!("Unknown mobile action"),
         };
-        if matches!(action, "state" | "save" | "delete") { Self::publish(&db, shared)?; }
+        if matches!(action, "state" | "save" | "delete" | "trash_action") { Self::publish(&db, shared)?; }
         Ok(result)
     }
     fn render(content: &Value, request: &Value, assets: BTreeMap<String, String>) -> Result<Value> {

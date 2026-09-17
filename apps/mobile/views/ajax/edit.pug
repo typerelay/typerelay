@@ -9,8 +9,8 @@ form#editor-form.mobile-editor
 			span.eyebrow= snippet ? 'Edit snippet' : 'New snippet'
 			h2= snippet && (snippet.title || snippet.trigger) || 'Untitled snippet'
 		.flow-actions
-			if draft
-				button.flow-trash#delete-draft(type="button" aria-label="Discard draft")
+			if draft || (snippet && library.permissions.edit)
+				button.flow-trash#delete-editor-item(type="button" aria-label=snippet ? 'Move snippet to Trash' : 'Discard draft')
 					span.material-symbols-outlined delete
 			button.flow-save#save(type="submit") Save
 	.flow-body

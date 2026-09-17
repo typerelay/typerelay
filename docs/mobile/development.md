@@ -6,6 +6,8 @@ The application shell follows Mailtwine's mobile interaction model: safe-area sc
 
 Snippet rows support configurable gestures. Defaults are left swipe to Copy, right swipe to Edit, and far-right swipe to move the snippet to Trash. Releasing after the action threshold executes immediately: Copy writes directly to the clipboard and Edit opens the editor. Tapping the row remains the prompted template/copy flow. Device-local settings under the keyboard section can assign Copy, Edit, Delete, or no action to each gesture. Vertical movement cancels a gesture so normal list scrolling remains available. Unsaved drafts appear above the list, can be resumed or discarded from the list, and expose a Trash action next to Save inside the editor.
 
+Saved snippets show a Trash action beside Save only when their library grants edit permission; the native store repeats permission and revision validation. Settings includes a Trash drawer. Returned items always expose Restore, while permanent deletion appears only for items whose library grants manage permission. All actions update the offline database and keyboard snapshot before synchronization.
+
 ## Build
 
 Requirements: Node 24, pnpm, Rust, Xcode for iOS; Android SDK 36, Java 21 and NDK 28.2.13676358 for Android. Native build scripts install the required Rust targets. Set `ANDROID_HOME` and `ANDROID_NDK_HOME` when using nondefault SDK paths.

@@ -245,12 +245,12 @@ impl Database {
             if library["state"] == "purged" { continue; }
             let can_manage = library["permissions"]["manage"] == true;
             if library["state"] == "trashed" {
-                if !Self::expired(&library) && can_manage { result.push(json!({"type":"library","id":id,"library":id,"name":library["name"],"revision":library["revision"],"can_purge":can_manage,"expires_at":library["expires_at"]})); }
+                if !Self::expired(&library) && can_manage { result.push(json!({"type":"library","id":id,"library":id,"name":library["name"],"revision":library["revision"],"can_restore":true,"can_purge":can_manage,"expires_at":library["expires_at"]})); }
                 continue;
             }
             if library["state"] != "active" || library["permissions"]["edit"] != true { continue; }
             for record in self.records(id)? {
-                if record["state"] == "trashed" && !Self::expired(&record) { result.push(json!({"type":"snippet","id":record["id"],"library":id,"name":record["title"].as_str().filter(|v|!v.is_empty()).or(record["trigger"].as_str()).unwrap_or("Untitled snippet"),"revision":record["revision"],"can_purge":can_manage,"expires_at":record["expires_at"]})); }
+                if record["state"] == "trashed" && !Self::expired(&record) { result.push(json!({"type":"snippet","id":record["id"],"library":id,"name":record["title"].as_str().filter(|v|!v.is_empty()).or(record["trigger"].as_str()).unwrap_or("Untitled snippet"),"library_name":library["name"],"revision":record["revision"],"can_restore":true,"can_purge":can_manage,"expires_at":record["expires_at"]})); }
             }
         }
         Ok(result)

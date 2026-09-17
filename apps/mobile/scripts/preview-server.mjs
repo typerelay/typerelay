@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 /** Development-only Vite middleware; authorization and account isolation stay server-side. */
 export class PreviewServer {
- static actions = new Set(['state', 'bind', 'save', 'delete', 'sync', 'reset', 'draft', 'render', 'keyboard', 'keyboard_render', 'asset', 'asset_import', 'asset_fetch', 'recovery', 'resolve']);
+ static actions = new Set(['state', 'bind', 'save', 'delete', 'trash', 'trash_action', 'sync', 'reset', 'draft', 'render', 'keyboard', 'keyboard_render', 'asset', 'asset_import', 'asset_fetch', 'recovery', 'resolve']);
  static queues = new Map();
  static plugin() {
   return { name: 'typerelay-mobile-preview', configureServer(server) {

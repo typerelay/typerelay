@@ -1,0 +1,26 @@
+div
+	header.modal-header
+		button.flow-back(type="button" data-bs-dismiss="modal" aria-label="Back")
+			span.material-symbols-outlined arrow_back
+		div
+			span.eyebrow TypeRelay safety
+			h2.modal-title Trash
+		span
+	.modal-body
+		if !items.length
+			.empty-state
+				span.material-symbols-outlined delete_sweep
+				h2 Trash is empty
+				p Deleted snippets and libraries remain available here during their retention period.
+		each item in items
+			article.trash-row(data-trash-id=item.type + '-' + item.id)
+				span.trash-kind
+					span.material-symbols-outlined= item.type === 'library' ? 'folder_delete' : 'description'
+				span.trash-copy
+					strong= item.name
+					small= (item.library_name || (item.type === 'library' ? 'Library' : 'Snippet')) + (item.expires_at ? ' · expires ' + new Date(item.expires_at).toLocaleDateString() : '')
+				span.trash-actions
+					button.secondary-button(type="button" data-trash-action="restore" data-target=JSON.stringify(item)) Restore
+					if item.can_purge
+						button.trash-purge(type="button" data-trash-action="purge" data-target=JSON.stringify(item) aria-label='Permanently delete ' + item.name)
+							span.material-symbols-outlined delete_forever

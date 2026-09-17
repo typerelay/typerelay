@@ -19,6 +19,7 @@ import edit from '../views/ajax/edit.pug';
 import fill from '../views/ajax/fill.pug';
 import review from '../views/ajax/review.pug';
 import libraryFilter from '../views/ajax/library-filter.pug';
+import trash from '../views/ajax/trash.pug';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import './style.css';
 
@@ -120,7 +121,10 @@ class MobileApp {
   MobileApp.$('editor-form').addEventListener('input', MobileApp.scheduleDraft);
   MobileApp.$('editor-form').addEventListener('click', event => { if (!(event.target as HTMLElement).closest('#type-picker')) { typeMenu.hidden = true; typeButton.setAttribute('aria-expanded', 'false'); } });
   MobileApp.$('cancel-edit').onclick = () => { Modal.getInstance(MobileApp.$('form-modal'))?.hide(); };
-  const deleteDraft = document.getElementById('delete-draft'); if (deleteDraft) deleteDraft.onclick = () => { void MobileApp.discardDraft(true).catch(MobileApp.error); };
+  const deleteEditorItem = document.getElementById('delete-editor-item'); if (deleteEditorItem) deleteEditorItem.onclick = () => {
+   if (snippet && library.permissions.edit) void MobileApp.deleteSnippet(library, snippet, true).catch(MobileApp.error);
+   else if (draft) void MobileApp.discardDraft(true).catch(MobileApp.error);
+  };
   const saveCopy = document.getElementById('save-copy') as HTMLButtonElement | null;
   if (saveCopy) saveCopy.onclick = () => { void MobileApp.busy(saveCopy, async () => { const library = MobileApp.library(MobileApp.input('edit-library').value); MobileApp.editing = { library: library._id, revision: library.editor_revision, operation_id: crypto.randomUUID() }; MobileApp.input('trigger').value = ''; MobileApp.input('title').value += ' (copy)'; await MobileApp.save(); }); };
   MobileApp.$('editor-form').onsubmit = event => { event.preventDefault(); void MobileApp.busy(MobileApp.$('save') as HTMLButtonElement, MobileApp.save); };
@@ -189,6 +193,7 @@ class MobileApp {
   MobileApp.$('reconnect').onclick = () => { void Auth.begin(Auth.server).catch(MobileApp.error); };
   MobileApp.$('keyboard-settings').onclick = () => { void Native.plugin.keyboardSettings().catch(MobileApp.error); };
   MobileApp.configureSwipeSettings();
+  void MobileApp.refreshTrashCount();
   MobileApp.$('logout').onclick = () => { void MobileApp.busy(MobileApp.$('logout') as HTMLButtonElement, async () => {
    const result = await Swal.fire({ title: 'Sign out?', text: 'Cached snippets, pending edits, and drafts will be removed from this device.', icon: 'warning', showCancelButton: true, confirmButtonText: 'Sign out' }); if (!result.isConfirmed) return;
    MobileApp.active = false; await MobileApp.syncJob?.catch(() => undefined); await MobileApp.draftJob.catch(() => undefined); clearTimeout(MobileApp.draftTimer);
@@ -217,11 +222,28 @@ class MobileApp {
   await Native.plugin.copy({ text: output.text, html: output.html, rtf: output.rtf });
   MobileApp.toast('Snippet copied');
  }
- static async deleteSnippet(library: Library, snippet: Snippet) {
+ static async deleteSnippet(library: Library, snippet: Snippet, closeEditor = false) {
+  if (!library.permissions.edit) throw new Error('This library is read-only.');
   const result = await Swal.fire({ title: 'Move snippet to Trash?', text: snippet.title || snippet.trigger || 'Untitled snippet', icon: 'warning', showCancelButton: true, confirmButtonText: 'Move to Trash' });
-  if (!result.isConfirmed) return;
+  if (!result.isConfirmed) return false;
   await Native.call('delete', { library: library._id, id: snippet.id, revision: library.editor_revision, record_revision: snippet.revision, operation_id: crypto.randomUUID() });
+  if (closeEditor) { await Native.call('draft', { draft: null }); MobileApp.editing = null; MobileApp.editorDirty = false; Modal.getInstance(MobileApp.$('form-modal'))?.hide(); }
   await MobileApp.load(); MobileApp.toast('Snippet moved to Trash'); void MobileApp.sync().catch(MobileApp.error);
+  return true;
+ }
+ static async refreshTrashCount() { try { const items = await Native.call('trash'); MobileApp.$('trash-count').textContent = items.length ? String(items.length) : ''; } catch { MobileApp.$('trash-count').textContent = ''; } }
+ static async showTrash() {
+  const items = await Native.call('trash'); MobileApp.renderTrash(items);
+  MobileApp.$('detail-modal').classList.add('is-drawer'); Modal.getOrCreateInstance(MobileApp.$('detail-modal')).show();
+ }
+ static renderTrash(items: any[]) {
+  MobileApp.$('detail-content').replaceChildren(MobileApp.fragment(trash({ items })));
+  for (const button of MobileApp.$('detail-content').querySelectorAll<HTMLButtonElement>('[data-trash-action]')) button.onclick = () => { void MobileApp.busy(button, async () => {
+   const action = button.dataset.trashAction!; const target = JSON.parse(button.dataset.target!);
+   if (action === 'purge') { const confirmation = await Swal.fire({ title: 'Delete permanently?', text: target.name, icon: 'warning', showCancelButton: true, confirmButtonText: 'Delete permanently' }); if (!confirmation.isConfirmed) return; }
+   const result = await Native.call('trash_action', { trash_action: action, target, operation_id: button.dataset.operation ||= crypto.randomUUID() });
+   MobileApp.renderTrash(result.items); await MobileApp.load(); await MobileApp.refreshTrashCount(); MobileApp.toast(action === 'restore' ? 'Item restored' : 'Item permanently deleted'); void MobileApp.sync().catch(MobileApp.error);
+  }); };
  }
  static async discardDraft(closeEditor = false) {
   const result = await Swal.fire({ title: 'Discard draft?', text: 'The unsaved snippet draft will be removed from this device.', icon: 'warning', showCancelButton: true, confirmButtonText: 'Discard draft' });
@@ -251,6 +273,7 @@ class MobileApp {
   MobileApp.$('resume-draft').onclick = () => { const draft = MobileApp.state.draft; if (!draft) return; try { const library = MobileApp.library(draft.editing.library); void MobileApp.openEditor(library, library.records.find(item => item.id === draft.editing.id), draft).catch(MobileApp.error); } catch (error) { MobileApp.error(error); } };
   MobileApp.$('discard-draft').onclick = () => { void MobileApp.discardDraft().catch(MobileApp.error); };
   MobileApp.$('conflicts').onclick = () => { void MobileApp.showReview('conflicts').catch(MobileApp.error); }; MobileApp.$('recovery').onclick = () => { void MobileApp.showReview('recovery').catch(MobileApp.error); };
+  MobileApp.$('trash').onclick = () => { void MobileApp.showTrash().catch(MobileApp.error); };
   MobileApp.$('settings-screen').addEventListener('click', event => { const link = (event.target as HTMLElement).closest<HTMLAnchorElement>('[data-external]'); if (!link) return; event.preventDefault(); void Browser.open({ url: link.href }); });
   MobileApp.$('snippets').onclick = event => { const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-use]'); if (!button) return; const article = button.closest<HTMLElement>('[data-record]')!; const library = MobileApp.library(article.dataset.library!); const snippet = library.records.find(snippet => snippet.id === article.dataset.record)!; void MobileApp.use(library, snippet).catch(MobileApp.error); };
   createRoot(MobileApp.$('controller')).render(createElement(Controller));

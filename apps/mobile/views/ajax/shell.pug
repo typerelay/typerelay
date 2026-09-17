@@ -126,6 +126,17 @@ main.mobile-app#workspace
 				button.secondary-button.wide#recovery(type="button")
 					span.material-symbols-outlined restore_page
 					span Recovered edits
+			section.settings-section
+				header.settings-section-header
+					span.settings-icon.danger-icon
+						span.material-symbols-outlined delete
+					div
+						h2 Trash
+						p Restore items or permanently delete them when permitted.
+				button.secondary-button.wide#trash(type="button")
+					span.material-symbols-outlined delete_sweep
+					span View Trash
+					span.settings-button-count#trash-count
 			section.settings-section.danger-section
 				h2 Account
 				p.settings-description Remove credentials, cached snippets, pending edits, and drafts from this device.

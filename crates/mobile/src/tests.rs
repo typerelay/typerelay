@@ -123,6 +123,12 @@ fn mobile_delete_is_offline_durable_and_idempotent() {
     assert_eq!(db.pending().unwrap().len(), 1);
     assert!(db.records(&fixture.library).unwrap().iter().all(|record| record["state"] != "active"));
     assert!(fixture.call(json!({"action":"keyboard"})).unwrap()["libraries"][0]["records"].as_array().unwrap().is_empty());
+    let trash = fixture.call(json!({"action":"trash"})).unwrap();
+    assert_eq!(trash[0]["name"], "Greeting"); assert_eq!(trash[0]["library_name"], "Team"); assert_eq!(trash[0]["can_restore"], true);
+    let restore = json!({"action":"trash_action","trash_action":"restore","operation_id":"restore-operation-one","target":trash[0]});
+    let restored = fixture.call(restore.clone()).unwrap(); assert_eq!(fixture.call(restore).unwrap(), restored);
+    let db = Database::open(fixture.private.path()).unwrap(); assert_eq!(db.pending().unwrap().len(), 2);
+    assert_eq!(fixture.call(json!({"action":"state"})).unwrap()["libraries"][0]["records"][0]["state"], "active");
 }
 
 #[test]
