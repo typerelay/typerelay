@@ -454,3 +454,30 @@ test('template metadata survives imports, edits, conflicts, moves and Trash', as
 	assert.deepEqual((await Libraries.get(ctx, destination.library._id)).snippets[0].content, changed);
 	await assert.rejects(Libraries.validate([{ trigger: 'bad', type: 'template', replace: '{{shell:ls}}' }]), /variable name/);
 });
+
+test('mobile OAuth binds callback, client, device metadata and rotated refresh tokens', async () => {
+ for (const os of ['ios', 'android']) {
+  const verifier = Support.token();
+  const body = { account: Fixture.owner.account, redirect_uri: 'com.typerelay.mobile://oauth/callback', client_id: 'typerelay-mobile', client_type: 'mobile', os, code_challenge_method: 'S256', code_challenge: createHash('sha256').update(verifier).digest('base64url'), state: Support.token() };
+  await assert.rejects(Auth.authorize(Fixture.owner.user, { ...body, os: 'macos' }), /Invalid operating system/);
+  await assert.rejects(Auth.authorize(Fixture.owner.user, { ...body, client_type: 'desktop' }), /Invalid client type/);
+  const callback = new URL(await Auth.authorize(Fixture.owner.user, body));
+  const exchange = { grant_type: 'authorization_code', client_id: body.client_id, redirect_uri: body.redirect_uri, code: callback.searchParams.get('code'), code_verifier: verifier };
+  await assert.rejects(Auth.exchange({ ...exchange, client_id: 'typerelay-desktop' }), /Invalid authorization code/);
+  await assert.rejects(Auth.exchange({ ...exchange, code_verifier: Support.token() }), /Invalid authorization code/);
+  const tokens = await Auth.exchange(exchange);
+  await assert.rejects(Auth.exchange(exchange), /Invalid authorization code/);
+  const device = await Device.findById(tokens.device).lean();
+  assert.equal(device.os, os); assert.equal(device.client_type, 'mobile'); assert.equal(device.oauth_client, 'typerelay-mobile');
+  await assert.rejects(Auth.exchange({ grant_type: 'refresh_token', client_id: 'typerelay-desktop', refresh_token: tokens.refresh_token }), /Invalid refresh client/);
+  const rotated = await Auth.exchange({ grant_type: 'refresh_token', client_id: 'typerelay-mobile', refresh_token: tokens.refresh_token });
+  await assert.rejects(Auth.exchange({ grant_type: 'refresh_token', client_id: 'typerelay-mobile', refresh_token: tokens.refresh_token }), /Invalid refresh/);
+  assert.equal((await Auth.bearer(rotated.access_token)).device, tokens.device);
+  await Device.updateOne({ _id: tokens.device }, { $set: { revoked: true } });
+ }
+});
+test('mobile callbacks require exact registered scheme host and path', () => {
+ assert.equal(Auth.redirect('com.typerelay.mobile://oauth/callback', 'typerelay-mobile'), 'com.typerelay.mobile://oauth/callback');
+ for (const uri of ['not-a-url', 'typerelay://oauth/callback', 'http://127.0.0.1:8080/callback', 'com.typerelay.mobile://oauth/callback/extra', 'com.typerelay.mobile://user@oauth/callback', 'com.typerelay.mobile://oauth/callback?x=1', 'com.typerelay.mobile://oauth/callback#x', 'com.typerelay.mobile://evil/callback']) assert.throws(() => Auth.redirect(uri, 'typerelay-mobile'), /Invalid mobile callback/);
+ assert.throws(() => Auth.redirect('com.typerelay.mobile://oauth/callback', 'typerelay-desktop'), /Invalid desktop callback/);
+});

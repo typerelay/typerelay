@@ -1,0 +1,39 @@
+{
+  "name": "@typerelay/mobile",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "node scripts/build-renderer.mjs && tsc --noEmit && vite build",
+    "cap:sync": "pnpm assets && pnpm build && capacitor sync",
+    "native:ios": "node scripts/build-native.mjs ios",
+    "native:android": "node scripts/build-native.mjs android",
+    "test": "cargo test --manifest-path ../../Cargo.toml -p typerelay-mobile --lib",
+    "assets": "node scripts/assets.mjs",
+    "test:ui": "node --test test/ui.test.mjs"
+  },
+  "dependencies": {
+    "@aparajita/capacitor-secure-storage": "^8.0.0",
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/app": "^8.1.1",
+    "@capacitor/browser": "^8.0.4",
+    "@capacitor/cli": "^8.5.0",
+    "@capacitor/core": "^8.5.0",
+    "@capacitor/ios": "^8.5.0",
+    "@capacitor/network": "^8.0.1",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "sweetalert2": "^11.26.25",
+    "vite": "^8.2.2",
+    "bootstrap": "^5.3.8"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.7",
+    "typescript": "^5.9.3",
+    "pug": "^3.0.3",
+    "@types/pug": "^2.0.10",
+    "@types/bootstrap": "^5.2.10"
+  }
+}

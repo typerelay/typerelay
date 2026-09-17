@@ -1,0 +1,15 @@
+div
+	.modal-header
+		h2.modal-title.h5 Settings
+	.modal-body
+		h3.h6 TypeRelay keyboard
+		p Enable TypeRelay in keyboard settings. When typing, switch to TypeRelay, select a snippet, then switch back.
+		p On iOS, Full Access is not required. Some apps and secure fields do not allow third-party keyboards.
+		button#keyboard-settings.btn.btn-outline-primary.btn-sm.mb-3(type="button") Open keyboard settings
+		h3.h6 Sync
+		p= server || 'Not signed in'
+		p The keyboard uses the last local snapshot. Open TypeRelay to receive changes from other devices.
+		button#reconnect.btn.btn-outline-primary.btn-sm.me-3(type="button" disabled=!server) Reconnect account
+		button#logout.btn.btn-outline-danger.btn-sm(type="button" disabled=!server) Sign out
+	.modal-footer
+		button.btn.btn-outline-secondary.btn-sm(type="button" data-bs-dismiss="modal") Close

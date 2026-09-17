@@ -1,0 +1,40 @@
+main.container.py-3#workspace
+	.d-flex.align-items-center.justify-content-between.mb-5
+		h1.h3.mb-0 TypeRelay
+		button#settings.btn.btn-outline-secondary.btn-sm(type="button") Settings
+	section#login.mb-5
+		h2.h5 Your snippets, anywhere
+		p Sign in to sync your libraries and enable the TypeRelay keyboard.
+		form#login-form
+			.mb-3
+				label.form-label(for="server") Server URL
+				input#server.form-control.form-control-sm(type="url" required value="https://app.typerelay.com" autocomplete="url")
+			.d-flex.justify-content-end
+				button.btn.btn-primary.btn-sm(type="submit") Sign in with browser
+	section#signed-in(hidden)
+		.d-flex.align-items-center.justify-content-between.mb-3
+			span#sync-status.small(role="status") Offline snippets
+			button#sync.btn.btn-outline-secondary.btn-sm(type="button") Sync
+		.row.align-items-center.g-2.mb-3
+			.col
+				label.form-label(for="search") Search snippets
+				input#search.form-control.form-control-sm(type="search")
+			.col
+				label.form-label(for="library") Library
+				select#library.form-select.form-select-sm
+					option(value="") All libraries
+		.d-flex.justify-content-end.mb-3
+			button#add.btn.btn-primary.btn-sm(type="button") Add snippet
+		button#restore-draft.btn.btn-outline-primary.btn-sm.mb-3(type="button" hidden) Resume draft
+		button#conflicts.btn.btn-outline-warning.btn-sm.mb-3(type="button" hidden) Review conflicts
+		button#recovery.btn.btn-outline-warning.btn-sm.mb-3(type="button") Recovered edits
+		#snippets
+		p#empty.text-secondary No snippets. Sync or choose another library.
+#form-modal.modal.fade(tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false" aria-label="Snippet editor")
+	.modal-dialog.modal-dialog-scrollable.modal-lg
+		.modal-content
+			#editor-content
+#detail-modal.modal.fade(tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false" aria-label="Snippet details")
+	.modal-dialog.modal-dialog-scrollable
+		.modal-content
+			#detail-content

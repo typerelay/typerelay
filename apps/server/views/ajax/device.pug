@@ -1,7 +1,7 @@
 li.list-group-item.d-flex.align-items-center.justify-content-between(data-device=device._id)
 	div
 		strong= device.name
-		div.small.text-muted= 'Client: ' + ({desktop: 'Desktop', cli: 'CLI / TUI'}[device.client_type] || 'Unknown') + ' · OS: ' + ({macos: 'macOS', windows: 'Windows', linux: 'Linux'}[device.os] || 'Unknown')
+		div.small.text-muted= 'Client: ' + ({desktop: 'Desktop', cli: 'CLI / TUI', mobile: 'Mobile'}[device.client_type] || 'Unknown') + ' · OS: ' + ({macos: 'macOS', windows: 'Windows', linux: 'Linux', ios: 'iOS', android: 'Android'}[device.os] || 'Unknown')
 		div.small.text-muted
 			span= 'Connected: '
 			if device.createdAt

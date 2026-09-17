@@ -1,0 +1,9 @@
+article.card.p-3.mb-3(data-record=snippet.id data-library=library._id)
+	.d-flex.justify-content-between.align-items-start.gap-2
+		div
+			h2.h6= snippet.title || snippet.trigger || 'Untitled snippet'
+			.small.text-secondary= library.name + (snippet.trigger ? ' · ' + snippet.trigger : '')
+		button.btn.btn-outline-secondary.btn-sm(type="button" data-edit=snippet.id disabled=!library.permissions.edit) Edit
+	p.snippet-preview.my-3= snippet.content.text || snippet.content.markdown || ''
+	.d-flex.justify-content-end
+		button.btn.btn-outline-primary.btn-sm(type="button" data-use=snippet.id) Use snippet

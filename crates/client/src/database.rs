@@ -126,7 +126,7 @@ impl Database {
 	pub fn pending_assets(&self)->Result<Vec<(Value,Vec<u8>)>> {let mut statement=self.connection.prepare("SELECT id FROM assets WHERE uploaded=0 ORDER BY id")?;let ids=statement.query_map([],|row|row.get::<_,String>(0))?.collect::<std::result::Result<Vec<_>,_>>()?;ids.into_iter().map(|id|self.asset(&id)?.context("Asset disappeared")).collect()}
 	pub fn mark_asset_uploaded(&self,id:&str)->Result<()> {self.connection.execute("UPDATE assets SET uploaded=1 WHERE id=?1",[id])?;Ok(())}
     pub fn edit(&self, file: &OpenFile, index: Option<usize>, entry: Option<Match>) -> Result<OpenFile> {
-        let transaction = self.connection.unchecked_transaction()?;
+        let transaction = if self.connection.is_autocommit() { Some(self.connection.unchecked_transaction()?) } else { None };
         self.editable(&file.id)?;
         let current = self.editor(&file.name)?;
         ensure!(current.revision == file.revision, "Library changed outside the TUI; draft kept. Reopen before saving");
@@ -148,7 +148,7 @@ impl Database {
         library["revision"] = json!(library["revision"].as_i64().unwrap_or(1) + 1);
         self.put_library(&library, &file.name, self.synced(&file.id)?)?;
         self.validate_transaction()?;
-        transaction.commit()?;
+        if let Some(transaction) = transaction { transaction.commit()?; }
         self.editor(&file.name)
     }
     pub fn destinations(&self, source: &str) -> Result<Vec<Value>> {
