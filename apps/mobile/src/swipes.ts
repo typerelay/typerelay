@@ -95,11 +95,10 @@ export class SwipeRows {
   const threshold = SwipeRows.commitThreshold(drag.row);
   let action: SwipeAction = 'none';
   if (offset >= threshold) action = SwipeRows.allowed(SwipeRows.preferences.rightFar, drag.row);
-  else if (offset <= -threshold) action = SwipeRows.allowed(SwipeRows.preferences.left, drag.row);
+  else if (offset <= -REVEAL_THRESHOLD) action = SwipeRows.allowed(SwipeRows.preferences.left, drag.row);
+  else if (offset >= REVEAL_THRESHOLD) action = SwipeRows.allowed(SwipeRows.preferences.right, drag.row);
   if (action !== 'none') { SwipeRows.reset(drag.row); SwipeRows.callback(action, drag.row); return; }
-  if (offset <= -REVEAL_THRESHOLD && SwipeRows.allowed(SwipeRows.preferences.left, drag.row) !== 'none') SwipeRows.offset(drag.row, -REVEAL);
-  else if (offset >= REVEAL_THRESHOLD && SwipeRows.allowed(SwipeRows.preferences.right, drag.row) !== 'none') SwipeRows.offset(drag.row, REVEAL);
-  else SwipeRows.reset(drag.row);
+  SwipeRows.reset(drag.row);
  };
  static cancel = (event: PointerEvent) => { const drag = SwipeRows.drag; if (!drag || drag.pointer !== event.pointerId) return; SwipeRows.drag = null; drag.row.classList.remove('is-dragging'); SwipeRows.reset(drag.row); };
  static commitThreshold(row: HTMLElement) { return Math.min(Math.max(150, row.clientWidth * 0.55), row.clientWidth - 48); }

@@ -202,10 +202,18 @@ class MobileApp {
  }
  static swipeAction = (action: SwipeAction, element: HTMLElement) => {
   const library = MobileApp.library(element.dataset.library!); const snippet = library.records.find(snippet => snippet.id === element.dataset.record); if (!snippet) return;
-  if (action === 'copy') void MobileApp.use(library, snippet).catch(MobileApp.error);
+  if (action === 'copy') void MobileApp.copySnippet(library, snippet).catch(MobileApp.error);
   else if (action === 'edit') void MobileApp.openEditor(library, snippet).catch(MobileApp.error);
   else if (action === 'delete') void MobileApp.deleteSnippet(library, snippet).catch(MobileApp.error);
  };
+ static async copySnippet(library: Library, snippet: Snippet) {
+  const variables = snippet.content.variables || {};
+  const values = Object.fromEntries(Object.entries(variables).map(([name, definition]) => [name, definition.default || '']));
+  const output = await Native.call('keyboard_render', { library: library._id, id: snippet.id, generation: MobileApp.state.generation, values, clipboard: true });
+  if (output.enter_actions) throw new Error('This snippet contains desktop Enter actions and cannot be copied directly on mobile.');
+  await Native.plugin.copy({ text: output.text, html: output.html, rtf: output.rtf });
+  MobileApp.toast('Snippet copied');
+ }
  static async deleteSnippet(library: Library, snippet: Snippet) {
   const result = await Swal.fire({ title: 'Move snippet to Trash?', text: snippet.title || snippet.trigger || 'Untitled snippet', icon: 'warning', showCancelButton: true, confirmButtonText: 'Move to Trash' });
   if (!result.isConfirmed) return;

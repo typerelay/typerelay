@@ -4,7 +4,7 @@ The mobile app lives in `apps/mobile`. It uses Mailtwine's React, TypeScript, Vi
 
 The application shell follows Mailtwine's mobile interaction model: safe-area screens, a logo/profile header, fixed equal-size Add/Search bottom actions, compact touch rows, a create drawer, and full-screen detail flows. The profile opens Settings; the Search action scrolls to and focuses the search field. The browser preview renders the same shell used by the installed iOS and Android apps.
 
-Snippet rows support configurable gestures. Defaults are left swipe to Copy, right swipe to Edit, and far-right swipe to move the snippet to Trash. Device-local settings under the keyboard section can assign Copy, Edit, Delete, or no action to each gesture. Vertical movement cancels a gesture so normal list scrolling remains available. Unsaved drafts appear above the list, can be resumed or discarded from the list, and expose a Trash action next to Save inside the editor.
+Snippet rows support configurable gestures. Defaults are left swipe to Copy, right swipe to Edit, and far-right swipe to move the snippet to Trash. Releasing after the action threshold executes immediately: Copy writes directly to the clipboard and Edit opens the editor. Tapping the row remains the prompted template/copy flow. Device-local settings under the keyboard section can assign Copy, Edit, Delete, or no action to each gesture. Vertical movement cancels a gesture so normal list scrolling remains available. Unsaved drafts appear above the list, can be resumed or discarded from the list, and expose a Trash action next to Save inside the editor.
 
 ## Build
 
