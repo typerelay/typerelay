@@ -57,7 +57,6 @@ main.mobile-app#workspace
 				div
 					span.eyebrow TypeRelay
 					h1 Settings
-				span
 			section.settings-section
 				header.settings-section-header
 					span.settings-icon
@@ -73,6 +72,30 @@ main.mobile-app#workspace
 				button.secondary-button.wide#keyboard-settings(type="button")
 					span.material-symbols-outlined settings
 					span Open keyboard settings
+				.settings-subsection
+					h3 Swipe actions
+					p.settings-description Choose what happens when you swipe a snippet. A short swipe reveals the action; a far swipe completes it.
+					label.setting-select(for="swipe-left")
+						span Swipe left
+						select#swipe-left
+							option(value="copy") Copy
+							option(value="edit") Edit
+							option(value="delete") Delete
+							option(value="none") Nothing
+					label.setting-select(for="swipe-right")
+						span Swipe right
+						select#swipe-right
+							option(value="copy") Copy
+							option(value="edit") Edit
+							option(value="delete") Delete
+							option(value="none") Nothing
+					label.setting-select(for="swipe-right-far")
+						span Far swipe right
+						select#swipe-right-far
+							option(value="copy") Copy
+							option(value="edit") Edit
+							option(value="delete") Delete
+							option(value="none") Nothing
 			section.settings-section
 				header.settings-section-header
 					span.settings-icon
@@ -90,36 +113,13 @@ main.mobile-app#workspace
 						strong Conflicts
 						small Review concurrent changes
 					strong#settings-conflicts 0
-				button.secondary-button.wide#settings-sync(type="button")
-					span.material-symbols-outlined sync
-					span Sync now
-				button.secondary-button.wide#reconnect(type="button")
-					span.material-symbols-outlined login
-					span Reconnect account
-			section.settings-section
-				h2 Swipe actions
-				p.settings-description Choose what happens when you swipe a snippet. A short swipe reveals the action; a far swipe completes it.
-				label.setting-select(for="swipe-right")
-					span Swipe right
-					select#swipe-right
-						option(value="copy") Copy
-						option(value="edit") Edit
-						option(value="delete") Delete
-						option(value="none") Nothing
-				label.setting-select(for="swipe-left")
-					span Swipe left
-					select#swipe-left
-						option(value="copy") Copy
-						option(value="edit") Edit
-						option(value="delete") Delete
-						option(value="none") Nothing
-				label.setting-select(for="swipe-left-far")
-					span Far swipe left
-					select#swipe-left-far
-						option(value="copy") Copy
-						option(value="edit") Edit
-						option(value="delete") Delete
-						option(value="none") Nothing
+				.settings-button-row
+					button.secondary-button#reconnect(type="button")
+						span.material-symbols-outlined login
+						span Reconnect
+					button.secondary-button#settings-sync(type="button")
+						span.material-symbols-outlined sync
+						span Sync now
 			section.settings-section
 				h2 Recovery
 				p.settings-description TypeRelay preserves edits that the server could not apply safely.
@@ -130,6 +130,13 @@ main.mobile-app#workspace
 				h2 Account
 				p.settings-description Remove credentials, cached snippets, pending edits, and drafts from this device.
 				button.danger-button.wide#logout(type="button") Sign out
+			footer.settings-family(aria-label="Other tools from our team")
+				small More tools from our team
+				ul
+					li: a(href="https://razuna.com/" data-external) Razuna — Digital Asset Management
+					li: a(href="https://streamient.com/" data-external) Streamient — knowledge for AI and humans
+					li: a(href="https://managani.com/" data-external) Managani — product growth platform
+					li: a(href="https://helpmonks.com/" data-external) Helpmonks — email management
 		nav.bottom-nav#bottom-nav(aria-label="Primary navigation")
 			button.nav-button#add(type="button" aria-label="Add snippet")
 				span.material-symbols-outlined add

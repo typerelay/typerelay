@@ -1,11 +1,18 @@
 form#editor-form.mobile-editor
+	- var snippetType = snippet && snippet.content.type || 'plain_text'
+	- var snippetLanguage = snippet && snippet.content.language || 'plain_text'
+	- var codeLanguages = [['plain_text', 'Plain text'], ['JavaScript', 'JavaScript'], ['TypeScript', 'TypeScript'], ['HTML', 'HTML'], ['CSS', 'CSS'], ['JSON', 'JSON'], ['Markdown', 'Markdown'], ['Python', 'Python'], ['Rust', 'Rust'], ['Shell', 'Shell'], ['SQL', 'SQL'], ['Java', 'Java'], ['Kotlin', 'Kotlin'], ['Swift', 'Swift'], ['Go', 'Go'], ['PHP', 'PHP'], ['Ruby', 'Ruby'], ['YAML', 'YAML'], ['XML', 'XML'], ['C', 'C'], ['C++', 'C++']]
 	header.flow-header
 		button.flow-back#cancel-edit(type="button" aria-label="Close editor")
 			span.material-symbols-outlined arrow_back
 		div
 			span.eyebrow= snippet ? 'Edit snippet' : 'New snippet'
 			h2= snippet && (snippet.title || snippet.trigger) || 'Untitled snippet'
-		button.flow-save#save(type="submit") Save
+		.flow-actions
+			if draft
+				button.flow-trash#delete-draft(type="button" aria-label="Discard draft")
+					span.material-symbols-outlined delete
+			button.flow-save#save(type="submit") Save
 	.flow-body
 		label.mobile-field(for="edit-library")
 			span Library
@@ -21,14 +28,23 @@ form#editor-form.mobile-editor
 				span Abbreviation
 				input#trigger(value=snippet && snippet.trigger || '' autocapitalize="none" autocorrect="off")
 		.mobile-field-grid
-			label.mobile-field(for="snippet-type")
+			label.mobile-field.content-type-field(for="snippet-type-button")
 				span Content type
-				select#snippet-type
-					each kind in ['plain_text','code','template','rich_text']
-						option(value=kind selected=kind===(snippet && snippet.content.type || 'plain_text'))= {plain_text:'Plain text',code:'Code',template:'Template',rich_text:'Rich text'}[kind]
-			label.mobile-field(for="language")
+				input#snippet-type(type="hidden" value=snippetType)
+				.type-picker#type-picker
+					button#snippet-type-button(type="button" aria-haspopup="listbox" aria-expanded="false")
+						span#snippet-type-label= {plain_text:'Plain text',code:'Code',template:'Template',rich_text:'Rich text'}[snippetType]
+						span.material-symbols-outlined expand_more
+					.type-menu#snippet-type-menu(role="listbox" hidden)
+						each kind in ['plain_text','code','template','rich_text']
+							button(type="button" role="option" data-snippet-type=kind aria-selected=kind===snippetType)= {plain_text:'Plain text',code:'Code',template:'Template',rich_text:'Rich text'}[kind]
+			label.mobile-field#language-field(for="language" hidden=snippetType!=='code')
 				span Code language
-				input#language(value=snippet && snippet.content.language || 'plain_text')
+				select#language
+					if !codeLanguages.some(item => item[0] === snippetLanguage)
+						option(value=snippetLanguage selected)= snippetLanguage
+					each language in codeLanguages
+						option(value=language[0] selected=language[0]===snippetLanguage)= language[1]
 		label.mobile-field.content-field(for="replace")
 			span Content
 			textarea#replace(rows="10")= snippet && (snippet.content.markdown || snippet.content.text) || ''

@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { Modal } from 'bootstrap';
 import Swal from 'sweetalert2';
 import { App } from '@capacitor/app';
+import { Browser } from '@capacitor/browser';
 import { Network } from '@capacitor/network';
 import { RichEditor } from '@server/browser/rich-editor.js';
 import { TemplateEditor } from '@server/public/template-editor.js';
@@ -98,16 +99,26 @@ class MobileApp {
   if (!library.permissions.edit) throw new Error('Library is read-only');
   if (MobileApp.state.draft && !draft) { const answer = await Swal.fire({ title: 'Replace the saved draft?', text: 'Resume the existing draft from the snippet list to keep editing it.', showCancelButton: true, confirmButtonText: 'Replace draft' }); if (!answer.isConfirmed) return; }
   MobileApp.richView?.destroy(); MobileApp.richView = null;
-  MobileApp.$('editor-content').replaceChildren(MobileApp.fragment(edit({ libraries: MobileApp.state.libraries, library, snippet })));
+  MobileApp.$('editor-content').replaceChildren(MobileApp.fragment(edit({ libraries: MobileApp.state.libraries, library, snippet, draft })));
   MobileApp.editing = draft?.editing || { library: library._id, id: snippet?.id, revision: library.editor_revision, record_revision: snippet?.revision, operation_id: crypto.randomUUID() };
   MobileApp.editorDirty = Boolean(draft);
   if (draft) { for (const [id, value] of Object.entries(draft.fields)) MobileApp.input(id).value = String(value); MobileApp.$('template-options').dataset.variables = JSON.stringify(draft.variables || {}); }
   MobileApp.template = new TemplateEditor(MobileApp);
   MobileApp.configureEditor();
-  MobileApp.input('snippet-type').onchange = () => { MobileApp.configureEditor(); MobileApp.scheduleDraft(); };
+  const typeLabels: Record<string, string> = { plain_text: 'Plain text', code: 'Code', template: 'Template', rich_text: 'Rich text' };
+  const typeButton = MobileApp.$('snippet-type-button'); const typeMenu = MobileApp.$('snippet-type-menu');
+  typeButton.onclick = () => { typeMenu.hidden = !typeMenu.hidden; typeButton.setAttribute('aria-expanded', String(!typeMenu.hidden)); };
+  for (const option of typeMenu.querySelectorAll<HTMLButtonElement>('[data-snippet-type]')) option.onclick = () => {
+   MobileApp.input('snippet-type').value = option.dataset.snippetType!; MobileApp.$('snippet-type-label').textContent = typeLabels[option.dataset.snippetType!];
+   for (const item of typeMenu.querySelectorAll<HTMLElement>('[data-snippet-type]')) item.setAttribute('aria-selected', String(item === option));
+   typeMenu.hidden = true; typeButton.setAttribute('aria-expanded', 'false'); MobileApp.$('language-field').hidden = option.dataset.snippetType !== 'code';
+   MobileApp.configureEditor(); MobileApp.scheduleDraft();
+  };
   MobileApp.input('edit-library').onchange = () => { const selected = MobileApp.library(MobileApp.input('edit-library').value); MobileApp.editing = { library: selected._id, revision: selected.editor_revision, operation_id: crypto.randomUUID() }; MobileApp.scheduleDraft(); };
   MobileApp.$('editor-form').addEventListener('input', MobileApp.scheduleDraft);
+  MobileApp.$('editor-form').addEventListener('click', event => { if (!(event.target as HTMLElement).closest('#type-picker')) { typeMenu.hidden = true; typeButton.setAttribute('aria-expanded', 'false'); } });
   MobileApp.$('cancel-edit').onclick = () => { void (async () => { if (MobileApp.editorDirty) await MobileApp.persistDraft(); else MobileApp.editing = null; Modal.getInstance(MobileApp.$('form-modal'))?.hide(); await MobileApp.load(); })().catch(MobileApp.error); };
+  const deleteDraft = document.getElementById('delete-draft'); if (deleteDraft) deleteDraft.onclick = () => { void MobileApp.discardDraft(true).catch(MobileApp.error); };
   const saveCopy = document.getElementById('save-copy') as HTMLButtonElement | null;
   if (saveCopy) saveCopy.onclick = () => { void MobileApp.busy(saveCopy, async () => { const library = MobileApp.library(MobileApp.input('edit-library').value); MobileApp.editing = { library: library._id, revision: library.editor_revision, operation_id: crypto.randomUUID() }; MobileApp.input('trigger').value = ''; MobileApp.input('title').value += ' (copy)'; await MobileApp.save(); }); };
   MobileApp.$('editor-form').onsubmit = event => { event.preventDefault(); void MobileApp.busy(MobileApp.$('save') as HTMLButtonElement, MobileApp.save); };
@@ -183,7 +194,7 @@ class MobileApp {
   }); };
  }
  static configureSwipeSettings() {
-  const fields: Array<[string, keyof SwipePreferences]> = [['swipe-right', 'right'], ['swipe-left', 'left'], ['swipe-left-far', 'leftFar']];
+  const fields: Array<[string, keyof SwipePreferences]> = [['swipe-left', 'left'], ['swipe-right', 'right'], ['swipe-right-far', 'rightFar']];
   for (const [id, key] of fields) {
    const select = MobileApp.$(id) as HTMLSelectElement; select.value = SwipeRows.preferences[key];
    select.onchange = () => { SwipeRows.save({ ...SwipeRows.preferences, [key]: select.value as SwipeAction }); SwipeRows.refresh(MobileApp.$('snippets')); MobileApp.toast('Swipe settings saved'); };
@@ -201,6 +212,13 @@ class MobileApp {
   await Native.call('delete', { library: library._id, id: snippet.id, revision: library.editor_revision, record_revision: snippet.revision, operation_id: crypto.randomUUID() });
   await MobileApp.load(); MobileApp.toast('Snippet moved to Trash'); void MobileApp.sync().catch(MobileApp.error);
  }
+ static async discardDraft(closeEditor = false) {
+  const result = await Swal.fire({ title: 'Discard draft?', text: 'The unsaved snippet draft will be removed from this device.', icon: 'warning', showCancelButton: true, confirmButtonText: 'Discard draft' });
+  if (!result.isConfirmed) return;
+  await Native.call('draft', { draft: null }); MobileApp.editorDirty = false; MobileApp.editing = null;
+  if (closeEditor) Modal.getInstance(MobileApp.$('form-modal'))?.hide();
+  await MobileApp.load(); MobileApp.toast('Draft discarded');
+ }
  static async start() {
   (globalThis as any).Swal = Swal;
   MobileApp.$('app').replaceChildren(...new DOMParser().parseFromString(shell(), 'text/html').body.childNodes);
@@ -214,8 +232,9 @@ class MobileApp {
   MobileApp.$('library-filters').onclick = event => { const button = (event.target as HTMLElement).closest<HTMLElement>('[data-library-filter]'); if (!button) return; MobileApp.input('library').value = button.dataset.libraryFilter || ''; MobileApp.filter(); };
   MobileApp.$('add').onclick = () => { MobileApp.switchScreen('snippets'); const library = MobileApp.state.libraries.find(library => library.permissions.edit && (!MobileApp.input('library').value || library._id === MobileApp.input('library').value)); if (!library) return MobileApp.toast('Choose an editable library. Create libraries in the web app.', 'error'); void MobileApp.openEditor(library).catch(MobileApp.error); };
   MobileApp.$('resume-draft').onclick = () => { const draft = MobileApp.state.draft; if (!draft) return; try { const library = MobileApp.library(draft.editing.library); void MobileApp.openEditor(library, library.records.find(item => item.id === draft.editing.id), draft).catch(MobileApp.error); } catch (error) { MobileApp.error(error); } };
-  MobileApp.$('discard-draft').onclick = () => { void (async () => { const result = await Swal.fire({ title: 'Discard draft?', text: 'The unsaved snippet draft will be removed from this device.', icon: 'warning', showCancelButton: true, confirmButtonText: 'Discard draft' }); if (!result.isConfirmed) return; await Native.call('draft', { draft: null }); MobileApp.editorDirty = false; MobileApp.editing = null; await MobileApp.load(); MobileApp.toast('Draft discarded'); })().catch(MobileApp.error); };
+  MobileApp.$('discard-draft').onclick = () => { void MobileApp.discardDraft().catch(MobileApp.error); };
   MobileApp.$('conflicts').onclick = () => { void MobileApp.showReview('conflicts').catch(MobileApp.error); }; MobileApp.$('recovery').onclick = () => { void MobileApp.showReview('recovery').catch(MobileApp.error); };
+  MobileApp.$('settings-screen').addEventListener('click', event => { const link = (event.target as HTMLElement).closest<HTMLAnchorElement>('[data-external]'); if (!link) return; event.preventDefault(); void Browser.open({ url: link.href }); });
   MobileApp.$('snippets').onclick = event => { const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-use]'); if (!button) return; const article = button.closest<HTMLElement>('[data-record]')!; const library = MobileApp.library(article.dataset.library!); const snippet = library.records.find(snippet => snippet.id === article.dataset.record)!; void MobileApp.use(library, snippet).catch(MobileApp.error); };
   createRoot(MobileApp.$('controller')).render(createElement(Controller));
   Auth.onError = MobileApp.error;

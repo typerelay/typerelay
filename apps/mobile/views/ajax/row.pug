@@ -1,11 +1,11 @@
 article.snippet-swipe-shell(data-record=snippet.id data-library=library._id data-editable=library.permissions.edit ? 'true' : 'false')
 	.snippet-swipe-rail
 		button.snippet-swipe-action.is-left(type="button" data-swipe-side="right")
-			span.material-symbols-outlined(data-swipe-icon) content_copy
-			span(data-swipe-label) Copy
-		button.snippet-swipe-action.is-right(type="button" data-swipe-side="left")
 			span.material-symbols-outlined(data-swipe-icon) edit
 			span(data-swipe-label) Edit
+		button.snippet-swipe-action.is-right(type="button" data-swipe-side="left")
+			span.material-symbols-outlined(data-swipe-icon) content_copy
+			span(data-swipe-label) Copy
 	button.snippet-row(type="button" data-use=snippet.id aria-label='Open ' + (snippet.title || snippet.trigger || 'snippet'))
 		span.snippet-kind(class='kind-' + snippet.content.type)
 			span.material-symbols-outlined= snippet.content.type === 'rich_text' ? 'format_align_left' : snippet.content.type === 'template' ? 'variable_add' : snippet.content.type === 'code' ? 'code' : 'notes'

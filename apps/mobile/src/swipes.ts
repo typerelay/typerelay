@@ -1,8 +1,8 @@
 export type SwipeAction = 'copy' | 'edit' | 'delete' | 'none';
-export type SwipePreferences = { right: SwipeAction; left: SwipeAction; leftFar: SwipeAction };
+export type SwipePreferences = { right: SwipeAction; left: SwipeAction; rightFar: SwipeAction };
 
-const KEY = 'typerelay_mobile_swipes';
-const DEFAULTS: SwipePreferences = { right: 'copy', left: 'edit', leftFar: 'delete' };
+const KEY = 'typerelay_mobile_swipes_v2';
+const DEFAULTS: SwipePreferences = { right: 'edit', left: 'copy', rightFar: 'delete' };
 const ACTIONS: Record<SwipeAction, { icon: string; label: string }> = {
  copy: { icon: 'content_copy', label: 'Copy' },
  edit: { icon: 'edit', label: 'Edit' },
@@ -23,7 +23,7 @@ export class SwipeRows {
   try {
    const saved = JSON.parse(localStorage.getItem(KEY) || '{}');
    const value = (name: keyof SwipePreferences) => Object.hasOwn(ACTIONS, saved[name]) ? saved[name] as SwipeAction : DEFAULTS[name];
-   return { right: value('right'), left: value('left'), leftFar: value('leftFar') };
+   return { right: value('right'), left: value('left'), rightFar: value('rightFar') };
   } catch { return { ...DEFAULTS }; }
  }
  static save(preferences: SwipePreferences) { SwipeRows.preferences = preferences; localStorage.setItem(KEY, JSON.stringify(preferences)); }
@@ -79,12 +79,12 @@ export class SwipeRows {
   const next = Math.max(-drag.row.clientWidth * 0.94, Math.min(drag.row.clientWidth * 0.94, drag.offset + x));
   const right = SwipeRows.allowed(SwipeRows.preferences.right, drag.row);
   const left = SwipeRows.allowed(SwipeRows.preferences.left, drag.row);
-  const leftFar = SwipeRows.allowed(SwipeRows.preferences.leftFar, drag.row);
-  const allowed = next > 0 ? right !== 'none' : next < 0 ? left !== 'none' || leftFar !== 'none' : true;
+  const rightFar = SwipeRows.allowed(SwipeRows.preferences.rightFar, drag.row);
+  const allowed = next > 0 ? right !== 'none' || rightFar !== 'none' : next < 0 ? left !== 'none' : true;
   const offset = allowed ? next : 0; SwipeRows.offset(drag.row, offset);
-  const far = offset < -SwipeRows.commitThreshold(drag.row) && leftFar !== 'none';
-  drag.row.classList.toggle('is-delete-commit', far && leftFar === 'delete');
-  if (far) SwipeRows.paint(drag.row, 'left', leftFar); else SwipeRows.paint(drag.row, 'left', left);
+  const far = offset > SwipeRows.commitThreshold(drag.row) && rightFar !== 'none';
+  drag.row.classList.toggle('is-delete-commit', far && rightFar === 'delete');
+  if (far) SwipeRows.paint(drag.row, 'right', rightFar); else SwipeRows.paint(drag.row, 'right', right);
  };
  static finish = (event: PointerEvent) => {
   const drag = SwipeRows.drag; if (!drag || drag.pointer !== event.pointerId) return;
@@ -94,8 +94,8 @@ export class SwipeRows {
   const offset = Number(drag.row.dataset.swipeOffset || 0);
   const threshold = SwipeRows.commitThreshold(drag.row);
   let action: SwipeAction = 'none';
-  if (offset <= -threshold) action = SwipeRows.allowed(SwipeRows.preferences.leftFar, drag.row);
-  else if (offset >= threshold) action = SwipeRows.allowed(SwipeRows.preferences.right, drag.row);
+  if (offset >= threshold) action = SwipeRows.allowed(SwipeRows.preferences.rightFar, drag.row);
+  else if (offset <= -threshold) action = SwipeRows.allowed(SwipeRows.preferences.left, drag.row);
   if (action !== 'none') { SwipeRows.reset(drag.row); SwipeRows.callback(action, drag.row); return; }
   if (offset <= -REVEAL_THRESHOLD && SwipeRows.allowed(SwipeRows.preferences.left, drag.row) !== 'none') SwipeRows.offset(drag.row, -REVEAL);
   else if (offset >= REVEAL_THRESHOLD && SwipeRows.allowed(SwipeRows.preferences.right, drag.row) !== 'none') SwipeRows.offset(drag.row, REVEAL);
@@ -109,5 +109,5 @@ export class SwipeRows {
   row.style.setProperty('--swipe-left-action-width', `${Math.max(REVEAL, offset > 0 ? offset : 0) / rem}rem`);
   row.style.setProperty('--swipe-right-action-width', `${Math.max(REVEAL, offset < 0 ? -offset : 0) / rem}rem`);
  }
- static reset(row: HTMLElement) { row.classList.remove('is-delete-commit'); SwipeRows.offset(row, 0); SwipeRows.paint(row, 'left', SwipeRows.allowed(SwipeRows.preferences.left, row)); }
+ static reset(row: HTMLElement) { row.classList.remove('is-delete-commit'); SwipeRows.offset(row, 0); SwipeRows.paint(row, 'left', SwipeRows.allowed(SwipeRows.preferences.left, row)); SwipeRows.paint(row, 'right', SwipeRows.allowed(SwipeRows.preferences.right, row)); }
 }
