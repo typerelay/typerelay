@@ -10,6 +10,7 @@ FROM node:24-bookworm-slim AS server-dependencies
 RUN npm install -g pnpm@12.0.0
 WORKDIR /opt/typerelay/apps/server
 COPY apps/server/package.json apps/server/pnpm-lock.yaml apps/server/pnpm-workspace.yaml ./
+COPY apps/server/patches ./patches
 RUN pnpm install --frozen-lockfile
 
 FROM node:24-bookworm-slim AS mcp-dependencies

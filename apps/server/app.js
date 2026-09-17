@@ -52,7 +52,9 @@ export class Server {
 		app.use('/vendor/bootstrap', express.static('node_modules/bootstrap/dist'));
 		app.use('/vendor/sweetalert2', express.static('node_modules/sweetalert2/dist'));
 		app.use('/white-label-assets', express.static(WhiteLabel.assetsRoot(), { index: false, maxAge: '7d' }));
-		const sessionStore = MongoStore.create({ mongoUrl: process.env.MONGO_URI, collectionName: 'web_sessions' });
+		app.get('/health', (req, res) => res.json({ ok: true }));
+		// Seconds; retain non-rolling cookies and the separate admin/reauthentication deadlines.
+		const sessionStore = MongoStore.create({ mongoUrl: process.env.MONGO_URI, collectionName: 'web_sessions', touchAfter: 60 });
 		app.use(session({ name: 'typerelay.sid', secret: process.env.SESSION_SECRET || 'change-me', store: sessionStore, resave: false, saveUninitialized: false, cookie: { httpOnly: true, sameSite: 'lax', secure: Auth.origin.startsWith('https:'), maxAge: 7 * 86400000 } }));
 		app.use(WhiteLabel.resolveRequest);
 		app.use(async (req, res, next) => {
@@ -63,13 +65,15 @@ export class Server {
 			res.locals.serverOrigin = Auth.origin;
 			res.locals.passkeysAvailable = !req.boundAccount;
 			res.locals.signupEnabled = Security.signupEnabled();
-			res.locals.csrf = req.session.csrf ||= Support.token();
-			if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !['/oauth/token', '/integrations/token', '/integrations/register'].includes(req.path) && !req.headers.authorization) Support.assert((req.headers['x-csrf-token'] || req.body?._csrf) === req.session.csrf, 'Session expired; reload and retry', 403);
+			const tokenEndpoint = ['/oauth/token', '/integrations/token', '/integrations/register'].includes(req.path);
+			const bearerApi = req.headers.authorization && /^\/api\/v[23](?:\/|$)/.test(req.path);
+			res.locals.csrf = req.session.csrf;
+			if (!tokenEndpoint && !bearerApi) res.locals.csrf = req.session.csrf ||= Support.token();
+			if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !tokenEndpoint && !req.headers.authorization) Support.assert((req.headers['x-csrf-token'] || req.body?._csrf) === req.session.csrf, 'Session expired; reload and retry', 403);
 			next();
 		});
 		Admin.mount(app);
 		app.use(AdminSettings.middleware);
-		app.get('/health', (req, res) => res.json({ ok: true }));
 		const authLimit = rateLimit({ windowMs: 900000, limit: 30, message: { error: 'Too many sign-in attempts; try again later.' } });
 		Security.mount(app, authLimit);
 		await PublicApi.mount(app, authLimit);

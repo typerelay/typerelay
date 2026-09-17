@@ -110,6 +110,9 @@ overrides:
   vitepress-openapi: 0.2.4
   '@types/node@^22.0.0': 22.20.2
 
+patchedDependencies:
+  connect-mongo@6.0.0: a5961fcefdb7d11e75e0ea8368a34d5aae0f52dd7b212442f677e7a11b24dc75
+
 importers:
 
   .:
@@ -191,7 +194,7 @@ importers:
         version: 5.3.8(@popperjs/core@2.11.8)
       connect-mongo:
         specifier: ^6.0.0
-        version: 6.0.0(express-session@1.19.0(supports-color@7.2.0))(mongodb@7.6.0)(supports-color@7.2.0)
+        version: 6.0.0(patch_hash=a5961fcefdb7d11e75e0ea8368a34d5aae0f52dd7b212442f677e7a11b24dc75)(express-session@1.19.0(supports-color@7.2.0))(mongodb@7.6.0)(supports-color@7.2.0)
       croner:
         specifier: ^10.0.1
         version: 10.0.1
@@ -6552,7 +6555,7 @@ snapshots:
 
   comma-separated-tokens@2.0.3: {}
 
-  connect-mongo@6.0.0(express-session@1.19.0(supports-color@7.2.0))(mongodb@7.6.0)(supports-color@7.2.0):
+  connect-mongo@6.0.0(patch_hash=a5961fcefdb7d11e75e0ea8368a34d5aae0f52dd7b212442f677e7a11b24dc75)(express-session@1.19.0(supports-color@7.2.0))(mongodb@7.6.0)(supports-color@7.2.0):
     dependencies:
       debug: 4.4.3(supports-color@7.2.0)
       express-session: 1.19.0(supports-color@7.2.0)
