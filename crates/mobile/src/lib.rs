@@ -74,6 +74,25 @@ impl Mobile {
                 transaction.commit()?;
                 result
             }
+            "delete" => {
+                let operation = Self::text(request, "operation_id")?;
+                ensure!((16..=128).contains(&operation.len()) && operation.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'), "Invalid operation ID");
+                let key = format!("mobile-delete-{operation}");
+                let signature = format!("{:x}", Sha256::digest(serde_json::to_vec(request)?));
+                if let Some(receipt) = db.meta(&key)? { ensure!(receipt["signature"] == signature, "This delete already completed for another snippet."); Self::publish(&db, shared)?; return Ok(receipt["result"].clone()); }
+                let transaction = db.connection.unchecked_transaction()?;
+                let library = db.library(Self::text(request, "library")?)?;
+                let file = db.editor(library["name"].as_str().context("Missing library name")?)?;
+                let id = Self::text(request, "id")?;
+                let index = file.ids.iter().position(|existing| existing == id).context("Snippet is no longer available")?;
+                let record = db.records(&file.id)?.into_iter().find(|record| record["id"] == id).context("Snippet no longer exists")?;
+                ensure!(record["revision"] == request["record_revision"], "This snippet changed. Reopen it before deleting.");
+                db.edit(&file, Some(index), None)?;
+                let result = json!({"library":file.id,"id":id,"deleted":true});
+                db.set_meta(&key, &json!({"signature":signature,"result":result}))?;
+                transaction.commit()?;
+                result
+            }
             "sync" => {
                 let server = Self::text(request, "server")?;
                 let mut credentials = Credentials { server: server.into(), access_token: Self::text(request, "access_token")?.into(), refresh_token: String::new() };
@@ -114,7 +133,7 @@ impl Mobile {
             "draft" => { db.set_meta("mobile_draft", request.get("draft").unwrap_or(&Value::Null))?; json!({}) }
             _ => anyhow::bail!("Unknown mobile action"),
         };
-        if matches!(action, "state" | "save") { Self::publish(&db, shared)?; }
+        if matches!(action, "state" | "save" | "delete") { Self::publish(&db, shared)?; }
         Ok(result)
     }
     fn render(content: &Value, request: &Value, assets: BTreeMap<String, String>) -> Result<Value> {

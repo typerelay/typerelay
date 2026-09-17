@@ -2,7 +2,9 @@
 
 The mobile app lives in `apps/mobile`. It uses Mailtwine's React, TypeScript, Vite and Capacitor stack. Swift and Kotlin implement the snippet keyboards. The existing Rust client supplies SQLite storage, outbox replay, asset normalization, conflict recovery and rendering through `crates/mobile`.
 
-The application shell follows Mailtwine's mobile interaction model: safe-area screens, fixed bottom navigation, a raised central create action, compact touch rows, and full-screen editor/detail flows. The browser preview renders the same shell used by the installed iOS and Android apps.
+The application shell follows Mailtwine's mobile interaction model: safe-area screens, a logo/profile header, fixed equal-size Add/Search bottom actions, compact touch rows, a create drawer, and full-screen detail flows. The profile opens Settings; the Search action scrolls to and focuses the search field. The browser preview renders the same shell used by the installed iOS and Android apps.
+
+Snippet rows support configurable gestures. Defaults are right swipe to Copy, left swipe to Edit, and far-left swipe to move the snippet to Trash. Device-local settings can assign Copy, Edit, Delete, or no action to each gesture. Vertical movement cancels a gesture so normal list scrolling remains available. Unsaved drafts appear above the list and can be resumed or explicitly discarded.
 
 ## Build
 

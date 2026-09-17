@@ -16,13 +16,11 @@ main.mobile-app#workspace
 			p#preview-notice.preview-notice(hidden) Browser preview uses your development account. Native keyboard behavior requires the installed app.
 	section#signed-in(hidden)
 		section.mobile-screen#snippets-screen(data-screen="snippets")
-			header.home-header
-				div
-					span.eyebrow Your workspace
-					h1 Snippets
-				button.header-action#sync(type="button" aria-label="Sync snippets")
-					span.material-symbols-outlined sync
-			p.sync-status#sync-status(role="status") Offline snippets
+			header.mobile-topbar
+				img(src="/mark.svg" alt="TypeRelay")
+				button.profile-button#profile(type="button" aria-label="Open settings")
+					span.material-symbols-outlined person
+			p#sync-status.visually-hidden(role="status") Offline snippets
 			.search-field
 				span.material-symbols-outlined search
 				input#search(type="search" aria-label="Search snippets" autocomplete="off" autocapitalize="none")
@@ -33,12 +31,14 @@ main.mobile-app#workspace
 			#library-filters.library-filters(role="group" aria-label="Filter by library")
 				button.library-filter.is-active(type="button" data-library-filter="") All
 			.notice-stack
-				button.notice-card#restore-draft(type="button" hidden)
-					span.material-symbols-outlined edit_note
-					span
-						strong Resume draft
-						small Continue your unsaved snippet
-					span.material-symbols-outlined chevron_right
+				div.notice-card#restore-draft(hidden)
+					button.notice-main#resume-draft(type="button")
+						span.material-symbols-outlined edit_note
+						span
+							strong Resume draft
+							small Continue your unsaved snippet
+					button.notice-dismiss#discard-draft(type="button" aria-label="Discard draft")
+						span.material-symbols-outlined close
 				button.notice-card.warning#conflicts(type="button" hidden)
 					span.material-symbols-outlined difference
 					span
@@ -52,6 +52,8 @@ main.mobile-app#workspace
 				p Sync your libraries or try another search.
 		section.mobile-screen.settings-screen#settings-screen(data-screen="settings" hidden)
 			header.screen-header
+				button.header-action#settings-back(type="button" aria-label="Back to snippets")
+					span.material-symbols-outlined arrow_back
 				div
 					span.eyebrow TypeRelay
 					h1 Settings
@@ -95,6 +97,30 @@ main.mobile-app#workspace
 					span.material-symbols-outlined login
 					span Reconnect account
 			section.settings-section
+				h2 Swipe actions
+				p.settings-description Choose what happens when you swipe a snippet. A short swipe reveals the action; a far swipe completes it.
+				label.setting-select(for="swipe-right")
+					span Swipe right
+					select#swipe-right
+						option(value="copy") Copy
+						option(value="edit") Edit
+						option(value="delete") Delete
+						option(value="none") Nothing
+				label.setting-select(for="swipe-left")
+					span Swipe left
+					select#swipe-left
+						option(value="copy") Copy
+						option(value="edit") Edit
+						option(value="delete") Delete
+						option(value="none") Nothing
+				label.setting-select(for="swipe-left-far")
+					span Far swipe left
+					select#swipe-left-far
+						option(value="copy") Copy
+						option(value="edit") Edit
+						option(value="delete") Delete
+						option(value="none") Nothing
+			section.settings-section
 				h2 Recovery
 				p.settings-description TypeRelay preserves edits that the server could not apply safely.
 				button.secondary-button.wide#recovery(type="button")
@@ -104,15 +130,13 @@ main.mobile-app#workspace
 				h2 Account
 				p.settings-description Remove credentials, cached snippets, pending edits, and drafts from this device.
 				button.danger-button.wide#logout(type="button") Sign out
-		nav.bottom-nav(aria-label="Primary navigation")
-			button.nav-button.is-active#nav-snippets(type="button" data-nav="snippets")
-				span.material-symbols-outlined search
-				span Snippets
-			button.create-button#add(type="button" aria-label="Add snippet")
+		nav.bottom-nav#bottom-nav(aria-label="Primary navigation")
+			button.nav-button#add(type="button" aria-label="Add snippet")
 				span.material-symbols-outlined add
-			button.nav-button#nav-settings(type="button" data-nav="settings")
-				span.material-symbols-outlined settings
-				span Settings
+				span Add
+			button.nav-button#nav-search(type="button" aria-label="Search snippets")
+				span.material-symbols-outlined search
+				span Search
 #form-modal.modal.mobile-flow.fade(tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false" aria-label="Snippet editor")
 	.modal-dialog
 		.modal-content

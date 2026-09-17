@@ -113,6 +113,19 @@ fn rejected_save_rolls_back_record_outbox_and_acknowledgement() {
 }
 
 #[test]
+fn mobile_delete_is_offline_durable_and_idempotent() {
+    let fixture = Fixture::new();
+    let request = json!({"action":"delete","operation_id":"delete-operation-one","library":fixture.library,"id":"snippet-one","record_revision":1});
+    let result = fixture.call(request.clone()).unwrap();
+    assert_eq!(result["deleted"], true);
+    assert_eq!(fixture.call(request).unwrap(), result);
+    let db = Database::open(fixture.private.path()).unwrap();
+    assert_eq!(db.pending().unwrap().len(), 1);
+    assert!(db.records(&fixture.library).unwrap().iter().all(|record| record["state"] != "active"));
+    assert!(fixture.call(json!({"action":"keyboard"})).unwrap()["libraries"][0]["records"].as_array().unwrap().is_empty());
+}
+
+#[test]
 fn identities_cannot_mix_accounts_or_server_origins() {
     let fixture = Fixture::new();
     let request = json!({"action":"bind","server":"https://example.test","account":"account-one"});

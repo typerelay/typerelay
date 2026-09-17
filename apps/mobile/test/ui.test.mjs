@@ -35,7 +35,7 @@ test('duplicate snapshots do not duplicate rows; create/delete preserve the list
 });
 
 test('updating a focused row preserves its initiating control', () => {
- const fixture = new Fixture(); fixture.update(); fixture.list.querySelector('[data-edit]').focus();
+ const fixture = new Fixture(); fixture.update(); fixture.list.querySelector('[data-use]').focus();
  fixture.libraries[0].records[0].title = 'Renamed'; fixture.update();
- assert.equal(fixture.dom.window.document.activeElement.dataset.edit, 'one'); fixture.dom.window.close();
+ assert.equal(fixture.dom.window.document.activeElement.dataset.use, 'one'); fixture.dom.window.close();
 });
