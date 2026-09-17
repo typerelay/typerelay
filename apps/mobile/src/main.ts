@@ -37,6 +37,7 @@ class MobileApp {
  static observer: MutationObserver;
  static screen = 'snippets';
  static editorDirty = false;
+ static editorCloseJob: Promise<void> = Promise.resolve();
  static $(id: string) { return document.getElementById(id)!; }
  static input(id: string) { return MobileApp.$(id) as HTMLInputElement; }
  static fragment(html: string) { return new DOMParser().parseFromString(html, 'text/html').body.firstElementChild!; }
@@ -96,6 +97,7 @@ class MobileApp {
  }
  static library(id: string) { const library = MobileApp.state.libraries.find(library => library._id === id); if (!library) throw new Error('Library is no longer available'); return library; }
  static async openEditor(library: Library, snippet?: Snippet, draft?: any) {
+  await MobileApp.editorCloseJob;
   if (!library.permissions.edit) throw new Error('Library is read-only');
   if (MobileApp.state.draft && !draft) { const answer = await Swal.fire({ title: 'Replace the saved draft?', text: 'Resume the existing draft from the snippet list to keep editing it.', showCancelButton: true, confirmButtonText: 'Replace draft' }); if (!answer.isConfirmed) return; }
   MobileApp.richView?.destroy(); MobileApp.richView = null;
@@ -117,12 +119,12 @@ class MobileApp {
   MobileApp.input('edit-library').onchange = () => { const selected = MobileApp.library(MobileApp.input('edit-library').value); MobileApp.editing = { library: selected._id, revision: selected.editor_revision, operation_id: crypto.randomUUID() }; MobileApp.scheduleDraft(); };
   MobileApp.$('editor-form').addEventListener('input', MobileApp.scheduleDraft);
   MobileApp.$('editor-form').addEventListener('click', event => { if (!(event.target as HTMLElement).closest('#type-picker')) { typeMenu.hidden = true; typeButton.setAttribute('aria-expanded', 'false'); } });
-  MobileApp.$('cancel-edit').onclick = () => { void (async () => { if (MobileApp.editorDirty) await MobileApp.persistDraft(); else MobileApp.editing = null; Modal.getInstance(MobileApp.$('form-modal'))?.hide(); await MobileApp.load(); })().catch(MobileApp.error); };
+  MobileApp.$('cancel-edit').onclick = () => { Modal.getInstance(MobileApp.$('form-modal'))?.hide(); };
   const deleteDraft = document.getElementById('delete-draft'); if (deleteDraft) deleteDraft.onclick = () => { void MobileApp.discardDraft(true).catch(MobileApp.error); };
   const saveCopy = document.getElementById('save-copy') as HTMLButtonElement | null;
   if (saveCopy) saveCopy.onclick = () => { void MobileApp.busy(saveCopy, async () => { const library = MobileApp.library(MobileApp.input('edit-library').value); MobileApp.editing = { library: library._id, revision: library.editor_revision, operation_id: crypto.randomUUID() }; MobileApp.input('trigger').value = ''; MobileApp.input('title').value += ' (copy)'; await MobileApp.save(); }); };
   MobileApp.$('editor-form').onsubmit = event => { event.preventDefault(); void MobileApp.busy(MobileApp.$('save') as HTMLButtonElement, MobileApp.save); };
-  MobileApp.$('form-modal').classList.toggle('is-create', !snippet);
+  MobileApp.$('form-modal').classList.add('is-drawer');
   Modal.getOrCreateInstance(MobileApp.$('form-modal')).show();
  }
  static configureEditor() {
@@ -162,9 +164,10 @@ class MobileApp {
   const rendered = await Native.call('keyboard_render', { ...selection, preview: true });
   MobileApp.$('detail-content').replaceChildren(MobileApp.fragment(fill({ snippet, rendered, variables: rendered.variables || rendered.template?.variables || {} })));
   MobileApp.$('fill-form').onsubmit = event => { event.preventDefault(); const button = (event.target as HTMLFormElement).querySelector<HTMLButtonElement>('[type=submit]')!; void MobileApp.busy(button, async () => { const values = Object.fromEntries(new FormData(event.target as HTMLFormElement)); const output = await Native.call('keyboard_render', { ...selection, values, clipboard: true }); if (output.enter_actions) throw new Error('Desktop Enter actions are unsupported on mobile'); await Native.plugin.copy({ text: output.text, html: output.html, rtf: output.rtf }); MobileApp.toast('Copied'); }); };
-  Modal.getOrCreateInstance(MobileApp.$('detail-modal')).show();
+  MobileApp.$('detail-modal').classList.add('is-drawer'); Modal.getOrCreateInstance(MobileApp.$('detail-modal')).show();
  }
  static async showReview(mode: string) {
+  MobileApp.$('detail-modal').classList.remove('is-drawer');
   const items = mode === 'conflicts' ? MobileApp.state.conflicts : await Native.call('recovery');
   MobileApp.$('detail-content').replaceChildren(MobileApp.fragment(review({ mode, title: mode === 'conflicts' ? 'Conflicts' : 'Recovered edits', items })));
   for (const button of MobileApp.$('detail-content').querySelectorAll<HTMLButtonElement>('[data-restore]')) button.onclick = () => { void MobileApp.busy(button, async () => {
@@ -227,9 +230,15 @@ class MobileApp {
   if (closeEditor) Modal.getInstance(MobileApp.$('form-modal'))?.hide();
   await MobileApp.load(); MobileApp.toast('Draft discarded');
  }
+ static async finishEditorClose() {
+  if (!MobileApp.editing) return;
+  if (MobileApp.editorDirty) await MobileApp.persistDraft(); else MobileApp.editing = null;
+  MobileApp.richView?.destroy(); MobileApp.richView = null; await MobileApp.load();
+ }
  static async start() {
   (globalThis as any).Swal = Swal;
   MobileApp.$('app').replaceChildren(...new DOMParser().parseFromString(shell(), 'text/html').body.childNodes);
+  MobileApp.$('form-modal').addEventListener('hidden.bs.modal', () => { MobileApp.editorCloseJob = MobileApp.editorCloseJob.catch(() => undefined).then(MobileApp.finishEditorClose).catch(MobileApp.error); });
   MobileApp.$('login-form').onsubmit = event => { event.preventDefault(); void MobileApp.busy((event.target as HTMLFormElement).querySelector('button')!, () => Auth.begin(MobileApp.input('server').value)); };
   MobileApp.$('settings-sync').onclick = () => { void MobileApp.busy(MobileApp.$('settings-sync') as HTMLButtonElement, MobileApp.sync); };
   MobileApp.$('profile').onclick = MobileApp.showSettings;

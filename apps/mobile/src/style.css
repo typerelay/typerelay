@@ -173,10 +173,10 @@ h1, h2, h3, p { margin: 0; }
 .flow-save { min-height: 2.35rem; padding: 0 0.8rem; border: 0; border-radius: 0.7rem; background: var(--accent); color: white; font-size: 0.74rem; font-weight: 730; }
 .flow-body, .mobile-flow .modal-body { flex: 1; padding: 1rem calc(1rem + env(safe-area-inset-right)) calc(1.5rem + env(safe-area-inset-bottom)) calc(1rem + env(safe-area-inset-left)); overflow-y: auto; }
 .mobile-flow .modal-footer { flex: none; padding: 0.75rem 1rem calc(0.75rem + env(safe-area-inset-bottom)); border-top: 0.0625rem solid var(--line); background: var(--surface); }
-.mobile-flow.is-create.show { display: flex !important; align-items: flex-end; }
-.mobile-flow.is-create .modal-dialog { width: min(100%, 48rem); height: min(82dvh, 46rem); margin: 0 auto; }
-.mobile-flow.is-create .modal-content { height: 100%; border-radius: 1.2rem 1.2rem 0 0; box-shadow: 0 -1rem 3rem rgba(48, 37, 26, 0.16); }
-.mobile-flow.is-create .flow-header { padding-top: 0.75rem; border-radius: 1.2rem 1.2rem 0 0; }
+.mobile-flow.is-drawer.show { display: flex !important; align-items: flex-end; }
+.mobile-flow.is-drawer .modal-dialog { width: min(100%, 48rem); height: min(82dvh, 46rem); margin: 0 auto; }
+.mobile-flow.is-drawer .modal-content { height: 100%; border-radius: 1.2rem 1.2rem 0 0; box-shadow: 0 -1rem 3rem rgba(48, 37, 26, 0.16); }
+.mobile-flow.is-drawer .flow-header, .mobile-flow.is-drawer .modal-header { padding-top: 0.75rem; border-radius: 1.2rem 1.2rem 0 0; }
 .mobile-flow .btn { min-height: 2.6rem; padding: 0.5rem 0.85rem; border-radius: 0.7rem; }
 .mobile-flow .btn-primary { border-color: var(--accent); background: var(--accent); }
 .draft-caption { display: flex; align-items: center; gap: 0.35rem; margin: 0.6rem 0 1rem; color: var(--muted); font-size: 0.68rem; }
