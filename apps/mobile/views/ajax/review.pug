@@ -1,0 +1,24 @@
+div
+	.modal-header
+		h2.modal-title.h5= title
+	.modal-body
+		if !items.length
+			p Nothing to review.
+		each item, index in items
+			article.mb-3.border-bottom.pb-3
+				if mode==='conflicts'
+					each label, key in {local: 'My version', server: 'Server version'}
+						- var version = item[key]
+						h3.h6= label
+						p= version && (version.title || version.trigger) || 'Deleted snippet'
+						pre.review-content= version && version.content && (version.content.text || version.content.markdown) || ''
+					button.btn.btn-outline-secondary.btn-sm.me-3(type="button" data-resolve=item._id data-choice="server") Keep server
+					button.btn.btn-outline-primary.btn-sm(type="button" data-resolve=item._id data-choice="local") Keep my version
+				else
+					- var version = item.data && (item.data.value || item.data.record || item.data)
+					h3.h6= version && (version.title || version.trigger) || 'Recovered edit'
+					pre.review-content= version && version.content && (version.content.text || version.content.markdown) || 'This change cannot be restored as a snippet.'
+					if version && version.content
+						button.btn.btn-outline-primary.btn-sm(type="button" data-restore=index) Restore as new snippet
+	.modal-footer
+		button.btn.btn-outline-secondary.btn-sm(type="button" data-bs-dismiss="modal") Close

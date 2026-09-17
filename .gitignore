@@ -40,3 +40,13 @@ credentials*.json
 /docs/public/openapi.json
 
 /.pnpm-store/
+
+# Mobile generated bundles and native build outputs
+/apps/mobile/dist/
+/apps/mobile/public/assets/generated/
+/apps/mobile/ios/App/App/public/
+/apps/mobile/ios/App/App/capacitor.config.json
+/apps/mobile/ios/App/build/
+/apps/mobile/native/
+/apps/mobile/android/app/src/main/jniLibs/
+/apps/mobile/android/local.properties

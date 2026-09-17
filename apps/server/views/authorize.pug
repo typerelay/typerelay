@@ -1,7 +1,7 @@
 extends layout
 block content
 	section.auth.card.p-4
-		h1.mb-3.fw-bold Connect your desktop
+		h1.mb-3.fw-bold Connect your device
 		p.mb-3 TypeRelay will sync libraries available to the selected account.
 		form(method="post" action="/oauth/authorize")
 			input(type="hidden" name="_csrf" value=csrf)

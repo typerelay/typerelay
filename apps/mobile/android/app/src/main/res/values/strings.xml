@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">TypeRelay</string>
+    <string name="title_activity_main">TypeRelay</string>
+    <string name="package_name">com.typerelay.mobile</string>
+    <string name="custom_url_scheme">com.typerelay.mobile</string>
+</resources>

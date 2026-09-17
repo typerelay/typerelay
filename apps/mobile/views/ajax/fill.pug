@@ -1,0 +1,16 @@
+form#fill-form
+	.modal-header
+		h2.modal-title.h5= snippet.title || 'Use snippet'
+	.modal-body
+		each name in rendered.fields
+			- var definition = variables[name] || {}
+			.mb-3
+				label.form-label(for='answer-'+name)= definition.label || name
+				textarea.form-control.form-control-sm(id='answer-'+name name=name rows=definition.multiline ? 3 : 1 required=definition.required)= definition.default || ''
+		pre#insert-preview.snippet-preview= rendered.text
+		if rendered.enter_actions
+			p.text-warning This snippet contains desktop Enter actions. Mobile cannot execute these actions. Edit the snippet before using it.
+		p.small.text-secondary Formatting depends on the app you paste into. Keyboard insertion on iOS uses plain text.
+	.modal-footer.justify-content-between
+		button.btn.btn-outline-secondary.btn-sm(type="button" data-bs-dismiss="modal") Cancel
+		button.btn.btn-primary.btn-sm(type="submit" disabled=!!rendered.enter_actions) Copy
