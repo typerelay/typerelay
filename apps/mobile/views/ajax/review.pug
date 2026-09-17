@@ -1,24 +1,31 @@
 div
-	.modal-header
-		h2.modal-title.h5= title
+	header.modal-header
+		button.flow-back(type="button" data-bs-dismiss="modal" aria-label="Back")
+			span.material-symbols-outlined arrow_back
+		div
+			span.eyebrow TypeRelay safety
+			h2.modal-title= title
+		span
 	.modal-body
 		if !items.length
-			p Nothing to review.
+			.empty-state
+				span.material-symbols-outlined task_alt
+				h2 Nothing to review
+				p TypeRelay has no recovered or conflicting edits waiting for you.
 		each item, index in items
-			article.mb-3.border-bottom.pb-3
+			article.settings-section.review-card
 				if mode==='conflicts'
 					each label, key in {local: 'My version', server: 'Server version'}
 						- var version = item[key]
-						h3.h6= label
-						p= version && (version.title || version.trigger) || 'Deleted snippet'
+						span.eyebrow= label
+						h3= version && (version.title || version.trigger) || 'Deleted snippet'
 						pre.review-content= version && version.content && (version.content.text || version.content.markdown) || ''
-					button.btn.btn-outline-secondary.btn-sm.me-3(type="button" data-resolve=item._id data-choice="server") Keep server
-					button.btn.btn-outline-primary.btn-sm(type="button" data-resolve=item._id data-choice="local") Keep my version
+					button.secondary-button(type="button" data-resolve=item._id data-choice="server") Keep server
+					button.primary-button(type="button" data-resolve=item._id data-choice="local") Keep my version
 				else
 					- var version = item.data && (item.data.value || item.data.record || item.data)
-					h3.h6= version && (version.title || version.trigger) || 'Recovered edit'
+					span.eyebrow Recovered edit
+					h3= version && (version.title || version.trigger) || 'Recovered edit'
 					pre.review-content= version && version.content && (version.content.text || version.content.markdown) || 'This change cannot be restored as a snippet.'
 					if version && version.content
-						button.btn.btn-outline-primary.btn-sm(type="button" data-restore=index) Restore as new snippet
-	.modal-footer
-		button.btn.btn-outline-secondary.btn-sm(type="button" data-bs-dismiss="modal") Close
+						button.primary-button.wide(type="button" data-restore=index) Restore as new snippet

@@ -1,41 +1,123 @@
-main.container.py-3#workspace
-	.d-flex.align-items-center.justify-content-between.mb-5
-		h1.h3.mb-0 TypeRelay
-		button#settings.btn.btn-outline-secondary.btn-sm(type="button") Settings
-	p#preview-notice.small.text-secondary.mb-3(hidden) Browser preview: edits sync to your account. Native keyboards and device-offline behavior require the installed app.
-	section#login.mb-5
-		h2.h5 Your snippets, anywhere
-		p Sign in to sync your libraries and enable the TypeRelay keyboard.
-		form#login-form
-			.mb-3
-				label.form-label(for="server") Server URL
-				input#server.form-control.form-control-sm(type="url" required value="https://app.typerelay.com" autocomplete="url")
-			.d-flex.justify-content-end
-				button.btn.btn-primary.btn-sm(type="submit") Sign in with browser
+main.mobile-app#workspace
+	section.auth-screen#login
+		.auth-brand
+			img(src="/mark.svg" alt="")
+			span.eyebrow TypeRelay mobile
+			h1 Your snippets, wherever you type.
+			p Search, edit, and sync your TypeRelay libraries. Then use the TypeRelay keyboard in any app.
+		.auth-card
+			form#login-form
+				label.mobile-field(for="server")
+					span Server URL
+					input#server(type="url" required value="https://app.typerelay.com" autocomplete="url")
+				button.primary-button.wide(type="submit")
+					span Sign in with browser
+					span.material-symbols-outlined arrow_forward
+			p#preview-notice.preview-notice(hidden) Browser preview uses your development account. Native keyboard behavior requires the installed app.
 	section#signed-in(hidden)
-		.d-flex.align-items-center.justify-content-between.mb-3
-			span#sync-status.small(role="status") Offline snippets
-			button#sync.btn.btn-outline-secondary.btn-sm(type="button") Sync
-		.row.align-items-center.g-2.mb-3
-			.col
-				label.form-label(for="search") Search snippets
-				input#search.form-control.form-control-sm(type="search")
-			.col
-				label.form-label(for="library") Library
-				select#library.form-select.form-select-sm
-					option(value="") All libraries
-		.d-flex.justify-content-end.mb-3
-			button#add.btn.btn-primary.btn-sm(type="button") Add snippet
-		button#restore-draft.btn.btn-outline-primary.btn-sm.mb-3(type="button" hidden) Resume draft
-		button#conflicts.btn.btn-outline-warning.btn-sm.mb-3(type="button" hidden) Review conflicts
-		button#recovery.btn.btn-outline-warning.btn-sm.mb-3(type="button") Recovered edits
-		#snippets
-		p#empty.text-secondary No snippets. Sync or choose another library.
-#form-modal.modal.fade(tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false" aria-label="Snippet editor")
-	.modal-dialog.modal-dialog-scrollable.modal-lg
+		section.mobile-screen#snippets-screen(data-screen="snippets")
+			header.home-header
+				div
+					span.eyebrow Your workspace
+					h1 Snippets
+				button.header-action#sync(type="button" aria-label="Sync snippets")
+					span.material-symbols-outlined sync
+			p.sync-status#sync-status(role="status") Offline snippets
+			.search-field
+				span.material-symbols-outlined search
+				input#search(type="search" aria-label="Search snippets" autocomplete="off" autocapitalize="none")
+				button#clear-search(type="button" aria-label="Clear search" hidden)
+					span.material-symbols-outlined close
+			select#library.visually-hidden(aria-label="Selected snippet library")
+				option(value="") All libraries
+			#library-filters.library-filters(role="group" aria-label="Filter by library")
+				button.library-filter.is-active(type="button" data-library-filter="") All
+			.notice-stack
+				button.notice-card#restore-draft(type="button" hidden)
+					span.material-symbols-outlined edit_note
+					span
+						strong Resume draft
+						small Continue your unsaved snippet
+					span.material-symbols-outlined chevron_right
+				button.notice-card.warning#conflicts(type="button" hidden)
+					span.material-symbols-outlined difference
+					span
+						strong Review conflicts
+						small Choose which version to keep
+					span.material-symbols-outlined chevron_right
+			#snippets.snippet-list
+			.empty-state#empty
+				span.material-symbols-outlined content_paste_search
+				h2 No snippets found
+				p Sync your libraries or try another search.
+		section.mobile-screen.settings-screen#settings-screen(data-screen="settings" hidden)
+			header.screen-header
+				div
+					span.eyebrow TypeRelay
+					h1 Settings
+				span
+			section.settings-section
+				header.settings-section-header
+					span.settings-icon
+						span.material-symbols-outlined keyboard
+					div
+						h2 TypeRelay keyboard
+						p Insert snippets while working in other apps.
+				ol.keyboard-steps
+					li Enable TypeRelay in your device keyboard settings.
+					li Switch to TypeRelay from any text field.
+					li Search and tap a snippet to insert it.
+				p.settings-note iOS works without Full Access. Secure fields and some apps use the system keyboard.
+				button.secondary-button.wide#keyboard-settings(type="button")
+					span.material-symbols-outlined settings
+					span Open keyboard settings
+			section.settings-section
+				header.settings-section-header
+					span.settings-icon
+						span.material-symbols-outlined cloud_sync
+					div
+						h2 Sync and account
+						p#settings-server Not signed in
+				.settings-row
+					span
+						strong Pending changes
+						small Saved locally until the next sync
+					strong#settings-pending 0
+				.settings-row
+					span
+						strong Conflicts
+						small Review concurrent changes
+					strong#settings-conflicts 0
+				button.secondary-button.wide#settings-sync(type="button")
+					span.material-symbols-outlined sync
+					span Sync now
+				button.secondary-button.wide#reconnect(type="button")
+					span.material-symbols-outlined login
+					span Reconnect account
+			section.settings-section
+				h2 Recovery
+				p.settings-description TypeRelay preserves edits that the server could not apply safely.
+				button.secondary-button.wide#recovery(type="button")
+					span.material-symbols-outlined restore_page
+					span Recovered edits
+			section.settings-section.danger-section
+				h2 Account
+				p.settings-description Remove credentials, cached snippets, pending edits, and drafts from this device.
+				button.danger-button.wide#logout(type="button") Sign out
+		nav.bottom-nav(aria-label="Primary navigation")
+			button.nav-button.is-active#nav-snippets(type="button" data-nav="snippets")
+				span.material-symbols-outlined search
+				span Snippets
+			button.create-button#add(type="button" aria-label="Add snippet")
+				span.material-symbols-outlined add
+			button.nav-button#nav-settings(type="button" data-nav="settings")
+				span.material-symbols-outlined settings
+				span Settings
+#form-modal.modal.mobile-flow.fade(tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false" aria-label="Snippet editor")
+	.modal-dialog
 		.modal-content
 			#editor-content
-#detail-modal.modal.fade(tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false" aria-label="Snippet details")
-	.modal-dialog.modal-dialog-scrollable
+#detail-modal.modal.mobile-flow.fade(tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false" aria-label="Snippet details")
+	.modal-dialog
 		.modal-content
 			#detail-content

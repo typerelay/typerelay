@@ -35,6 +35,12 @@ importers:
       '@capacitor/network':
         specifier: ^8.0.1
         version: 8.0.1(@capacitor/core@8.5.2)
+      '@fontsource-variable/inter':
+        specifier: ^5.3.0
+        version: 5.3.0
+      '@fontsource-variable/material-symbols-outlined':
+        specifier: ^5.3.6
+        version: 5.3.6
       bootstrap:
         specifier: ^5.3.8
         version: 5.3.8(@popperjs/core@2.11.8)
@@ -130,6 +136,12 @@ packages:
     resolution: {integrity: sha512-9xK/FHFmzKGanB6BdoSZOzXk8vF0OFVQSQ4PAsIrzAzLuXHryO317qy8dcHVpgxYeuZq2noI0My9z1DvVDi/9w==}
     peerDependencies:
       '@capacitor/core': '>=8.0.0'
+
+  '@fontsource-variable/inter@5.3.0':
+    resolution: {integrity: sha512-OupL48va4JNofb97w6NYeF9S7W/kHNKM0Er8Dem5nqi4jeOLrVJDoE8tZEpnMJmtkvNbB1EIPPwHcdkF6b1oUA==}
+
+  '@fontsource-variable/material-symbols-outlined@5.3.6':
+    resolution: {integrity: sha512-XM9x1ZBt1DFoxObS1IYY2JVXaA+848kECx2j53RZowY0/vWqYTapYMuEIZWXa7CyVpEs07lgY9nZriuQvDGNVQ==}
 
   '@ionic/cli-framework-output@2.2.8':
     resolution: {integrity: sha512-TshtaFQsovB4NWRBydbNFawql6yul7d5bMiW1WYYf17hd99V6xdDdk3vtF51bw6sLkxON3bDQpWsnUc9/hVo3g==}
@@ -1058,6 +1070,10 @@ snapshots:
   '@capacitor/network@8.0.1(@capacitor/core@8.5.2)':
     dependencies:
       '@capacitor/core': 8.5.2
+
+  '@fontsource-variable/inter@5.3.0': {}
+
+  '@fontsource-variable/material-symbols-outlined@5.3.6': {}
 
   '@ionic/cli-framework-output@2.2.8':
     dependencies:

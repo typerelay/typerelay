@@ -1,16 +1,24 @@
 form#fill-form
-	.modal-header
-		h2.modal-title.h5= snippet.title || 'Use snippet'
+	header.modal-header
+		button.flow-back(type="button" data-bs-dismiss="modal" aria-label="Back")
+			span.material-symbols-outlined arrow_back
+		div
+			span.eyebrow Use snippet
+			h2.modal-title= snippet.title || snippet.trigger || 'Untitled snippet'
+		span
 	.modal-body
 		each name in rendered.fields
 			- var definition = variables[name] || {}
-			.mb-3
-				label.form-label(for='answer-'+name)= definition.label || name
-				textarea.form-control.form-control-sm(id='answer-'+name name=name rows=definition.multiline ? 3 : 1 required=definition.required)= definition.default || ''
-		pre#insert-preview.snippet-preview= rendered.text
+			label.mobile-field(for='answer-'+name)
+				span= definition.label || name
+				textarea(id='answer-'+name name=name rows=definition.multiline ? 3 : 1 required=definition.required)= definition.default || ''
+		span.eyebrow Preview
+		pre#insert-preview= rendered.text
 		if rendered.enter_actions
-			p.text-warning This snippet contains desktop Enter actions. Mobile cannot execute these actions. Edit the snippet before using it.
-		p.small.text-secondary Formatting depends on the app you paste into. Keyboard insertion on iOS uses plain text.
-	.modal-footer.justify-content-between
-		button.btn.btn-outline-secondary.btn-sm(type="button" data-bs-dismiss="modal") Cancel
-		button.btn.btn-primary.btn-sm(type="submit" disabled=!!rendered.enter_actions) Copy
+			p.settings-note This snippet contains desktop Enter actions. Mobile cannot execute these actions. Edit the snippet before using it.
+		p.settings-note Formatting depends on the destination app. iOS keyboard insertion uses plain text.
+	.modal-footer
+		button.secondary-button(type="button" data-bs-dismiss="modal") Cancel
+		button.primary-button(type="submit" disabled=!!rendered.enter_actions)
+			span.material-symbols-outlined content_copy
+			span Copy snippet

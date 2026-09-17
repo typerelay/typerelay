@@ -1,6 +1,8 @@
 # TypeRelay mobile development
 
-The mobile app lives in `apps/mobile` on `codex/mobile-app`. It uses Mailtwine's React, TypeScript, Vite and Capacitor stack. Swift and Kotlin implement the snippet keyboards. The existing Rust client supplies SQLite storage, outbox replay, asset normalization, conflict recovery and rendering through `crates/mobile`.
+The mobile app lives in `apps/mobile`. It uses Mailtwine's React, TypeScript, Vite and Capacitor stack. Swift and Kotlin implement the snippet keyboards. The existing Rust client supplies SQLite storage, outbox replay, asset normalization, conflict recovery and rendering through `crates/mobile`.
+
+The application shell follows Mailtwine's mobile interaction model: safe-area screens, fixed bottom navigation, a raised central create action, compact touch rows, and full-screen editor/detail flows. The browser preview renders the same shell used by the installed iOS and Android apps.
 
 ## Build
 

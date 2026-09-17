@@ -1,35 +1,43 @@
-form#editor-form
-	.modal-header
-		h2.modal-title.h5= snippet ? 'Edit snippet' : 'Add snippet'
-	.modal-body
-		.mb-3
-			label.form-label(for="edit-library") Library
-			select#edit-library.form-select.form-select-sm(required disabled=!!snippet)
+form#editor-form.mobile-editor
+	header.flow-header
+		button.flow-back#cancel-edit(type="button" aria-label="Close editor")
+			span.material-symbols-outlined arrow_back
+		div
+			span.eyebrow= snippet ? 'Edit snippet' : 'New snippet'
+			h2= snippet && (snippet.title || snippet.trigger) || 'Untitled snippet'
+		button.flow-save#save(type="submit") Save
+	.flow-body
+		label.mobile-field(for="edit-library")
+			span Library
+			select#edit-library(required disabled=!!snippet)
 				each item in libraries
 					if item.permissions.edit
 						option(value=item._id selected=item._id===library._id)= item.name
-		.mb-3
-			label.form-label(for="title") Title
-			input#title.form-control.form-control-sm(value=snippet && snippet.title || '')
-		.mb-3
-			label.form-label(for="trigger") Abbreviation (optional)
-			input#trigger.form-control.form-control-sm(value=snippet && snippet.trigger || '' autocapitalize="none" autocorrect="off")
-		.row.align-items-center.mb-3
-			.col
-				label.form-label(for="snippet-type") Content type
-				select#snippet-type.form-select.form-select-sm
+		.mobile-field-grid
+			label.mobile-field(for="title")
+				span Title
+				input#title(value=snippet && snippet.title || '')
+			label.mobile-field(for="trigger")
+				span Abbreviation
+				input#trigger(value=snippet && snippet.trigger || '' autocapitalize="none" autocorrect="off")
+		.mobile-field-grid
+			label.mobile-field(for="snippet-type")
+				span Content type
+				select#snippet-type
 					each kind in ['plain_text','code','template','rich_text']
 						option(value=kind selected=kind===(snippet && snippet.content.type || 'plain_text'))= {plain_text:'Plain text',code:'Code',template:'Template',rich_text:'Rich text'}[kind]
-			.col
-				label.form-label(for="language") Code language
-				input#language.form-control.form-control-sm(value=snippet && snippet.content.language || 'plain_text')
-		.mb-3
-			label.form-label(for="replace") Content
-			textarea#replace.form-control.form-control-sm(rows="8")= snippet && (snippet.content.markdown || snippet.content.text) || ''
+			label.mobile-field(for="language")
+				span Code language
+				input#language(value=snippet && snippet.content.language || 'plain_text')
+		label.mobile-field.content-field(for="replace")
+			span Content
+			textarea#replace(rows="10")= snippet && (snippet.content.markdown || snippet.content.text) || ''
 		include ../../../server/views/ajax/rich-editor.pug
 		include ../../../server/views/ajax/template-editor.pug
-		p.small.text-secondary Offline saves are queued until the next sync.
-	.modal-footer.justify-content-between
-		button#cancel-edit.btn.btn-outline-secondary.btn-sm(type="button") Close (keep draft)
-		button#save-copy.btn.btn-outline-primary.btn-sm(type="button") Save as new
-		button#save.btn.btn-primary.btn-sm(type="submit") Save snippet
+		p.draft-caption
+			span.material-symbols-outlined cloud_done
+			span Changes are saved locally while you edit.
+		if snippet
+			button.secondary-button.wide#save-copy(type="button")
+				span.material-symbols-outlined content_copy
+				span Save as new snippet

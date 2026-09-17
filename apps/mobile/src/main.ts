@@ -15,8 +15,8 @@ import shell from '../views/ajax/shell.pug';
 import row from '../views/ajax/row.pug';
 import edit from '../views/ajax/edit.pug';
 import fill from '../views/ajax/fill.pug';
-import settings from '../views/ajax/settings.pug';
 import review from '../views/ajax/review.pug';
+import libraryFilter from '../views/ajax/library-filter.pug';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import './style.css';
 
@@ -33,6 +33,7 @@ class MobileApp {
  static codeReadonly = false;
  static assetURLs = new Map<string, string>();
  static observer: MutationObserver;
+ static screen = 'snippets';
  static $(id: string) { return document.getElementById(id)!; }
  static input(id: string) { return MobileApp.$(id) as HTMLInputElement; }
  static fragment(html: string) { return new DOMParser().parseFromString(html, 'text/html').body.firstElementChild!; }
@@ -59,13 +60,37 @@ class MobileApp {
   MobileApp.$('sync-status').textContent = `${state.pending} pending · ${state.conflicts.length} conflicts`;
   MobileApp.$('restore-draft').hidden = !state.draft;
   MobileApp.$('conflicts').hidden = !state.conflicts.length;
+  MobileApp.$('settings-pending').textContent = String(state.pending);
+  MobileApp.$('settings-conflicts').textContent = String(state.conflicts.length);
+  MobileApp.$('settings-server').textContent = Auth.server || 'Not signed in';
   const select = MobileApp.$('library') as HTMLSelectElement;
   for (const option of [...select.options]) if (option.value && !state.libraries.some(library => library._id === option.value)) option.remove();
   for (const library of state.libraries) { let option = [...select.options].find(option => option.value === library._id); if (!option) { option = new Option(library.name, library._id); select.add(option); } option.textContent = library.name; }
+  const filters = MobileApp.$('library-filters');
+  for (const element of [...filters.querySelectorAll<HTMLElement>('[data-library-filter]')]) if (element.dataset.libraryFilter && !state.libraries.some(library => library._id === element.dataset.libraryFilter)) element.remove();
+  for (const library of state.libraries) {
+   let filter = filters.querySelector<HTMLElement>(`[data-library-filter="${CSS.escape(library._id)}"]`);
+   if (!filter) { filter = MobileApp.fragment(libraryFilter({ library })) as HTMLElement; filters.append(filter); }
+   filter.textContent = library.name;
+  }
   Items.update(MobileApp.$('snippets'), state.libraries, row);
   MobileApp.filter();
  }
- static filter() { const query = MobileApp.input('search').value.toLocaleLowerCase(); const library = MobileApp.input('library').value; let count = 0; for (const element of [...MobileApp.$('snippets').children] as HTMLElement[]) { element.hidden = (!!library && element.dataset.library !== library) || !(element.dataset.search || '').includes(query); if (!element.hidden) count++; } MobileApp.$('empty').hidden = count > 0; }
+ static filter() {
+  const query = MobileApp.input('search').value.toLocaleLowerCase(); const library = MobileApp.input('library').value; let count = 0;
+  for (const element of [...MobileApp.$('snippets').children] as HTMLElement[]) { element.hidden = (!!library && element.dataset.library !== library) || !(element.dataset.search || '').includes(query); if (!element.hidden) count++; }
+  MobileApp.$('empty').hidden = count > 0;
+  MobileApp.$('clear-search').hidden = !query;
+  for (const button of MobileApp.$('library-filters').querySelectorAll<HTMLElement>('[data-library-filter]')) button.classList.toggle('is-active', button.dataset.libraryFilter === library);
+ }
+ static switchScreen(screen: 'snippets' | 'settings') {
+  MobileApp.screen = screen;
+  MobileApp.$('snippets-screen').hidden = screen !== 'snippets';
+  MobileApp.$('settings-screen').hidden = screen !== 'settings';
+  MobileApp.$('nav-snippets').classList.toggle('is-active', screen === 'snippets');
+  MobileApp.$('nav-settings').classList.toggle('is-active', screen === 'settings');
+  document.documentElement.scrollTop = 0;
+ }
  static library(id: string) { const library = MobileApp.state.libraries.find(library => library._id === id); if (!library) throw new Error('Library is no longer available'); return library; }
  static async openEditor(library: Library, snippet?: Snippet, draft?: any) {
   if (!library.permissions.edit) throw new Error('Library is read-only');
@@ -80,7 +105,8 @@ class MobileApp {
   MobileApp.input('edit-library').onchange = () => { const selected = MobileApp.library(MobileApp.input('edit-library').value); MobileApp.editing = { library: selected._id, revision: selected.editor_revision, operation_id: crypto.randomUUID() }; MobileApp.scheduleDraft(); };
   MobileApp.$('editor-form').addEventListener('input', MobileApp.scheduleDraft);
   MobileApp.$('cancel-edit').onclick = () => { void MobileApp.persistDraft().then(() => { Modal.getInstance(MobileApp.$('form-modal'))?.hide(); return MobileApp.load(); }).catch(MobileApp.error); };
-  MobileApp.$('save-copy').onclick = () => { void MobileApp.busy(MobileApp.$('save-copy') as HTMLButtonElement, async () => { const library = MobileApp.library(MobileApp.input('edit-library').value); MobileApp.editing = { library: library._id, revision: library.editor_revision, operation_id: crypto.randomUUID() }; MobileApp.input('trigger').value = ''; MobileApp.input('title').value += ' (copy)'; await MobileApp.save(); }); };
+  const saveCopy = document.getElementById('save-copy') as HTMLButtonElement | null;
+  if (saveCopy) saveCopy.onclick = () => { void MobileApp.busy(saveCopy, async () => { const library = MobileApp.library(MobileApp.input('edit-library').value); MobileApp.editing = { library: library._id, revision: library.editor_revision, operation_id: crypto.randomUUID() }; MobileApp.input('trigger').value = ''; MobileApp.input('title').value += ' (copy)'; await MobileApp.save(); }); };
   MobileApp.$('editor-form').onsubmit = event => { event.preventDefault(); void MobileApp.busy(MobileApp.$('save') as HTMLButtonElement, MobileApp.save); };
   Modal.getOrCreateInstance(MobileApp.$('form-modal')).show();
  }
@@ -114,7 +140,7 @@ class MobileApp {
    if (MobileApp.richView && entry.replace !== MobileApp.richView.content()) { MobileApp.richView.editor.commands.setContent(entry.replace, { contentType: 'markdown' }); await MobileApp.persistDraft(); }
   }
   await Native.call('save', { ...MobileApp.editing, entry }); MobileApp.editing = null; await Native.call('draft', { draft: null });
-  Modal.getInstance(MobileApp.$('form-modal'))?.hide(); await MobileApp.load(); MobileApp.toast('Snippet saved'); void MobileApp.sync().catch(MobileApp.error);
+  Modal.getInstance(MobileApp.$('form-modal'))?.hide(); await MobileApp.load(); MobileApp.switchScreen('snippets'); MobileApp.toast('Snippet saved'); void MobileApp.sync().catch(MobileApp.error);
  };
  static async use(library: Library, snippet: Snippet) {
   const selection = { library: library._id, id: snippet.id, generation: MobileApp.state.generation };
@@ -138,24 +164,30 @@ class MobileApp {
   Modal.getOrCreateInstance(MobileApp.$('detail-modal')).show();
  }
  static showSettings() {
-  MobileApp.$('detail-content').replaceChildren(MobileApp.fragment(settings({ server: Auth.server })));
+  MobileApp.switchScreen('settings');
+  MobileApp.$('settings-server').textContent = Auth.server || 'Not signed in';
+  MobileApp.$('settings-pending').textContent = String(MobileApp.state.pending);
+  MobileApp.$('settings-conflicts').textContent = String(MobileApp.state.conflicts.length);
   MobileApp.$('reconnect').onclick = () => { void Auth.begin(Auth.server).catch(MobileApp.error); };
   MobileApp.$('keyboard-settings').onclick = () => { void Native.plugin.keyboardSettings().catch(MobileApp.error); };
   MobileApp.$('logout').onclick = () => { void MobileApp.busy(MobileApp.$('logout') as HTMLButtonElement, async () => {
    const result = await Swal.fire({ title: 'Sign out?', text: 'Cached snippets, pending edits, and drafts will be removed from this device.', icon: 'warning', showCancelButton: true, confirmButtonText: 'Sign out' }); if (!result.isConfirmed) return;
    MobileApp.active = false; await MobileApp.syncJob?.catch(() => undefined); await MobileApp.draftJob.catch(() => undefined); clearTimeout(MobileApp.draftTimer);
    await Native.call('reset'); await Auth.request('connection','DELETE').catch(() => undefined); await Auth.clear(); MobileApp.assetURLs.clear(); MobileApp.editing = null;
-   Modal.getInstance(MobileApp.$('detail-modal'))?.hide(); await MobileApp.load(); MobileApp.active = true;
+   await MobileApp.load(); MobileApp.switchScreen('snippets'); MobileApp.active = true;
   }); };
-  Modal.getOrCreateInstance(MobileApp.$('detail-modal')).show();
  }
  static async start() {
   (globalThis as any).Swal = Swal;
   MobileApp.$('app').replaceChildren(...new DOMParser().parseFromString(shell(), 'text/html').body.childNodes);
   MobileApp.$('login-form').onsubmit = event => { event.preventDefault(); void MobileApp.busy((event.target as HTMLFormElement).querySelector('button')!, () => Auth.begin(MobileApp.input('server').value)); };
-  MobileApp.$('settings').onclick = MobileApp.showSettings;
   MobileApp.$('sync').onclick = () => { void MobileApp.busy(MobileApp.$('sync') as HTMLButtonElement, MobileApp.sync); };
-  MobileApp.$('search').oninput = MobileApp.filter; MobileApp.$('library').onchange = MobileApp.filter;
+  MobileApp.$('settings-sync').onclick = () => { void MobileApp.busy(MobileApp.$('settings-sync') as HTMLButtonElement, MobileApp.sync); };
+  MobileApp.$('nav-snippets').onclick = () => MobileApp.switchScreen('snippets');
+  MobileApp.$('nav-settings').onclick = MobileApp.showSettings;
+  MobileApp.$('search').oninput = MobileApp.filter;
+  MobileApp.$('clear-search').onclick = () => { MobileApp.input('search').value = ''; MobileApp.filter(); MobileApp.input('search').focus(); };
+  MobileApp.$('library-filters').onclick = event => { const button = (event.target as HTMLElement).closest<HTMLElement>('[data-library-filter]'); if (!button) return; MobileApp.input('library').value = button.dataset.libraryFilter || ''; MobileApp.filter(); };
   MobileApp.$('add').onclick = () => { const library = MobileApp.state.libraries.find(library => library.permissions.edit && (!MobileApp.input('library').value || library._id === MobileApp.input('library').value)); if (!library) return MobileApp.toast('Choose an editable library. Create libraries in the web app.', 'error'); void MobileApp.openEditor(library).catch(MobileApp.error); };
   MobileApp.$('restore-draft').onclick = () => { const draft = MobileApp.state.draft; if (!draft) return; try { const library = MobileApp.library(draft.editing.library); void MobileApp.openEditor(library, library.records.find(item => item.id === draft.editing.id), draft).catch(MobileApp.error); } catch (error) { MobileApp.error(error); } };
   MobileApp.$('conflicts').onclick = () => { void MobileApp.showReview('conflicts').catch(MobileApp.error); }; MobileApp.$('recovery').onclick = () => { void MobileApp.showReview('recovery').catch(MobileApp.error); };
