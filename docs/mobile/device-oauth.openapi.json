@@ -1,36 +1,248 @@
 {
   "openapi": "3.1.0",
-  "info": { "title": "TypeRelay mobile device OAuth", "version": "1.0.0", "description": "First-party mobile enrollment for sync protocol 6. Separate from the public integration OAuth API." },
-  "servers": [{ "url": "https://app.typerelay.com" }],
+  "info": {
+    "title": "TypeRelay mobile device OAuth",
+    "version": "1.0.0",
+    "description": "First-party mobile enrollment for sync protocol 6. Separate from the public integration OAuth API. Development browser previews may additionally use exactly TYPERELAY_MOBILE_PREVIEW_URL/oauth/callback with os=web; this callback is unavailable in production."
+  },
+  "servers": [
+    {
+      "url": "https://app.typerelay.com"
+    }
+  ],
   "paths": {
     "/oauth/authorize": {
       "get": {
         "summary": "Open browser sign-in and device consent",
         "parameters": [
-          { "name": "client_id", "in": "query", "required": true, "schema": { "const": "typerelay-mobile" } },
-          { "name": "redirect_uri", "in": "query", "required": true, "schema": { "const": "com.typerelay.mobile://oauth/callback" } },
-          { "name": "code_challenge_method", "in": "query", "required": true, "schema": { "const": "S256" } },
-          { "name": "code_challenge", "in": "query", "required": true, "schema": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" } },
-          { "name": "state", "in": "query", "required": true, "schema": { "type": "string", "minLength": 20, "maxLength": 256 } },
-          { "name": "client_type", "in": "query", "required": true, "schema": { "const": "mobile" } },
-          { "name": "os", "in": "query", "required": true, "schema": { "enum": ["ios", "android"] } },
-          { "name": "device_name", "in": "query", "schema": { "type": "string" } }
+          {
+            "name": "client_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "const": "typerelay-mobile"
+            }
+          },
+          {
+            "name": "redirect_uri",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "const": "com.typerelay.mobile://oauth/callback"
+            }
+          },
+          {
+            "name": "code_challenge_method",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "const": "S256"
+            }
+          },
+          {
+            "name": "code_challenge",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{43}$"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 20,
+              "maxLength": 256
+            }
+          },
+          {
+            "name": "client_type",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "const": "mobile"
+            }
+          },
+          {
+            "name": "os",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "enum": [
+                "ios",
+                "android"
+              ]
+            }
+          },
+          {
+            "name": "device_name",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
-        "responses": { "200": { "description": "Browser sign-in or consent form. Form submission includes session CSRF token and selected account, then redirects with code and state." } }
+        "responses": {
+          "200": {
+            "description": "Browser sign-in or consent form. Form submission includes session CSRF token and selected account, then redirects with code and state."
+          }
+        }
       }
     },
     "/oauth/token": {
       "post": {
         "summary": "Exchange an authorization code or rotate a mobile refresh token",
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "oneOf": [
-          { "type": "object", "required": ["grant_type", "client_id", "redirect_uri", "code", "code_verifier"], "properties": { "grant_type": { "const": "authorization_code" }, "client_id": { "const": "typerelay-mobile" }, "redirect_uri": { "const": "com.typerelay.mobile://oauth/callback" }, "code": { "type": "string" }, "code_verifier": { "type": "string", "minLength": 43, "maxLength": 128 } } },
-          { "type": "object", "required": ["grant_type", "client_id", "refresh_token"], "properties": { "grant_type": { "const": "refresh_token" }, "client_id": { "const": "typerelay-mobile" }, "refresh_token": { "type": "string" } } }
-        ] } } } },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "grant_type",
+                      "client_id",
+                      "redirect_uri",
+                      "code",
+                      "code_verifier"
+                    ],
+                    "properties": {
+                      "grant_type": {
+                        "const": "authorization_code"
+                      },
+                      "client_id": {
+                        "const": "typerelay-mobile"
+                      },
+                      "redirect_uri": {
+                        "const": "com.typerelay.mobile://oauth/callback"
+                      },
+                      "code": {
+                        "type": "string"
+                      },
+                      "code_verifier": {
+                        "type": "string",
+                        "minLength": 43,
+                        "maxLength": 128
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "grant_type",
+                      "client_id",
+                      "refresh_token"
+                    ],
+                    "properties": {
+                      "grant_type": {
+                        "const": "refresh_token"
+                      },
+                      "client_id": {
+                        "const": "typerelay-mobile"
+                      },
+                      "refresh_token": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
         "responses": {
-          "200": { "description": "Device tokens. Refresh tokens rotate on use; access tokens expire after 900 seconds.", "content": { "application/json": { "schema": { "type": "object", "required": ["access_token", "refresh_token", "token_type", "expires_in", "account", "device"], "properties": { "access_token": { "type": "string" }, "refresh_token": { "type": "string" }, "token_type": { "const": "Bearer" }, "expires_in": { "const": 900 }, "account": { "type": "string" }, "device": { "type": "string" } } } } } },
-          "400": { "description": "Invalid client, verifier or redirect" },
-          "401": { "description": "Expired, replayed, revoked or client-mismatched grant" }
+          "200": {
+            "description": "Device tokens. Refresh tokens rotate on use; access tokens expire after 900 seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "access_token",
+                    "refresh_token",
+                    "token_type",
+                    "expires_in",
+                    "account",
+                    "device"
+                  ],
+                  "properties": {
+                    "access_token": {
+                      "type": "string"
+                    },
+                    "refresh_token": {
+                      "type": "string"
+                    },
+                    "token_type": {
+                      "const": "Bearer"
+                    },
+                    "expires_in": {
+                      "const": 900
+                    },
+                    "account": {
+                      "type": "string"
+                    },
+                    "device": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid client, verifier or redirect"
+          },
+          "401": {
+            "description": "Expired, replayed, revoked or client-mismatched grant"
+          }
         }
+      }
+    },
+    "/api/v2/mobile-preview/identity": {
+      "get": {
+        "summary": "Validate a device for the development-only browser storage bridge",
+        "description": "Mounted only in development with TYPERELAY_MOBILE_PREVIEW_URL configured. Requires device bearer authentication and X-TypeRelay-Sync-Protocol: 6.",
+        "parameters": [
+          {
+            "name": "X-TypeRelay-Sync-Protocol",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "const": "6"
+            }
+          }
+        ],
+        "security": [
+          {
+            "DeviceBearer": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authenticated user, account and device IDs"
+          },
+          "401": {
+            "description": "Invalid or missing device token"
+          },
+          "404": {
+            "description": "Preview disabled"
+          },
+          "426": {
+            "description": "Wrong sync protocol"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "DeviceBearer": {
+        "type": "http",
+        "scheme": "bearer"
       }
     }
   }

@@ -29,7 +29,23 @@ Android debug APK: `apps/mobile/android/app/build/outputs/apk/debug/app-debug.ap
 
 For iOS device installation, open `apps/mobile/ios/App/App.xcodeproj`, select your development team for **App** and **TypeRelayKeyboard**, and provision `group.com.typerelay.mobile` for both. Bundle identifiers are `com.typerelay.mobile` and `com.typerelay.mobile.keyboard`. App Group provisioning and physical-device acceptance remain necessary before TestFlight.
 
-`pnpm --dir apps/mobile dev` serves the web bundle, but the database and keyboard bridge require a native app; there is no browser database substitute.
+## Browser testing on dbh
+
+A dedicated `mobile` Compose service runs Vite on port 5174, following Mailtwine's mobile-container pattern. Run `dbh-run urls` for its named URL (currently `https://mobile.tr.n.lan/`). Point this hostname at dbh in your hosts file, as with the other mobile development apps.
+
+```fish
+dbh-run urls
+dbh-run secrets
+dbh-run compose -- build mobile
+dbh-run exec -- python3 scripts/setup-mobile-dbh.py n
+dbh-run compose -- up -d app mobile
+```
+
+The route setup command adds the named development Caddy mobile route, keeps a backup, validates the configuration and reloads the running development proxy. The mobile source is mounted for hot reload.
+
+The browser runs the actual mobile UI. Its development-only web bridge calls the same Rust SQLite/outbox/rendering code in the mobile container. Preview caches are isolated by authenticated user, account and browser ID. Browser OAuth uses only the explicitly configured `TYPERELAY_MOBILE_PREVIEW_URL` callback; production rejects this callback. Native builds retain their original secure-storage and callback paths. The preview uses the browser implementation of the storage plugin, like Mailtwine; sign out after testing on a shared browser.
+
+Edits sync to real development account data. Keyboard extensions, native secure storage and device-offline operation still require the installed app. Browser preview storage resides on dbh, so the preview itself needs network access. `pnpm --dir apps/mobile dev` without the preview environment remains a native frontend development server.
 
 On NadaMini, backend development uses `dbh-run`. Run `dbh-run urls` for the current named endpoints. Mobile login requires HTTPS, including custom development servers with trusted certificates. Do not use local Docker.
 

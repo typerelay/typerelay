@@ -8,6 +8,7 @@ import { RichEditor } from '@server/browser/rich-editor.js';
 import { TemplateEditor } from '@server/public/template-editor.js';
 import { Auth } from './auth';
 import { Native } from './native';
+import { Preview } from './preview';
 import { Items } from './items';
 import type { Library, Snippet, State } from './types';
 import shell from '../views/ajax/shell.pug';
@@ -143,7 +144,7 @@ class MobileApp {
   MobileApp.$('logout').onclick = () => { void MobileApp.busy(MobileApp.$('logout') as HTMLButtonElement, async () => {
    const result = await Swal.fire({ title: 'Sign out?', text: 'Cached snippets, pending edits, and drafts will be removed from this device.', icon: 'warning', showCancelButton: true, confirmButtonText: 'Sign out' }); if (!result.isConfirmed) return;
    MobileApp.active = false; await MobileApp.syncJob?.catch(() => undefined); await MobileApp.draftJob.catch(() => undefined); clearTimeout(MobileApp.draftTimer);
-   await Auth.request('connection','DELETE').catch(() => undefined); await Native.call('reset'); await Auth.clear(); MobileApp.assetURLs.clear(); MobileApp.editing = null;
+   await Native.call('reset'); await Auth.request('connection','DELETE').catch(() => undefined); await Auth.clear(); MobileApp.assetURLs.clear(); MobileApp.editing = null;
    Modal.getInstance(MobileApp.$('detail-modal'))?.hide(); await MobileApp.load(); MobileApp.active = true;
   }); };
   Modal.getOrCreateInstance(MobileApp.$('detail-modal')).show();
@@ -162,10 +163,11 @@ class MobileApp {
   createRoot(MobileApp.$('controller')).render(createElement(Controller));
   Auth.onError = MobileApp.error;
   await Auth.initialize(async () => { await MobileApp.load(); await MobileApp.sync(); });
-  if (Auth.server) MobileApp.input('server').value = Auth.server;
+  if (Auth.server || Preview.enabled) MobileApp.input('server').value = Auth.server || Preview.origin;
+  if (Preview.enabled) { MobileApp.input('server').readOnly = true; MobileApp.$('preview-notice').hidden = false; }
   await MobileApp.load();
   await Network.addListener('networkStatusChange', status => { if (status.connected) void MobileApp.sync().catch(MobileApp.error); });
-  await App.addListener('appStateChange', event => { MobileApp.active = event.isActive; if (event.isActive) void MobileApp.sync().catch(MobileApp.error); else void MobileApp.persistDraft().catch(MobileApp.error); });
+  if (!Preview.enabled) await App.addListener('appStateChange', event => { MobileApp.active = event.isActive; if (event.isActive) void MobileApp.sync().catch(MobileApp.error); else void MobileApp.persistDraft().catch(MobileApp.error); });
   setInterval(() => { if (MobileApp.active && Auth.tokens) void MobileApp.sync().catch(() => undefined); }, 30000);
   void MobileApp.sync().catch(MobileApp.error);
  }

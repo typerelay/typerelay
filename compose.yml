@@ -1,5 +1,6 @@
 x-env: &env
   NODE_ENV: development
+  TYPERELAY_MOBILE_PREVIEW_URL: "${TYPERELAY_MOBILE_PREVIEW_URL:-http://localhost:5174}"
   TYPERELAY_APP: web
   TYPERELAY_GHOST_CONTENT_API_KEY: "${TYPERELAY_GHOST_CONTENT_API_KEY:-}"
   PORT: 3040
@@ -45,6 +46,36 @@ x-env: &env
   BILLING_ENABLED: "${BILLING_ENABLED:-}"
 
 services:
+  mobile:
+    image: typerelay-mobile-dev:local
+    command: ["pnpm", "exec", "vite", "--config", "/opt/typerelay/apps/mobile/vite.config.ts", "--host", "0.0.0.0", "--port", "5174", "--strictPort"]
+    build:
+      context: .
+      dockerfile: apps/server/Dockerfile
+      target: mobile
+    restart: unless-stopped
+    working_dir: /opt/typerelay/apps/mobile
+    ports:
+      - "127.0.0.1:5174:5174"
+    environment:
+      NODE_ENV: development
+      TYPERELAY_MOBILE_PREVIEW: "true"
+      MOBILE_API_URL: http://app:3040
+      MOBILE_API_ORIGIN: "${APP_URL:-http://localhost:3040}"
+      MOBILE_PREVIEW_ORIGIN: "${TYPERELAY_MOBILE_PREVIEW_URL:-http://localhost:5174}"
+      __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: mobile.typerelay.orb.local
+    volumes:
+      - ./apps/mobile:/opt/typerelay/apps/mobile
+      - ./apps/server:/opt/typerelay/apps/server:ro
+      - typerelay-mobile-node-modules:/opt/typerelay/apps/mobile/node_modules
+      - typerelay-node-modules:/opt/typerelay/apps/server/node_modules:ro
+      - typerelay-mobile-preview:/data/mobile-preview
+    depends_on:
+      app:
+        condition: service_healthy
+    labels:
+      - dev.orbstack.http-port=5174
+
   init:
     extends:
       file: ./compose.base.yml
@@ -210,3 +241,5 @@ services:
 volumes:
   typerelay-server:
   typerelay-node-modules:
+  typerelay-mobile-node-modules:
+  typerelay-mobile-preview:

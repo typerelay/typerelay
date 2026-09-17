@@ -2,6 +2,7 @@ repo = "typerelay"
 default_files = ["compose.yml", "compose.dbh.yml"]
 
 [environment]
+TYPERELAY_MOBILE_PREVIEW_URL = "https://mobile.tr.{profile}.lan"
 APP_URL = "https://tr.{profile}.lan"
 MCP_BASE_URL = "https://mcp.tr.{profile}.lan"
 DEV_TYPERELAY_MONGODB_URI = "mongodb://dbh.pipefish-mermaid.ts.net:27017/typerelay?replicaSet=hmrs0"
@@ -15,5 +16,6 @@ JWT_SECRET = "dev-jwt-secret-change-me"
 compose_args = ["exec", "-e", "APP_URL=http://localhost:3040", "-e", "MCP_BASE_URL=http://localhost:3041", "-e", "API_RATE_LIMIT_ENABLED=false", "app", "npm", "test"]
 
 [urls]
+mobile = "https://mobile.tr.{profile}.lan"
 app = "https://tr.{profile}.lan"
 mcp = "https://mcp.tr.{profile}.lan/mcp"

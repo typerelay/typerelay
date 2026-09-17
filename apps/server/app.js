@@ -120,6 +120,7 @@ export class Server {
 			if (req.boundAccount) Support.assert(req.ctx.account === req.boundAccount, 'Custom domain account mismatch', 403);
 			next();
 		});
+		if (process.env.NODE_ENV === 'development' && process.env.TYPERELAY_MOBILE_PREVIEW_URL) app.get('/api/v2/mobile-preview/identity', (req, res) => { Support.assert(req.ctx.device, 'Device sign-in required', 401); res.json({ user: req.ctx.user, account: req.ctx.account, device: req.ctx.device }); });
 		PublicApi.mountSettings(app);
 		app.post('/api/v2/assets', express.raw({ type: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'], limit: '5mb' }), async (req, res) => res.json(await Assets.put(req.ctx, req.body)));
 		app.post('/api/v2/assets/presence', async (req, res) => res.json(await Assets.presence(req.ctx, req.body.ids)));

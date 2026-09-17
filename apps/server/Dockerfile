@@ -19,6 +19,21 @@ WORKDIR /opt/typerelay/apps/mcp
 COPY apps/mcp/package.json apps/mcp/pnpm-lock.yaml apps/mcp/pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
+# Development-only mobile frontend and its shared Rust storage bridge.
+FROM rust AS mobile-rust
+RUN cargo build --release --locked -p typerelay-mobile --features preview --bin typerelay-mobile-preview
+
+FROM server-dependencies AS mobile
+WORKDIR /opt/typerelay/apps/mobile
+COPY apps/mobile/package.json apps/mobile/pnpm-lock.yaml apps/mobile/pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY apps/server /opt/typerelay/apps/server
+COPY apps/mobile ./
+COPY --from=mobile-rust /src/target/release/typerelay-mobile-preview /usr/local/bin/
+COPY --from=rust /src/target/wasm32-unknown-unknown/release/typerelay_template_wasm.wasm /usr/local/share/typerelay/template.wasm
+ENV NODE_ENV=development
+CMD ["pnpm", "exec", "vite", "--host", "0.0.0.0", "--port", "5174", "--strictPort"]
+
 FROM node:24-bookworm-slim AS production
 ARG APP_VERSION=development
 ENV APP_VERSION=${APP_VERSION}

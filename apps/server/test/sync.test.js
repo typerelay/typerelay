@@ -481,3 +481,25 @@ test('mobile callbacks require exact registered scheme host and path', () => {
  for (const uri of ['not-a-url', 'typerelay://oauth/callback', 'http://127.0.0.1:8080/callback', 'com.typerelay.mobile://oauth/callback/extra', 'com.typerelay.mobile://user@oauth/callback', 'com.typerelay.mobile://oauth/callback?x=1', 'com.typerelay.mobile://oauth/callback#x', 'com.typerelay.mobile://evil/callback']) assert.throws(() => Auth.redirect(uri, 'typerelay-mobile'), /Invalid mobile callback/);
  assert.throws(() => Auth.redirect('com.typerelay.mobile://oauth/callback', 'typerelay-desktop'), /Invalid desktop callback/);
 });
+
+test('browser preview callback is restricted to the configured development origin', async () => {
+ const previousEnvironment = process.env.NODE_ENV; const previousPreview = process.env.TYPERELAY_MOBILE_PREVIEW_URL;
+ try {
+  process.env.NODE_ENV = 'development'; process.env.TYPERELAY_MOBILE_PREVIEW_URL = 'https://preview.example.test/mobile';
+  const redirect = 'https://preview.example.test/mobile/oauth/callback';
+  assert.equal(Auth.redirect(redirect, 'typerelay-mobile'), redirect);
+  for (const uri of ['https://other.example.test/mobile/oauth/callback', 'https://preview.example.test/oauth/callback', redirect + '?query=1']) assert.throws(() => Auth.redirect(uri, 'typerelay-mobile'), /Invalid mobile callback/);
+  const verifier = Support.token();
+  const body = { account: Fixture.owner.account, client_id: 'typerelay-mobile', client_type: 'mobile', os: 'web', redirect_uri: redirect, code_challenge_method: 'S256', code_challenge: createHash('sha256').update(verifier).digest('base64url'), state: Support.token() };
+  const callback = new URL(await Auth.authorize(Fixture.owner.user, body));
+  const tokens = await Auth.exchange({ grant_type: 'authorization_code', client_id: body.client_id, redirect_uri: redirect, code_verifier: verifier, code: callback.searchParams.get('code') });
+  assert.equal((await Device.findById(tokens.device).lean()).os, 'web');
+  await Device.updateOne({ _id: tokens.device }, { $set: { revoked: true } });
+  process.env.NODE_ENV = 'production';
+  assert.throws(() => Auth.redirect(redirect, 'typerelay-mobile'), /Invalid mobile callback/);
+  assert.equal(Auth.redirect('com.typerelay.mobile://oauth/callback', 'typerelay-mobile'), 'com.typerelay.mobile://oauth/callback');
+ } finally {
+  if (previousEnvironment === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = previousEnvironment;
+  if (previousPreview === undefined) delete process.env.TYPERELAY_MOBILE_PREVIEW_URL; else process.env.TYPERELAY_MOBILE_PREVIEW_URL = previousPreview;
+ }
+});

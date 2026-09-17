@@ -8,3 +8,9 @@ target
 .pnpm-store
 docs/.vitepress/dist
 docs/.vitepress/cache
+
+apps/mobile/android
+apps/mobile/ios
+apps/mobile/native
+apps/mobile/dist
+apps/mobile/public/assets/generated

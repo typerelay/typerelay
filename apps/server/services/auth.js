@@ -76,8 +76,9 @@ export class Auth {
 		const loopback = url.protocol === 'http:' && url.hostname === '127.0.0.1' && url.port && url.pathname === '/callback';
 		const mobile = client === 'typerelay-mobile';
 		Support.assert(['typerelay-desktop', 'typerelay-mobile'].includes(client), 'Invalid client');
+		const preview = mobile && process.env.NODE_ENV === 'development' && process.env.TYPERELAY_MOBILE_PREVIEW_URL && url.href === process.env.TYPERELAY_MOBILE_PREVIEW_URL + '/oauth/callback';
 		const app = url.protocol === (mobile ? 'com.typerelay.mobile:' : 'typerelay:') && url.hostname === 'oauth' && url.pathname === '/callback' && !url.port;
-		Support.assert(((!mobile && loopback) || app) && !url.username && !url.password && !url.search && !url.hash, mobile ? 'Invalid mobile callback URL' : 'Invalid desktop callback URL');
+		Support.assert(((!mobile && loopback) || app || preview) && !url.username && !url.password && !url.search && !url.hash, mobile ? 'Invalid mobile callback URL' : 'Invalid desktop callback URL');
 		return url.href;
 	}
 	static async authorize(user, body) {
@@ -88,7 +89,7 @@ export class Auth {
 		Support.assert(typeof body.state === 'string' && body.state.length >= 20 && body.state.length <= 256, 'Invalid state');
 		const code = Support.token();
 		Support.assert((body.client_id !== 'typerelay-mobile' && body.client_type === undefined) || (body.client_id === 'typerelay-mobile' ? ['mobile'] : ['desktop', 'cli']).includes(body.client_type), 'Invalid client type');
-		Support.assert((body.client_id !== 'typerelay-mobile' && body.os === undefined) || (body.client_id === 'typerelay-mobile' ? ['ios', 'android'] : ['macos', 'windows', 'linux']).includes(body.os), 'Invalid operating system');
+		Support.assert((body.client_id !== 'typerelay-mobile' && body.os === undefined) || (body.client_id === 'typerelay-mobile' ? (redirect.startsWith('https:') || redirect.startsWith('http:') ? ['web'] : ['ios', 'android']) : ['macos', 'windows', 'linux']).includes(body.os), 'Invalid operating system');
 		await Ticket.create({ hash: Support.hash(code), kind: 'oauth', account: ctx.account, data: { user, client: body.client_id, redirect, challenge: body.code_challenge, name: Support.text(body.device_name || (body.client_id === 'typerelay-mobile' ? 'TypeRelay mobile' : 'Desktop')), client_type: body.client_type, os: body.os }, expires: new Date(Date.now() + 300000) });
 		const url = new URL(redirect);
 		url.searchParams.set('code', code);

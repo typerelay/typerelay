@@ -5,6 +5,16 @@ x-dbh-ca-volumes: &dbh-ca-volumes
   - "${DBH_CADDY_CA}:/usr/local/share/ca-certificates/dbh-caddy-root.crt:ro"
 
 services:
+  mobile:
+    ports: !override []
+    environment:
+      __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: "mobile.tr.${DBH_PROFILE}.lan"
+    networks:
+      default:
+      dbh_proxy:
+        aliases:
+          - "${DBH_PROFILE}-typerelay-mobile"
+
   app:
     ports: !override []
     environment: *dbh-ca-environment

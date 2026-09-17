@@ -78,7 +78,7 @@ snippetAssetSchema.index({ account: 1, last_referenced_at: 1 });
 const SnippetAsset = mongoose.model('SnippetAsset', snippetAssetSchema);
 const Migration = mongoose.model('Migration', new mongoose.Schema({ key: { type: String, unique: true }, completed: Boolean }));
 const MigrationBackup = mongoose.model('MigrationBackup', new mongoose.Schema({ key: { type: String, unique: true }, source_collection: String, payload: mixed }));
-const Device = mongoose.model('Device', new mongoose.Schema({ account: objectid, user: objectid, name: String, oauth_client: { type: String, enum: ['typerelay-desktop', 'typerelay-mobile'] }, client_type: { type: String, enum: ['desktop', 'cli', 'mobile'] }, os: { type: String, enum: ['macos', 'windows', 'linux', 'ios', 'android'] }, last_active: Date, access: String, access_expires: Date, refresh: String, refresh_expires: Date, revoked: { type: Boolean, default: false } }, { timestamps: true }));
+const Device = mongoose.model('Device', new mongoose.Schema({ account: objectid, user: objectid, name: String, oauth_client: { type: String, enum: ['typerelay-desktop', 'typerelay-mobile'] }, client_type: { type: String, enum: ['desktop', 'cli', 'mobile'] }, os: { type: String, enum: ['macos', 'windows', 'linux', 'ios', 'android', 'web'] }, last_active: Date, access: String, access_expires: Date, refresh: String, refresh_expires: Date, revoked: { type: Boolean, default: false } }, { timestamps: true }));
 const change = new mongoose.Schema({ account: objectid, sequence: Number, library: objectid, kind: String, departures: [String] });
 change.index({ account: 1, sequence: 1 }, { unique: true });
 const Change = mongoose.model('Change', change);
