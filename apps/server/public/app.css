@@ -158,7 +158,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 }
 
 #product-updates-drawer {
-	--bs-offcanvas-width: var(--fw-drawer-width, 37.5rem);
+	--bs-offcanvas-width: 40vw;
 }
 
 #productUpdatesModal .modal-content {

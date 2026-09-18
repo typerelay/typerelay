@@ -18,7 +18,7 @@ class Fixture {
 }
 
 before(async () => {
-	process.env.NODE_ENV = 'test'; process.env.PORT = '3183'; process.env.TYPERELAY_HOSTED_EDITION = 'true'; process.env.TYPERELAY_GHOST_CONTENT_API_KEY = 'fixture-key'; process.env.BILLING_ENABLED = 'false'; process.env.WHITE_LABEL_ENABLED = 'false';
+	process.env.NODE_ENV = 'test'; process.env.PORT = '3183'; process.env.APP_VERSION = 'news-drawer-test'; process.env.TYPERELAY_HOSTED_EDITION = 'true'; process.env.TYPERELAY_GHOST_CONTENT_API_KEY = 'fixture-key'; process.env.BILLING_ENABLED = 'false'; process.env.WHITE_LABEL_ENABLED = 'false';
 	process.env.MONGO_URI = process.env.MONGO_URI.replace(/\/[^/?]+(?=\?|$)/, '/typerelay_product_updates_test');
 	process.env.SESSION_SECRET = Support.token(); process.env.JWT_SECRET = Support.token();
 	Auth.origin = Fixture.origin;
@@ -55,6 +55,13 @@ test('real authenticated routes enforce CSRF, persist monotonic seen state and r
 	const pageHtml = await page.text();
 	const dom = new JSDOM(pageHtml);
 	Fixture.csrf = dom.window.document.querySelector('meta[name=csrf-token]').content;
+	assert.equal(dom.window.document.querySelector('script[src$="/app.js"]').getAttribute('src'), '/assets/news-drawer-test/app.js');
+	assert.equal(dom.window.document.querySelector('script[src$="/auth.js"]').getAttribute('src'), '/assets/news-drawer-test/auth.js');
+	assert.equal(dom.window.document.querySelector('link[href$="/app.css"]').getAttribute('href'), '/assets/news-drawer-test/app.css');
+	const versionedModule = await Fixture.request('/assets/news-drawer-test/product-updates.js');
+	assert.equal(versionedModule.status, 200);
+	assert.match(await versionedModule.text(), /bootstrap\.Offcanvas/);
+	assert.equal((await Fixture.request('/assets/previous-release/product-updates.js')).status, 404);
 	assert.equal(dom.window.document.querySelectorAll('[data-product-update-id]').length, 7);
 	assert.equal(dom.window.document.querySelector('#workspace-content').hidden, false);
 	assert.ok(dom.window.document.querySelector('#product-updates-drawer #product-updates-news'));
