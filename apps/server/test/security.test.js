@@ -142,7 +142,7 @@ test('self-hosted signup confirmation creates no operational notification', asyn
 	assert.equal(snippets[0].content.variables.name.label, 'Name'); assert.equal(snippets[1].content.language, 'javascript');
 	assert.equal(snippets[4].content.variables.date.format, 'YYYY-MM-DD'); assert.equal(snippets[4].content.variables.date.timezone, 'local');
 	const icon = await SnippetAsset.findOne({ account: member.account }).lean();
-	assert.ok(icon); assert.deepEqual(snippets[2].content.assets, [icon.id]); assert.equal(await Change.countDocuments({ account: member.account, library: library._id }), 1);
+	assert.ok(icon); assert.deepEqual(snippets[2].content.assets, [icon.id]); assert.equal(snippets[2].content.markdown.split('\n')[0], `![TypeRelay icon](typerelay-asset:${icon.id})`); assert.doesNotMatch(snippets[2].content.markdown, /<img/); assert.equal(await Change.countDocuments({ account: member.account, library: library._id }), 1);
 	const support = RichText.render({ ...snippets[5].content, values: { name: 'Alex' }, preview: false, assets: {} });
 	assert.match(support.html, /Hi Alex/); assert.match(support.html, /href="https:\/\/typerelay\.com\/"/); assert.match(support.html, /href="https:\/\/docs\.typerelay\.com\/mcp\/"/); assert.match(support.html, /href="https:\/\/app\.typerelay\.com\/"/); assert.match(support.rtf, /TypeRelay Support/); assert.match(support.text, /open the in-app chat/);
 	assert.deepEqual(await Billing.usage(member.account), { libraries: 1, snippets: 6, people: 1, invitations: 0, machines: 0 });
