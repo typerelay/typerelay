@@ -8,7 +8,7 @@ class TypeRelay {
 	tombstones = new Set();
 	formOperation = null;
 	submitting = false;
-	selected = null;
+	selected = document.querySelector('[data-editor]')?.dataset.editor || null;
 	selectedSnippets = new Set();
 	selectionAnchor = null;
 	cursor = 0;

@@ -282,6 +282,10 @@ test('web AJAX updates only affected snippets; preserves panel, filter and multi
 	const { library } = await Fixture.json('libraries', 'POST', { name: 'Browser library', yaml: 'matches: [{trigger: web, replace: Before}, {trigger: untouched, replace: Keep}]\n' });
 	const html = await (await Fixture.request('/')).text();
 	const dom = new JSDOM(html, { url: Fixture.origin, runScripts: 'outside-only' });
+	const firstLibrary = dom.window.document.querySelector('.library');
+	assert.equal(dom.window.document.querySelector('[data-editor]').dataset.editor, firstLibrary.dataset.id);
+	assert.ok(firstLibrary.classList.contains('active-library'));
+	assert.equal(firstLibrary.getAttribute('aria-pressed'), 'true');
 	const errors = [];
 	dom.window.Swal = { fire: async value => { if (value.icon === 'error') errors.push(value.title); return { isConfirmed: true }; } };
 	dom.window.bootstrap = { Modal: { getOrCreateInstance: () => ({ show() {}, hide() {} }), getInstance: () => ({ hide() {} }) } };
@@ -292,6 +296,7 @@ test('web AJAX updates only affected snippets; preserves panel, filter and multi
 	const source = (await BrowserSource.script()).replace('new TypeRelay();', 'window.client = new TypeRelay();').replace('export { client };', '');
 	dom.window.eval(source);
 	const client = dom.window.client;
+	assert.equal(client.selected, firstLibrary.dataset.id);
 	await client.open(library._id);
 	const editSnippet = client.editSnippet.bind(client);
 	const confirm = client.confirm;
@@ -553,7 +558,7 @@ test('all Bootstrap modals resist Escape and background clicks but explicit clos
 	const dom = new JSDOM(html, { url: Fixture.origin, runScripts: 'outside-only', pretendToBeVisual: true });
 	dom.window.eval(await readFile('./node_modules/bootstrap/dist/js/bootstrap.bundle.js', 'utf8'));
 	try {
-		assert.ok(dom.window.document.querySelector('#beta-notice-trigger'));
+		assert.ok(dom.window.document.querySelector('#beta-notice-trigger').hidden);
 		for (const modal of dom.window.document.querySelectorAll('.modal')) {
 			assert.equal(modal.dataset.bsBackdrop, 'static'); assert.equal(modal.dataset.bsKeyboard, 'false');
 			modal.classList.remove('fade');
