@@ -6,10 +6,13 @@ import { Encoder } from 'cbor-x';
 const cbor = new Encoder({ useRecords: false, useTag259ForMaps: false, tagUint8Array: false });
 import { generateSync } from 'otplib';
 import { JSDOM } from 'jsdom';
-import { mongoose, User, Ticket, Member, Passkey, Device } from '../model/index.js';
+import bcrypt from 'bcryptjs';
+import { mongoose, User, Account, Ticket, Member, Passkey, Device, SignupNotification } from '../model/index.js';
 import { Support } from '../services/support.js';
 import { Auth } from '../services/auth.js';
 import { Security } from '../services/security.js';
+import { SignupNotifications } from '../services/signup_notifications.js';
+import { Team } from '../services/team.js';
 
 class Browser {
 	cookie = ''; csrf = ''; account = '';
@@ -95,6 +98,62 @@ test('SMTP_SERVERS uses the shared authenticated multi-server format', () => {
 	assert.equal(Auth.nextSmtpServer(servers).name, 'smtp-2');
 	assert.equal(Auth.nextSmtpServer(servers).name, 'one');
 	assert.throws(() => Auth.smtpServers({ SMTP_SERVERS: '{}' }), /non-empty JSON array/);
+});
+test('confirmed hosted signups notify Type Relay through a durable retrying outbox', async () => {
+	const email = randomUUID() + '@example.test';
+	await Auth.login(email, 'Hosted Owner');
+	const confirmation = Fixture.mailUrl(Fixture.mails.findLast(mail => mail.to === email));
+	const originalSendMail = Auth.mail.sendMail;
+	process.env.TYPERELAY_HOSTED_EDITION = 'true';
+	Auth.mail.sendMail = async mail => { if (mail.to === 'hi@typerelay.com') throw new Error('temporary SMTP failure'); Fixture.mails.push(mail); return { accepted: [mail.to] }; };
+	try { await Auth.consume(confirmation.searchParams.get('token')); }
+	finally { Auth.mail.sendMail = originalSendMail; delete process.env.TYPERELAY_HOSTED_EDITION; }
+	const user = await User.findOne({ email }).lean();
+	let record;
+	for (let attempt = 0; attempt < 100; attempt++) { record = await SignupNotification.findOne({ user: user._id }).lean(); if (record?.attempts) break; await new Promise(resolve => setTimeout(resolve, 10)); }
+	assert.equal(record.status, 'pending'); assert.equal(record.attempts, 1);
+	await SignupNotification.updateOne({ _id: record._id }, { $set: { next_attempt_at: new Date(0) } });
+	const delivered = [];
+	assert.deepEqual(await SignupNotifications.reconcile(async message => delivered.push(message)), { checked: 1, sent: 1, retrying: 0, failed: 0 });
+	assert.equal(delivered[0].to, 'hi@typerelay.com'); assert.equal(delivered[0].replyTo, email); assert.match(delivered[0].subject, /^Type Relay signup:/); assert.match(delivered[0].text, /Account ID:/); assert.match(delivered[0].messageId, /^<typerelay-signup-/);
+	assert.equal((await SignupNotification.findById(record._id).lean()).status, 'sent');
+	assert.deepEqual(await SignupNotifications.reconcile(async () => { throw new Error('must not resend'); }), { checked: 0, sent: 0, retrying: 0, failed: 0 });
+	const failedUser = await User.create({ email: randomUUID() + '@example.test', name: 'Failed notification' });
+	const failedAccount = await Account.create({ name: 'Failed notification' });
+	const failedRecord = await SignupNotification.create({ account: failedAccount._id, user: failedUser._id, email: failedUser.email, name: failedUser.name, attempts: SignupNotifications.maxAttempts - 1, message_id: SignupNotifications.messageId(failedAccount._id) });
+	await assert.rejects(SignupNotifications.deliver(failedRecord._id, async () => { throw new Error('permanent SMTP failure'); }), /permanent SMTP failure/);
+	const exhausted = await SignupNotification.findById(failedRecord._id).lean(); assert.equal(exhausted.status, 'failed'); assert.equal(exhausted.attempts, SignupNotifications.maxAttempts);
+});
+test('self-hosted signup confirmation creates no operational notification', async () => {
+	const email = randomUUID() + '@example.test'; await Auth.login(email, 'Self-hosted Owner');
+	const confirmation = Fixture.mailUrl(Fixture.mails.findLast(mail => mail.to === email));
+	const user = await User.findById(await Auth.consume(confirmation.searchParams.get('token'))).lean();
+	assert.equal(await SignupNotification.exists({ user: user._id }), null);
+});
+test('team admins directly add new or existing users without replacing existing passwords', async () => {
+	const owner = await User.create({ email: randomUUID() + '@example.test', name: 'Team Owner' });
+	const account = await Account.create({ name: 'Direct team' });
+	await Member.create({ user: owner._id, account: account._id, role: 'owner' });
+	const ctx = await Support.context(String(owner._id), String(account._id));
+	const generatedEmail = randomUUID() + '@example.test';
+	await Ticket.create({ hash: Support.hash(Support.token()), kind: 'invite', email: generatedEmail, account: account._id, expires: new Date(Date.now() + 60000) });
+	const generated = await Team.add(ctx, { name: 'Generated User', email: generatedEmail, password: '', send_welcome_email: false });
+	assert.ok(generated.temporary_password.length >= 20); assert.equal(generated.member.profile.name, 'Generated User');
+	const generatedUser = await User.findOne({ email: generatedEmail }).select('+password').lean();
+	assert.ok(!JSON.stringify(generated).includes('$2')); assert.ok(await bcrypt.compare(generated.temporary_password, generatedUser.password)); assert.equal((await User.findById(generatedUser._id).lean()).password, undefined); assert.equal(await Ticket.exists({ kind: 'invite', email: generatedEmail, account: account._id }), null);
+	assert.ok(!Fixture.mails.some(mail => mail.to === generatedEmail));
+	await assert.rejects(Team.add(ctx, { name: 'Duplicate', email: generatedEmail, password: '', send_welcome_email: false }), /already a member/);
+	await assert.rejects(Team.add(ctx, { name: '', email: randomUUID() + '@example.test', password: '', send_welcome_email: false }), /Invalid text/);
+	await assert.rejects(Team.add(ctx, { name: 'Short password', email: randomUUID() + '@example.test', password: 'short', send_welcome_email: false }), /at least 8 characters/);
+	await assert.rejects(Team.add({ ...ctx, role: 'member' }, { name: 'Blocked', email: randomUUID() + '@example.test', password: '', send_welcome_email: false }), /Admin required/);
+	const customEmail = randomUUID() + '@example.test';
+	const custom = await Team.add(ctx, { name: 'Custom User', email: customEmail, password: 'custom-password', send_welcome_email: true });
+	assert.equal(custom.temporary_password, 'custom-password'); assert.ok(Fixture.mails.some(mail => mail.to === customEmail && mail.subject.includes('access')));
+	const existingPassword = await Security.password('existing-password');
+	const existing = await User.create({ email: randomUUID() + '@example.test', name: 'Existing User', password: existingPassword.hash });
+	const linked = await Team.add(ctx, { name: '', email: existing.email, password: 'replacement-password', send_welcome_email: false });
+	assert.equal(linked.temporary_password, undefined); assert.equal(linked.member.profile.name, 'Existing User');
+	assert.ok(await bcrypt.compare(existingPassword.password, (await User.findById(existing._id).select('+password').lean()).password));
 });
 test('signup, generated password, password login, OAuth continuation and recovery', async () => {
 	const { browser, email, user } = await Fixture.account();

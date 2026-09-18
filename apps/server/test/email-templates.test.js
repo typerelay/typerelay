@@ -4,14 +4,14 @@ import { JSDOM } from 'jsdom';
 import { AdminSettings } from '../services/admin_settings.js';
 
 test('Mailtwine-style defaults cover every active Type Relay email flow with HTML and text', () => {
-	assert.deepEqual(Object.keys(AdminSettings.templates), ['login', 'signup', 'email-change', 'password-reset', 'invite']);
+	assert.deepEqual(Object.keys(AdminSettings.templates), ['login', 'signup', 'email-change', 'password-reset', 'invite', 'team-member-added']);
 	for (const [key, definition] of Object.entries(AdminSettings.templates)) {
 		const template = { ...definition, text: AdminSettings.plainText(definition.html) };
 		assert.doesNotThrow(() => AdminSettings.validateTemplate(key, template));
 		const message = AdminSettings.render(template, { name: 'Alex', inviterName: 'Sam', tenantName: 'Example team', url: 'https://app.example.test/action?token=abc&other=def' });
 		assert.match(message.html, /<p>/); assert.match(message.text, /https:\/\/app.example.test\/action\?token=abc&other=def/); assert.ok(message.text.length > 200);
 		assert.doesNotMatch(message.html + message.text + message.subject, /Mailtwine|{{|24 hours|1 hour|account will be locked/);
-		assert.match(message.text, key === 'invite' ? /7 days/ : /15 minutes/);
+		if (key === 'invite') assert.match(message.text, /7 days/); else if (key !== 'team-member-added') assert.match(message.text, /15 minutes/);
 		const dom = new JSDOM(message.html); assert.equal(dom.window.document.querySelector('a').href, 'https://app.example.test/action?token=abc&other=def'); dom.window.close();
 	}
 	assert.match(AdminSettings.templates['password-reset'].html, /generate a new password/);

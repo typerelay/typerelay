@@ -27,7 +27,7 @@ class TypeRelay {
 		document.addEventListener('input', event => { if ((event.target.id === 'trigger' || event.target.hasAttribute('data-import-trigger')) && !event.isComposing) Abbreviation.field(event.target); });
 		document.addEventListener('compositionend', event => { if (event.target.id === 'trigger') Abbreviation.field(event.target); });
 		document.addEventListener('submit', event => this.onSubmit(event));
-		document.querySelector('#settings')?.addEventListener('hidden.bs.modal', () => { const secret = document.querySelector('#token-secret-value'); if (secret) secret.textContent = ''; document.querySelector('#token-secret')?.setAttribute('hidden', ''); });
+		document.querySelector('#settings')?.addEventListener('hidden.bs.modal', () => { const secret = document.querySelector('#token-secret-value'); if (secret) secret.textContent = ''; document.querySelector('#token-secret')?.setAttribute('hidden', ''); const password = document.querySelector('#team-member-generated-password'); if (password) password.value = ''; document.querySelector('#team-member-password-result')?.classList.add('d-none'); });
 		document.addEventListener('click', event => this.onClick(event).catch(error => this.toast(error.message, 'error')));
 		document.querySelector('#search')?.addEventListener('input', () => {
 			this.searchVersion++;
@@ -331,7 +331,8 @@ class TypeRelay {
 	}
 	async onSubmit(event) {
 		const form = event.target;
-		if (!['login', 'access-token-form', 'profile-form', 'account-form', 'invite-form', 'record-form', 'team-seats-form', 'change-to-pro-form', 'change-to-team-form', 'checkout-team-form', 'white-label-domain-form'].includes(form.id)) return;
+		const groupForm = form.hasAttribute('data-group-form');
+		if (!groupForm && !['login', 'access-token-form', 'profile-form', 'account-form', 'team-member-form', 'record-form', 'team-seats-form', 'change-to-pro-form', 'change-to-team-form', 'checkout-team-form', 'white-label-domain-form'].includes(form.id)) return;
 		event.preventDefault();
 		const abbreviation = form.querySelector('#trigger');
 		if (abbreviation) Abbreviation.field(abbreviation);
@@ -357,7 +358,21 @@ class TypeRelay {
 				document.querySelector('#account-switch').selectedOptions[0].textContent = data.get('name');
 				this.toast('Account saved');
 			}
-			if (form.id === 'invite-form') { const result = await this.request('team/invitations', 'POST', { email: data.get('email') }); this.update('[data-invitation="' + result.invitation + '"]', '#invitations', await this.request('fragments/invitation/' + result.invitation, 'GET', null, true)); await this.refreshBilling(); this.toast('Invitation sent'); }
+			if (form.id === 'team-member-form') {
+				const result = await this.request('team/members', 'POST', { name: data.get('name'), email: data.get('email'), password: data.get('password'), send_welcome_email: data.has('send_welcome_email') });
+				this.update('[data-member="' + result.member._id + '"]', '#members', result.html);
+				form.reset();
+				document.querySelector('#team-member-generated-password').value = ''; document.querySelector('#team-member-password-result').classList.add('d-none');
+				if (result.temporary_password) { document.querySelector('#team-member-generated-password').value = result.temporary_password; document.querySelector('#team-member-password-result').classList.remove('d-none'); }
+				await this.refreshBilling(); this.toast('User added');
+			}
+			if (groupForm) {
+				const id = form.dataset.groupId;
+				const result = await this.request('team/groups' + (id ? '/' + id : ''), id ? 'PATCH' : 'POST', { name: data.get('name'), users: data.getAll('users') });
+				this.update('[data-group="' + result.group._id + '"]', '#groups', result.html);
+				if (!id) { form.reset(); form.classList.add('d-none'); }
+				this.toast('Group saved');
+			}
 			if (form.id === 'record-form') { this.submitting = true; await this.submit(data); bootstrap.Modal.getInstance(document.querySelector('#form-modal')).hide(); this.toast('Saved'); }
 		} catch (error) { this.toast(error.message, 'error'); }
 		finally { this.submitting = false; if (button) button.disabled = false; }
@@ -466,6 +481,8 @@ class TypeRelay {
 		if (button.id === 'search-trigger') return this.openSearch();
 		if (button.dataset.settingsTab) return this.settingsTab(button.dataset.settingsTab);
 		if (button.id === 'dismiss-token') { document.querySelector('#token-secret-value').textContent = ''; document.querySelector('#token-secret').hidden = true; return; }
+		if (button.id === 'copy-team-member-password') { await navigator.clipboard.writeText(document.querySelector('#team-member-generated-password').value); this.toast('Password copied'); return; }
+		if (button.id === 'dismiss-team-member-password') { document.querySelector('#team-member-generated-password').value = ''; document.querySelector('#team-member-password-result').classList.add('d-none'); return; }
 		if (button.id === 'retry-tokens') { button.disabled = true; try { await this.tokens(); } finally { button.disabled = false; } return; }
 		if (button.dataset.revokeToken && await this.confirm('Revoke this integration?')) { button.disabled = true; ++this.tokensVersion; try { await this.request('access-tokens/' + button.dataset.revokeToken, 'DELETE'); ++this.tokensVersion; document.querySelector('[data-access-token="' + button.dataset.revokeToken + '"]')?.remove(); } finally { button.disabled = false; } return; }
 		if (button.dataset.searchLibrary) {
@@ -525,17 +542,12 @@ class TypeRelay {
 			else this.update('[data-member="' + id + '"]', '#members', await this.request('fragments/member/' + id, 'GET', null, true));
 			await this.refreshBilling();
 		}
-		if (button.id === 'new-group' || data.editGroup) {
-			const group = data.editGroup ? JSON.parse(data.editGroup) : null;
-			return this.form('group', group ? { group: group._id } : {}, async fields => {
-				const result = await this.request('team/groups' + (group ? '/' + group._id : ''), group ? 'PATCH' : 'POST', { name: fields.get('name'), users: fields.getAll('users') });
-				this.update('[data-group="' + result.group._id + '"]', '#groups', await this.request('fragments/group/' + result.group._id, 'GET', null, true));
-			});
-		}
+		if (button.id === 'new-group') { const form = document.querySelector('#group-create-form'); form.classList.remove('d-none'); form.elements.name.focus(); return; }
+		if ('editGroup' in data) { const row = button.closest('[data-group]'); row.querySelector('.group-display').hidden = true; const form = row.querySelector('[data-group-form]'); form.classList.remove('d-none'); form.elements.name.focus(); return; }
+		if ('cancelGroup' in data) { const form = button.closest('[data-group-form]'); form.reset(); form.classList.add('d-none'); form.closest('[data-group]')?.querySelector('.group-display').removeAttribute('hidden'); return; }
 		if (data.deleteGroup && await this.confirm('Delete this group and its grants?')) {
 			await this.request('team/groups/' + data.deleteGroup, 'PATCH', { deleted: true });
 			document.querySelector('[data-group="' + data.deleteGroup + '"]').remove();
-			bootstrap.Modal.getInstance(document.querySelector('#form-modal')).hide();
 		}
 		if (data.revokeInvitation && await this.confirm('Revoke this invitation?')) { await this.request('team/invitations/' + data.revokeInvitation, 'DELETE'); document.querySelector('[data-invitation="' + data.revokeInvitation + '"]').remove(); await this.refreshBilling(); }
 		if (data.revokeDevice && await this.confirm('Revoke this device?')) { button.disabled = true; ++this.devicesVersion; try { await this.request('devices/' + data.revokeDevice, 'DELETE'); ++this.devicesVersion; document.querySelector('[data-device="' + data.revokeDevice + '"]')?.remove(); } finally { button.disabled = false; } }

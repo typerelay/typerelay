@@ -93,16 +93,6 @@ if kind === 'snippet' || kind === 'conflict'
 		pre= JSON.stringify(conflict.local, null, 2)
 		h3.h6.fw-bold Current server version
 		pre= JSON.stringify(current, null, 2)
-if kind === 'group'
-	label.form-label.fw-bold(for="name") Group name
-	input#name.form-control.form-control-sm.mb-4(name="name" value=group ? group.name : '' required)
-	label.form-label.fw-bold(for="users") Members
-	select#users.form-select.form-select-sm.mb-4(name="users" multiple)
-		each member in team.members
-			option(value=member.user selected=group && group.users.map(String).includes(String(member.user)))= member.profile.email
-	if group
-		button.btn.btn-outline-danger.btn-sm(type="button" data-delete-group=group._id) Delete group
-
 if kind === 'snippetslab' || kind === 'import'
 	label.form-label.fw-bold(for="import-file")= importFormat.name + ' export'
 	input#import-file.form-control.form-control-sm.mb-3(type="file" accept=importFormat.accept)

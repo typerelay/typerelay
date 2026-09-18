@@ -60,7 +60,7 @@ test('scheduler immediately syncs, prevents overlap, retries failures, and honor
 	assert.equal(errors.length, 1);
 	jobs.length = 0;
 	Scheduler.start({ CronClass: Cron, productUpdatesEnabled: false, syncProductUpdates: () => assert.fail('Disabled sync') });
-	assert.equal(jobs.length, 5);
+	assert.equal(jobs.length, 6);
 });
 
 test('syncs every Ghost product post and maps #modal safely', async () => {

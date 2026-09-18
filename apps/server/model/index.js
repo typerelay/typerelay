@@ -65,6 +65,9 @@ membership.index({ account: 1, user: 1 }, { unique: true });
 const Member = mongoose.model('Member', membership);
 const Group = mongoose.model('Group', new mongoose.Schema({ account: objectid, name: String, users: [objectid] }));
 const Ticket = mongoose.model('Ticket', new mongoose.Schema({ hash: { type: String, unique: true }, kind: String, email: String, account: objectid, data: mixed, expires: Date }));
+const signupNotificationSchema = new mongoose.Schema({ account: { type: objectid, required: true, unique: true, index: true }, user: { type: objectid, required: true, index: true }, email: { type: String, required: true }, name: { type: String, default: '' }, status: { type: String, enum: ['pending', 'sent', 'failed'], default: 'pending', index: true }, attempts: { type: Number, default: 0 }, next_attempt_at: { type: Date, default: null }, last_attempt_at: { type: Date, default: null }, sent_at: { type: Date, default: null }, failed_at: { type: Date, default: null }, last_error: { type: String, default: '' }, message_id: { type: String, required: true } }, { timestamps: true });
+signupNotificationSchema.index({ status: 1, next_attempt_at: 1 });
+const SignupNotification = mongoose.model('SignupNotification', signupNotificationSchema);
 const lifecycle = { state: { type: String, enum: ['active', 'trashed', 'purged'], default: 'active' }, trashed_at: Date, trashed_by: String, expires_at: Date };
 const Library = mongoose.model('Library', new mongoose.Schema({ account: objectid, creator: objectid, name: String, shared: Boolean, editable: Boolean, members: [objectid], groups: [objectid], purge_readers: [objectid], revision: Number, ...lifecycle }));
 const snippetSchema = new mongoose.Schema({ account: objectid, library: objectid, id: String, title: String, trigger: String, content: mixed, position: Number, revision: Number, ...lifecycle }, { timestamps: true });
@@ -87,7 +90,7 @@ operation.index({ account: 1, user: 1, operation: 1 }, { unique: true });
 const Operation = mongoose.model('Operation', operation);
 const Conflict = mongoose.model('Conflict', new mongoose.Schema({ account: objectid, library: objectid, user: objectid, snippet: String, local: mixed, base: mixed, server: mixed, resolved: { type: Boolean, default: false } }, { timestamps: true }));
 
-export { mongoose, User, Account, Member, Group, Ticket, Library, Device, Change, Operation, Conflict, Passkey, Snippet, SnippetAsset, Migration, MigrationBackup };
+export { mongoose, User, Account, Member, Group, Ticket, SignupNotification, Library, Device, Change, Operation, Conflict, Passkey, Snippet, SnippetAsset, Migration, MigrationBackup };
 
 // Integration credentials are independent of desktop enrollment.
 export const Integration = mongoose.model('Integration', new mongoose.Schema({ account: objectid, user: objectid, name: String, kind: { type: String, enum: ['pat', 'oauth'] }, scopes: [String], hash: { type: String, select: false }, expires: Date, revoked: { type: Boolean, default: false }, last_used: Date, client: String, resource: String, refresh: { type: String, select: false }, refresh_expires: Date }, { timestamps: true }));

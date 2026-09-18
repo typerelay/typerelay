@@ -9,7 +9,7 @@ import { Billing } from './billing.js';
 import { WhiteLabel } from './white_label.js';
 
 export class AdminAccounts {
-	static owned = ['Member', 'Group', 'Library', 'Snippet', 'SnippetAsset', 'Device', 'Change', 'Operation', 'Conflict', 'Integration', 'ApiAudit', 'AdminAudit'];
+	static owned = ['Member', 'Group', 'SignupNotification', 'Library', 'Snippet', 'SnippetAsset', 'Device', 'Change', 'Operation', 'Conflict', 'Integration', 'ApiAudit', 'AdminAudit'];
 	static state(account) { return account.deletion?.requested_at ? account.deletion.stage === 'failed' ? 'failed' : 'deleting' : account.is_active === false ? 'suspended' : 'active'; }
 	static async counts(ids) {
 		const match = { account: { $in: ids } };

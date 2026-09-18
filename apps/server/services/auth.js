@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { mongoose, User, Account, Member, Ticket, Device, Integration, IntegrationToken, OAuthClient } from '../model/index.js';
 import { Support } from './support.js';
 import { Billing } from './billing.js';
+import { SignupNotifications } from './signup_notifications.js';
 
 export class Auth {
 	static origin = process.env.APP_URL || 'http://localhost:3040';
@@ -55,6 +56,7 @@ export class Auth {
 	static async consume(token) {
 		let user;
 		let account;
+		let signupNotification;
 		await mongoose.connection.transaction(async session => {
 			const ticket = await Ticket.findOneAndDelete({ hash: Support.hash(Support.text(token, 256)), kind: 'login', expires: { $gt: new Date() } }, { session }).lean();
 			Support.assert(ticket, 'Link expired or already used', 401);
@@ -65,9 +67,11 @@ export class Auth {
 				[user] = await User.create([{ email: ticket.email, name: ticket.data?.name || ticket.email.split('@')[0] }], { session });
 				[account] = await Account.create([{ name: user.name + '’s team' }], { session });
 				await Member.create([{ account: account._id, user: user._id, role: 'owner' }], { session });
+				if (Billing.hosted()) signupNotification = await SignupNotifications.create(user, account, session);
 			}
 		});
 		if (account) await Billing.initializeAccount(account, user).catch(error => console.error(`Stripe setup failed for new TypeRelay account: ${error.message}`));
+		if (signupNotification) { const sendMail = Auth.mail.sendMail; void SignupNotifications.deliver(signupNotification._id, message => sendMail(message)).catch(error => console.error(`Type Relay signup notification deferred: ${error.message}`)); }
 		return String(user._id);
 	}
 	static redirect(uri, client = 'typerelay-desktop') {

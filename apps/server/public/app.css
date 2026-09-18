@@ -31,6 +31,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 #totp-secret { overflow-wrap: anywhere; }
 #settings .modal-body { padding: 1.5rem; }
 .global-search { display: flex; align-items: center; gap: .2rem; min-width: 0; width: 100%; max-width: 32rem; margin: 0; background: #fff; border: .0625rem solid #e7dfd2; color: #71685e; font-size: .875rem; text-align: left; }
+.global-search:hover, .global-search:focus-visible { border-color: #a15c40; background: #fffdf8; color: #302d29; outline: none; }
 .global-search kbd { background: #f3eee5; color: #71685e; border: .0625rem solid #e7dfd2; font-size: .75rem; }
 .library { cursor: pointer; transition: border-color .15s, background-color .15s; }
 .library:hover, .library:focus-visible, .library.active-library { border-color: #a15c40; background: #fffdf8; }

@@ -30,4 +30,10 @@ export const emailTemplates = {
 		html: '<p>Hi {{name}},</p>\n<p>{{inviterName}} invited you to join <strong>{{tenantName}}</strong> on Type Relay to share snippets and libraries with your team.</p>\n<p><a href="{{url}}">Accept invitation</a></p>\n<p>Sign in with the email address that received this invitation. This invitation expires in 7 days.</p>\n<p>If you were not expecting this invitation, you can safely ignore this email.</p>',
 		variables: ['name', 'inviterName', 'tenantName', 'url'],
 	},
+	'team-member-added': {
+		name: 'Team member added',
+		subject: 'You now have access to {{tenantName}} on Type Relay',
+		html: '<p>Hi {{name}},</p>\n<p>You now have access to <strong>{{tenantName}}</strong> on Type Relay.</p>\n<p><a href="{{url}}">Sign in to Type Relay</a></p>\n<p>If you were not expecting this message, contact the account owner.</p>',
+		variables: ['name', 'tenantName', 'url'],
+	},
 };

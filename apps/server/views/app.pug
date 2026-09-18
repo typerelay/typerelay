@@ -98,11 +98,25 @@ block content
 										.d-flex.justify-content-end
 											button.btn.btn-primary.btn-sm Save
 									if ctx.entitlements.capabilities.team
-										form#invite-form.mb-3
-											label.form-label(for="invite-email") Invite by email
-											input#invite-email.form-control.form-control-sm.mb-3(name="email" type="email" required)
+										form#team-member-form.mb-3
+											label.form-label(for="team-member-name") Name (new users only)
+											input#team-member-name.form-control.form-control-sm.mb-3(name="name" autocomplete="name")
+											label.form-label(for="team-member-email") Email
+											input#team-member-email.form-control.form-control-sm.mb-3(name="email" type="email" required autocomplete="email")
+											label.form-label(for="team-member-password") Password
+											input#team-member-password.form-control.form-control-sm.mb-3(name="password" type="text" minlength="8" maxlength="256" autocomplete="off" aria-describedby="team-member-password-help")
+											p#team-member-password-help.small.text-muted Leave blank to generate a password. Existing users keep their password.
+											.form-check.mb-3
+												input#team-member-send-welcome.form-check-input.h-20px.w-30px(type="checkbox" name="send_welcome_email" checked)
+												label.form-check-label(for="team-member-send-welcome") Send email notification
 											.d-flex.justify-content-end
-												button.btn.btn-primary.btn-sm Invite
+												button.btn.btn-primary.btn-sm Add user
+										#team-member-password-result.d-none.mb-3
+											label.form-label(for="team-member-generated-password") Temporary password
+											.input-group.input-group-sm
+												input#team-member-generated-password.form-control.form-control-sm(type="text" readonly autocomplete="off")
+												button#copy-team-member-password.btn.btn-outline-secondary.btn-sm(type="button") Copy
+												button#dismiss-team-member-password.btn.btn-primary.btn-sm(type="button") Done
 								ul#invitations.list-group.mb-3
 									each invitation in team.invitations
 										include ajax/invitation
@@ -115,7 +129,9 @@ block content
 										each group in team.groups
 											include ajax/group
 									if ['owner', 'admin'].includes(ctx.role)
-										button#new-group.btn.btn-outline-secondary.btn-sm.mb-5 New group
+										button#new-group.btn.btn-outline-secondary.btn-sm.mb-3(type="button") New group
+										- var groupForm = null
+										include ajax/group-form
 							section.settings-pane(id="settings-pane-devices" role="tabpanel" aria-labelledby="settings-tab-devices" hidden=true)
 								h3.h6.fw-bold Connected devices
 								ul#devices.list-group.mb-3
