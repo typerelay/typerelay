@@ -166,8 +166,9 @@ class MobileApp {
  static async use(library: Library, snippet: Snippet) {
   const selection = { library: library._id, id: snippet.id, generation: MobileApp.state.generation };
   const rendered = await Native.call('keyboard_render', { ...selection, preview: true });
-  MobileApp.$('detail-content').replaceChildren(MobileApp.fragment(fill({ snippet, rendered, variables: rendered.variables || rendered.template?.variables || {} })));
+  MobileApp.$('detail-content').replaceChildren(MobileApp.fragment(fill({ snippet, rendered, variables: rendered.variables || rendered.template?.variables || {}, canEdit: library.permissions.edit })));
   MobileApp.$('fill-form').onsubmit = event => { event.preventDefault(); const button = (event.target as HTMLFormElement).querySelector<HTMLButtonElement>('[type=submit]')!; void MobileApp.busy(button, async () => { const values = Object.fromEntries(new FormData(event.target as HTMLFormElement)); const output = await Native.call('keyboard_render', { ...selection, values, clipboard: true }); if (output.enter_actions) throw new Error('Desktop Enter actions are unsupported on mobile'); await Native.plugin.copy({ text: output.text, html: output.html, rtf: output.rtf }); MobileApp.toast('Copied'); }); };
+  const edit = document.getElementById('edit-from-detail'); if (edit) edit.onclick = () => { const modal = MobileApp.$('detail-modal'); modal.addEventListener('hidden.bs.modal', () => { void MobileApp.openEditor(library, snippet).catch(MobileApp.error); }, { once: true }); Modal.getInstance(modal)?.hide(); };
   MobileApp.$('detail-modal').classList.add('is-drawer'); Modal.getOrCreateInstance(MobileApp.$('detail-modal')).show();
  }
  static async showReview(mode: string) {
