@@ -20,13 +20,19 @@ This list contains your active desktop and CLI/TUI connections for the selected 
 
 Hosted Free accounts can connect one machine. Pro trials, Pro and Team allow unlimited connected machines subject to platform safety limits. Stored extra device grants stop syncing after a downgrade until the account upgrades or the active Free-plan device is revoked.
 
-## Access tokens
+## Access tokens and OAuth
 
-Create named personal access tokens for the API or MCP. Personal tokens do not expire and receive every API scope, but they never override your account role or library permissions. The secret is shown once; copy it before dismissing the confirmation.
+**Apps Access** has separate **Access Tokens** and **OAuth** tabs.
+
+Create a named personal access token for the API or MCP from **Access Tokens**. Personal tokens are permanent and receive every API scope, but never override your account role or library permissions. The secret is shown once; copy it before dismissing the confirmation. TypeRelay cannot recover it later.
 
 Hosted API and MCP access require an active Pro trial, Pro or Team plan. Existing tokens remain stored after a downgrade but cannot authenticate. Delete a token to stop it immediately.
 
-The **OAuth** tab shows discovery metadata and apps you have authorized. Revoking an app invalidates its refresh and delegated access. Account owners and admins can also pre-register public PKCE clients or confidential clients that authenticate with a client secret. Confidential secrets are shown only once.
+The **OAuth** tab shows the MCP endpoint, issuer, protected-resource metadata and authorization-server metadata. **Authorized Apps** lists OAuth grants for your user in the selected account. Revoking an app invalidates its refresh token and delegated access immediately.
+
+Account owners and admins can also manage account-bound, pre-registered OAuth clients. Choose a public client for `none` token endpoint authentication, or a confidential client for `client_secret_post`. Every client must use S256 PKCE and one to ten HTTPS or IP-loopback redirect URIs. Confidential secrets are shown once and cannot be recovered. Deleting a client revokes every authorization issued to it in the account.
+
+Dynamic client registration remains available for compatible clients that do not need pre-registration. See [API authentication](../api/authentication#oauth-clients) for endpoints, scopes and lifetimes, or [MCP setup](../mcp/setup) for discovery URLs.
 
 ## Subscription and white-label
 

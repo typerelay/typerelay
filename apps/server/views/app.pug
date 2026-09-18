@@ -1,13 +1,14 @@
 extends layout
 block content
 	#workspace(data-account=account._id)
-		.row#workspace-content(hidden=typeof news !== 'undefined' && news)
+		.row#workspace-content
 			aside.col-md-4
 				.library-controls.d-flex.align-items-center.gap-3.mb-3
 					select#account-switch.form-select.form-select-sm(aria-label="Account")
 						each item in accounts
 							option(value=item._id selected=String(item._id) === String(account._id))= item.name
 					button#new-library.btn.btn-primary.btn-sm New library
+				- var selectedLibrary = libraries.length ? String(libraries[0]._id) : null
 				#libraries
 					each library in libraries
 						include ajax/library
@@ -20,13 +21,13 @@ block content
 
 			section.col-md-8
 				#editor.card.p-4
-					h2.fw-bold Select a library
-					p.text-muted Import YAML or create your first library.
-		#conflicts.mt-3(hidden=typeof news !== 'undefined' && news)
-		if typeof productUpdatesEnabled !== 'undefined' && productUpdatesEnabled
-			#news-view(hidden=!news)
-				if news
-					include ajax/section/news
+					if libraries.length
+						- var library = libraries[0]
+						include ajax/editor
+					else
+						h2.fw-bold Select a library
+						p.text-muted Import YAML or create your first library.
+		#conflicts.mt-3
 		#rich-image-modal.modal.fade(tabindex="-1" aria-label="Add rich-text image" data-bs-backdrop="static" data-bs-keyboard="false")
 			.modal-dialog.modal-lg.modal-dialog-scrollable
 				.modal-content
@@ -291,7 +292,7 @@ block content
 					.modal-footer
 						button#empty-trash.btn.btn-outline-danger.btn-sm(type="button" disabled) Empty Trash
 
-		button#beta-notice-trigger.beta-notice-trigger(type="button" data-bs-toggle="modal" data-bs-target="#beta-notice-modal" aria-label="About the TypeRelay beta") Beta
+		button#beta-notice-trigger.beta-notice-trigger(type="button" data-bs-toggle="modal" data-bs-target="#beta-notice-modal" aria-label="About the TypeRelay beta" hidden) Beta
 		#beta-notice-modal.modal.fade(tabindex="-1" aria-labelledby="beta-notice-title" data-bs-backdrop="static" data-bs-keyboard="false")
 			.modal-dialog.modal-sm.modal-dialog-centered
 				.modal-content

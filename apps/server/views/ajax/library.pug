@@ -1,4 +1,4 @@
-article.card.mb-3.library(role="button" tabindex="0" aria-label="Open library " + library.name data-id=library._id data-revision=library.revision data-record=JSON.stringify(library))
+article.card.mb-3.library(role="button" tabindex="0" aria-label="Open library " + library.name aria-pressed=(typeof selectedLibrary !== 'undefined' && selectedLibrary === String(library._id)).toString() class=typeof selectedLibrary !== 'undefined' && selectedLibrary === String(library._id) ? 'active-library' : '' data-id=library._id data-revision=library.revision data-record=JSON.stringify(library))
 	.card-body
 		.d-flex.align-items-center.justify-content-between.mb-3
 			div.library-name

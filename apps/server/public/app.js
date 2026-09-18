@@ -1,4 +1,5 @@
 import { ProductNews } from './product-updates.js';
+import { TrialCountdown } from './trial-countdown.js';
 import { TemplateEditor, TemplateFill } from './template-editor.js';
 import { Abbreviation } from './abbreviation.js';
 import { RichTextRuntime } from './rich-text-runtime.js';
@@ -8,7 +9,7 @@ class TypeRelay {
 	tombstones = new Set();
 	formOperation = null;
 	submitting = false;
-	selected = null;
+	selected = document.querySelector('[data-editor]')?.dataset.editor || null;
 	selectedSnippets = new Set();
 	selectionAnchor = null;
 	cursor = 0;
@@ -25,6 +26,7 @@ class TypeRelay {
 	submit = null;
 	constructor() {
 		this.templateEditor = new TemplateEditor(this); this.templateFill = new TemplateFill(this);
+		this.trialCountdown = new TrialCountdown(this);
 		document.querySelectorAll('.library').forEach(node => this.libraries.set(node.dataset.id, JSON.parse(node.dataset.record)));
 		document.addEventListener('input', event => { if ((event.target.id === 'trigger' || event.target.hasAttribute('data-import-trigger')) && !event.isComposing) Abbreviation.field(event.target); });
 		document.addEventListener('compositionend', event => { if (event.target.id === 'trigger') Abbreviation.field(event.target); });
@@ -72,6 +74,7 @@ class TypeRelay {
 			const invitation = new URL(location.href).searchParams.get('invite');
 			if (invitation) this.accept(invitation);
 			this.productNews = new ProductNews(this);
+			this.trialCountdown.refresh();
 			if (location.hash === '#settings-subscription') { bootstrap.Modal.getOrCreateInstance(document.querySelector('#settings')).show(); this.settingsTab('subscription'); }
 		}
 	}
@@ -203,6 +206,7 @@ class TypeRelay {
 	applyBilling(result) {
 		if (result.subscription_html && document.querySelector('#settings-pane-subscription')) this.update('#subscription-content', '#settings-pane-subscription', result.subscription_html);
 		if (result.trial_html) this.update('#billing-nav-action', 'header .d-flex', result.trial_html);
+		this.trialCountdown.refresh();
 		if (Object.hasOwn(result, 'tokens_form_html')) { if (result.tokens_form_html && !document.querySelector('#access-token-form')) document.querySelector('#access-token-form-container')?.replaceChildren(this.fragment(result.tokens_form_html)); else if (!result.tokens_form_html) document.querySelector('#access-token-form')?.remove(); }
 		if (Object.hasOwn(result, 'oauth_client_form_html')) { if (result.oauth_client_form_html && !document.querySelector('#oauth-client-form')) document.querySelector('#oauth-client-form-container')?.replaceChildren(this.fragment(result.oauth_client_form_html)); else if (!result.oauth_client_form_html) document.querySelector('#oauth-client-form')?.remove(); }
 	}

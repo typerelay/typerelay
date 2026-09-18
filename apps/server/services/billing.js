@@ -397,7 +397,7 @@ export class Billing {
 	static locals(account, ctx, usage = null, now = new Date()) {
 		const entitlements = Billing.entitlements(account, now);
 		const status = account?.billing?.status || 'incomplete';
-		return { account, ctx, usage, entitlements, plan: entitlements.plan, billingStatus: status, isTrialing: entitlements.trial, trialText: entitlements.trial ? Billing.trialText(account, now) : '', trialAvailable: Billing.enabled() && entitlements.plan === 'free' && !account?.billing?.trial_started_at, canManageBilling: ['owner', 'admin'].includes(ctx?.role || ''), billingEnabled: Billing.enabled(), plans: Billing.plans };
+		return { account, ctx, usage, entitlements, plan: entitlements.plan, billingStatus: status, isTrialing: entitlements.trial, trialText: entitlements.trial ? Billing.trialText(account, now) : '', trialStartedAt: entitlements.trial && account?.billing?.trial_started_at ? new Date(account.billing.trial_started_at).toISOString() : '', trialEndsAt: entitlements.trial && account?.billing?.trial_ends_at ? new Date(account.billing.trial_ends_at).toISOString() : '', trialDays: Billing.trialDays(), trialAvailable: Billing.enabled() && entitlements.plan === 'free' && !account?.billing?.trial_started_at, canManageBilling: ['owner', 'admin'].includes(ctx?.role || ''), billingEnabled: Billing.enabled(), plans: Billing.plans };
 	}
 
 	static async fragments(accountId, ctx) {
