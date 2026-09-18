@@ -163,6 +163,12 @@ h1, h2, h3, p { margin: 0; }
 .type-menu button { display: block; width: 100%; padding: 0.65rem 0.7rem; border: 0; border-radius: 0.5rem; background: transparent; text-align: left; }
 .type-menu button[aria-selected="true"] { background: var(--accent-soft); color: var(--accent-dark); font-weight: 700; }
 .type-menu button:active { background: #ede9e1; }
+.mobile-select { position: relative; width: 100%; min-width: 0; }
+.mobile-select-button { display: flex; width: 100%; min-height: 2.75rem; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.6rem 0.7rem; border: 0.0625rem solid var(--line); border-radius: 0.68rem; background: var(--surface-strong); text-align: left; }
+.mobile-select-button > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mobile-select-menu { position: absolute; top: calc(100% + 0.3rem); right: 0; left: 0; z-index: 80; max-height: 15rem; padding: 0.3rem; border: 0.0625rem solid var(--line); border-radius: 0.72rem; background: var(--surface-strong); box-shadow: var(--shadow); overflow-y: auto; }
+.mobile-select-menu button { display: block; width: 100%; padding: 0.6rem 0.65rem; border: 0; border-radius: 0.5rem; background: transparent; text-align: left; }
+.mobile-select-menu button[aria-selected="true"] { background: var(--accent-soft); color: var(--accent-dark); font-weight: 700; }
 
 .mobile-flow { padding: 0 !important; }
 .mobile-flow .modal-dialog { width: min(100%, 48rem); height: 100dvh; max-width: none; margin: 0 auto; }
@@ -190,7 +196,11 @@ h1, h2, h3, p { margin: 0; }
 .draft-caption .material-symbols-outlined { color: var(--green); font-size: 1rem; }
 
 .rich-editor-surface { min-height: 14rem; border: 0.0625rem solid var(--line); border-radius: 0.72rem; background: var(--surface-strong); padding: 0.75rem; }
-.rich-toolbar { padding: 0.4rem; border: 0.0625rem solid var(--line); border-bottom: 0; border-radius: 0.72rem 0.72rem 0 0; background: #efede7; overflow-x: auto; }
+.rich-toolbar { padding: 0.3rem; border: 0.0625rem solid var(--line); border-bottom: 0; border-radius: 0.72rem 0.72rem 0 0; background: #efede7; overflow: visible; }
+.mobile-editor .rich-toolbar .btn, .mobile-editor .rich-toolbar .rich-icon-button { width: auto; min-width: 2rem; min-height: 2rem; height: 2rem; padding: 0.2rem 0.4rem; border-radius: 0.48rem; font-size: 0.72rem; line-height: 1; }
+.mobile-editor .rich-toolbar .btn-group { display: inline-flex; gap: 0.1rem; }
+.mobile-editor .rich-toolbar .dropdown { position: relative; }
+.mobile-editor .rich-toolbar .dropdown-menu { position: absolute !important; top: calc(100% + 0.25rem) !important; right: auto !important; left: 0 !important; max-width: calc(100vw - 2rem); transform: none !important; }
 .rich-toolbar + .rich-editor-surface { border-radius: 0 0 0.72rem 0.72rem; }
 .tiptap:focus { outline: none; }
 .tiptap img { max-width: 100%; height: auto; }
@@ -198,6 +208,13 @@ h1, h2, h3, p { margin: 0; }
 .tiptap td, .tiptap th { border: 0.0625rem solid #aaa; padding: 0.3rem; }
 .rich-toolbar-icon { width: 1rem; height: 1rem; fill: none; stroke: currentColor; }
 .form-check-input { width: 1.875rem; height: 1.25rem; }
+#template-options { width: 100%; }
+#template-options [data-template-mutation] { display: grid !important; width: 100%; grid-template-columns: minmax(0, 1fr) auto; gap: 0.45rem; }
+#template-options [data-template-mutation] > label { justify-content: flex-start; padding: 0; border: 0; background: transparent; color: var(--muted); font-size: 0.7rem; font-weight: 680; }
+#template-options [data-template-mutation] > label[for="variable-kind"], #template-options [data-mobile-select="variable-kind"], #template-options [data-template-mutation] > label[for="variable-name"] { grid-column: 1 / -1; }
+#template-options #variable-name { grid-column: 1; width: 100%; min-width: 0; min-height: 2.65rem; border: 0.0625rem solid var(--line); border-radius: 0.68rem; }
+#template-options #insert-variable { grid-column: 2; min-height: 2.65rem; margin: 0; border-radius: 0.68rem; }
+#template-options .row { --bs-gutter-x: 0.65rem; }
 .review-content, #insert-preview { max-height: 18rem; padding: 0.75rem; border-radius: 0.7rem; background: var(--surface-strong); white-space: pre-wrap; overflow: auto; }
 .trash-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 0.7rem; margin-bottom: 0.6rem; padding: 0.75rem; border: 0.0625rem solid var(--line); border-radius: 0.85rem; background: var(--surface); }
 .trash-kind { display: grid; width: 2.5rem; height: 2.5rem; place-items: center; border-radius: 0.75rem; background: var(--danger-soft); color: var(--danger); }

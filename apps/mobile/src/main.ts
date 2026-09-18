@@ -20,6 +20,7 @@ import fill from '../views/ajax/fill.pug';
 import review from '../views/ajax/review.pug';
 import libraryFilter from '../views/ajax/library-filter.pug';
 import trash from '../views/ajax/trash.pug';
+import mobileSelect from '../views/ajax/mobile-select.pug';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import './style.css';
 
@@ -36,12 +37,30 @@ class MobileApp {
  static codeReadonly = false;
  static assetURLs = new Map<string, string>();
  static observer: MutationObserver;
+ static selectObserver: MutationObserver;
  static screen = 'snippets';
  static editorDirty = false;
  static editorCloseJob: Promise<void> = Promise.resolve();
  static $(id: string) { return document.getElementById(id)!; }
  static input(id: string) { return MobileApp.$(id) as HTMLInputElement; }
  static fragment(html: string) { return new DOMParser().parseFromString(html, 'text/html').body.firstElementChild!; }
+ static enhanceEditorSelects = () => {
+  const form = document.getElementById('editor-form'); if (!form) return;
+  for (const select of form.querySelectorAll<HTMLSelectElement>('select:not([data-mobile-enhanced])')) {
+   select.dataset.mobileEnhanced = 'true'; select.hidden = true;
+   const options = [...select.options].map(option => ({ label: option.textContent || option.value, value: option.value }));
+   const selected = select.selectedOptions[0] || select.options[0];
+   const control = MobileApp.fragment(mobileSelect({ id: select.id || crypto.randomUUID(), label: selected?.textContent || '', value: select.value, disabled: select.disabled, options })) as HTMLElement;
+   select.after(control);
+   const button = control.querySelector<HTMLButtonElement>('.mobile-select-button')!; const menu = control.querySelector<HTMLElement>('.mobile-select-menu')!;
+   button.onclick = () => { for (const other of form.querySelectorAll<HTMLElement>('.mobile-select-menu')) if (other !== menu) other.hidden = true; menu.hidden = !menu.hidden; button.setAttribute('aria-expanded', String(!menu.hidden)); };
+   for (const option of menu.querySelectorAll<HTMLButtonElement>('[data-mobile-option]')) option.onclick = () => {
+    select.value = option.dataset.mobileOption!; control.querySelector<HTMLElement>('[data-mobile-select-label]')!.textContent = option.textContent || option.dataset.mobileOption!;
+    for (const item of menu.querySelectorAll<HTMLElement>('[data-mobile-option]')) item.setAttribute('aria-selected', String(item === option));
+    menu.hidden = true; button.setAttribute('aria-expanded', 'false'); select.dispatchEvent(new Event('input', { bubbles: true })); select.dispatchEvent(new Event('change', { bubbles: true }));
+   };
+  }
+ };
  static toast(message: string, icon: 'success' | 'error' = 'success') { void Swal.fire({ toast: true, position: 'top-end', icon, title: message, timer: 4000, showConfirmButton: false }); }
  static error(error: unknown) { MobileApp.toast(error instanceof Error ? error.message : String(error), 'error'); }
  static async busy(control: HTMLButtonElement, operation: () => Promise<void>) { control.disabled = true; try { await operation(); } catch (error) { MobileApp.error(error); } finally { control.disabled = false; } }
@@ -108,7 +127,7 @@ class MobileApp {
   if (draft) { for (const [id, value] of Object.entries(draft.fields)) MobileApp.input(id).value = String(value); MobileApp.$('template-options').dataset.variables = JSON.stringify(draft.variables || {}); }
   MobileApp.template = new TemplateEditor(MobileApp);
   MobileApp.configureEditor();
-  const typeLabels: Record<string, string> = { plain_text: 'Plain text', code: 'Code', template: 'Template', rich_text: 'Rich text' };
+  const typeLabels: Record<string, string> = { plain_text: 'Text', code: 'Code', rich_text: 'Rich text' };
   const typeButton = MobileApp.$('snippet-type-button'); const typeMenu = MobileApp.$('snippet-type-menu');
   typeButton.onclick = () => { typeMenu.hidden = !typeMenu.hidden; typeButton.setAttribute('aria-expanded', String(!typeMenu.hidden)); };
   for (const option of typeMenu.querySelectorAll<HTMLButtonElement>('[data-snippet-type]')) option.onclick = () => {
@@ -119,15 +138,14 @@ class MobileApp {
   };
   MobileApp.input('edit-library').onchange = () => { const selected = MobileApp.library(MobileApp.input('edit-library').value); MobileApp.editing = { library: selected._id, revision: selected.editor_revision, operation_id: crypto.randomUUID() }; MobileApp.scheduleDraft(); };
   MobileApp.$('editor-form').addEventListener('input', MobileApp.scheduleDraft);
-  MobileApp.$('editor-form').addEventListener('click', event => { if (!(event.target as HTMLElement).closest('#type-picker')) { typeMenu.hidden = true; typeButton.setAttribute('aria-expanded', 'false'); } });
+  MobileApp.$('editor-form').addEventListener('click', event => { const target = event.target as HTMLElement; if (!target.closest('#type-picker')) { typeMenu.hidden = true; typeButton.setAttribute('aria-expanded', 'false'); } if (!target.closest('.mobile-select')) for (const menu of MobileApp.$('editor-form').querySelectorAll<HTMLElement>('.mobile-select-menu')) menu.hidden = true; });
   MobileApp.$('cancel-edit').onclick = () => { Modal.getInstance(MobileApp.$('form-modal'))?.hide(); };
   const deleteEditorItem = document.getElementById('delete-editor-item'); if (deleteEditorItem) deleteEditorItem.onclick = () => {
    if (snippet && library.permissions.edit) void MobileApp.deleteSnippet(library, snippet, true).catch(MobileApp.error);
    else if (draft) void MobileApp.discardDraft(true).catch(MobileApp.error);
   };
-  const saveCopy = document.getElementById('save-copy') as HTMLButtonElement | null;
-  if (saveCopy) saveCopy.onclick = () => { void MobileApp.busy(saveCopy, async () => { const library = MobileApp.library(MobileApp.input('edit-library').value); MobileApp.editing = { library: library._id, revision: library.editor_revision, operation_id: crypto.randomUUID() }; MobileApp.input('trigger').value = ''; MobileApp.input('title').value += ' (copy)'; await MobileApp.save(); }); };
   MobileApp.$('editor-form').onsubmit = event => { event.preventDefault(); void MobileApp.busy(MobileApp.$('save') as HTMLButtonElement, MobileApp.save); };
+  MobileApp.enhanceEditorSelects(); MobileApp.selectObserver?.disconnect(); MobileApp.selectObserver = new MutationObserver(MobileApp.enhanceEditorSelects); MobileApp.selectObserver.observe(MobileApp.$('editor-content'), { childList: true, subtree: true });
   MobileApp.$('form-modal').classList.add('is-drawer');
   Modal.getOrCreateInstance(MobileApp.$('form-modal')).show();
  }
@@ -141,7 +159,6 @@ class MobileApp {
    refresh: (id: string) => MobileApp.remoteImage(`assets/${id}/refresh`, {}),
   });
   MobileApp.template.attach();
-  if (MobileApp.input('snippet-type').value === 'plain_text') MobileApp.$('template-options').hidden = true;
   MobileApp.observer?.disconnect();
   MobileApp.observer = new MutationObserver(() => { void MobileApp.hydrateImages(); });
   MobileApp.observer.observe(MobileApp.$('rich-editor'), { childList: true, subtree: true });
@@ -152,10 +169,13 @@ class MobileApp {
  static scheduleDraft = () => { MobileApp.editorDirty = true; clearTimeout(MobileApp.draftTimer); MobileApp.draftTimer = setTimeout(() => { void MobileApp.persistDraft().catch(MobileApp.error); }, 250); };
  static async persistDraft() { clearTimeout(MobileApp.draftTimer); if (!MobileApp.editing || !MobileApp.editorDirty) return; MobileApp.richView?.content(); const fields = Object.fromEntries(['title','trigger','snippet-type','language','replace','edit-library'].map(id => [id, MobileApp.input(id).value])); const draft = { editing: MobileApp.editing, fields, variables: MobileApp.template?.variables || {} }; MobileApp.draftJob = MobileApp.draftJob.catch(() => undefined).then(() => Native.call('draft', { draft })); await MobileApp.draftJob; }
  static save = async () => {
-  await MobileApp.persistDraft(); const kind = MobileApp.input('snippet-type').value; const template = ['template','rich_text'].includes(kind) ? await MobileApp.template.content() : null;
-  const entry = { trigger: MobileApp.input('trigger').value, title: MobileApp.input('title').value, type: kind, language: MobileApp.input('language').value, replace: MobileApp.richView?.content() ?? MobileApp.input('replace').value, variables: template?.variables || {} };
-  if (kind === 'rich_text') {
-   const preview = await Native.call('render', { content: { type: kind, version: 2, markdown: entry.replace, variables: entry.variables }, preview: true });
+  await MobileApp.persistDraft(); const selectedKind = MobileApp.input('snippet-type').value; const template = selectedKind !== 'code' ? await MobileApp.template.content() : null;
+  const replace = MobileApp.richView?.content() ?? MobileApp.input('replace').value; const variables = template?.variables || {};
+  const dynamic = selectedKind !== 'code' && (selectedKind === 'rich_text' || Object.keys(variables).length > 0 || /(^|[^\\])\{\{/.test(replace));
+  const storedKind = selectedKind === 'plain_text' && dynamic ? 'template' : selectedKind;
+  const entry = { trigger: MobileApp.input('trigger').value, title: MobileApp.input('title').value, type: storedKind, language: MobileApp.input('language').value, replace, variables };
+  if (selectedKind === 'rich_text') {
+   const preview = await Native.call('render', { content: { type: selectedKind, version: 2, markdown: entry.replace, variables: entry.variables }, preview: true });
    const images = new DOMParser().parseFromString(preview.html, 'text/html').querySelectorAll('img[src]');
    for (const url of new Set([...images].map(image => image.getAttribute('src')!).filter(url => /^(https?:|data:image\/(png|jpeg|webp|gif);base64,)/i.test(url)))) { const asset = /^https?:/i.test(url) ? await MobileApp.remoteImage('assets/remote', { url }) : await Native.call('asset_import', { base64: url.slice(url.indexOf(',') + 1) }); entry.replace = entry.replace.replaceAll(url, `typerelay-asset:${asset.id}`).replaceAll(url.replaceAll('&', '&amp;'), `typerelay-asset:${asset.id}`); }
    if (MobileApp.richView && entry.replace !== MobileApp.richView.content()) { MobileApp.richView.editor.commands.setContent(entry.replace, { contentType: 'markdown' }); await MobileApp.persistDraft(); }
@@ -256,7 +276,7 @@ class MobileApp {
  static async finishEditorClose() {
   if (!MobileApp.editing) return;
   if (MobileApp.editorDirty) await MobileApp.persistDraft(); else MobileApp.editing = null;
-  MobileApp.richView?.destroy(); MobileApp.richView = null; await MobileApp.load();
+  MobileApp.richView?.destroy(); MobileApp.richView = null; MobileApp.selectObserver?.disconnect(); await MobileApp.load();
  }
  static async start() {
   (globalThis as any).Swal = Swal;

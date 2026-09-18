@@ -1,5 +1,6 @@
 form#editor-form.mobile-editor
-	- var snippetType = snippet && snippet.content.type || 'plain_text'
+	- var storedSnippetType = snippet && snippet.content.type || 'plain_text'
+	- var snippetType = storedSnippetType === 'template' ? 'plain_text' : storedSnippetType
 	- var snippetLanguage = snippet && snippet.content.language || 'plain_text'
 	- var codeLanguages = [['plain_text', 'Plain text'], ['JavaScript', 'JavaScript'], ['TypeScript', 'TypeScript'], ['HTML', 'HTML'], ['CSS', 'CSS'], ['JSON', 'JSON'], ['Markdown', 'Markdown'], ['Python', 'Python'], ['Rust', 'Rust'], ['Shell', 'Shell'], ['SQL', 'SQL'], ['Java', 'Java'], ['Kotlin', 'Kotlin'], ['Swift', 'Swift'], ['Go', 'Go'], ['PHP', 'PHP'], ['Ruby', 'Ruby'], ['YAML', 'YAML'], ['XML', 'XML'], ['C', 'C'], ['C++', 'C++']]
 	header.flow-header
@@ -33,11 +34,11 @@ form#editor-form.mobile-editor
 				input#snippet-type(type="hidden" value=snippetType)
 				.type-picker#type-picker
 					button#snippet-type-button(type="button" aria-haspopup="listbox" aria-expanded="false")
-						span#snippet-type-label= {plain_text:'Plain text',code:'Code',template:'Template',rich_text:'Rich text'}[snippetType]
+						span#snippet-type-label= {plain_text:'Text',code:'Code',rich_text:'Rich text'}[snippetType]
 						span.material-symbols-outlined expand_more
 					.type-menu#snippet-type-menu(role="listbox" hidden)
-						each kind in ['plain_text','code','template','rich_text']
-							button(type="button" role="option" data-snippet-type=kind aria-selected=kind===snippetType)= {plain_text:'Plain text',code:'Code',template:'Template',rich_text:'Rich text'}[kind]
+						each kind in ['plain_text','code','rich_text']
+							button(type="button" role="option" data-snippet-type=kind aria-selected=kind===snippetType)= {plain_text:'Text',code:'Code',rich_text:'Rich text'}[kind]
 			label.mobile-field#language-field(for="language" hidden=snippetType!=='code')
 				span Code language
 				select#language
@@ -46,14 +47,9 @@ form#editor-form.mobile-editor
 					each language in codeLanguages
 						option(value=language[0] selected=language[0]===snippetLanguage)= language[1]
 		label.mobile-field.content-field(for="replace")
-			span Content
 			textarea#replace(rows="10")= snippet && (snippet.content.markdown || snippet.content.text) || ''
 		include ../../../server/views/ajax/rich-editor.pug
 		include ../../../server/views/ajax/template-editor.pug
 		p.draft-caption
 			span.material-symbols-outlined cloud_done
 			span Changes are saved locally while you edit.
-		if snippet
-			button.secondary-button.wide#save-copy(type="button")
-				span.material-symbols-outlined content_copy
-				span Save as new snippet
