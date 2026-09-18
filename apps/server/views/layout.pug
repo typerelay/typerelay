@@ -41,7 +41,7 @@ html(lang="en")
 								path(d="M18 8a3 3 0 0 1 0 6")
 								path(d="M10 8v11a1 1 0 0 1 -1 1h-1a1 1 0 0 1 -1 -1v-5")
 								path(d="M12 8l4.524 -3.77a.9 .9 0 0 1 1.476 .692v12.156a.9 .9 0 0 1 -1.476 .692l-4.524 -3.77h-8a1 1 0 0 1 -1 -1v-4a1 1 0 0 1 1 -1h8")
-							span.fw-semibold.d-none.d-md-inline What's new
+							span.d-none.d-md-inline What's new
 							span.badge.rounded-pill.text-bg-danger.d-none#product-updates-badge 0
 					include ajax/trial-button
 					.dropdown
@@ -67,6 +67,14 @@ html(lang="en")
 			block content
 		if newsEnabled
 			#product-updates-modal-root
+			#product-updates-drawer.offcanvas.offcanvas-end(tabindex="-1" aria-labelledby="productUpdatesDrawerLabel")
+				.offcanvas-header
+					h2#productUpdatesDrawerLabel.offcanvas-title.h5.mb-0 What's new
+					button.btn-close.cursor-pointer(type="button" data-bs-dismiss="offcanvas" aria-label="Close")
+				.offcanvas-body
+					#news-view
+						if news
+							include ajax/section/news
 		if profile
 			button#scroll-top.btn.btn-primary.btn-sm.scroll-top(type="button" aria-label="Scroll to top" aria-hidden="true" tabindex="-1")
 				span(aria-hidden="true") ↑

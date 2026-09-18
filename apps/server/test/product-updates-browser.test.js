@@ -8,12 +8,15 @@ class Fixture {
 	static post(id = 'one') { return { _id: id, title: 'Update ' + id, excerpt: 'Safe excerpt', published_at: new Date('2026-09-16'), link: 'https://typerelay.com/blog/' + id + '/', feature_image: '' }; }
 	static archive(updates = [Fixture.post()], cursor = '') { return pug.renderFile('./views/ajax/section/news.pug', { product_updates: { updates, latest_update_id: updates[0]?._id || '', next_cursor: cursor } }); }
 	static modal() { return pug.renderFile('./views/ajax/product_updates_modal.pug', { product_updates: { updates: [Fixture.post()], through_update_id: 'one' } }); }
-	static async create(request) {
-		const dom = new JSDOM('<a class="brand-link" href="/">Home</a><a href="/news" data-product-updates-nav>News</a><span id="product-updates-badge" class="d-none"></span><div id="workspace-content"><input id="draft" value="unsaved"><input type="checkbox" checked></div><div id="conflicts"></div><div id="news-view" hidden></div><div id="product-updates-modal-root"></div>', { url: 'https://app.typerelay.com/?account=account', runScripts: 'outside-only', pretendToBeVisual: true });
+	static async create(request, path = '/?account=account', archive = '') {
+		const dom = new JSDOM(`<a class="brand-link" href="/">Home</a><a href="/news" data-product-updates-nav>News</a><span id="product-updates-badge" class="d-none"></span><div id="workspace-content"><input id="draft" value="unsaved"><input type="checkbox" checked></div><div id="conflicts"></div><div id="product-updates-modal-root"></div><div id="product-updates-drawer"><div id="news-view">${archive}</div></div>`, { url: 'https://app.typerelay.com' + path, runScripts: 'outside-only', pretendToBeVisual: true });
 		const { window } = dom;
 		window.scrollTo = (x, y) => { Object.defineProperty(window, 'scrollX', { configurable: true, value: x }); Object.defineProperty(window, 'scrollY', { configurable: true, value: y }); };
 		const instances = new Map();
-		window.bootstrap = { Modal: { getInstance: node => instances.get(node), getOrCreateInstance: node => { if (!instances.has(node)) instances.set(node, { show: () => node.classList.add('show'), hide: () => { node.classList.remove('show'); node.dispatchEvent(new window.Event('hidden.bs.modal', { bubbles: true })); }, dispose: () => instances.delete(node) }); return instances.get(node); } } };
+		window.bootstrap = {
+			Modal: { getInstance: node => instances.get(node), getOrCreateInstance: node => { if (!instances.has(node)) instances.set(node, { show: () => node.classList.add('show'), hide: () => { node.classList.remove('show'); node.dispatchEvent(new window.Event('hidden.bs.modal', { bubbles: true })); }, dispose: () => instances.delete(node) }); return instances.get(node); } },
+			Offcanvas: { getOrCreateInstance: node => { if (!instances.has(node)) instances.set(node, { show: () => node.classList.add('show'), hide: () => { const shown = node.classList.contains('show'); node.classList.remove('show'); if (shown) node.dispatchEvent(new window.Event('hidden.bs.offcanvas', { bubbles: true })); } }); return instances.get(node); } },
+		};
 		const errors = []; const calls = [];
 		const app = { account: 'account', request: async (...args) => { calls.push(args); return request(...args); }, fragment: html => { const template = window.document.createElement('template'); template.innerHTML = html; return template.content.firstElementChild; }, toast: message => errors.push(message) };
 		window.eval((await readFile('./public/product-updates.js', 'utf8')).replace('export class ProductNews', 'window.ProductNews = class ProductNews'));
@@ -24,7 +27,7 @@ class Fixture {
 	static async flush() { await new Promise(resolve => setImmediate(resolve)); }
 }
 
-test('archive navigation preserves workspace nodes, draft, selection and scroll; pagination deduplicates', async () => {
+test('drawer navigation preserves workspace nodes and draft while URL history and pagination stay incremental', async () => {
 	const fixture = await Fixture.create(async path => {
 		if (path.endsWith('/status')) return { new_count: 2, has_modal: false };
 		if (path === '/ajax/section/news') return Fixture.archive([Fixture.post()], 'cursor');
@@ -37,17 +40,41 @@ test('archive navigation preserves workspace nodes, draft, selection and scroll;
 		const workspace = document.querySelector('#workspace-content'); const input = document.querySelector('#draft');
 		input.value = 'unsaved changes'; input.focus(); input.setSelectionRange(2, 5); window.scrollTo(0, 450);
 		await news.navigate(true, true);
-		assert.equal(window.location.pathname, '/news'); assert.equal(workspace.hidden, true);
+		assert.equal(window.location.pathname, '/news'); assert.equal(workspace.hidden, false);
+		assert.equal(document.querySelector('#product-updates-drawer').classList.contains('show'), true);
 		const root = document.querySelector('#product-updates-news'); const list = root.querySelector('#product-updates-list');
 		await news.more(root, root.querySelector('button'));
 		assert.equal(list.children.length, 2); assert.equal(root.querySelector('button').classList.contains('d-none'), true);
+		const popped = new Promise(resolve => window.addEventListener('popstate', resolve, { once: true }));
 		await news.navigate(false, true);
+		await popped; await Fixture.flush();
 		assert.equal(document.querySelector('#workspace-content'), workspace); assert.equal(workspace.hidden, false);
 		assert.equal(document.querySelector('#draft'), input); assert.equal(input.value, 'unsaved changes'); assert.equal(input.selectionStart, 2); assert.equal(document.activeElement, input);
 		assert.equal(document.querySelector('input[type=checkbox]').checked, true); assert.equal(window.scrollY, 450);
-		await news.navigate(true, true);
+		assert.equal(window.location.pathname, '/'); assert.equal(document.querySelector('#product-updates-drawer').classList.contains('show'), false);
+		const forwarded = new Promise(resolve => window.addEventListener('popstate', resolve, { once: true }));
+		window.history.forward(); await forwarded; await Fixture.flush();
+		assert.equal(window.location.pathname, '/news'); assert.equal(document.querySelector('#product-updates-drawer').classList.contains('show'), true);
 		assert.equal(document.querySelector('#product-updates-list'), list);
 		assert.equal(calls.filter(([path]) => path === '/ajax/section/news').length, 1);
+	} finally { fixture.dom.window.close(); }
+});
+
+test('direct news URL opens the populated drawer and closing restores the workspace URL', async () => {
+	const archive = Fixture.archive([Fixture.post()]);
+	const fixture = await Fixture.create(async path => {
+		if (path.endsWith('/status')) return { new_count: 1, has_modal: false };
+		if (path.endsWith('/seen')) return { new_count: 0 };
+		assert.fail(path);
+	}, '/news?account=account', archive);
+	try {
+		const { news, window } = fixture;
+		assert.equal(news.active, true);
+		assert.equal(window.document.querySelector('#product-updates-drawer').classList.contains('show'), true);
+		assert.equal(window.document.querySelector('#workspace-content').hidden, false);
+		window.bootstrap.Offcanvas.getOrCreateInstance(news.drawer).hide();
+		assert.equal(window.location.pathname, '/');
+		assert.equal(news.active, false);
 	} finally { fixture.dom.window.close(); }
 });
 
@@ -91,13 +118,14 @@ test('late status and modal responses cannot restore a dismissed update', async 
 	} finally { fixture.dom.window.close(); }
 });
 
-test('empty archive and escaped Ghost content render with Mailtwine modal controls', () => {
+test('empty archive and escaped Ghost content render with Mailtwine modal controls', async () => {
 	assert.match(Fixture.archive([]), /No product updates yet/);
 	const post = { ...Fixture.post(), title: '<img src=x onerror=alert(1)>', excerpt: '<script>alert(1)</script>' };
 	const html = pug.renderFile('./views/ajax/product_updates_modal.pug', { product_updates: { updates: [post], through_update_id: 'one' } });
 	assert.ok(html.includes('&lt;script&gt;')); assert.ok(!html.includes('<script>'));
 	assert.match(html, /modal-dialog-centered modal-dialog-scrollable modal-lg/);
 	assert.match(html, /Got it/); assert.match(html, /Read more/); assert.match(html, /data-bs-keyboard="false"/);
+	assert.match(await readFile('./public/app.css', 'utf8'), /--bs-offcanvas-width:\s*var\(--fw-drawer-width, 37\.5rem\)/);
 });
 
 test('concurrent acknowledgements cannot restore an older badge count', async () => {

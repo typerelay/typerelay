@@ -3,7 +3,8 @@ export class ProductNews {
 	constructor(app) {
 		this.app = app;
 		this.root = document.querySelector('#product-updates-modal-root');
-		if (!this.root) return;
+		this.drawer = document.querySelector('#product-updates-drawer');
+		if (!this.root || !this.drawer) return;
 		this.view = document.querySelector('#news-view');
 		this.version = 0; this.navigation = 0; this.active = location.pathname === '/news';
 		this.workspaceUrl = '/?account=' + encodeURIComponent(app.account);
@@ -15,9 +16,10 @@ export class ProductNews {
 			void this.navigate(link.hasAttribute('data-product-updates-nav'), true, link).catch(error => this.app.toast(error.message, 'error'));
 		});
 		window.addEventListener('popstate', () => { void this.navigate(location.pathname === '/news', false).catch(error => this.app.toast(error.message, 'error')); });
+		this.drawer.addEventListener('hidden.bs.offcanvas', () => this.closed());
 		document.addEventListener('hidden.bs.modal', () => this.showQueued());
 		document.addEventListener('visibilitychange', () => { if (!document.hidden) { this.lastCheck = 0; void this.check(); this.showQueued(); } });
-		if (this.active) { this.setActive(true); void this.mountArchive().catch(error => this.app.toast(error.message, 'error')); }
+		if (this.active) void this.navigate(true, false).catch(error => this.app.toast(error.message, 'error'));
 		void this.check();
 	}
 	badge(count) {
@@ -92,9 +94,6 @@ export class ProductNews {
 	}
 	setActive(active) {
 		this.active = active;
-		document.querySelector('#workspace-content').hidden = active;
-		document.querySelector('#conflicts').hidden = active;
-		this.view.hidden = !active;
 		document.querySelector('[data-product-updates-nav]').classList.toggle('active', active);
 		document.title = active ? "What's new · TypeRelay" : 'TypeRelay';
 	}
@@ -106,21 +105,30 @@ export class ProductNews {
 				const html = await this.app.request('/ajax/section/news', 'GET', undefined, true);
 				if (navigation !== this.navigation) return;
 				this.view.replaceChildren(this.app.fragment(html));
-				this.archiveStale = false; this.newsScroll = { x: 0, y: 0 };
+				this.archiveStale = false;
 			}
 			if (navigation !== this.navigation) return;
-			if (active !== this.active) {
-				if (active) { this.workspaceScroll = { x: window.scrollX, y: window.scrollY }; this.workspaceFocus = document.activeElement; }
-				else this.newsScroll = { x: window.scrollX, y: window.scrollY };
-			}
+			if (active && !this.active) this.workspaceFocus = document.activeElement;
 			this.setActive(active);
-			const url = active ? this.newsUrl : this.workspaceUrl;
-			if (push && location.pathname !== new URL(url, location.href).pathname) history.pushState({}, '', url);
-			const scroll = (active ? this.newsScroll : this.workspaceScroll) || { x: 0, y: 0 };
-			window.scrollTo(scroll.x, scroll.y);
-			if (!active) this.workspaceFocus?.focus({ preventScroll: true });
-			else await this.mountArchive();
+			if (active) {
+				if (push && location.pathname !== '/news') history.pushState({ productNews: true }, '', this.newsUrl);
+				bootstrap.Offcanvas.getOrCreateInstance(this.drawer).show();
+				await this.mountArchive();
+			} else {
+				bootstrap.Offcanvas.getOrCreateInstance(this.drawer).hide();
+				if (push && location.pathname === '/news') this.restoreWorkspaceUrl();
+			}
 		} finally { this.busy(button, false); }
+	}
+	restoreWorkspaceUrl() {
+		if (history.state?.productNews) history.back();
+		else history.replaceState({}, '', this.workspaceUrl);
+	}
+	closed() {
+		this.workspaceFocus?.focus?.({ preventScroll: true });
+		if (!this.active) return;
+		this.setActive(false);
+		if (location.pathname === '/news') this.restoreWorkspaceUrl();
 	}
 	async mountArchive() {
 		const root = this.view.firstElementChild;

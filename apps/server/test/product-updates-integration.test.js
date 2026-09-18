@@ -56,8 +56,11 @@ test('real authenticated routes enforce CSRF, persist monotonic seen state and r
 	const dom = new JSDOM(pageHtml);
 	Fixture.csrf = dom.window.document.querySelector('meta[name=csrf-token]').content;
 	assert.equal(dom.window.document.querySelectorAll('[data-product-update-id]').length, 7);
-	assert.equal(dom.window.document.querySelector('#workspace-content').hidden, true);
-	assert.ok(dom.window.document.querySelector('[data-product-updates-nav]'));
+	assert.equal(dom.window.document.querySelector('#workspace-content').hidden, false);
+	assert.ok(dom.window.document.querySelector('#product-updates-drawer #product-updates-news'));
+	const newsLink = dom.window.document.querySelector('[data-product-updates-nav]');
+	assert.ok(newsLink);
+	assert.equal(newsLink.querySelector('span:not(#product-updates-badge)').classList.contains('fw-semibold'), false);
 	const cursor = dom.window.document.querySelector('#product-updates-news').dataset.nextCursor;
 	dom.window.close();
 	assert.deepEqual(await (await Fixture.request('/ajax/product-updates/status')).json(), { new_count: 9, has_modal: true });

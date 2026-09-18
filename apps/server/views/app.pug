@@ -1,7 +1,7 @@
 extends layout
 block content
 	#workspace(data-account=account._id)
-		.row#workspace-content(hidden=typeof news !== 'undefined' && news)
+		.row#workspace-content
 			aside.col-md-4
 				.library-controls.d-flex.align-items-center.gap-3.mb-3
 					select#account-switch.form-select.form-select-sm(aria-label="Account")
@@ -27,11 +27,7 @@ block content
 					else
 						h2.fw-bold Select a library
 						p.text-muted Import YAML or create your first library.
-		#conflicts.mt-3(hidden=typeof news !== 'undefined' && news)
-		if typeof productUpdatesEnabled !== 'undefined' && productUpdatesEnabled
-			#news-view(hidden=!news)
-				if news
-					include ajax/section/news
+		#conflicts.mt-3
 		#rich-image-modal.modal.fade(tabindex="-1" aria-label="Add rich-text image" data-bs-backdrop="static" data-bs-keyboard="false")
 			.modal-dialog.modal-lg.modal-dialog-scrollable
 				.modal-content

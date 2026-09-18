@@ -1,7 +1,7 @@
 #billing-nav-action
 	if canManageBilling && billingEnabled
 		if isTrialing
-			button.btn.btn-warning.btn-sm(type="button" data-settings-open="subscription")= trialText
+			button.btn.btn-warning.btn-sm(type="button" data-settings-open="subscription" data-trial-countdown data-trial-started-at=trialStartedAt data-trial-ends-at=trialEndsAt data-trial-days=trialDays)= trialText
 		else if plan === 'free' && trialAvailable
 			button.btn.btn-warning.btn-sm(type="button" data-start-trial) Try PRO for 7 days for free
 		else if plan === 'free'

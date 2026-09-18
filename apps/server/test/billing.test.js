@@ -77,6 +77,10 @@ test('one-time Pro trial unlocks API and machines, then expires to Free', async 
 	const trial = Billing.entitlements(account, new Date(startedAt.getTime() + 86400000));
 	assert.equal(trial.plan, 'pro');
 	assert.equal(trial.trial, true);
+	const trialLocals = Billing.locals(account, Fixture.ctx, null, new Date(startedAt.getTime() + 86400000));
+	assert.equal(trialLocals.trialStartedAt, startedAt.toISOString());
+	assert.equal(trialLocals.trialEndsAt, new Date(startedAt.getTime() + 7 * 86400000).toISOString());
+	assert.equal(trialLocals.trialDays, 7);
 	const ctx = await Fixture.context();
 	assert.doesNotThrow(() => Billing.assertApi(ctx));
 	await Billing.assertDeviceEnrollment(ctx);

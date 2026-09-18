@@ -1,9 +1,7 @@
 include ../../mixins/product_updates
 
 #product-updates-news(data-latest-update-id=product_updates.latest_update_id data-next-cursor=product_updates.next_cursor)
-	.d-flex.flex-wrap.gap-3.justify-content-between.align-items-center.mb-5
-		h1.mb-0 What's new
-		span.text-muted Product updates from TypeRelay
+	p.text-muted.mb-5 Product updates from TypeRelay
 	#product-updates-list
 		each update in product_updates.updates
 			+productUpdateCard(update)
