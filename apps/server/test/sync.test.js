@@ -113,6 +113,7 @@ test('YAML managed export, multiline, deletion, invalid imports and duplicates',
 });
 test('two device independent edits merge and retry is idempotent', async () => {
 	const { library } = await Fixture.create(Fixture.owner);
+	assert.equal(+library.snippets[0].updatedAt, +library.snippets[1].updatedAt);
 	const op = randomUUID();
 	const first = await Fixture.upload(Fixture.owner, library, [Fixture.change(library.snippets[0], 'First edit')], op);
 	const retry = await Fixture.upload(Fixture.owner, library, [Fixture.change(library.snippets[0], 'First edit')], op);
@@ -120,7 +121,7 @@ test('two device independent edits merge and retry is idempotent', async () => {
 	await assert.rejects(Fixture.upload(Fixture.owner, library, [Fixture.change(library.snippets[0], 'Changed retry')], op), /Operation ID/);
 	const second = await Fixture.upload(Fixture.owner, library, [Fixture.change(library.snippets[1], 'Second edit')]);
 	assert.deepEqual(second.conflicts, []);
-	assert.deepEqual(second.library.snippets.map(snippet => snippet.replace), ['First edit', 'Second edit']);
+	assert.deepEqual(second.library.snippets.map(snippet => snippet.replace), ['Second edit', 'First edit']);
 });
 test('same snippet and edit/delete retain conflict; explicit resolution', async () => {
 	const { library } = await Fixture.create(Fixture.owner);
@@ -306,6 +307,7 @@ test('batch moves preserve IDs/order, update both libraries and retry idempotent
 	const moved = (await Libraries.get(ctx, destination._id)).snippets;
 	assert.deepEqual(moved.map(row => row.trigger), ['existing', 'hello', 'bye']);
 	assert.deepEqual(moved.slice(1).map(row => row.id), source.snippets.map(row => row.id));
+	assert.deepEqual(moved.slice(1).map(row => +row.updatedAt), source.snippets.map(row => +row.updatedAt));
 	assert.ok(first.libraries.every(row => row.revision === 2));
 	await assert.rejects(Fixture.upload(ctx, source, [Fixture.change(source.snippets[0], 'Stale edit')]), /moved/);
 	assert.equal(await Snippet.countDocuments({ account: ctx.account, id: source.snippets[0].id }), 1);

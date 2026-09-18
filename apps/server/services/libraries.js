@@ -243,7 +243,8 @@ export class Libraries {
 		await Billing.assertResourceIncrease(ctx, 'snippets', entries.length, session);
 		const [library] = await Library.create([{ account: ctx.account, creator: ctx.user, name: Support.text(body.name), shared: false, editable: false, members: [], groups: [], revision: 1, state: 'active' }], { session });
 		for (const entry of entries) if (entry.id !== undefined) Support.assert(typeof entry.id === 'string' && /^[a-zA-Z0-9_-]{16,128}$/.test(entry.id), 'Invalid snippet ID');
-		for (const [position, entry] of entries.entries()) await Snippet.create([{ account: ctx.account, library: library._id, id: entry.id || randomUUID(), ...Libraries.value(entry), position, revision: 1, state: 'active' }], { session });
+		const createdAt = new Date();
+		for (const [position, entry] of entries.entries()) await Snippet.create([{ account: ctx.account, library: library._id, id: entry.id || randomUUID(), ...Libraries.value(entry), position, revision: 1, state: 'active', createdAt, updatedAt: createdAt }], { session });
 		await Support.change(ctx.account, library._id, 'library', session);
 		return Libraries.view(ctx, await Libraries.hydrate(library.toObject(), session));
 	}
@@ -369,7 +370,7 @@ export class Libraries {
 			for (const record of selected) {
 				const item = body.items.find(item => item.id === record.id);
 				const change = item.value === undefined ? {} : Libraries.value(await Libraries.prepared(ctx,item.value), record.content);
-				await Snippet.updateOne({ _id: record._id }, { $set: { library: destination._id, position: position++, ...change }, $inc: { revision: 1 } }, { session });
+				await Snippet.updateOne({ _id: record._id }, { $set: { library: destination._id, position: position++, ...change }, $inc: { revision: 1 } }, { session, timestamps: item.value !== undefined });
 				await Conflict.updateMany({ account: ctx.account, library: source._id, snippet: record.id }, { $set: { library: destination._id } }, { session });
 			}
 			const entries = await Snippet.find({ library: destination._id, state: 'active' }).session(session).lean();

@@ -292,7 +292,7 @@ test('authentication handoff does not reopen settings over the browser',async()=
 test('search loupe is right aligned and title bar has no shortcut badge',async()=>{
  const f=await Fixture.create();try{
   const style=f.dom.window.getComputedStyle(f.dom.window.document.querySelector('.search-icon'));
-  assert.equal(style.right,'0.85rem');assert.equal(style.left,'auto');
+  assert.equal(parseFloat(style.right),parseFloat(f.dom.window.getComputedStyle(f.dom.window.document.documentElement).fontSize)*0.85);assert.equal(style.left,'auto');
   assert.equal(f.dom.window.document.querySelector('.shortcut-key'),null);
  }finally{f.dom.window.close();}
 });

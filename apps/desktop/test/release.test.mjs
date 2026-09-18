@@ -36,7 +36,7 @@ test('private signing bridge confines paths, serializes requests and verifies be
 		await bridge.start(); assert.equal((await fs.stat(bridge.path)).mode & 0o777, 0o600);
 		await Promise.all([SigningBridge.request(bridge.path, first), SigningBridge.request(bridge.path, second)]);
 		await SigningBridge.request(bridge.path, path.basename(relative), allowed);
-		assert.equal(maximum, 1); assert.deepEqual(new Set(signed), new Set([first, second, relative]));
+		assert.equal(maximum, 1); assert.deepEqual(new Set(signed), new Set(await Promise.all([first, second, relative].map(file => fs.realpath(file)))));
 		await assert.rejects(SigningBridge.request(bridge.path, outside), /failed/);
 		const link = path.join(allowed, 'linked.exe'); await fs.symlink(outside, link); await assert.rejects(SigningBridge.request(bridge.path, link), /failed/);
 		const fake = path.join(allowed, 'bad.exe'); await fs.writeFile(fake, 'not PE'); await assert.rejects(SigningBridge.request(bridge.path, fake), /failed/);

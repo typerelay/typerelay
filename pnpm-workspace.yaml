@@ -12,9 +12,7 @@ allowBuilds:
   vue-demi: true
 overrides:
   hashery: 3.0.1
-  vitepress-openapi: 0.2.4
   '@types/node@^22.0.0': 22.20.2
-  mongoose: 9.10.0
   is-core-module: 2.16.2
 patchedDependencies:
   connect-mongo@6.0.0: apps/server/patches/connect-mongo@6.0.0.patch
