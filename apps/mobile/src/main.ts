@@ -24,7 +24,7 @@ import mobileSelect from '../views/ajax/mobile-select.pug';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import './style.css';
 
-class MobileApp {
+export class MobileApp {
  static state: State = { generation: '', libraries: [], pending: 0, conflicts: [] };
  static listeners = new Set<() => void>();
  static syncJob: Promise<void> | null = null;
@@ -44,6 +44,18 @@ class MobileApp {
  static $(id: string) { return document.getElementById(id)!; }
  static input(id: string) { return MobileApp.$(id) as HTMLInputElement; }
  static fragment(html: string) { return new DOMParser().parseFromString(html, 'text/html').body.firstElementChild!; }
+ static toggleAnchoredMenu(control: HTMLElement, menu: HTMLElement, button: HTMLElement) {
+  const open = menu.hidden;
+  const form = document.getElementById('editor-form');
+  for (const other of form?.querySelectorAll<HTMLElement>('.type-menu, .mobile-select-menu') || []) if (other !== menu) { other.hidden = true; other.parentElement?.classList.remove('opens-up'); }
+  if (!open) { menu.hidden = true; control.classList.remove('opens-up'); button.setAttribute('aria-expanded', 'false'); return; }
+  menu.hidden = false; control.classList.remove('opens-up'); button.setAttribute('aria-expanded', 'true');
+  const boundary = control.closest<HTMLElement>('.flow-body')?.getBoundingClientRect() || { top: 0, bottom: window.innerHeight };
+  const anchor = button.getBoundingClientRect(); const rem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+  const below = Math.max(0, boundary.bottom - anchor.bottom - rem * 0.5); const above = Math.max(0, anchor.top - boundary.top - rem * 0.5);
+  const opensUp = Math.min(menu.scrollHeight, rem * 15) > below && above > below;
+  control.classList.toggle('opens-up', opensUp); control.style.setProperty('--mobile-select-max-height', `${Math.max(rem * 6, opensUp ? above : below) / rem}rem`);
+ }
  static enhanceEditorSelects = () => {
   const form = document.getElementById('editor-form'); if (!form) return;
   for (const select of form.querySelectorAll<HTMLSelectElement>('select:not([data-mobile-enhanced])')) {
@@ -53,7 +65,7 @@ class MobileApp {
    const control = MobileApp.fragment(mobileSelect({ id: select.id || crypto.randomUUID(), label: selected?.textContent || '', value: select.value, disabled: select.disabled, options })) as HTMLElement;
    select.after(control);
    const button = control.querySelector<HTMLButtonElement>('.mobile-select-button')!; const menu = control.querySelector<HTMLElement>('.mobile-select-menu')!;
-   button.onclick = () => { for (const other of form.querySelectorAll<HTMLElement>('.mobile-select-menu')) if (other !== menu) other.hidden = true; menu.hidden = !menu.hidden; button.setAttribute('aria-expanded', String(!menu.hidden)); };
+   button.onclick = () => MobileApp.toggleAnchoredMenu(control, menu, button);
    for (const option of menu.querySelectorAll<HTMLButtonElement>('[data-mobile-option]')) option.onclick = () => {
     select.value = option.dataset.mobileOption!; control.querySelector<HTMLElement>('[data-mobile-select-label]')!.textContent = option.textContent || option.dataset.mobileOption!;
     for (const item of menu.querySelectorAll<HTMLElement>('[data-mobile-option]')) item.setAttribute('aria-selected', String(item === option));
@@ -129,7 +141,7 @@ class MobileApp {
   MobileApp.configureEditor();
   const typeLabels: Record<string, string> = { plain_text: 'Text', code: 'Code', rich_text: 'Rich text' };
   const typeButton = MobileApp.$('snippet-type-button'); const typeMenu = MobileApp.$('snippet-type-menu');
-  typeButton.onclick = () => { typeMenu.hidden = !typeMenu.hidden; typeButton.setAttribute('aria-expanded', String(!typeMenu.hidden)); };
+  typeButton.onclick = () => MobileApp.toggleAnchoredMenu(MobileApp.$('type-picker'), typeMenu, typeButton);
   for (const option of typeMenu.querySelectorAll<HTMLButtonElement>('[data-snippet-type]')) option.onclick = () => {
    MobileApp.input('snippet-type').value = option.dataset.snippetType!; MobileApp.$('snippet-type-label').textContent = typeLabels[option.dataset.snippetType!];
    for (const item of typeMenu.querySelectorAll<HTMLElement>('[data-snippet-type]')) item.setAttribute('aria-selected', String(item === option));

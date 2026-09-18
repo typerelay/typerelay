@@ -160,13 +160,15 @@ h1, h2, h3, p { margin: 0; }
 .type-picker > button { display: flex; width: 100%; min-height: 2.75rem; align-items: center; justify-content: space-between; padding: 0.65rem 0.75rem; border: 0.0625rem solid var(--line); border-radius: 0.72rem; background: var(--surface-strong); text-align: left; }
 .type-picker > button:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 0.18rem color-mix(in srgb, var(--accent), transparent 80%); outline: 0; }
 .type-menu { position: absolute; top: calc(100% + 0.35rem); right: 0; left: 0; z-index: 50; padding: 0.3rem; border: 0.0625rem solid var(--line); border-radius: 0.72rem; background: var(--surface-strong); box-shadow: var(--shadow); }
+.type-picker.opens-up .type-menu { top: auto; bottom: calc(100% + 0.35rem); max-height: var(--mobile-select-max-height, 15rem); overflow-y: auto; }
 .type-menu button { display: block; width: 100%; padding: 0.65rem 0.7rem; border: 0; border-radius: 0.5rem; background: transparent; text-align: left; }
 .type-menu button[aria-selected="true"] { background: var(--accent-soft); color: var(--accent-dark); font-weight: 700; }
 .type-menu button:active { background: #ede9e1; }
 .mobile-select { position: relative; width: 100%; min-width: 0; }
 .mobile-select-button { display: flex; width: 100%; min-height: 2.75rem; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.6rem 0.7rem; border: 0.0625rem solid var(--line); border-radius: 0.68rem; background: var(--surface-strong); text-align: left; }
 .mobile-select-button > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mobile-select-menu { position: absolute; top: calc(100% + 0.3rem); right: 0; left: 0; z-index: 80; max-height: 15rem; padding: 0.3rem; border: 0.0625rem solid var(--line); border-radius: 0.72rem; background: var(--surface-strong); box-shadow: var(--shadow); overflow-y: auto; }
+.mobile-select-menu { position: absolute; top: calc(100% + 0.3rem); right: 0; left: 0; z-index: 80; max-height: var(--mobile-select-max-height, 15rem); padding: 0.3rem; border: 0.0625rem solid var(--line); border-radius: 0.72rem; background: var(--surface-strong); box-shadow: var(--shadow); overflow-y: auto; }
+.mobile-select.opens-up .mobile-select-menu { top: auto; bottom: calc(100% + 0.3rem); }
 .mobile-select-menu button { display: block; width: 100%; padding: 0.6rem 0.65rem; border: 0; border-radius: 0.5rem; background: transparent; text-align: left; }
 .mobile-select-menu button[aria-selected="true"] { background: var(--accent-soft); color: var(--accent-dark); font-weight: 700; }
 
