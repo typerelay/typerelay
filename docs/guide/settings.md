@@ -22,9 +22,11 @@ Hosted Free accounts can connect one machine. Pro trials, Pro and Team allow unl
 
 ## Access tokens
 
-Create named personal access tokens for the API or MCP with a 1–365 day expiry (default 90), or set expiry to 0 for a token that never expires. Select only the scopes needed. The secret is shown once. Tokens belong to you and the selected account; their scopes never override your library permissions.
+Create named personal access tokens for the API or MCP. Personal tokens do not expire and receive every API scope, but they never override your account role or library permissions. The secret is shown once; copy it before dismissing the confirmation.
 
-Hosted API and MCP access require an active Pro trial, Pro or Team plan. Existing tokens remain stored after a downgrade but cannot authenticate. Viewing, creating or revoking tokens requires a sign-in within the last 15 minutes. If prompted, use **Sign in** to authenticate in a new tab, then **Retry** in the original Settings tab; your form input stays in place.
+Hosted API and MCP access require an active Pro trial, Pro or Team plan. Existing tokens remain stored after a downgrade but cannot authenticate. Delete a token to stop it immediately.
+
+The **OAuth** tab shows discovery metadata and apps you have authorized. Revoking an app invalidates its refresh and delegated access. Account owners and admins can also pre-register public PKCE clients or confidential clients that authenticate with a client secret. Confidential secrets are shown only once.
 
 ## Subscription and white-label
 

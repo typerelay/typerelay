@@ -8,6 +8,8 @@ import { mongoose, User, Account, Member, Ticket, Device, Integration, Integrati
 import { Support } from './support.js';
 import { Billing } from './billing.js';
 import { SignupNotifications } from './signup_notifications.js';
+import { StarterContent } from './starter_content.js';
+import bcrypt from 'bcryptjs';
 
 export class Auth {
 	static origin = process.env.APP_URL || 'http://localhost:3040';
@@ -67,6 +69,7 @@ export class Auth {
 				[user] = await User.create([{ email: ticket.email, name: ticket.data?.name || ticket.email.split('@')[0] }], { session });
 				[account] = await Account.create([{ name: user.name + '’s team' }], { session });
 				await Member.create([{ account: account._id, user: user._id, role: 'owner' }], { session });
+				await StarterContent.create(account, user, session);
 				if (Billing.hosted()) signupNotification = await SignupNotifications.create(user, account, session);
 			}
 		});
@@ -136,16 +139,16 @@ export class Auth {
 	static scopes = scopes;
 	static apiResource() { return Auth.origin + '/api/v3'; }
 	static mcpResource() { return (process.env.MCP_BASE_URL || 'http://localhost:3041').replace(/\/$/, '') + '/mcp'; }
+	static mcpMetadata() { const resource = new URL(Auth.mcpResource()); return resource.origin + '/.well-known/oauth-protected-resource' + resource.pathname; }
+	static oauthConfig() { return { issuer: Auth.origin, authorization_endpoint: Auth.origin + '/integrations/authorize', token_endpoint: Auth.origin + '/integrations/token', registration_endpoint: Auth.origin + '/integrations/register', authorization_server_metadata_url: Auth.origin + '/.well-known/oauth-authorization-server', resource_metadata_url: Auth.mcpMetadata(), api_resource: Auth.apiResource(), mcp_endpoint: Auth.mcpResource(), client_registration: { dynamic_registration_supported: true, pre_registration_supported: true } }; }
 	static integrationScopes(scopes) {
 		Support.assert(Array.isArray(scopes) && scopes.length && scopes.every(scope => Auth.scopes.includes(scope)), 'Select valid scopes');
 		return [...new Set(scopes)].sort();
 	}
 	static async createIntegration(ctx, body) {
 		Billing.assertApi(ctx);
-		const days = body.days === undefined ? 90 : body.days;
-		Support.assert(typeof days === 'number' && Number.isInteger(days) && days >= 0 && days <= 365, 'Expiry must be 0–365 days');
 		const token = 'tr_pat_' + Support.token();
-		const grant = await AccountAccess.write(ctx.account, async session => (await Integration.create([{ account: ctx.account, user: ctx.user, name: Support.text(body.name), kind: 'pat', scopes: Auth.integrationScopes(body.scopes), hash: Support.hash(token), expires: days === 0 ? null : new Date(Date.now() + days * 86400000) }], { session }))[0]);
+		const grant = await AccountAccess.write(ctx.account, async session => (await Integration.create([{ account: ctx.account, user: ctx.user, name: Support.text(body.name), kind: 'pat', scopes: Auth.scopes, hash: Support.hash(token), expires: null }], { session }))[0]);
 		return { token, grant: grant.toObject() };
 	}
 	static async integration(header, resource = Auth.apiResource()) {
@@ -164,15 +167,44 @@ export class Auth {
 		return { ...ctx, credential: String(grant._id), scopes: grant.scopes, grant };
 	}
 	static requireScope(ctx, scope) { Support.assert(ctx.scopes.includes(scope), 'Required scope: ' + scope, 403); }
-	static async registerIntegration(body) {
-		Support.assert(body.token_endpoint_auth_method === 'none' && Array.isArray(body.redirect_uris) && body.redirect_uris.length > 0 && body.redirect_uris.length <= 10, 'Public PKCE clients require redirect_uris and token_endpoint_auth_method none');
+	static integrationRedirects(body) {
+		Support.assert(Array.isArray(body.redirect_uris) && body.redirect_uris.length > 0 && body.redirect_uris.length <= 10, 'OAuth clients require 1–10 redirect URIs');
 		const redirects = body.redirect_uris.map(uri => {
 			let url; try { url = new URL(uri); } catch { Support.assert(false, 'Invalid redirect URI'); }
 			Support.assert(!url.username && !url.password && !url.hash && (url.protocol === 'https:' || (url.protocol === 'http:' && ['127.0.0.1', '[::1]'].includes(url.hostname))), 'Use HTTPS or an IP loopback redirect');
 			return url.href;
 		});
-		const client = await OAuthClient.create({ client_id: Support.token(), name: Support.text(body.client_name || 'Integration'), redirects });
-		return { client_id: client.client_id, client_name: client.name, redirect_uris: redirects, token_endpoint_auth_method: 'none', grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'] };
+		return [...new Set(redirects)];
+	}
+	static integrationClient(client) {
+		return { id: String(client._id), client_id: client.client_id, client_name: client.name, client_uri: client.client_uri || null, redirect_uris: client.redirects, token_endpoint_auth_method: client.token_endpoint_auth_method || 'none', registration_source: client.registration_source || 'dynamic', created_at: client.createdAt || null };
+	}
+	static async registerIntegration(body, options = {}) {
+		const method = body.token_endpoint_auth_method || 'none';
+		Support.assert(options.manual ? ['none', 'client_secret_post'].includes(method) : method === 'none', options.manual ? 'Unsupported token endpoint authentication method' : 'Public PKCE clients require token_endpoint_auth_method none');
+		const redirects = Auth.integrationRedirects(body);
+		let clientUri = '';
+		if (body.client_uri) {
+			let url; try { url = new URL(body.client_uri); } catch { Support.assert(false, 'Invalid client website'); }
+			Support.assert(!url.username && !url.password && !url.hash && url.protocol === 'https:', 'Client website must use HTTPS');
+			clientUri = url.href;
+		}
+		const secret = method === 'client_secret_post' ? Support.token() : null;
+		const client = await OAuthClient.create({ account: options.ctx?.account, created_by: options.ctx?.user, client_id: 'tr_oauth_' + Support.token(), name: Support.text(body.client_name || 'Integration'), client_uri: clientUri || undefined, redirects, registration_source: options.manual ? 'manual' : 'dynamic', token_endpoint_auth_method: method, secret_hash: secret ? await bcrypt.hash(secret, 12) : undefined });
+		const serialized = Auth.integrationClient(client);
+		if (options.manual) return { ...serialized, ...(secret ? { client_secret: secret } : {}), grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'] };
+		return { client_id: serialized.client_id, client_name: serialized.client_name, redirect_uris: serialized.redirect_uris, token_endpoint_auth_method: serialized.token_endpoint_auth_method, grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'] };
+	}
+	static async createOAuthClient(ctx, body) {
+		Billing.assertApi(ctx); Support.assert(Support.admin(ctx), 'Owner or admin access required', 403);
+		return Auth.registerIntegration(body, { manual: true, ctx });
+	}
+	static async authenticateOAuthClient(body) {
+		const client = await OAuthClient.findOne({ client_id: body.client_id }).select('+secret_hash').lean();
+		Support.assert(client, 'Unregistered client', 401);
+		const method = client.token_endpoint_auth_method || 'none';
+		if (method === 'client_secret_post') Support.assert(typeof body.client_secret === 'string' && await bcrypt.compare(body.client_secret, client.secret_hash || ''), 'Invalid client secret', 401);
+		return client;
 	}
 	static async integrationRequest(body) {
 		const client = await OAuthClient.findOne({ client_id: body.client_id }).lean();
@@ -188,12 +220,14 @@ export class Auth {
 		if (body.decision === 'deny') { const redirect = new URL(body.redirect_uri); redirect.searchParams.set('error', 'access_denied'); redirect.searchParams.set('state', body.state); return redirect.href; }
 		const ctx = await Support.context(user, body.account);
 		Billing.assertApi(ctx);
+		if (client.account) Support.assert(Support.equal(client.account, ctx.account), 'OAuth client is registered for another account', 403);
 		const code = Support.token();
 		await Ticket.create({ hash: Support.hash(code), kind: 'integration-code', account: ctx.account, expires: new Date(Date.now() + 300000), data: { user, client: client.client_id, name: client.name, scopes, resource: body.resource, redirect: body.redirect_uri, challenge: body.code_challenge } });
 		const url = new URL(body.redirect_uri); url.searchParams.set('code', code); url.searchParams.set('state', body.state);
 		return url.href;
 	}
 	static async exchangeIntegration(body) {
+		await Auth.authenticateOAuthClient(body);
 		const access = Support.token(); const refresh = Support.token();
 		let grant;
 		// Replayed refresh tokens invalidate the entire grant, including delegated access.

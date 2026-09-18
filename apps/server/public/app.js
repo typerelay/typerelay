@@ -16,6 +16,8 @@ class TypeRelay {
 	trashItems = [];
 	searchVersion = 0;
 	tokensVersion = 0;
+	oauthConsentsVersion = 0;
+	oauthClientsVersion = 0;
 	devicesVersion = 0;
 	openVersion = 0;
 	searchTimer = null;
@@ -27,7 +29,7 @@ class TypeRelay {
 		document.addEventListener('input', event => { if ((event.target.id === 'trigger' || event.target.hasAttribute('data-import-trigger')) && !event.isComposing) Abbreviation.field(event.target); });
 		document.addEventListener('compositionend', event => { if (event.target.id === 'trigger') Abbreviation.field(event.target); });
 		document.addEventListener('submit', event => this.onSubmit(event));
-		document.querySelector('#settings')?.addEventListener('hidden.bs.modal', () => { const secret = document.querySelector('#token-secret-value'); if (secret) secret.textContent = ''; document.querySelector('#token-secret')?.setAttribute('hidden', ''); });
+		document.querySelector('#settings')?.addEventListener('hidden.bs.modal', () => { for (const secret of document.querySelectorAll('[data-secret-value]')) secret.value = ''; document.querySelector('#access-token-secret')?.replaceChildren(); document.querySelector('#oauth-client-secret')?.replaceChildren(); });
 		document.addEventListener('click', event => this.onClick(event).catch(error => this.toast(error.message, 'error')));
 		document.querySelector('#search')?.addEventListener('input', () => {
 			this.searchVersion++;
@@ -101,7 +103,7 @@ class TypeRelay {
 	}
 	async request(path, method = 'GET', body, raw = false) {
 		const response = await fetch(path.startsWith('/') ? path : '/api/v2/' + path, { method, headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': document.querySelector('meta[name=csrf-token]').content, 'X-Account-Id': this.account || '' }, body: body ? JSON.stringify({ operation_id: this.submitting ? this.formOperation : crypto.randomUUID(), ...body }) : undefined });
-		if (!response.ok) { const result = await response.json(); if (result.code === 'reauthentication_required') document.querySelector('#token-auth-required')?.removeAttribute('hidden'); const error = new Error(result.error); Object.assign(error, result); throw error; }
+		if (!response.ok) { const result = await response.json(); const error = new Error(result.error); Object.assign(error, result); throw error; }
 		if (response.headers.get('X-CSRF-Token')) document.querySelector('meta[name=csrf-token]').content = response.headers.get('X-CSRF-Token');
 		return raw ? response.text() : response.json();
 	}
@@ -111,7 +113,7 @@ class TypeRelay {
 		return response.json();
 	}
 	async bundle(file) { const response = await fetch('/api/v2/import/bundle', { method: 'POST', headers: { 'Content-Type': 'application/zip', 'X-CSRF-Token': document.querySelector('meta[name=csrf-token]').content, 'X-Account-Id': this.account || '', 'X-Operation-Id': this.formOperation }, body: file }); const result = await response.json(); if (!response.ok) throw new Error(result.error); return result; }
-	fragment(html) { const template = document.createElement('template'); template.innerHTML = html; for (const time of template.content.querySelectorAll('time[data-local-time]')) time.textContent = new Date(time.dateTime).toLocaleString(); return template.content.firstElementChild; }
+	fragment(html) { const template = document.createElement('template'); template.innerHTML = html; for (const time of template.content.querySelectorAll('time[data-local-time]')) time.textContent = new Date(time.dateTime).toLocaleString(); for (const time of template.content.querySelectorAll('time[data-local-date]')) time.textContent = new Date(time.dateTime).toLocaleDateString(); return template.content.firstElementChild; }
 	update(selector, container, html, before) {
 		const old = document.querySelector(selector);
 		const next = this.fragment(html);
@@ -193,7 +195,7 @@ class TypeRelay {
 		});
 		document.querySelectorAll('.settings-pane').forEach(pane => { pane.hidden = pane.id !== 'settings-pane-' + id; });
 		if (focus) tab.focus();
-		if (id === 'tokens') this.tokens().catch(error => this.toast(error.message, 'error'));
+		if (id === 'tokens') Promise.all([this.tokens(), this.oauth()]).catch(error => this.toast(error.message, 'error'));
 		if (id === 'devices') this.devices().catch(error => this.toast(error.message, 'error'));
 		if (id === 'whiteLabel') this.refreshWhiteLabel().catch(error => this.toast(error.message, 'error'));
 		if (id === 'subscription') this.refreshBilling().catch(error => this.toast(error.message, 'error'));
@@ -201,7 +203,8 @@ class TypeRelay {
 	applyBilling(result) {
 		if (result.subscription_html && document.querySelector('#settings-pane-subscription')) this.update('#subscription-content', '#settings-pane-subscription', result.subscription_html);
 		if (result.trial_html) this.update('#billing-nav-action', 'header .d-flex', result.trial_html);
-		if (result.tokens_form_html && !document.querySelector('#access-token-form')) document.querySelector('#access-token-form-container')?.replaceChildren(this.fragment(result.tokens_form_html));
+		if (Object.hasOwn(result, 'tokens_form_html')) { if (result.tokens_form_html && !document.querySelector('#access-token-form')) document.querySelector('#access-token-form-container')?.replaceChildren(this.fragment(result.tokens_form_html)); else if (!result.tokens_form_html) document.querySelector('#access-token-form')?.remove(); }
+		if (Object.hasOwn(result, 'oauth_client_form_html')) { if (result.oauth_client_form_html && !document.querySelector('#oauth-client-form')) document.querySelector('#oauth-client-form-container')?.replaceChildren(this.fragment(result.oauth_client_form_html)); else if (!result.oauth_client_form_html) document.querySelector('#oauth-client-form')?.remove(); }
 	}
 	async refreshBilling() { if (document.querySelector('#settings-pane-subscription')) this.applyBilling(await this.request('billing/fragments')); }
 	applyWhiteLabel(result) {
@@ -217,14 +220,27 @@ class TypeRelay {
 		try { const data = new FormData(); data.append('file', input.files[0]); this.applyWhiteLabel(await this.upload('white-label/assets/' + input.dataset.whiteLabelFile, data)); this.toast('Brand asset saved'); } finally { button.disabled = false; }
 	}
 	async tokens() {
-		const version = ++this.tokensVersion;
-		let rows;
-		try { rows = await this.request('access-tokens'); } catch (error) { if (error.code === 'reauthentication_required') return; throw error; }
-		if (version !== this.tokensVersion) return;
-		document.querySelector('#token-auth-required').hidden = true;
+		await this.rows('access-tokens', 'data-access-token', '#access-tokens', 'tokensVersion');
+	}
+	async rows(path, attribute, container, versionName) {
+		if (!document.querySelector(container)) return;
+		const version = ++this[versionName]; const rows = await this.request(path); if (version !== this[versionName]) return;
 		const ids = new Set(rows.map(row => row.id));
-		for (const row of rows) this.update('[data-access-token="' + row.id + '"]', '#access-tokens', row.html);
-		for (const node of document.querySelectorAll('[data-access-token]')) if (!ids.has(node.dataset.accessToken)) node.remove();
+		for (const row of rows) this.update('[' + attribute + '="' + row.id + '"]', container, row.html);
+		for (const node of document.querySelectorAll('[' + attribute + ']')) if (!ids.has(node.getAttribute(attribute))) node.remove();
+	}
+	async oauth() {
+		if (!document.querySelector('#oauth-pane')) return;
+		const config = await this.request('oauth/config');
+		for (const [id, value] of [['oauth-mcp-endpoint', config.mcp_endpoint], ['oauth-issuer', config.issuer], ['oauth-resource-metadata', config.resource_metadata_url], ['oauth-auth-metadata', config.authorization_server_metadata_url]]) { const node = document.querySelector('#' + id); if (node) node.textContent = value; }
+		await Promise.all([this.rows('oauth/consents', 'data-oauth-consent', '#oauth-consents', 'oauthConsentsVersion'), this.rows('oauth/clients', 'data-oauth-client', '#oauth-clients', 'oauthClientsVersion')]);
+	}
+	async copySecret(button) {
+		const input = button.closest('[data-token-secret],[data-oauth-client-secret]')?.querySelector('[data-secret-value]');
+		if (!input?.value) throw new Error('Secret is unavailable');
+		if (navigator.clipboard?.writeText && window.isSecureContext) { try { await navigator.clipboard.writeText(input.value); this.toast('Secret copied'); return; } catch {} }
+		input.focus({ preventScroll: true }); input.select(); input.setSelectionRange?.(0, input.value.length); if (typeof document.execCommand !== 'function' || !document.execCommand('copy')) throw new Error('Could not copy secret');
+		this.toast('Secret copied');
 	}
 	keyboard(event) {
 		if (!this.account || event.isComposing) return;
@@ -349,7 +365,7 @@ class TypeRelay {
 	async onSubmit(event) {
 		const form = event.target;
 		const groupForm = form.hasAttribute('data-group-form');
-		if (!groupForm && !['login', 'access-token-form', 'profile-form', 'account-form', 'team-member-form', 'record-form', 'team-seats-form', 'change-to-pro-form', 'change-to-team-form', 'checkout-team-form', 'white-label-domain-form'].includes(form.id)) return;
+		if (!groupForm && !['login', 'access-token-form', 'oauth-client-form', 'profile-form', 'account-form', 'team-member-form', 'record-form', 'team-seats-form', 'change-to-pro-form', 'change-to-team-form', 'checkout-team-form', 'white-label-domain-form'].includes(form.id)) return;
 		event.preventDefault();
 		const abbreviation = form.querySelector('#trigger');
 		if (abbreviation) Abbreviation.field(abbreviation);
@@ -362,7 +378,8 @@ class TypeRelay {
 			if (form.id === 'checkout-team-form') { const result = await this.request('billing/checkout', 'POST', { plan: 'team', seats: Number(data.get('seats')) }); location.assign(result.url); return; }
 			if (form.id === 'white-label-domain-form') { await this.whiteLabelRequest('white-label/domain', 'PUT', { hostname: data.get('hostname') }); this.toast('Domain saved'); return; }
 			if (form.id === 'login') this.toast((await this.request('/auth/login', 'POST', { email: data.get('email') })).message);
-			if (form.id === 'access-token-form') { ++this.tokensVersion; const row = await this.request('access-tokens', 'POST', { name: form.elements.name.value, days: Number(form.elements.days.value), scopes: [...form.querySelectorAll('[name=scopes]:checked')].map(input => input.value) }); ++this.tokensVersion; this.update('[data-access-token="' + row.id + '"]', '#access-tokens', row.html); document.querySelector('#token-secret-value').textContent = row.token; document.querySelector('#token-secret').hidden = false; form.reset(); return; }
+			if (form.id === 'access-token-form') { ++this.tokensVersion; const row = await this.request('access-tokens', 'POST', { name: form.elements.name.value }); ++this.tokensVersion; this.update('[data-access-token="' + row.id + '"]', '#access-tokens', row.html); document.querySelector('#access-token-secret').replaceChildren(this.fragment(row.secret_html)); form.reset(); return; }
+			if (form.id === 'oauth-client-form') { ++this.oauthClientsVersion; const row = await this.request('oauth/clients', 'POST', { client_name: data.get('client_name'), client_uri: data.get('client_uri') || undefined, redirect_uris: String(data.get('redirect_uris')).split(/\n|,/).map(value => value.trim()).filter(Boolean), token_endpoint_auth_method: data.get('token_endpoint_auth_method') }); ++this.oauthClientsVersion; this.update('[data-oauth-client="' + row.id + '"]', '#oauth-clients', row.html, document.querySelector('#oauth-clients').firstElementChild); document.querySelector('#oauth-client-secret').replaceChildren(...(row.secret_html ? [this.fragment(row.secret_html)] : [])); form.reset(); return; }
 			if (form.id === 'profile-form') {
 				const result = await this.request('profile', 'PATCH', { name: data.get('name'), email: data.get('email') });
 				this.update('#account-avatar', 'header .dropdown', result.avatar);
@@ -496,11 +513,13 @@ class TypeRelay {
 		if (button.id === 'scroll-top') { window.scrollTo({ top: 0, behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }); return; }
 		if (button.id === 'search-trigger') return this.openSearch();
 		if (button.dataset.settingsTab) return this.settingsTab(button.dataset.settingsTab);
-		if (button.id === 'dismiss-token') { document.querySelector('#token-secret-value').textContent = ''; document.querySelector('#token-secret').hidden = true; return; }
+		if (button.hasAttribute('data-copy-secret')) { await this.copySecret(button); return; }
+		if (button.hasAttribute('data-dismiss-secret')) { const secret = button.closest('[data-token-secret],[data-oauth-client-secret]'); const input = secret?.querySelector('[data-secret-value]'); if (input) input.value = ''; secret?.remove(); return; }
 		if (button.id === 'team-member-copy-password') { await this.copyTeamPassword(); return; }
 		if (button.id === 'team-member-rotate-password') { this.rotateTeamPassword(); return; }
-		if (button.id === 'retry-tokens') { button.disabled = true; try { await this.tokens(); } finally { button.disabled = false; } return; }
-		if (button.dataset.revokeToken && await this.confirm('Revoke this integration?')) { button.disabled = true; ++this.tokensVersion; try { await this.request('access-tokens/' + button.dataset.revokeToken, 'DELETE'); ++this.tokensVersion; document.querySelector('[data-access-token="' + button.dataset.revokeToken + '"]')?.remove(); } finally { button.disabled = false; } return; }
+		if (button.dataset.deleteToken && await this.confirm('Delete Token? This token will stop working immediately.')) { button.disabled = true; ++this.tokensVersion; try { await this.request('access-tokens/' + button.dataset.deleteToken, 'DELETE'); ++this.tokensVersion; document.querySelector('[data-access-token="' + button.dataset.deleteToken + '"]')?.remove(); document.querySelector('[data-token-secret="' + button.dataset.deleteToken + '"]')?.remove(); this.toast('Token deleted'); } finally { button.disabled = false; } return; }
+		if (button.dataset.revokeConsent && await this.confirm('Revoke app access? This app will need a new OAuth approval before it can connect again.')) { button.disabled = true; ++this.oauthConsentsVersion; try { await this.request('oauth/consents/' + button.dataset.revokeConsent, 'DELETE'); ++this.oauthConsentsVersion; document.querySelector('[data-oauth-consent="' + button.dataset.revokeConsent + '"]')?.remove(); this.toast('Authorized app revoked'); } finally { button.disabled = false; } return; }
+		if (button.dataset.deleteOauthClient && await this.confirm('Delete OAuth client? This client will stop working immediately and its grants will be revoked.')) { button.disabled = true; ++this.oauthClientsVersion; ++this.oauthConsentsVersion; try { await this.request('oauth/clients/' + button.dataset.deleteOauthClient, 'DELETE'); ++this.oauthClientsVersion; document.querySelector('[data-oauth-client="' + button.dataset.deleteOauthClient + '"]')?.remove(); await this.rows('oauth/consents', 'data-oauth-consent', '#oauth-consents', 'oauthConsentsVersion'); this.toast('OAuth client deleted'); } finally { button.disabled = false; } return; }
 		if (button.dataset.searchLibrary) {
 			const id = button.dataset.searchLibrary;
 			const snippet = button.dataset.searchSnippet;

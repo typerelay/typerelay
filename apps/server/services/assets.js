@@ -33,16 +33,17 @@ export class Assets {
 		const normalized = await sharp(data, { animated }).metadata();
 		return { id: Assets.id(data), data, mime_type: mimeType, size: data.length, width: normalized.width, height: normalized.height, animated };
 	}
-	static async put(ctx, input, sourceUrl = '') {
+	static async put(ctx, input, sourceUrl = '', session = null) {
 		const asset = await Assets.normalize(input);
-		return Assets.save(ctx, asset, sourceUrl);
+		return Assets.save(ctx, asset, sourceUrl, session);
 	}
 	static async accept(ctx,input,expectedId='',sourceUrl='') {
 		Support.assert(Buffer.isBuffer(input)&&input.length>0&&input.length<=Assets.maximumStored,'Asset exceeds 2 MiB',413);const detected=await fileTypeFromBuffer(input);Support.assert(detected&&Assets.types.has(detected.mime),'Invalid image asset',415);const metadata=await sharp(input,{animated:true,limitInputPixels:4096*4096*4}).metadata();Support.assert(metadata.width&&metadata.height&&metadata.width<=Assets.maximumDimension&&metadata.height<=Assets.maximumDimension,'Invalid normalized image dimensions',400);const asset={id:Assets.id(input),data:input,mime_type:detected.mime,size:input.length,width:metadata.width,height:metadata.height,animated:detected.mime==='image/gif'&&Number(metadata.pages||1)>1};Support.assert(!expectedId||asset.id===expectedId,'Asset hash does not match its URL',409);return Assets.save(ctx,asset,sourceUrl);
 	}
-	static async save(ctx,asset,sourceUrl='') {
+	static async save(ctx,asset,sourceUrl='',session=null) {
 		const update = { $setOnInsert: { account: ctx.account, ...asset, last_referenced_at: new Date() }, ...(sourceUrl ? { $addToSet: { source_urls: sourceUrl } } : {}) };
-		await AccountAccess.write(ctx.account, session => SnippetAsset.updateOne({ account: ctx.account, id: asset.id }, update, { upsert: true, session }));
+		if (session) await SnippetAsset.updateOne({ account: ctx.account, id: asset.id }, update, { upsert: true, session });
+		else await AccountAccess.write(ctx.account, transaction => SnippetAsset.updateOne({ account: ctx.account, id: asset.id }, update, { upsert: true, session: transaction }));
 		return Assets.metadata({ ...asset, source_urls: sourceUrl ? [sourceUrl] : [] });
 	}
 	static async get(ctx, id, includeData = false) {

@@ -1,4 +1,5 @@
-import { mongoose, Library, Snippet, Migration, MigrationBackup, Operation } from '../model/index.js';
+import { mongoose, Library, Snippet, Migration, MigrationBackup, Operation, Integration } from '../model/index.js';
+import { scopes } from '../api/catalog.js';
 import { Yaml } from './support.js';
 export class StorageMigration {
 	static async code() {
@@ -30,5 +31,10 @@ export class StorageMigration {
 		// Old receipts are acknowledged without retaining their content-bearing library snapshots.
 		for await (const operation of Operation.find({ 'result.library': { $exists: true } }).lean().cursor()) await Operation.updateOne({ _id: operation._id }, { $set: { result: { library_id: String(operation.result.library._id), versions: Object.fromEntries((operation.result.library.snippets || []).map(entry => [entry.id, entry.revision])), conflicts: operation.result.conflicts || [] } } });
 		await Migration.updateOne({ key: 'records-v2' }, { $set: { completed: true } }, { upsert: true });
+	}
+	static async tokens() {
+		if ((await Migration.findOne({ key: 'mailtwine-tokens-v1' }).lean())?.completed) return;
+		await Integration.updateMany({ kind: 'pat' }, { $set: { scopes, expires: null } });
+		await Migration.updateOne({ key: 'mailtwine-tokens-v1' }, { $set: { completed: true } }, { upsert: true });
 	}
 }

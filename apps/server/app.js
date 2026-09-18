@@ -37,6 +37,7 @@ export class Server {
 			return;
 		}
 		await StorageMigration.code();
+		await StorageMigration.tokens();
 		await Promise.all(Object.values(mongoose.models).map(model => model.createIndexes()));
 		await StorageMigration.run();
 		const app = express();
@@ -125,7 +126,7 @@ export class Server {
 			const usage = await Billing.usage(account._id);
 			const profile = await User.findById(ctx.user).lean();
 			await AdminSettings.application(req, res, profile, ctx);
-			res.render('app', { productUpdatesEnabled: ProductUpdates.eligible(req), news: req.path === '/news', product_updates: req.path === '/news' ? await ProductUpdates.listProductUpdates() : null, integrationScopes: Auth.scopes, importFormats: Libraries.importFormats, accounts, account, ctx, libraries: await Libraries.list(ctx), team: await Team.list(ctx), profile, ...Billing.locals(account, ctx, usage), whiteLabelSettings: WhiteLabel.serialize(account) });
+			res.render('app', { productUpdatesEnabled: ProductUpdates.eligible(req), news: req.path === '/news', product_updates: req.path === '/news' ? await ProductUpdates.listProductUpdates() : null, importFormats: Libraries.importFormats, accounts, account, ctx, libraries: await Libraries.list(ctx), team: await Team.list(ctx), profile, ...Billing.locals(account, ctx, usage), whiteLabelSettings: WhiteLabel.serialize(account) });
 		});
 		app.get('/snippet-assets/:account/:id', async (req, res) => { const ctx = await Support.context(req.session.user, req.params.account); const asset = await Assets.get(ctx, req.params.id, true); res.set({ 'Content-Type': asset.mime_type, 'Content-Length': String(asset.size), ETag: `"${asset.id}"`, 'Cache-Control': 'private, max-age=31536000, immutable' }).send(asset.data); });
 		app.use('/api/v1', (req, res) => res.status(426).json({ error: 'Upgrade TypeRelay: rich text requires sync protocol 6', protocol: 6 }));

@@ -58,12 +58,14 @@ test('sysadmin credentials fail closed and admin auth requires platform host, CS
 test('account creation, shared users, counts, search, CSV and revisions', async () => {
 	const created = await Fixture.json('/admin/api/accounts', 'POST', { name: 'Admin fixture', owner_name: 'Owner', owner_email: 'Owner@example.test' }, 201);
 	const id = created.id;
+	assert.equal(created.account.usage.libraries, 1); assert.equal(created.account.usage.snippets, 6); assert.equal(created.account.usage.assets, 1); assert.ok(created.account.usage.bytes > 0);
+	assert.deepEqual((await M.Snippet.find({ account: id }).sort({ position: 1 }).select('trigger').lean()).map(snippet => snippet.trigger), ['welcome', 'jslog', 'rich', 'sig', 'status', 'support']);
 	const second = await Fixture.json('/admin/api/accounts', 'POST', { name: 'Second account', owner_name: 'Do not overwrite', owner_email: 'owner@example.test' }, 201);
 	assert.equal(second.account.owner.name, 'Owner'); assert.equal(await M.User.countDocuments({ email: 'owner@example.test' }), 1);
 	const active = await M.Library.create({ account: id, name: 'Active', state: 'active' }); const trashed = await M.Library.create({ account: id, name: 'Trash', state: 'trashed' });
 	await M.Snippet.create([{ account: id, library: active._id, id: 'one', state: 'active' }, { account: id, library: trashed._id, id: 'two', state: 'active' }, { account: id, library: active._id, id: 'three', state: 'trashed' }]);
 	const detail = await Fixture.json('/admin/api/accounts/' + id);
-	assert.equal(detail.account.usage.snippets, 1); assert.equal(detail.account.usage.trash_snippets, 1); assert.equal(detail.account.usage.users, 1); assert.equal(detail.account.owner_accounts, 2);
+	assert.equal(detail.account.usage.snippets, 7); assert.equal(detail.account.usage.trash_snippets, 1); assert.equal(detail.account.usage.users, 1); assert.equal(detail.account.owner_accounts, 2);
 	const changed = await Fixture.json('/admin/api/accounts/' + id, 'PUT', { revision: detail.revision, name: '=Formula', owner_name: 'Changed shared name', override: { plan: 'team', limits: { people: 8, snippets: 0, machines: 2 } } });
 	assert.equal(changed.account.effective_plan, 'team'); assert.equal((await AdminAccounts.get(second.id)).owner.name, 'Changed shared name');
 	assert.equal(changed.related[0].id, second.id); assert.equal(changed.related[0].account.owner.name, 'Changed shared name');

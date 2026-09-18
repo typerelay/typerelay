@@ -3,7 +3,6 @@ import { AccountAccess } from './account_access.js';
 import pug from 'pug';
 import { randomBytes } from 'node:crypto';
 import { Account, Device, Library, Member, Snippet, Ticket, User } from '../model/index.js';
-import { scopes } from '../api/catalog.js';
 
 export class Billing {
 	static catalogName = 'typerelay_2026';
@@ -404,6 +403,6 @@ export class Billing {
 	static async fragments(accountId, ctx) {
 		const account = await Billing.account(accountId);
 		const locals = Billing.locals(account, ctx, await Billing.usage(accountId));
-		return { account, entitlements: locals.entitlements, subscription_html: pug.renderFile('./views/ajax/subscription.pug', locals), trial_html: pug.renderFile('./views/ajax/trial-button.pug', locals), tokens_form_html: locals.entitlements.capabilities.api ? pug.renderFile('./views/ajax/access-token-form.pug', { integrationScopes: scopes }) : '' };
+		return { account, entitlements: locals.entitlements, subscription_html: pug.renderFile('./views/ajax/subscription.pug', locals), trial_html: pug.renderFile('./views/ajax/trial-button.pug', locals), tokens_form_html: locals.entitlements.capabilities.api ? pug.renderFile('./views/ajax/access-token-form.pug') : '', oauth_client_form_html: locals.entitlements.capabilities.api && ['owner', 'admin'].includes(ctx.role) ? pug.renderFile('./views/ajax/oauth-client-form.pug') : '' };
 	}
 }

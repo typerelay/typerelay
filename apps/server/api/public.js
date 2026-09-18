@@ -8,7 +8,7 @@ import { Auth } from '../services/auth.js';
 import { Support, Yaml } from '../services/support.js';
 import { Libraries } from '../services/libraries.js';
 import { Team } from '../services/team.js';
-import { Integration, IntegrationToken, ApiAudit, Member, Account, Device, Conflict, Operation } from '../model/index.js';
+import { Integration, IntegrationToken, ApiAudit, Member, Account, Device, Conflict, Operation, OAuthClient } from '../model/index.js';
 import { operations } from './catalog.js';
 import { Billing } from '../services/billing.js';
 import { ApiRateLimit } from '../rate_limit.js';
@@ -43,7 +43,7 @@ export class PublicApi {
 			if (req.method === 'OPTIONS') return res.sendStatus(204);
 			next();
 		});
-		app.get('/.well-known/oauth-authorization-server', (req, res) => res.json({ issuer: Auth.origin, authorization_endpoint: Auth.origin + '/integrations/authorize', token_endpoint: Auth.origin + '/integrations/token', registration_endpoint: Auth.origin + '/integrations/register', response_types_supported: ['code'], grant_types_supported: ['authorization_code', 'refresh_token'], token_endpoint_auth_methods_supported: ['none'], code_challenge_methods_supported: ['S256'], scopes_supported: Auth.scopes }));
+		app.get('/.well-known/oauth-authorization-server', (req, res) => res.json({ issuer: Auth.origin, authorization_endpoint: Auth.origin + '/integrations/authorize', token_endpoint: Auth.origin + '/integrations/token', registration_endpoint: Auth.origin + '/integrations/register', response_types_supported: ['code'], grant_types_supported: ['authorization_code', 'refresh_token'], token_endpoint_auth_methods_supported: ['none', 'client_secret_post'], code_challenge_methods_supported: ['S256'], scopes_supported: Auth.scopes }));
 		app.get('/.well-known/oauth-protected-resource/api/v3', (req, res) => res.json({ resource: Auth.apiResource(), authorization_servers: [Auth.origin], scopes_supported: Auth.scopes, bearer_methods_supported: ['header'] }));
 		app.post('/integrations/register', authLimit, async (req, res) => res.status(201).json(await Auth.registerIntegration(req.body)));
 		app.post('/integrations/token', authLimit, async (req, res) => { res.set('Cache-Control', 'no-store'); res.json(await Auth.exchangeIntegration(req.body)); });
@@ -52,7 +52,7 @@ export class PublicApi {
 			if (!req.session.user) { req.session.return_to = req.originalUrl; return res.render('login', { returnTo: req.originalUrl }); }
 			res.setHeader('Content-Security-Policy', String(res.getHeader('Content-Security-Policy') || '').replace("form-action 'self'", "form-action 'self' " + new URL(req.query.redirect_uri).origin));
 			const members = await Member.find({ user: req.session.user }).lean();
-			const accounts = (await Account.find({ _id: { $in: members.map(member => member.account) } }).lean()).filter(account => (!req.boundAccount || String(account._id) === req.boundAccount) && Billing.entitlements(account).capabilities.api);
+			const accounts = (await Account.find({ _id: { $in: members.map(member => member.account) } }).lean()).filter(account => (!req.boundAccount || String(account._id) === req.boundAccount) && (!client.account || Support.equal(client.account, account._id)) && Billing.entitlements(account).capabilities.api);
 			Support.assert(accounts.length, 'API and MCP access require Pro or Team', 403);
 			res.render('integration-authorize', { client, scopes, request: req.query, accounts });
 		});
@@ -97,18 +97,36 @@ export class PublicApi {
 		});
 	}
 	static mountSettings(app) {
-		app.use('/api/v2/access-tokens', (req, res, next) => {
-			res.set('Cache-Control', 'no-store');
-			if (!(req.session.user && !req.headers.authorization && Date.now() - Number(req.session.auth_at || 0) < 900000)) return res.status(401).json({ error: 'Sign in again to manage access tokens', code: 'reauthentication_required' });
-			res.set('X-CSRF-Token', req.session.csrf);
-			next();
-		});
+		app.use(['/api/v2/access-tokens', '/api/v2/oauth'], (req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
 		app.get('/api/v2/access-tokens', async (req, res) => {
-			const grants = await Integration.find({ user: req.ctx.user, account: req.ctx.account, revoked: false }).sort({ createdAt: 1 }).lean();
+			const grants = await Integration.find({ user: req.ctx.user, account: req.ctx.account, kind: 'pat', revoked: false }).sort({ createdAt: 1 }).lean();
 			res.json(grants.map(grant => ({ id: String(grant._id), html: pug.renderFile('./views/ajax/access-token.pug', { grant }) })));
 		});
-		app.post('/api/v2/access-tokens', async (req, res) => { const { token, grant } = await Auth.createIntegration(req.ctx, req.body); res.set('Cache-Control', 'no-store').json({ token, id: String(grant._id), html: pug.renderFile('./views/ajax/access-token.pug', { grant }) }); });
-		app.delete('/api/v2/access-tokens/:id', async (req, res) => { await Integration.updateOne({ _id: Support.id(req.params.id), user: req.ctx.user, account: req.ctx.account }, { $set: { revoked: true } }); res.json({ revoked: req.params.id }); });
+		app.post('/api/v2/access-tokens', async (req, res) => { const { token, grant } = await Auth.createIntegration(req.ctx, req.body); res.json({ id: String(grant._id), html: pug.renderFile('./views/ajax/access-token.pug', { grant }), secret_html: pug.renderFile('./views/ajax/access-token-secret.pug', { id: String(grant._id), token }) }); });
+		app.delete('/api/v2/access-tokens/:id', async (req, res) => { const grant = await Integration.findOneAndUpdate({ _id: Support.id(req.params.id), user: req.ctx.user, account: req.ctx.account, kind: 'pat', revoked: false }, { $set: { revoked: true } }).lean(); Support.assert(grant, 'Token not found', 404); res.json({ revoked: req.params.id }); });
+		app.get('/api/v2/oauth/config', (req, res) => res.json(Auth.oauthConfig()));
+		app.get('/api/v2/oauth/consents', async (req, res) => {
+			const grants = await Integration.find({ user: req.ctx.user, account: req.ctx.account, kind: 'oauth', revoked: false }).sort({ last_used: -1, createdAt: -1 }).lean();
+			res.json(grants.map(grant => ({ id: String(grant._id), html: pug.renderFile('./views/ajax/oauth-consent.pug', { grant }) })));
+		});
+		app.delete('/api/v2/oauth/consents/:id', async (req, res) => {
+			const grant = await Integration.findOneAndUpdate({ _id: Support.id(req.params.id), user: req.ctx.user, account: req.ctx.account, kind: 'oauth', revoked: false }, { $set: { revoked: true } }).lean();
+			Support.assert(grant, 'Authorized app not found', 404); await IntegrationToken.deleteMany({ grant: grant._id }); res.json({ revoked: req.params.id });
+		});
+		app.get('/api/v2/oauth/clients', async (req, res) => {
+			Support.assert(Support.admin(req.ctx), 'Owner or admin access required', 403);
+			const clients = await OAuthClient.find({ account: req.ctx.account, registration_source: 'manual' }).sort({ createdAt: -1 }).lean();
+			res.json(clients.map(client => ({ id: String(client._id), html: pug.renderFile('./views/ajax/oauth-client.pug', { client: Auth.integrationClient(client) }) })));
+		});
+		app.post('/api/v2/oauth/clients', async (req, res) => {
+			const client = await Auth.createOAuthClient(req.ctx, req.body); res.status(201).json({ id: client.id, html: pug.renderFile('./views/ajax/oauth-client.pug', { client }), ...(client.client_secret ? { secret_html: pug.renderFile('./views/ajax/oauth-client-secret.pug', { secret: client.client_secret }) } : {}) });
+		});
+		app.delete('/api/v2/oauth/clients/:id', async (req, res) => {
+			Support.assert(Support.admin(req.ctx), 'Owner or admin access required', 403);
+			const client = await OAuthClient.findOneAndDelete({ _id: Support.id(req.params.id), account: req.ctx.account, registration_source: 'manual' }).lean(); Support.assert(client, 'OAuth client not found', 404);
+			const grants = await Integration.find({ account: req.ctx.account, client: client.client_id, kind: 'oauth', revoked: false }).select('_id').lean(); const ids = grants.map(grant => grant._id);
+			await Integration.updateMany({ _id: { $in: ids } }, { $set: { revoked: true } }); if (ids.length) await IntegrationToken.deleteMany({ grant: { $in: ids } }); res.json({ deleted: req.params.id });
+		});
 	}
 	static async run(operation, ctx, params, body, query, session) {
 		const id = params.id;

@@ -11,6 +11,9 @@ test('TipTap rich editor round-trips GFM, raw HTML, asset images and source mode
 	assert.deepEqual([...dom.window.document.querySelectorAll('.row.align-items-center.g-0 > div > .snippet-label')].map(label => label.textContent), ['Abbreviation', 'Title (optional)', 'Type']);
 	assert.equal(dom.window.document.querySelectorAll('.snippet-label').length, 4);
 	assert.equal(dom.window.document.querySelector('#template-options > .input-group') !== null, true);
+	const variableDefinition = dom.window.document.querySelector('#variable-definition').content;
+	assert.equal(variableDefinition.querySelector('[data-input-options].variable-checks') !== null, true);
+	assert.equal(variableDefinition.querySelectorAll('.form-check.variable-check').length, 2);
 	assert.ok(dom.window.document.querySelector('#template-options').compareDocumentPosition(dom.window.document.querySelector('#replace')) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING);
 	assert.ok(dom.window.document.querySelector('#template-options').compareDocumentPosition(dom.window.document.querySelector('#rich-options')) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING);
 	assert.equal(dom.window.document.querySelector('#copy-code'), null);
