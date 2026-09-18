@@ -19,11 +19,7 @@ form#fill-form
 		p.settings-note Formatting depends on the destination app. iOS keyboard insertion uses plain text.
 	.modal-footer.drawer-actions
 		if canEdit
-			button.secondary-button#edit-from-detail(type="button")
-				span.material-symbols-outlined edit
-				span Edit
+			button.secondary-button#edit-from-detail(type="button") Edit
 		.drawer-action-group
 			button.secondary-button(type="button" data-bs-dismiss="modal") Cancel
-			button.primary-button(type="submit" disabled=!!rendered.enter_actions)
-				span.material-symbols-outlined content_copy
-				span Copy snippet
+			button.primary-button(type="submit" disabled=!!rendered.enter_actions) Copy snippet
