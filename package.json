@@ -1,12 +1,31 @@
 {
   "name": "typerelay",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+  "private": true,
+  "description": "Cross-platform text expansion with shared snippets and native keyboards",
+  "license": "AGPL-3.0",
+  "type": "module",
+  "packageManager": "pnpm@12.0.0",
+  "engines": {
+    "node": ">=24"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC"
+  "scripts": {
+    "start": "pnpm --filter @typerelay/server start",
+    "build": "pnpm --filter @typerelay/server build",
+    "test": "pnpm --filter @typerelay/server test",
+    "mcp:start": "pnpm --filter @typerelay/mcp start",
+    "mcp:test": "pnpm --filter @typerelay/mcp test",
+    "docs:dev": "pnpm --filter @typerelay/docs dev",
+    "docs:build": "pnpm --filter @typerelay/docs build",
+    "mobile:dev": "pnpm --filter @typerelay/mobile dev",
+    "mobile:build": "pnpm --filter @typerelay/mobile build",
+    "mobile:sync": "pnpm --filter @typerelay/mobile cap:sync",
+    "mobile:test": "pnpm --filter @typerelay/mobile test",
+    "native:ios": "pnpm --filter @typerelay/mobile native:ios",
+    "native:android": "pnpm --filter @typerelay/mobile native:android",
+    "android:release": "pnpm --filter @typerelay/mobile android:release",
+    "android:test": "pnpm --filter @typerelay/mobile test:release",
+    "desktop:build": "pnpm --filter typerelay-desktop build",
+    "desktop:test": "pnpm --filter typerelay-desktop test"
+  }
 }

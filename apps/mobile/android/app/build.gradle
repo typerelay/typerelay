@@ -46,6 +46,32 @@ android {
     }
 }
 
+def mobileWebRoot = file('../..')
+def packagedWebIndex = file('src/main/assets/public/index.html')
+def mobileWebSources = files(
+    fileTree(dir: new File(mobileWebRoot, 'src'), include: '**/*'),
+    fileTree(dir: new File(mobileWebRoot, 'views'), include: '**/*'),
+    fileTree(dir: new File(mobileWebRoot, 'scripts'), include: '**/*'),
+    new File(mobileWebRoot, 'capacitor.config.ts'),
+    new File(mobileWebRoot, 'index.html'),
+    new File(mobileWebRoot, 'package.json'),
+    new File(mobileWebRoot, 'tsconfig.json'),
+    new File(mobileWebRoot, 'vite.config.ts'),
+    file('../../../../pnpm-lock.yaml'),
+    file('../../../../pnpm-workspace.yaml')
+)
+
+tasks.register('verifyFreshWebAssets') {
+    inputs.files(mobileWebSources)
+    doLast {
+        if (!packagedWebIndex.isFile()) throw new GradleException("Mobile web assets are missing. Run 'pnpm run mobile:build' and 'pnpm --filter @typerelay/mobile exec cap sync android' before building a release.")
+        def latestSource = mobileWebSources.files.findAll { it.isFile() }.max { it.lastModified() }
+        if (latestSource && packagedWebIndex.lastModified() < latestSource.lastModified()) throw new GradleException("Mobile web assets are stale. Run 'pnpm run mobile:build' and 'pnpm --filter @typerelay/mobile exec cap sync android' before building a release.")
+    }
+}
+
+tasks.matching { it.name == 'preReleaseBuild' }.configureEach { dependsOn('verifyFreshWebAssets') }
+
 gradle.taskGraph.whenReady { taskGraph ->
     def requiresSignedRelease = taskGraph.allTasks.any { task -> task.project == project && task.name in ["bundleRelease", "assembleRelease"] }
     if (requiresSignedRelease && !releaseSigningConfigured && !allowUnsignedRelease) throw new GradleException("Release signing is not configured. Set TYPERELAY_ANDROID_KEYSTORE_PATH, TYPERELAY_ANDROID_KEYSTORE_PASSWORD, TYPERELAY_ANDROID_KEY_ALIAS, and TYPERELAY_ANDROID_KEY_PASSWORD, or set ALLOW_UNSIGNED_RELEASE=true.")

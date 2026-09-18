@@ -17,11 +17,11 @@ if (process.argv[2] === 'ios') {
  copyFileSync(join(root, `target/aarch64-apple-ios/${profile}/libtyperelay_mobile.a`), join(mobile, 'native/ios/iphoneos/libtyperelay_mobile.a'));
  execFileSync('xcrun', ['lipo', '-create', ...targets.slice(1).map(target => join(root, `target/${target}/${profile}/libtyperelay_mobile.a`)), '-output', join(mobile, 'native/ios/iphonesimulator/libtyperelay_mobile.a')], { stdio: 'inherit' });
 } else if (process.argv[2] === 'android') {
- const sdk = process.env.ANDROID_HOME || join(homedir(), 'Library/Android/sdk');
- const ndk = process.env.ANDROID_NDK_HOME || join(sdk, 'ndk/28.2.13676358');
+ const sdk = process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT || join(homedir(), process.platform === 'darwin' ? 'Library/Android/sdk' : 'Android/Sdk');
+ const ndk = process.env.ANDROID_NDK_HOME || process.env.ANDROID_NDK_ROOT || join(sdk, 'ndk/28.2.13676358');
  const host = process.platform === 'darwin' ? 'darwin-x86_64' : 'linux-x86_64';
  const bin = join(ndk, 'toolchains/llvm/prebuilt', host, 'bin');
- if (!existsSync(bin)) throw new Error('Install Android NDK 28.2.13676358 or set ANDROID_NDK_HOME.');
+ if (!existsSync(bin)) throw new Error(`Android NDK 28.2.13676358 not found at ${ndk}. Install it with Android Studio's SDK Manager or set ANDROID_NDK_HOME/ANDROID_NDK_ROOT.`);
  for (const [target, abi] of [['aarch64-linux-android', 'arm64-v8a'], ['x86_64-linux-android', 'x86_64']]) {
   execFileSync('rustup', ['target', 'add', target], { stdio: 'inherit' });
   const key = target.replaceAll('-', '_');

@@ -1,6 +1,0 @@
-packages:
-  - .
-onlyBuiltDependencies:
-  - esbuild
-overrides:
-  is-core-module: 2.16.2

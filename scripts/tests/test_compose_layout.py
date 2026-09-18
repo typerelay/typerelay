@@ -9,6 +9,9 @@ class ComposeLayoutTests(unittest.TestCase):
         cls.root = pathlib.Path(__file__).resolve().parents[2]
         cls.development = (cls.root / "compose.yml").read_text()
         cls.production = (cls.root / "compose.prod.yml").read_text()
+        cls.base = (cls.root / "compose.base.yml").read_text()
+        cls.server_dockerfile = (cls.root / "apps" / "server" / "Dockerfile").read_text()
+        cls.mcp_dockerfile = (cls.root / "apps" / "mcp" / "Dockerfile").read_text()
         cls.dbh = (cls.root / "compose.dbh.yml").read_text()
         cls.dbh_run = (cls.root / ".codex" / "dbh-run.toml").read_text()
         cls.dbh_run_config = tomllib.loads(cls.dbh_run)
@@ -56,6 +59,16 @@ class ComposeLayoutTests(unittest.TestCase):
             self.assertIn(f"{name} =", self.dbh_run)
         for value in self.dbh_run_config["environment"].values():
             value.format(profile="n", repo="typerelay")
+
+    def test_node_dependencies_use_the_root_workspace(self):
+        self.assertIn("typerelay-root-node-modules:/opt/typerelay/node_modules", self.base)
+        self.assertIn("--dir, /opt/typerelay, --filter", self.development)
+        for source in [self.server_dockerfile, self.mcp_dockerfile]:
+            self.assertIn("COPY package.json pnpm-lock.yaml pnpm-workspace.yaml", source)
+            self.assertIn("pnpm --filter", source)
+            self.assertIn(" deploy --prod ", source)
+            self.assertNotIn("apps/server/pnpm-lock.yaml", source)
+            self.assertNotIn("apps/mcp/pnpm-lock.yaml", source)
 
 
 if __name__ == "__main__":

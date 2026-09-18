@@ -67,6 +67,7 @@ services:
     volumes:
       - ./apps/mobile:/opt/typerelay/apps/mobile
       - ./apps/server:/opt/typerelay/apps/server:ro
+      - typerelay-root-node-modules:/opt/typerelay/node_modules:ro
       - typerelay-mobile-node-modules:/opt/typerelay/apps/mobile/node_modules
       - typerelay-node-modules:/opt/typerelay/apps/server/node_modules:ro
       - typerelay-mobile-preview:/data/mobile-preview
@@ -82,7 +83,7 @@ services:
       service: base
     user: root
     environment: *env
-    command: [corepack, pnpm, install, --frozen-lockfile]
+    command: [corepack, pnpm, --dir, /opt/typerelay, --filter, "@typerelay/server", install, --frozen-lockfile]
     restart: "no"
 
   app:
@@ -147,7 +148,7 @@ services:
   docs:
     profiles: [tools]
     image: node:24-bookworm-slim
-    working_dir: /repo/docs
+    working_dir: /repo
     user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
     environment:
       npm_config_cache: /tmp/npm-cache
@@ -155,7 +156,7 @@ services:
       - .:/repo
     ports:
       - "127.0.0.1:5173:5173"
-    command: [sh, -c, "npx --yes pnpm@12.0.0 install --frozen-lockfile && npx --yes pnpm@12.0.0 run build"]
+    command: [sh, -c, "npx --yes pnpm@12.0.0 --filter @typerelay/docs install --frozen-lockfile && npx --yes pnpm@12.0.0 --filter @typerelay/docs build"]
   mcp:
     image: typerelay-mcp
     build:
@@ -174,13 +175,13 @@ services:
   mcp-tools:
     profiles: [tools]
     image: node:24-bookworm-slim
-    working_dir: /repo/apps/mcp
+    working_dir: /repo
     user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
     environment:
       npm_config_cache: /tmp/npm-cache
     volumes:
       - .:/repo
-    command: [sh, -c, "npx --yes pnpm@12.0.0 install --frozen-lockfile && npx --yes pnpm@12.0.0 test"]
+    command: [sh, -c, "npx --yes pnpm@12.0.0 --filter @typerelay/mcp install --frozen-lockfile && npx --yes pnpm@12.0.0 --filter @typerelay/mcp test"]
   browser-check:
     depends_on:
       app:
@@ -240,6 +241,7 @@ services:
 
 volumes:
   typerelay-server:
+  typerelay-root-node-modules:
   typerelay-node-modules:
   typerelay-mobile-node-modules:
   typerelay-mobile-preview:

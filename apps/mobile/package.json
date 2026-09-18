@@ -12,6 +12,7 @@
     "native:android": "node scripts/build-native.mjs android",
     "test": "cargo test --manifest-path ../../Cargo.toml -p typerelay-mobile --lib",
     "assets": "node scripts/assets.mjs",
+    "test:release": "node --test test/release-packaging.test.mjs",
     "test:ui": "node --test test/ui.test.mjs",
     "test:preview": "node --test test/preview-server.test.mjs"
   },

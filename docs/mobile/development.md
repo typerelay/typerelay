@@ -17,11 +17,10 @@ Requirements: Node 24, pnpm, Rust, Xcode for iOS; Android SDK 36, Java 21 and ND
 Run from the repository root, in Fish:
 
 ```fish
-pnpm --dir apps/server install --frozen-lockfile
-pnpm --dir apps/mobile install --frozen-lockfile
-pnpm --dir apps/mobile cap:sync
-pnpm --dir apps/mobile native:ios
-pnpm --dir apps/mobile native:android
+pnpm install --frozen-lockfile
+pnpm run mobile:sync
+pnpm run native:ios
+pnpm run native:android
 ```
 
 The server package supplies the existing editor modules, Pug partials and artwork tooling; it does not need to be running to build the mobile frontend. Native scripts compile optimized Rust by default; append `--debug` for Rust debugging. Rebuild native libraries after changing Rust code, then build the corresponding platform app. Generated libraries are deliberately excluded from Git.
@@ -35,7 +34,7 @@ Android packages include ARM64 devices and x86_64 emulators; 32-bit Android is n
 
 Android debug APK: `apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`.
 
-Create a signed Android App Bundle from `apps/mobile` with `pnpm run android:release`. On macOS it loads the existing `HELPMONKS_ANDROID_*` signing values from the sibling `helpmonks-install-script/macos_config.fish`; `TYPERELAY_ANDROID_*` values override them. The command rebuilds the Rust bridge and web assets, synchronizes Capacitor, signs the release, verifies its signature, and writes `android/app/build/outputs/bundle/release/app-release.aab`.
+Create a signed Android App Bundle from the repository root with `pnpm run android:release`. On macOS it loads the existing `HELPMONKS_ANDROID_*` signing values from the sibling `helpmonks-install-script/macos_config.fish`; `TYPERELAY_ANDROID_*` values override them. The command requires NDK `28.2.13676358`, rebuilds the Rust bridge and web assets, synchronizes Capacitor, signs the release, verifies its signature, and writes `apps/mobile/android/app/build/outputs/bundle/release/app-release.aab`. Install the exact side-by-side NDK with Android Studio's SDK Manager; set `ANDROID_NDK_HOME` or `ANDROID_NDK_ROOT` only when it is outside the selected Android SDK.
 
 For iOS device installation, open `apps/mobile/ios/App/App.xcodeproj`, select your development team for **App** and **TypeRelayKeyboard**, and provision `group.com.typerelay.mobile` for both. Bundle identifiers are `com.typerelay.mobile` and `com.typerelay.mobile.keyboard`. App Group provisioning and physical-device acceptance remain necessary before TestFlight.
 
@@ -87,7 +86,7 @@ The app uses React subscriptions with Pug-rendered fragments, including the exis
 
 ```fish
 cargo test -p typerelay-mobile -p typerelay-client --lib
-pnpm --dir apps/mobile build
+pnpm run mobile:build
 dbh-run compose -- exec -e APP_URL=http://localhost:3040 -e API_RATE_LIMIT_ENABLED=false app node --test --test-force-exit --test-name-pattern 'mobile|desktop PKCE|device enrollment|PKCE account binding' test/sync.test.js
 ```
 
@@ -106,6 +105,6 @@ The broader server suite is not currently green. Baseline verification at `df7a8
 - Try Notes, mail, messaging and browser fields. On Android, test formatted text, supported images and refusal/fallback. On iOS, test secure fields and an app that blocks custom keyboards.
 - Revoke access or sign out; verify snapshots and images disappear when the device learns the change.
 
-Run the supplied frontend regression checks with `pnpm --dir apps/mobile test:ui` (Node 24). They verify item-only replacement, preserved surrounding state/focus, and duplicate/create/delete handling. These checks were intentionally left for the user to execute.
+Run the supplied frontend regression checks with `pnpm --filter @typerelay/mobile test:ui` (Node 24). They verify item-only replacement, preserved surrounding state/focus, and duplicate/create/delete handling. These checks are intentionally left for the user to execute.
 
 Frontend interaction testing belongs to the user. Native builds and unit/API tests do not establish device usability or App Store/Play approval.
