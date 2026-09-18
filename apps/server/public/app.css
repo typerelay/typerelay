@@ -44,6 +44,10 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .settings-nav .list-group-item { border: 0; border-radius: 0; padding: .85rem 1.25rem; }
 .settings-nav .active { background: #a15c40; color: white; }
 .settings-content { flex: 1; min-width: 0; overflow-y: auto; padding: 1.5rem; }
+.settings-tabs { gap: .5rem; border-bottom: 0; margin-bottom: .25rem; }
+.settings-tabs .nav-link { border: .0625rem solid #d7dfea; border-radius: .6rem; padding: .45rem .9rem; font-weight: 500; color: #5d6470; background: white; transition: all .15s ease-in-out; }
+.settings-tabs .nav-link:hover, .settings-tabs .nav-link:focus { color: #302d29; background: #f8f5ee; border-color: #d7dfea; box-shadow: none; }
+.settings-tabs .nav-link.active, .settings-tabs .show > .nav-link { color: white; background: #a15c40; border-color: #302d29; box-shadow: .125rem .125rem 0 0 #302d29; }
 .team-settings-card { border-color: #d7dfea; background: #f7f9fc; }
 .team-member + .team-member { margin-top: 1.25rem; }
 .team-member-remove { display: inline-flex; width: 2.25rem; height: 2.25rem; align-items: center; justify-content: center; padding: 0; }

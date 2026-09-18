@@ -178,7 +178,7 @@ block content
 								h3.h6.fw-bold Access Tokens
 								if !ctx.entitlements.capabilities.api
 									.alert.alert-warning API and MCP access require Pro or Team. Existing tokens stay stored but cannot authenticate.
-								ul.nav.nav-pills.mb-4(role="tablist")
+								ul.nav.nav-pills.settings-tabs.mb-4(role="tablist")
 									li.nav-item(role="presentation")
 										button.nav-link.active(type="button" data-bs-toggle="tab" data-bs-target="#access-tokens-pane" role="tab" aria-controls="access-tokens-pane" aria-selected="true") Access Tokens
 									li.nav-item(role="presentation")
