@@ -7,6 +7,7 @@
     "dev": "vite --host 127.0.0.1",
     "build": "node scripts/build-renderer.mjs && tsc --noEmit && vite build",
     "cap:sync": "pnpm assets && pnpm build && capacitor sync",
+    "android:release": "bash scripts/android-release-bundle.sh",
     "native:ios": "node scripts/build-native.mjs ios",
     "native:android": "node scripts/build-native.mjs android",
     "test": "cargo test --manifest-path ../../Cargo.toml -p typerelay-mobile --lib",

@@ -1,12 +1,29 @@
 apply plugin: 'com.android.application'
 apply plugin: 'org.jetbrains.kotlin.android'
 
+def releaseKeystorePath = System.getenv("TYPERELAY_ANDROID_KEYSTORE_PATH")
+def releaseKeystorePassword = System.getenv("TYPERELAY_ANDROID_KEYSTORE_PASSWORD")
+def releaseKeyAlias = System.getenv("TYPERELAY_ANDROID_KEY_ALIAS")
+def releaseKeyPassword = System.getenv("TYPERELAY_ANDROID_KEY_PASSWORD")
+def allowUnsignedRelease = System.getenv("ALLOW_UNSIGNED_RELEASE") == "true"
+def releaseSigningConfigured = releaseKeystorePath && releaseKeystorePassword && releaseKeyAlias && releaseKeyPassword && file(releaseKeystorePath).exists()
+
 android {
     kotlinOptions { jvmTarget = "21" }
     compileOptions { sourceCompatibility JavaVersion.VERSION_21; targetCompatibility JavaVersion.VERSION_21 }
     namespace = "com.typerelay.mobile"
     ndkVersion "28.2.13676358"
     compileSdk = rootProject.ext.compileSdkVersion
+    signingConfigs {
+        release {
+            if (releaseSigningConfigured) {
+                storeFile file(releaseKeystorePath)
+                storePassword releaseKeystorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+            }
+        }
+    }
     defaultConfig {
         applicationId "com.typerelay.mobile"
         minSdkVersion rootProject.ext.minSdkVersion
@@ -22,10 +39,16 @@ android {
     }
     buildTypes {
         release {
+            if (releaseSigningConfigured) signingConfig signingConfigs.release
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }
+}
+
+gradle.taskGraph.whenReady { taskGraph ->
+    def requiresSignedRelease = taskGraph.allTasks.any { task -> task.project == project && task.name in ["bundleRelease", "assembleRelease"] }
+    if (requiresSignedRelease && !releaseSigningConfigured && !allowUnsignedRelease) throw new GradleException("Release signing is not configured. Set TYPERELAY_ANDROID_KEYSTORE_PATH, TYPERELAY_ANDROID_KEYSTORE_PASSWORD, TYPERELAY_ANDROID_KEY_ALIAS, and TYPERELAY_ANDROID_KEY_PASSWORD, or set ALLOW_UNSIGNED_RELEASE=true.")
 }
 
 repositories {

@@ -35,6 +35,8 @@ Android packages include ARM64 devices and x86_64 emulators; 32-bit Android is n
 
 Android debug APK: `apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`.
 
+Create a signed Android App Bundle from `apps/mobile` with `pnpm run android:release`. On macOS it loads the existing `HELPMONKS_ANDROID_*` signing values from the sibling `helpmonks-install-script/macos_config.fish`; `TYPERELAY_ANDROID_*` values override them. The command rebuilds the Rust bridge and web assets, synchronizes Capacitor, signs the release, verifies its signature, and writes `android/app/build/outputs/bundle/release/app-release.aab`.
+
 For iOS device installation, open `apps/mobile/ios/App/App.xcodeproj`, select your development team for **App** and **TypeRelayKeyboard**, and provision `group.com.typerelay.mobile` for both. Bundle identifiers are `com.typerelay.mobile` and `com.typerelay.mobile.keyboard`. App Group provisioning and physical-device acceptance remain necessary before TestFlight.
 
 ## Browser testing on dbh
