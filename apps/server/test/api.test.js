@@ -2,7 +2,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID, createHash } from 'node:crypto';
 import express from 'express';
-import { mongoose, Account, User, Member, Integration, ApiAudit, OAuthClient } from '../model/index.js';
+import { mongoose, Account, User, Member, Integration, ApiAudit, OAuthClient, Migration } from '../model/index.js';
 import { Support } from '../services/support.js';
 import { Auth } from '../services/auth.js';
 import { Libraries } from '../services/libraries.js';
@@ -10,6 +10,7 @@ import { PublicApi } from '../api/public.js';
 import { AdminAccounts } from '../services/admin_accounts.js';
 import { operations } from '../api/catalog.js';
 import spec, { ApiSchema } from '../api/openapi.js';
+import { StorageMigration } from '../services/storage_migration.js';
 
 class ApiFixture {
 	static server; static base; static owner; static outsider; static token; static reader; static library;
@@ -26,8 +27,8 @@ before(async () => {
 	const account = await Account.create({ name: 'API test' });
 	ApiFixture.owner = await ApiFixture.user(account._id);
 	ApiFixture.outsider = await ApiFixture.user((await Account.create({ name: 'Other' }))._id);
-	ApiFixture.token = (await Auth.createIntegration(ApiFixture.owner, { name: 'Tests', scopes: Auth.scopes })).token;
-	ApiFixture.reader = (await Auth.createIntegration(ApiFixture.owner, { name: 'Read only', scopes: ['content:read'] })).token;
+	ApiFixture.token = (await Auth.createIntegration(ApiFixture.owner, { name: 'Tests' })).token;
+	ApiFixture.reader = 'tr_pat_' + Support.token(); await Integration.create({ account: ApiFixture.owner.account, user: ApiFixture.owner.user, name: 'Legacy read only', kind: 'pat', scopes: ['content:read'], hash: Support.hash(ApiFixture.reader), expires: null });
 	const app = express(); app.use(express.json()); await PublicApi.mount(app, (req, res, next) => next());
 	app.use((error, req, res, next) => res.status(error.status || 500).json({ error: error.message }));
 	ApiFixture.server = app.listen(0, '127.0.0.1'); await new Promise(resolve => ApiFixture.server.once('listening', resolve)); ApiFixture.base = 'http://127.0.0.1:' + ApiFixture.server.address().port;
@@ -39,25 +40,21 @@ test('public authentication is separate from desktop and scope-limited; no token
 	assert.equal((await ApiFixture.request('/me', 'GET', null, 'bad')).status, 401);
 	assert.equal((await ApiFixture.request('/libraries', 'POST', { operation_id: randomUUID(), name: 'No' }, ApiFixture.reader)).status, 403);
 	const grant = await Integration.findOne({ name: 'Tests' }).lean(); assert.equal(grant.hash, undefined);
+	const metadata = await (await fetch(ApiFixture.base + '/.well-known/oauth-authorization-server')).json(); assert.deepEqual(metadata.token_endpoint_auth_methods_supported, ['none', 'client_secret_post']);
+	assert.equal(Auth.oauthConfig().resource_metadata_url, new URL(Auth.mcpResource()).origin + '/.well-known/oauth-protected-resource/mcp');
 });
-test('unlimited personal tokens support reads and writes, counts, validation and revocation', async () => {
+test('personal tokens are full access, non-expiring, hashed and revocable', async () => {
 	const before = (await AdminAccounts.counts([new mongoose.Types.ObjectId(ApiFixture.owner.account)])).get(ApiFixture.owner.account).integrations;
-	const { token, grant } = await Auth.createIntegration(ApiFixture.owner, { name: 'Unlimited', days: 0, scopes: Auth.scopes });
+	const { token, grant } = await Auth.createIntegration(ApiFixture.owner, { name: 'Mailtwine parity', days: 1, scopes: ['content:read'] });
 	assert.equal(grant.expires, null);
+	assert.deepEqual(grant.scopes, Auth.scopes);
 	assert.equal((await ApiFixture.request('/me', 'GET', null, token)).status, 200);
 	assert.equal((await ApiFixture.request('/libraries', 'POST', { operation_id: randomUUID(), name: 'Unlimited token write' }, token)).status, 200);
 	assert.equal((await AdminAccounts.counts([new mongoose.Types.ObjectId(ApiFixture.owner.account)])).get(ApiFixture.owner.account).integrations, before + 1);
-	for (const days of [-1, 366, 1.5, null, '', false, '0']) await assert.rejects(Auth.createIntegration(ApiFixture.owner, { name: 'Invalid', days, scopes: ['content:read'] }), /Expiry/);
-	const finite = await Auth.createIntegration(ApiFixture.owner, { name: 'Finite', days: 365, scopes: ['content:read'] });
-	assert.ok(finite.grant.expires > new Date(Date.now() + 364 * 86400000));
-	const standard = await Auth.createIntegration(ApiFixture.owner, { name: 'Default', scopes: ['content:read'] });
-	assert.ok(Math.abs(+standard.grant.expires - Date.now() - 90 * 86400000) < 5000);
-	await Integration.updateOne({ _id: finite.grant._id }, { $set: { expires: new Date(Date.now() - 1000) } });
-	assert.equal((await ApiFixture.request('/me', 'GET', null, finite.token)).status, 401);
+	assert.equal((await Integration.findById(grant._id).lean()).hash, undefined);
+	await assert.rejects(Auth.createIntegration(ApiFixture.owner, { name: '' }), /Invalid text/);
 	await Integration.updateOne({ _id: grant._id }, { $set: { revoked: true } });
 	assert.equal((await ApiFixture.request('/me', 'GET', null, token)).status, 401);
-	await Integration.updateOne({ _id: standard.grant._id }, { $unset: { expires: 1 } });
-	assert.equal((await ApiFixture.request('/me', 'GET', null, standard.token)).status, 401, 'Only explicit null is unlimited');
 });
 test('private CRUD, metadata, retries and search use the shared sync data', async () => {
 	const body = { operation_id: randomUUID(), name: 'Code', snippets: [{ id: randomUUID(), title: 'Tabs', trigger: null, content: { version: 1, type: 'code', language: 'rust', text: '\t  fn main() {}\n\n' } }] };
@@ -107,6 +104,21 @@ test('OAuth registration, account/resource binding, PKCE and refresh replay revo
 	assert.ok(refreshed.access_token);
 	await assert.rejects(Auth.exchangeIntegration({ grant_type: 'refresh_token', refresh_token: token.refresh_token, client_id: client.client_id, resource: request.resource }), /replay/);
 	await assert.rejects(Auth.integration('Bearer ' + refreshed.access_token), /revoked/);
+});
+test('confidential manual OAuth clients require their one-time secret and stay account-bound', async () => {
+	const client = await Auth.createOAuthClient(ApiFixture.owner, { client_name: 'Confidential client', client_uri: 'https://example.test/', redirect_uris: ['https://example.test/callback'], token_endpoint_auth_method: 'client_secret_post' });
+	assert.ok(client.client_secret); assert.equal((await OAuthClient.findById(client.id).lean()).secret_hash, undefined);
+	const verifier = Support.token(); const request = { client_id: client.client_id, redirect_uri: client.redirect_uris[0], response_type: 'code', state: Support.token(), code_challenge_method: 'S256', code_challenge: createHash('sha256').update(verifier).digest('base64url'), resource: Auth.apiResource(), scope: 'content:read', account: ApiFixture.owner.account };
+	const redirect = new URL(await Auth.approveIntegration(ApiFixture.owner.user, request)); const exchange = { grant_type: 'authorization_code', code: redirect.searchParams.get('code'), code_verifier: verifier, client_id: client.client_id, redirect_uri: request.redirect_uri, resource: request.resource };
+	await assert.rejects(Auth.exchangeIntegration(exchange), /client secret/i); await assert.rejects(Auth.exchangeIntegration({ ...exchange, client_secret: 'wrong' }), /client secret/i);
+	assert.ok((await Auth.exchangeIntegration({ ...exchange, client_secret: client.client_secret })).access_token);
+	await assert.rejects(Auth.approveIntegration(ApiFixture.outsider.user, { ...request, account: ApiFixture.outsider.account }), /another account/);
+	const member = await ApiFixture.user(ApiFixture.owner.account, 'member'); await assert.rejects(Auth.createOAuthClient(member, { client_name: 'Denied', redirect_uris: ['https://example.test/member'], token_endpoint_auth_method: 'none' }), /admin access/i);
+});
+test('personal-token migration is repeatable and normalizes legacy grants', async () => {
+	const legacy = await Integration.create({ account: ApiFixture.owner.account, user: ApiFixture.owner.user, name: 'Legacy', kind: 'pat', scopes: ['content:read'], hash: Support.hash(Support.token()), expires: new Date(Date.now() + 86400000) });
+	await Migration.deleteOne({ key: 'mailtwine-tokens-v1' }); await StorageMigration.tokens(); await StorageMigration.tokens();
+	const migrated = await Integration.findById(legacy._id).lean(); assert.deepEqual(migrated.scopes, Auth.scopes); assert.equal(migrated.expires, null);
 });
 test('revocation and member removal invalidate integrations', async () => {
 	const { token, grant } = await Auth.createIntegration(ApiFixture.outsider, { name: 'Revoke', scopes: ['content:read'] });

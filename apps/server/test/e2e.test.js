@@ -572,10 +572,11 @@ test('all Bootstrap modals resist Escape and background clicks but explicit clos
 });
 
 test('public API edits reach two SQLite clients and token settings update individual rows', async () => {
-	const token = await Fixture.json('access-tokens', 'POST', { name: 'API integration', scopes: ['content:read', 'content:write'], days: 1 });
-	assert.match(token.token, /^tr_pat_/); assert.ok(token.html.includes('data-access-token'));
-	const list = await Fixture.json('access-tokens'); assert.ok(!JSON.stringify(list).includes(token.token));
-	const headers = { Authorization: 'Token ' + token.token, 'Content-Type': 'application/json' };
+	const token = await Fixture.json('access-tokens', 'POST', { name: 'API integration' });
+	const secretDom = new JSDOM(token.secret_html); const secret = secretDom.window.document.querySelector('[data-secret-value]').value; secretDom.window.close();
+	assert.match(secret, /^tr_pat_/); assert.ok(token.html.includes('data-access-token'));
+	const list = await Fixture.json('access-tokens'); assert.ok(!JSON.stringify(list).includes(secret));
+	const headers = { Authorization: 'Token ' + secret, 'Content-Type': 'application/json' };
 	const body = { operation_id: randomUUID(), name: 'Public API sync', snippets: [{ id: randomUUID(), title: 'API code', trigger: null, content: { version: 1, type: 'code', language: 'rust', text: '\t  fn api() {}\n\n' } }] };
 	const response = await fetch(Fixture.origin + '/api/v3/libraries', { method: 'POST', headers, body: JSON.stringify(body) });
 	assert.equal(response.status, 200); const created = await response.json();
@@ -590,9 +591,9 @@ test('public API edits reach two SQLite clients and token settings update indivi
 		await client.onSubmit({ target: form, preventDefault() {}, submitter: form.querySelector('button[type=submit]') });
 		assert.equal(document.querySelector('#settings-pane-tokens'), pane);
 		assert.equal(document.querySelectorAll('[data-access-token="' + token.id + '"]').length, 1);
-		assert.equal(document.querySelector('#token-secret-value').textContent, token.token);
+		assert.equal(document.querySelector('#access-token-secret [data-secret-value]').value, secret);
 		document.querySelector('#settings').dispatchEvent(new dom.window.Event('hidden.bs.modal'));
-		assert.equal(document.querySelector('#token-secret-value').textContent, '');
+		assert.equal(document.querySelector('#access-token-secret').children.length, 0);
 	} finally { dom.window.close(); }
 	await Fixture.json('access-tokens/' + token.id, 'DELETE');
 	assert.equal((await fetch(Fixture.origin + '/api/v3/libraries', { headers })).status, 401);

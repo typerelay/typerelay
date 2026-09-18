@@ -67,7 +67,7 @@ block content
 						button.btn-close(data-bs-dismiss="modal" aria-label="Close")
 					.modal-body.settings-body.p-0
 						nav.settings-nav.list-group.list-group-flush(role="tablist" aria-label="Settings sections" aria-orientation="vertical")
-							- var settingsSections = {profile: 'Profile', security: 'Security', team: 'My team', devices: 'Connected devices', tokens: 'Access tokens'}
+							- var settingsSections = {profile: 'Profile', security: 'Security', team: 'My team', devices: 'Connected devices', tokens: 'Apps Access'}
 							if billingEnabled
 								- settingsSections.subscription = 'Subscription'
 								if ['owner', 'admin'].includes(ctx.role)
@@ -175,21 +175,53 @@ block content
 								h3.h6.fw-bold Connected devices
 								ul#devices.list-group.mb-3
 							section.settings-pane(id="settings-pane-tokens" role="tabpanel" aria-labelledby="settings-tab-tokens" hidden=true)
-								h3.h6.fw-bold Access tokens and authorized integrations
-								#token-auth-required.alert.alert-warning(hidden role="status")
-									p.mb-3 For your security, token management requires a sign-in within the last 15 minutes. Sign in in a new tab, then retry here.
-									a.btn.btn-primary.btn-sm(href="/login" target="_blank" rel="noopener") Sign in
-									button#retry-tokens.btn.btn-outline-secondary.btn-sm.ms-3(type="button") Retry
+								h3.h6.fw-bold Access Tokens
 								if !ctx.entitlements.capabilities.api
 									.alert.alert-warning API and MCP access require Pro or Team. Existing tokens stay stored but cannot authenticate.
-								ul#access-tokens.list-group.mb-5
-								#access-token-form-container
+								ul.nav.nav-pills.mb-4(role="tablist")
+									li.nav-item(role="presentation")
+										button.nav-link.active(type="button" data-bs-toggle="tab" data-bs-target="#access-tokens-pane" role="tab" aria-controls="access-tokens-pane" aria-selected="true") Access Tokens
+									li.nav-item(role="presentation")
+										button.nav-link(type="button" data-bs-toggle="tab" data-bs-target="#oauth-pane" role="tab" aria-controls="oauth-pane" aria-selected="false") OAuth
+								.tab-content
+									.tab-pane.fade.show.active#access-tokens-pane(role="tabpanel")
+										#access-token-form-container
+											if ctx.entitlements.capabilities.api
+												include ajax/access-token-form
+										#access-token-secret.mb-4
+										ul#access-tokens.list-group.mb-5
+									.tab-pane.fade#oauth-pane(role="tabpanel")
+										.card.mb-4
+											.card-body
+												h2.h5.card-title OAuth & Connected Apps
+												p.text-muted.mb-3 OAuth lets API and MCP clients connect to Type Relay with your approval.
+												.small.text-muted.mb-1 MCP Endpoint
+												code.small#oauth-mcp-endpoint Loading…
+												.alert.alert-secondary.small.mt-3.mb-3
+													span Use this endpoint in OAuth-capable clients. See the
+													a.ms-1(href="/docs/mcp/setup" target="_blank" rel="noopener") setup guide
+												h3.h6 Supported registration methods
+												.d-flex.flex-wrap.gap-2
+													span.badge.text-bg-secondary Dynamic registration
+													span.badge.text-bg-secondary Pre-registration
+												details.mt-3
+													summary.fw-semibold Advanced OAuth metadata
+													.pt-3
+														.small.text-muted.mb-1 Issuer
+														code.small#oauth-issuer Loading…
+														.small.text-muted.mt-3.mb-1 Resource Metadata
+														code.small#oauth-resource-metadata Loading…
+														.small.text-muted.mt-3.mb-1 Authorization Server Metadata
+														code.small#oauth-auth-metadata Loading…
+										h2.h5 Authorized Apps
+										#oauth-consents.list-group.mb-5
+						if ['owner', 'admin'].includes(ctx.role)
+							h2.h5 Pre-Registered OAuth Clients
+							#oauth-client-form-container
 								if ctx.entitlements.capabilities.api
-									include ajax/access-token-form
-								div#token-secret.mb-3(hidden)
-									p Copy this token now. It will not be shown again.
-									code#token-secret-value
-									button#dismiss-token.btn.btn-outline-secondary.btn-sm.ms-3(type="button") Done
+									include ajax/oauth-client-form
+											#oauth-client-secret.mb-4
+											#oauth-clients.list-group.mb-5
 							if billingEnabled
 								section.settings-pane(id="settings-pane-subscription" role="tabpanel" aria-labelledby="settings-tab-subscription" hidden=true)
 									include ajax/subscription

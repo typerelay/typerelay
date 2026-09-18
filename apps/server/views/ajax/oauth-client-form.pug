@@ -1,0 +1,15 @@
+form#oauth-client-form.card.mb-4
+	.card-body
+		label.form-label(for="oauth-client-name") Client name
+		input#oauth-client-name.form-control.form-control-sm.mb-3(name="client_name" required maxlength="100" autocomplete="off")
+		label.form-label(for="oauth-client-auth-method") Token endpoint authentication
+		select#oauth-client-auth-method.form-select.form-select-sm.mb-3(name="token_endpoint_auth_method")
+			option(value="none") Public client (PKCE only)
+			option(value="client_secret_post") Confidential client (client secret)
+		label.form-label(for="oauth-client-uri") Client website (optional)
+		input#oauth-client-uri.form-control.form-control-sm.mb-3(name="client_uri" type="url" autocomplete="off")
+		label.form-label(for="oauth-client-redirect-uris") Redirect URIs
+		textarea#oauth-client-redirect-uris.form-control.form-control-sm.mb-3(name="redirect_uris" rows="4" required aria-describedby="oauth-client-redirect-help")
+		div#oauth-client-redirect-help.form-text.mb-3 Enter one HTTPS or loopback URI per line.
+		.text-end
+			button.btn.btn-primary.btn-sm(type="submit") Create OAuth Client

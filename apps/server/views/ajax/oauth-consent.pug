@@ -1,0 +1,14 @@
+.list-group-item(data-oauth-consent=String(grant._id))
+	.d-flex.justify-content-between.align-items-start.gap-3
+		.flex-grow-1
+			strong= grant.name
+			.small.text-muted.mt-1
+				span Granted
+				time.ms-1(datetime=new Date(grant.createdAt).toISOString() data-local-time)= new Date(grant.createdAt).toISOString()
+				if grant.last_used
+					span  · Last used
+					time.ms-1(datetime=new Date(grant.last_used).toISOString() data-local-time)= new Date(grant.last_used).toISOString()
+			.d-flex.flex-wrap.gap-1.mt-2
+				each scope in grant.scopes
+					span.badge.text-bg-secondary= scope
+		button.btn.btn-outline-danger.btn-sm(type="button" data-revoke-consent=String(grant._id) aria-label="Revoke app access" title="Revoke app access") Revoke

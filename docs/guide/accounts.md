@@ -46,4 +46,4 @@ On hosted plans, non-owner membership in another account requires that account t
 
 ## Sign out
 
-Choose the avatar menu, then **Sign out**, to end the current browser session. This does not disconnect desktop devices or revoke API/MCP tokens. Manage those separately under **Connected devices** and **Access tokens**.
+Choose the avatar menu, then **Sign out**, to end the current browser session. This does not disconnect desktop devices or revoke API/MCP tokens. Manage those separately under **Connected devices** and **Apps Access**.

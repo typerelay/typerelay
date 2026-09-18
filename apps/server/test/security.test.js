@@ -7,7 +7,7 @@ const cbor = new Encoder({ useRecords: false, useTag259ForMaps: false, tagUint8A
 import { generateSync } from 'otplib';
 import { JSDOM } from 'jsdom';
 import bcrypt from 'bcryptjs';
-import { mongoose, User, Account, Ticket, Member, Passkey, Device, SignupNotification } from '../model/index.js';
+import { mongoose, User, Account, Ticket, Member, Passkey, Device, SignupNotification, Integration, IntegrationToken, OAuthClient } from '../model/index.js';
 import { Support } from '../services/support.js';
 import { Auth } from '../services/auth.js';
 import { Security } from '../services/security.js';
@@ -36,7 +36,7 @@ class Browser {
 		return value;
 	}
 	async tokens() {
-		const token = await this.json('/api/v2/access-tokens', 'POST', { name: 'Fresh login', scopes: ['content:read'], days: 1 });
+		const token = await this.json('/api/v2/access-tokens', 'POST', { name: 'Session token' });
 		assert.ok((await this.json('/api/v2/access-tokens', 'GET', null)).some(row => row.id === token.id));
 		await this.json('/api/v2/access-tokens/' + token.id, 'DELETE');
 	}
@@ -317,9 +317,8 @@ test('login waits for persistence before returning its redirect, including pendi
 		assert.equal(result.redirect, factor ? '/auth/two-factor' : '/');
 	}
 });
-test('expired token authentication offers retry without replacing settings and refreshes CSRF after sign-in', async () => {
-	const { browser, email, user } = await Fixture.account();
-	const password = (await browser.json('/api/v2/security/password')).password;
+test('token settings use the normal session and update individual rows without reloads', async () => {
+	const { browser, user } = await Fixture.account();
 	const dom = new JSDOM(await (await browser.call('/')).text(), { url: Fixture.origin, runScripts: 'outside-only' });
 	try {
 		const document = dom.window.document;
@@ -331,44 +330,49 @@ test('expired token authentication offers retry without replacing settings and r
 		dom.window.fetch = (path, options) => fetch(Fixture.origin + path, { ...options, headers: { ...options.headers, Cookie: browser.cookie }, redirect: 'manual' });
 		dom.window.eval((await BrowserSource.script()).replace('export { client };', 'window.testClient = client;'));
 		const client = dom.window.testClient; client.account = browser.account;
-		client.toast = message => assert.fail(message); client.confirm = async () => true;
+		client.toast = () => {}; client.confirm = async () => true;
 		client.poll = client.loadTrash = () => assert.fail('No page or section reload');
 		const pane = document.querySelector('#settings-pane-tokens');
 		const form = document.querySelector('#access-token-form');
-		form.elements.name.value = 'Keep my input'; form.elements.days.value = '0';
+		form.elements.name.value = 'CLI';
 		const sessions = await mongoose.connection.collection('web_sessions').find({}).toArray();
 		const stored = sessions.find(row => JSON.parse(row.session).user === String(user._id));
 		const session = JSON.parse(stored.session); session.auth_at = Date.now() - 16 * 60000;
 		await mongoose.connection.collection('web_sessions').updateOne({ _id: stored._id }, { $set: { session: JSON.stringify(session) } });
-		const denied = await browser.call('/api/v2/access-tokens');
-		assert.equal(denied.status, 401); assert.equal(denied.headers.get('cache-control'), 'no-store');
-		assert.equal((await denied.json()).code, 'reauthentication_required');
-		await browser.json('/api/v2/access-tokens', 'POST', { name: 'Denied', scopes: ['content:read'], days: 0 }, 401);
-		await client.tokens();
-		assert.equal(document.querySelector('#token-auth-required').hidden, false);
-		assert.equal(document.querySelector('#settings-pane-tokens'), pane);
-		assert.equal(form.elements.name.value, 'Keep my input');
-		await browser.page('/login');
-		await browser.json('/auth/password', 'POST', { email, password });
-		const retry = document.querySelector('#retry-tokens');
-		await client.onClick({ target: retry });
-		assert.equal(retry.disabled, false);
-		assert.equal(document.querySelector('#token-auth-required').hidden, true);
-		assert.equal(document.querySelector('meta[name=csrf-token]').content, browser.csrf);
-		await client.onSubmit({ target: form, preventDefault() {}, submitter: form.querySelector('button:not([type=reset])') });
+		const allowed = await browser.call('/api/v2/access-tokens'); assert.equal(allowed.status, 200); assert.equal(allowed.headers.get('cache-control'), 'no-store');
+		await client.onSubmit({ target: form, preventDefault() {}, submitter: form.querySelector('button[type=submit]') });
 		const row = document.querySelector('[data-access-token]'); assert.ok(row);
-		assert.match(row.textContent, /Never expires/);
+		assert.match(row.textContent, /CLI.*Created/s); assert.doesNotMatch(row.textContent, /scope|expire/i);
+		const secret = document.querySelector('#access-token-secret [data-secret-value]'); assert.match(secret.value, /^tr_pat_/);
+		assert.ok(!(await browser.json('/api/v2/access-tokens', 'GET', null)).some(item => JSON.stringify(item).includes(secret.value)));
 		assert.equal(document.querySelector('#settings-pane-tokens'), pane);
 		let release;
 		const request = client.request.bind(client);
 		client.request = async (path, ...args) => path === 'access-tokens' && !args.length ? new Promise(resolve => { release = resolve; }) : request(path, ...args);
 		const pending = client.tokens();
-		await client.onClick({ target: row.querySelector('[data-revoke-token]') });
+		await client.onClick({ target: row.querySelector('[data-delete-token]') });
 		release([{ id: row.dataset.accessToken, html: row.outerHTML }]); await pending;
 		assert.equal(document.querySelector('[data-access-token]'), null, 'Late list response cannot restore revoked token');
 		assert.equal(document.querySelector('#settings-pane-tokens'), pane);
+		document.querySelector('#settings').dispatchEvent(new dom.window.Event('hidden.bs.modal')); assert.equal(document.querySelector('#access-token-secret').children.length, 0);
 		const anonymous = new Browser(); await anonymous.page();
 		assert.notEqual((await anonymous.call('/api/v2/access-tokens')).status, 200);
+	} finally { dom.window.close(); }
+});
+test('OAuth settings manage metadata, authorized apps and confidential clients incrementally', async () => {
+	const { browser, user } = await Fixture.account(); const dom = new JSDOM(await (await browser.call('/')).text(), { url: Fixture.origin, runScripts: 'outside-only' });
+	try {
+		const document = dom.window.document; const pane = document.querySelector('#settings-pane-tokens'); document.querySelector('#workspace').removeAttribute('data-account');
+		dom.window.fetch = (path, options) => fetch(Fixture.origin + path, { ...options, headers: { ...options.headers, Cookie: browser.cookie }, redirect: 'manual' }); dom.window.eval((await BrowserSource.script()).replace('export { client };', 'window.testClient = client;'));
+		const client = dom.window.testClient; client.account = browser.account; client.toast = () => {}; client.confirm = async () => true; client.poll = client.loadTrash = () => assert.fail('No page or section reload');
+		await client.oauth(); assert.equal(document.querySelector('#oauth-issuer').textContent, Auth.origin); assert.match(document.querySelector('#oauth-mcp-endpoint').textContent, /\/mcp$/);
+		const form = document.querySelector('#oauth-client-form'); form.elements.client_name.value = 'Dashboard client'; form.elements.client_uri.value = 'https://example.test/'; form.elements.redirect_uris.value = 'https://example.test/callback'; form.elements.token_endpoint_auth_method.value = 'client_secret_post';
+		await client.onSubmit({ target: form, preventDefault() {}, submitter: form.querySelector('button[type=submit]') });
+		const clientRow = document.querySelector('[data-oauth-client]'); const secret = document.querySelector('#oauth-client-secret [data-secret-value]').value; assert.ok(clientRow); assert.ok(secret); assert.ok(!JSON.stringify(await browser.json('/api/v2/oauth/clients', 'GET', null)).includes(secret));
+		const storedClient = await OAuthClient.findById(clientRow.dataset.oauthClient).lean();
+		const grant = await Integration.create({ account: browser.account, user: user._id, name: storedClient.name, kind: 'oauth', client: storedClient.client_id, resource: Auth.apiResource(), scopes: ['content:read'], expires: new Date(Date.now() + 86400000) }); const delegated = await IntegrationToken.create({ grant: grant._id, hash: Support.hash(Support.token()), resource: Auth.apiResource(), expires: new Date(Date.now() + 60000) });
+		await client.oauth(); const consent = document.querySelector('[data-oauth-consent="' + grant._id + '"]'); assert.ok(consent); await client.onClick({ target: consent.querySelector('[data-revoke-consent]') }); assert.equal(document.querySelector('[data-oauth-consent="' + grant._id + '"]'), null); assert.equal((await Integration.findById(grant._id).lean()).revoked, true); assert.equal(await IntegrationToken.exists({ _id: delegated._id }), null);
+		const second = await Integration.create({ account: browser.account, user: user._id, name: storedClient.name, kind: 'oauth', client: storedClient.client_id, resource: Auth.apiResource(), scopes: ['content:read'], expires: new Date(Date.now() + 86400000) }); await client.onClick({ target: clientRow.querySelector('[data-delete-oauth-client]') }); assert.equal(document.querySelector('[data-oauth-client]'), null); assert.equal(await OAuthClient.exists({ _id: storedClient._id }), null); assert.equal((await Integration.findById(second._id).lean()).revoked, true); assert.equal(document.querySelector('#settings-pane-tokens'), pane);
 	} finally { dom.window.close(); }
 });
 test('device rows expose metadata and browser-local times; legacy devices stay unknown', async () => {

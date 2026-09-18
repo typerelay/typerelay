@@ -1,0 +1,13 @@
+.list-group-item(data-oauth-client=client.id)
+	.d-flex.justify-content-between.align-items-start.gap-3
+		.flex-grow-1
+			strong= client.client_name
+			span.badge.text-bg-light.ms-2= client.token_endpoint_auth_method
+			.small.text-muted.mt-2 Client ID
+			code.small.d-block.mb-2= client.client_id
+			.small.text-muted Redirect URIs
+			ul.small.mb-0
+				each uri in client.redirect_uris
+					li
+						code= uri
+		button.btn.btn-outline-danger.btn-sm(type="button" data-delete-oauth-client=client.id aria-label="Delete OAuth client" title="Delete OAuth client") Delete
