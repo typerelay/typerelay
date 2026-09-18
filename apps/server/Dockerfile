@@ -39,6 +39,7 @@ CMD ["pnpm", "exec", "vite", "--host", "0.0.0.0", "--port", "5174", "--strictPor
 FROM node:24-bookworm-slim AS production
 ARG APP_VERSION=development
 ENV APP_VERSION=${APP_VERSION}
+ENV NODE_OPTIONS=--disable-warning=ExperimentalWarning
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml /opt/typerelay/
 WORKDIR /opt/typerelay/apps/server
 COPY --from=workspace-dependencies /opt/deploy/server ./
