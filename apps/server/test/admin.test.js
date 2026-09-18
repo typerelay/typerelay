@@ -135,7 +135,7 @@ test('settings encrypt and mask secrets; custom code only enters authenticated a
 	await Fixture.json('/admin/api/settings/custom-code', 'PUT', { js: '</script>', css: '', origins: [] }, 400);
 	const locals = { styleNonce: 'nonce-test' }; const headers = { 'Content-Security-Policy': "script-src 'self'; style-src 'self'" }; const response = { locals, getHeader: key => headers[key], setHeader: (key, value) => { headers[key] = value; } };
 	await AdminSettings.application({}, response, { _id: new M.User()._id, name: 'Test', email: 'test@example.test' }, { account: 'account', role: 'owner', entitlements: { plan: 'team' } });
-	assert.ok(locals.managani.token); assert.match(headers['Content-Security-Policy'], /nonce-nonce-test/); assert.match(headers['Content-Security-Policy'], /cdn.example.test/);
+	assert.ok(locals.managani.token); assert.match(headers['Content-Security-Policy'], /nonce-nonce-test/); assert.match(headers['Content-Security-Policy'], /style-src-elem 'self' https:\/\/cdn\.example\.test/); assert.match(headers['Content-Security-Policy'], /font-src 'self' https:\/\/cdn\.example\.test/);
 	for (const path of ['/admin', '/admin/login', '/login', '/signup']) { const html = await (await Fixture.request(path)).text(); assert.ok(!html.includes('window.adminFixture')); assert.ok(!html.includes('managani.js')); }
 	const adminCookie = Fixture.cookie; const adminCsrf = Fixture.csrf;
 	const token = Support.token(); await M.Ticket.create({ hash: Support.hash(token), kind: 'login', email: 'owner@example.test', expires: new Date(Date.now() + 60000) });

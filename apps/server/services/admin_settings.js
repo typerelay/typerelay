@@ -88,7 +88,7 @@ export class AdminSettings {
 			}
 		} catch { console.error('Managani widget unavailable'); }
 		const directives = String(res.getHeader('Content-Security-Policy') || '').split(';').map(value => value.trim()).filter(Boolean);
-		for (const name of ['script-src', 'style-src', 'connect-src', 'img-src', 'frame-src']) {
+		for (const name of ['script-src', 'style-src', 'style-src-elem', 'connect-src', 'font-src', 'img-src', 'frame-src']) {
 			let index = directives.findIndex(value => value.startsWith(name + ' '));
 			if (index < 0) { index = directives.length; directives.push(name + " 'self'"); }
 			if (name === 'script-src') directives[index] += " 'nonce-" + res.locals.styleNonce + "'";
