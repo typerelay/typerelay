@@ -584,6 +584,7 @@ test('public API edits reach two SQLite clients and token settings update indivi
 	const dom = new JSDOM(await (await Fixture.request('/')).text(), { url: Fixture.origin, runScripts: 'outside-only' });
 	try {
 		const document = dom.window.document; const pane = document.querySelector('#settings-pane-tokens');
+		assert.ok(document.querySelector('#oauth-pane #oauth-client-form')); assert.equal(document.querySelector('#settings-pane-profile #oauth-client-form'), null);
 		const script = (await BrowserSource.script()).replace('export { client };', 'window.testClient = client;');
 		dom.window.eval(script); const client = dom.window.testClient;
 		client.request = async () => token; client.toast = () => {};

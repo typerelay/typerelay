@@ -215,11 +215,11 @@ block content
 														code.small#oauth-auth-metadata Loading…
 										h2.h5 Authorized Apps
 										#oauth-consents.list-group.mb-5
-						if ['owner', 'admin'].includes(ctx.role)
-							h2.h5 Pre-Registered OAuth Clients
-							#oauth-client-form-container
-								if ctx.entitlements.capabilities.api
-									include ajax/oauth-client-form
+										if ['owner', 'admin'].includes(ctx.role)
+											h2.h5 Pre-Registered OAuth Clients
+											#oauth-client-form-container
+												if ctx.entitlements.capabilities.api
+													include ajax/oauth-client-form
 											#oauth-client-secret.mb-4
 											#oauth-clients.list-group.mb-5
 							if billingEnabled
