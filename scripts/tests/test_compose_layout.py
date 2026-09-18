@@ -12,6 +12,8 @@ class ComposeLayoutTests(unittest.TestCase):
         cls.base = (cls.root / "compose.base.yml").read_text()
         cls.server_dockerfile = (cls.root / "apps" / "server" / "Dockerfile").read_text()
         cls.mcp_dockerfile = (cls.root / "apps" / "mcp" / "Dockerfile").read_text()
+        cls.server_package = (cls.root / "apps" / "server" / "package.json").read_text()
+        cls.mcp_package = (cls.root / "apps" / "mcp" / "package.json").read_text()
         cls.dbh = (cls.root / "compose.dbh.yml").read_text()
         cls.dbh_run = (cls.root / ".codex" / "dbh-run.toml").read_text()
         cls.dbh_run_config = tomllib.loads(cls.dbh_run)
@@ -69,6 +71,15 @@ class ComposeLayoutTests(unittest.TestCase):
             self.assertIn(" deploy --prod ", source)
             self.assertNotIn("apps/server/pnpm-lock.yaml", source)
             self.assertNotIn("apps/mcp/pnpm-lock.yaml", source)
+
+    def test_every_backend_preloads_shared_observability(self):
+        preload = "node --import @typerelay/observability/register"
+        self.assertIn(preload, self.server_package)
+        self.assertIn(preload, self.mcp_package)
+        self.assertIn("command: [npm, run, start]", self.development)
+        for source in [self.server_dockerfile, self.mcp_dockerfile]:
+            self.assertIn("COPY apps/server/observability/package.json", source)
+        self.assertIn("COPY apps/server/observability ./apps/server/observability", self.mcp_dockerfile)
 
 
 if __name__ == "__main__":

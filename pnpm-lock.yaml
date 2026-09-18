@@ -138,6 +138,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.30.0
         version: 1.30.0(supports-color@7.2.0)(zod@4.6.5)
+      '@typerelay/observability':
+        specifier: workspace:*
+        version: link:../server/observability
       express:
         specifier: ^5.2.1
         version: 5.2.1(supports-color@7.2.0)
@@ -283,6 +286,9 @@ importers:
       '@tiptap/starter-kit':
         specifier: ^3.31.3
         version: 3.31.3
+      '@typerelay/observability':
+        specifier: workspace:*
+        version: link:observability
       '@xmldom/xmldom':
         specifier: ^0.9.12
         version: 0.9.12
@@ -363,6 +369,18 @@ importers:
         specifier: ^30.1.0
         version: 30.1.0(@noble/hashes@2.4.0)
 
+  apps/server/observability:
+    dependencies:
+      '@hyperdx/node-opentelemetry':
+        specifier: ^0.11.0
+        version: 0.11.0(supports-color@7.2.0)
+      '@opentelemetry/instrumentation':
+        specifier: 0.222.0
+        version: 0.222.0(@opentelemetry/api@1.9.1)(supports-color@7.2.0)
+      '@opentelemetry/instrumentation-runtime-node':
+        specifier: 0.35.0
+        version: 0.35.0(@opentelemetry/api@1.9.1)(supports-color@7.2.0)
+
   docs:
     devDependencies:
       vitepress:
@@ -370,10 +388,10 @@ importers:
         version: 1.6.4(@algolia/client-search@5.59.0)(@types/node@22.20.2)(lightningcss@1.33.0)(postcss@8.5.28)(qrcode@1.5.4)(search-insights@2.17.3)(typescript@7.0.2)
       vitepress-openapi:
         specifier: ^0.2.5
-        version: 0.2.5(vitepress@1.6.4(@algolia/client-search@5.59.0)(@types/node@22.20.2)(lightningcss@1.33.0)(postcss@8.5.28)(qrcode@1.5.4)(search-insights@2.17.3))(vue@3.5.43(typescript@7.0.2))
+        version: 0.2.5(vitepress@1.6.4(@algolia/client-search@5.59.0)(@types/node@22.20.2)(lightningcss@1.33.0)(postcss@8.5.28)(qrcode@1.5.4)(search-insights@2.17.3)(typescript@7.0.2))(vue@3.5.43(typescript@7.0.2))
       vitepress-plugin-tabs:
         specifier: ^0.9.1
-        version: 0.9.1(vitepress@1.6.4(@algolia/client-search@5.59.0)(@types/node@22.20.2)(lightningcss@1.33.0)(postcss@8.5.28)(qrcode@1.5.4)(search-insights@2.17.3))(vue@3.5.43(typescript@7.0.2))
+        version: 0.9.1(vitepress@1.6.4(@algolia/client-search@5.59.0)(@types/node@22.20.2)(lightningcss@1.33.0)(postcss@8.5.28)(qrcode@1.5.4)(search-insights@2.17.3)(typescript@7.0.2))(vue@3.5.43(typescript@7.0.2))
       vue:
         specifier: ^3.5.43
         version: 3.5.43(typescript@7.0.2)
@@ -1391,6 +1409,10 @@ packages:
     resolution: {integrity: sha512-fmEWp5kXlGEc3i/lR698Hz41DfGyN4Tbe4g7L1AxSc7fF8Xeh/FQ9Quqpa9dVA413Q1Ad43QOLzU4JoXgbFPWw==}
     engines: {node: '>=8.0.0'}
 
+  '@opentelemetry/api-logs@0.222.0':
+    resolution: {integrity: sha512-9mb1If+IF6u0ZVXkHQ6ogEae5HwA6ajIVUgpSDQyRASxft6BSXHvBvPooRle3yFN/fKnCdSOnuu0OC3PLcF6+g==}
+    engines: {node: '>=8.0.0'}
+
   '@opentelemetry/api@1.9.1':
     resolution: {integrity: sha512-gLyJlPHPZYdAk1JENA9LeHejZe1Ti77/pTeFm/nMXmQH/HFZlcS/O2XJB+L8fkbrNSqhdtlvjBVjxwUYanNH5Q==}
     engines: {node: '>=8.0.0'}
@@ -1708,6 +1730,12 @@ packages:
     peerDependencies:
       '@opentelemetry/api': ^1.3.0
 
+  '@opentelemetry/instrumentation-runtime-node@0.35.0':
+    resolution: {integrity: sha512-/cOW4Qlv4nnr4QXDCkv0TEtOBa9R9lXHu//JuD5+nRPYR74g9iLmf5tadcYvn32oz2R8vQnV8FTnMLzjfAGMCQ==}
+    engines: {node: ^18.19.0 || >=20.6.0}
+    peerDependencies:
+      '@opentelemetry/api': ^1.3.0
+
   '@opentelemetry/instrumentation-socket.io@0.65.0':
     resolution: {integrity: sha512-dNvIbD40h0z69stQ9cIeAWRyy5WyQM1a1XnFthekc/oi/ipX4E6oYJBM4X2xKBxjZMTjdV5VshLoNeYMSBsnjw==}
     engines: {node: ^18.19.0 || >=20.6.0}
@@ -1734,6 +1762,12 @@ packages:
 
   '@opentelemetry/instrumentation@0.218.0':
     resolution: {integrity: sha512-mIZil8Es+sYDK5m+DQiwAwF57F14TF2YlEqvIjZ/RQWcxDBwRGsKfdK2Tv65OU9meQKCMzSIFS9mxAcnAb6Bkg==}
+    engines: {node: ^18.19.0 || >=20.6.0}
+    peerDependencies:
+      '@opentelemetry/api': ^1.3.0
+
+  '@opentelemetry/instrumentation@0.222.0':
+    resolution: {integrity: sha512-fhbRDuAgzPKpq1k5+hX3uS+3QAYNca0on0Ngot/R8dDsQtuFaADeZnG2uSgxABuvcI7S2phAaRhbct9jieeKZw==}
     engines: {node: ^18.19.0 || >=20.6.0}
     peerDependencies:
       '@opentelemetry/api': ^1.3.0
@@ -6092,6 +6126,10 @@ snapshots:
     dependencies:
       '@opentelemetry/api': 1.9.1
 
+  '@opentelemetry/api-logs@0.222.0':
+    dependencies:
+      '@opentelemetry/api': 1.9.1
+
   '@opentelemetry/api@1.9.1': {}
 
   '@opentelemetry/auto-instrumentations-node@0.76.0(@opentelemetry/api@1.9.1)(@opentelemetry/core@2.11.0(@opentelemetry/api@1.9.1))(supports-color@7.2.0)':
@@ -6584,6 +6622,15 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  '@opentelemetry/instrumentation-runtime-node@0.35.0(@opentelemetry/api@1.9.1)(supports-color@7.2.0)':
+    dependencies:
+      '@opentelemetry/api': 1.9.1
+      '@opentelemetry/api-logs': 0.222.0
+      '@opentelemetry/core': 2.11.0(@opentelemetry/api@1.9.1)
+      '@opentelemetry/instrumentation': 0.222.0(@opentelemetry/api@1.9.1)(supports-color@7.2.0)
+    transitivePeerDependencies:
+      - supports-color
+
   '@opentelemetry/instrumentation-socket.io@0.65.0(@opentelemetry/api@1.9.1)(supports-color@7.2.0)':
     dependencies:
       '@opentelemetry/api': 1.9.1
@@ -6621,6 +6668,15 @@ snapshots:
     dependencies:
       '@opentelemetry/api': 1.9.1
       '@opentelemetry/api-logs': 0.218.0
+      import-in-the-middle: 3.5.1
+      require-in-the-middle: 8.0.1(supports-color@7.2.0)
+    transitivePeerDependencies:
+      - supports-color
+
+  '@opentelemetry/instrumentation@0.222.0(@opentelemetry/api@1.9.1)(supports-color@7.2.0)':
+    dependencies:
+      '@opentelemetry/api': 1.9.1
+      '@opentelemetry/api-logs': 0.222.0
       import-in-the-middle: 3.5.1
       require-in-the-middle: 8.0.1(supports-color@7.2.0)
     transitivePeerDependencies:
@@ -9728,7 +9784,7 @@ snapshots:
     transitivePeerDependencies:
       - '@vue/composition-api'
 
-  vitepress-openapi@0.2.5(vitepress@1.6.4(@algolia/client-search@5.59.0)(@types/node@22.20.2)(lightningcss@1.33.0)(postcss@8.5.28)(qrcode@1.5.4)(search-insights@2.17.3))(vue@3.5.43(typescript@7.0.2)):
+  vitepress-openapi@0.2.5(vitepress@1.6.4(@algolia/client-search@5.59.0)(@types/node@22.20.2)(lightningcss@1.33.0)(postcss@8.5.28)(qrcode@1.5.4)(search-insights@2.17.3)(typescript@7.0.2))(vue@3.5.43(typescript@7.0.2)):
     dependencies:
       '@lucide/vue': 1.47.0(vue@3.5.43(typescript@7.0.2))
       '@vueuse/core': 14.4.0(vue@3.5.43(typescript@7.0.2))
@@ -9741,7 +9797,7 @@ snapshots:
     transitivePeerDependencies:
       - '@vue/composition-api'
 
-  vitepress-plugin-tabs@0.9.1(vitepress@1.6.4(@algolia/client-search@5.59.0)(@types/node@22.20.2)(lightningcss@1.33.0)(postcss@8.5.28)(qrcode@1.5.4)(search-insights@2.17.3))(vue@3.5.43(typescript@7.0.2)):
+  vitepress-plugin-tabs@0.9.1(vitepress@1.6.4(@algolia/client-search@5.59.0)(@types/node@22.20.2)(lightningcss@1.33.0)(postcss@8.5.28)(qrcode@1.5.4)(search-insights@2.17.3)(typescript@7.0.2))(vue@3.5.43(typescript@7.0.2)):
     dependencies:
       vitepress: 1.6.4(@algolia/client-search@5.59.0)(@types/node@22.20.2)(lightningcss@1.33.0)(postcss@8.5.28)(qrcode@1.5.4)(search-insights@2.17.3)(typescript@7.0.2)
       vue: 3.5.43(typescript@7.0.2)

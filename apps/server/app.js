@@ -23,6 +23,7 @@ import { WhiteLabel } from './services/white_label.js';
 import { Assets } from './services/assets.js';
 import { ProductUpdates } from './services/product_updates.js';
 import { Bundles } from './services/bundles.js';
+import { recordException, shutdownObservability } from '@typerelay/observability';
 
 export class Server {
 	static async start() {
@@ -30,7 +31,7 @@ export class Server {
 		if (ProductUpdates.enabled()) await ProductUpdates.backfillProductUpdatesSeenAt();
 		if (process.env.SERVER_MODE === 'scheduler') {
 			Scheduler.start();
-			console.log('TypeRelay scheduler running: Trash cleanup daily; trial and white-label reconciliation every five minutes; Helpmonks trial enrollment every minute');
+			console.log(JSON.stringify({ event: 'service_started', service: process.env.OTEL_SERVICE_NAME || 'typerelay-scheduler', mode: 'scheduler', version: process.env.APP_VERSION || 'development' }));
 			return;
 		}
 		await StorageMigration.code();
@@ -271,10 +272,11 @@ export class Server {
 		app.use((error, req, res, next) => {
 			if (res.headersSent) return next(error);
 			const status = error.status || (error.code === 11000 ? 409 : 0) || (error.name === 'ValidationError' || error.name === 'CastError' ? 400 : 500);
-			if (status === 500) console.error(error);
+			if (status === 500) { recordException(error); console.error(error); }
 			res.status(status).json({ error: status === 500 ? 'Request failed; please retry' : (error.code === 11000 ? 'Abbreviation or name already exists' : error.message), ...(typeof error.code === 'string' && error.code ? { code: error.code } : {}), ...(error.details ? { details: error.details } : {}), ...(error.settings ? { settings: error.settings, html: pug.renderFile('./views/ajax/white-label.pug', { whiteLabelSettings: error.settings }) } : {}) });
 		});
-		const server = app.listen(Number(process.env.PORT || 3040), '0.0.0.0');
+		const port = Number(process.env.PORT || 3040);
+		const server = app.listen(port, '0.0.0.0', () => console.log(JSON.stringify({ event: 'service_started', service: process.env.OTEL_SERVICE_NAME || 'typerelay-app', mode: 'app', port, version: process.env.APP_VERSION || 'development' })));
 		server.on('close', () => sessionStore.close());
 		return server;
 	}
@@ -292,4 +294,7 @@ export class Server {
 		res.json(result.library ? { ...result, ...Server.presentation(result.library) } : result);
 	}
 }
-if (process.env.NODE_ENV !== 'test') await Server.start();
+if (process.env.NODE_ENV !== 'test') {
+	try { await Server.start(); }
+	catch (error) { recordException(error); console.error(JSON.stringify({ event: 'service_start_failed', service: process.env.OTEL_SERVICE_NAME || 'typerelay-app', error: error.message || String(error) })); await shutdownObservability(); process.exit(1); }
+}
