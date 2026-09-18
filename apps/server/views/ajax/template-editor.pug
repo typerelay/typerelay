@@ -24,12 +24,12 @@
 				.col-md-6(data-input-options)
 					label.form-label Prefilled answer (optional)
 					textarea.form-control.form-control-sm.mb-2(data-vfield="default" rows="1")
-			.d-flex.flex-wrap.align-items-center.gap-4(data-input-options)
-				label.form-check.d-flex.align-items-center.ps-0.mb-0
-					input.form-check-input.m-0.me-2(type="checkbox" data-vfield="required")
+			.variable-checks(data-input-options)
+				label.form-check.variable-check
+					input.form-check-input(type="checkbox" data-vfield="required")
 					span.form-check-label Require an answer when used
-				label.form-check.d-flex.align-items-center.ps-0.mb-0
-					input.form-check-input.m-0.me-2(type="checkbox" data-vfield="multiline")
+				label.form-check.variable-check
+					input.form-check-input(type="checkbox" data-vfield="multiline")
 					span.form-check-label Allow multiple lines
 			.row(data-time-options)
 				.col

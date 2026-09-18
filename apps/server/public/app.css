@@ -111,7 +111,10 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 #template-options .form-control, #template-options .form-select, #template-options .btn { font-size: .75rem; min-height: 1.75rem; padding-top: .15rem; padding-bottom: .15rem; }
 #template-options legend { font-size: .8rem; margin-bottom: .5rem; }
 #template-options fieldset { padding: .75rem; border: .0625rem solid var(--bs-border-color); border-radius: .375rem; }
-#template-options .form-check-inline { margin-right: 1rem; }
+#template-options .variable-checks { display: flex; flex-wrap: wrap; align-items: center; gap: 1.5rem; }
+#template-options .variable-check { display: flex; height: 1.25rem; align-items: center; padding-left: 0; margin: 0; }
+#template-options .variable-check .form-check-input { float: none; margin: 0 .5rem 0 0; }
+#template-options .variable-check .form-check-label { display: flex; height: 1.25rem; align-items: center; line-height: 1; }
 .rich-toolbar { padding: .5rem; border: .0625rem solid var(--bs-border-color); border-bottom: 0; border-radius: .375rem .375rem 0 0; background: var(--bs-tertiary-bg); }
 .rich-toolbar .rich-icon-button { display: inline-flex; width: 2rem; min-width: 2rem; height: 2rem; align-items: center; justify-content: center; padding: 0; line-height: 1; }
 .rich-toolbar-icon { width: 1rem; height: 1rem; fill: none; stroke: currentcolor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
