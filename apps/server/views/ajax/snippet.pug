@@ -7,8 +7,11 @@ article.snippet(tabindex="0" role="group" aria-label="Snippet " + (snippet.title
 			if snippet.title && snippet.trigger
 				span.small.text-muted= snippet.trigger
 		.d-flex.align-items-center
-			button.btn.btn-outline-secondary.btn-sm.ms-3(type="button" data-copy-snippet=snippet.id) Copy
+			button.btn.btn-outline-secondary.btn-sm.ms-3(type="button" data-copy-snippet=snippet.id)= snippet.content && ['template', 'rich_text'].includes(snippet.content.type) && Object.keys(snippet.content.variables || {}).length ? 'Fill and copy' : 'Copy'
 			if library.permissions.edit
 				button.btn.btn-outline-secondary.btn-sm.ms-3(data-edit-snippet=snippet.id) Edit
 				button.btn.btn-outline-danger.btn-sm.ms-3(data-delete-snippet=snippet.id) Trash
-	pre.mb-0.snippet-expansion= snippet.replace
+	if snippet.content && snippet.content.type === 'rich_text'
+		.rich-snippet-preview!= snippet.rich_html || ''
+	else
+		pre.mb-0.snippet-expansion= snippet.replace

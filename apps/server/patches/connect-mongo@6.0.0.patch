@@ -1,0 +1,76 @@
+diff --git a/dist/index.cjs b/dist/index.cjs
+index 789bf06f5a4a1e9ffb325b6bb9c3de2da3ea49b2..3dce41890cc901343d4d783677db52d21358ed17 100644
+--- a/dist/index.cjs
++++ b/dist/index.cjs
+@@ -334,10 +334,11 @@ var MongoStore = class MongoStore extends express_session.Store {
+ 		(async () => {
+ 			try {
+ 				debug$1(`MongoStore#set=${sid}`);
+-				if (this.options.touchAfter > 0 && session?.lastModified) delete session.lastModified;
++				const sessionToStore = { ...session };
++				if (this.options.touchAfter > 0) delete sessionToStore.lastModified;
+ 				const s = {
+ 					_id: this.computeStorageId(sid),
+-					session: this.transformFunctions.serialize(session)
++					session: this.transformFunctions.serialize(sessionToStore)
+ 				};
+ 				s.expires = computeExpires(session, this.options.ttl);
+ 				if (this.options.touchAfter > 0) s.lastModified = /* @__PURE__ */ new Date();
+@@ -371,8 +372,8 @@ var MongoStore = class MongoStore extends express_session.Store {
+ 				const touchAfter = this.options.touchAfter * 1e3;
+ 				const lastModified = session.lastModified ? session.lastModified.getTime() : 0;
+ 				const currentDate = /* @__PURE__ */ new Date();
+-				if (touchAfter > 0 && lastModified > 0) {
+-					if (currentDate.getTime() - lastModified < touchAfter) {
++				if (touchAfter > 0) {
++					if (lastModified > 0 && currentDate.getTime() - lastModified < touchAfter) {
+ 						debug$1(`Skip touching session=${sid}`);
+ 						return callback(null);
+ 					}
+@@ -380,7 +381,7 @@ var MongoStore = class MongoStore extends express_session.Store {
+ 				}
+ 				updateFields.expires = computeExpires(session, this.options.ttl);
+ 				const collection = await this.collectionP;
+-				const updateQuery = { $set: updateFields };
++				const updateQuery = { $max: updateFields };
+ 				if (this.options.timestamps) updateQuery.$currentDate = { updatedAt: true };
+ 				if ((await collection.updateOne({ _id: this.computeStorageId(sid) }, updateQuery, { writeConcern: this.options.writeOperationOptions })).matchedCount === 0) return callback(/* @__PURE__ */ new Error("Unable to find the session to touch"));
+ 				else {
+diff --git a/dist/index.mjs b/dist/index.mjs
+index 1e039857d07f6bd36a97d4db672bcecb1d671a57..440d36a4655c67617c639bbce5851622b2c337c2 100644
+--- a/dist/index.mjs
++++ b/dist/index.mjs
+@@ -301,10 +301,11 @@ var MongoStore = class MongoStore extends session.Store {
+ 		(async () => {
+ 			try {
+ 				debug(`MongoStore#set=${sid}`);
+-				if (this.options.touchAfter > 0 && session$1?.lastModified) delete session$1.lastModified;
++				const sessionToStore = { ...session$1 };
++				if (this.options.touchAfter > 0) delete sessionToStore.lastModified;
+ 				const s = {
+ 					_id: this.computeStorageId(sid),
+-					session: this.transformFunctions.serialize(session$1)
++					session: this.transformFunctions.serialize(sessionToStore)
+ 				};
+ 				s.expires = computeExpires(session$1, this.options.ttl);
+ 				if (this.options.touchAfter > 0) s.lastModified = /* @__PURE__ */ new Date();
+@@ -338,8 +339,8 @@ var MongoStore = class MongoStore extends session.Store {
+ 				const touchAfter = this.options.touchAfter * 1e3;
+ 				const lastModified = session$1.lastModified ? session$1.lastModified.getTime() : 0;
+ 				const currentDate = /* @__PURE__ */ new Date();
+-				if (touchAfter > 0 && lastModified > 0) {
+-					if (currentDate.getTime() - lastModified < touchAfter) {
++				if (touchAfter > 0) {
++					if (lastModified > 0 && currentDate.getTime() - lastModified < touchAfter) {
+ 						debug(`Skip touching session=${sid}`);
+ 						return callback(null);
+ 					}
+@@ -347,7 +348,7 @@ var MongoStore = class MongoStore extends session.Store {
+ 				}
+ 				updateFields.expires = computeExpires(session$1, this.options.ttl);
+ 				const collection = await this.collectionP;
+-				const updateQuery = { $set: updateFields };
++				const updateQuery = { $max: updateFields };
+ 				if (this.options.timestamps) updateQuery.$currentDate = { updatedAt: true };
+ 				if ((await collection.updateOne({ _id: this.computeStorageId(sid) }, updateQuery, { writeConcern: this.options.writeOperationOptions })).matchedCount === 0) return callback(/* @__PURE__ */ new Error("Unable to find the session to touch"));
+ 				else {

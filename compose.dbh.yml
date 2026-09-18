@@ -1,0 +1,42 @@
+x-dbh-ca-environment: &dbh-ca-environment
+  NODE_EXTRA_CA_CERTS: /usr/local/share/ca-certificates/dbh-caddy-root.crt
+
+x-dbh-ca-volumes: &dbh-ca-volumes
+  - "${DBH_CADDY_CA}:/usr/local/share/ca-certificates/dbh-caddy-root.crt:ro"
+
+services:
+  mobile:
+    ports: !override []
+    environment:
+      __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: "mobile.tr.${DBH_PROFILE}.lan"
+    networks:
+      default:
+      dbh_proxy:
+        aliases:
+          - "${DBH_PROFILE}-typerelay-mobile"
+
+  app:
+    ports: !override []
+    environment: *dbh-ca-environment
+    volumes: *dbh-ca-volumes
+    networks:
+      default:
+      dbh_proxy:
+        aliases:
+          - "${DBH_PROFILE}-typerelay-app"
+          - "${DBH_PROFILE}-typerelay-server"
+
+  mcp:
+    ports: !override []
+    environment: *dbh-ca-environment
+    volumes: *dbh-ca-volumes
+    networks:
+      default:
+      dbh_proxy:
+        aliases:
+          - "${DBH_PROFILE}-typerelay-mcp"
+
+networks:
+  dbh_proxy:
+    name: "${DBH_PROXY_NETWORK}"
+    external: true

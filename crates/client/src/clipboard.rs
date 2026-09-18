@@ -2,6 +2,7 @@
 use anyhow::{Context, Result, bail};
 use std::{collections::BTreeMap, io::{Read, Write, BufRead}, process::{Command, Stdio}, sync::{Arc, atomic::{AtomicBool, Ordering}, mpsc::{self, Receiver, Sender}}, thread, time::{Duration, Instant, SystemTime, UNIX_EPOCH}};
 use wl_clipboard_rs::{copy::{self, MimeSource, MimeType, Options, Source}, paste::{self, ClipboardType, Seat}};
+use crate::clipboard_payload::ClipboardPayload;
 
 pub enum Progress { Ready, Finished }
 
@@ -41,8 +42,11 @@ impl ClipboardLease {
         Ok(Self { previous, marker, published: false })
     }
 
-    fn publish(&mut self, text: String) -> Result<()> {
-        Options::new().copy_multi(vec![MimeSource { source: Source::Bytes(text.into_bytes().into()), mime_type: MimeType::Text }, MimeSource { source: Source::Bytes(Box::new([])), mime_type: MimeType::Specific(self.marker.clone()) }])?;
+	fn publish(&mut self,payload:ClipboardPayload)->Result<()> {
+		let mut sources=vec![MimeSource{source:Source::Bytes(payload.plain.into_bytes().into()),mime_type:MimeType::Text}];
+		if let Some(html)=payload.html{sources.push(MimeSource{source:Source::Bytes(html.into_bytes().into()),mime_type:MimeType::Specific("text/html".into())});}
+		if let Some(rtf)=payload.rtf{sources.push(MimeSource{source:Source::Bytes(rtf.into_bytes().into()),mime_type:MimeType::Specific("text/rtf".into())});}
+		sources.push(MimeSource{source:Source::Bytes(Box::new([])),mime_type:MimeType::Specific(self.marker.clone())});Options::new().copy_multi(sources)?;
         self.published = true;
         Ok(())
     }
@@ -74,10 +78,13 @@ impl Drop for ClipboardLease {
 
 impl PasteJob {
     pub fn copy_text(text: String) -> Result<()> {
+		Self::copy_payload(ClipboardPayload::text(text))
+	}
+	pub fn copy_payload(payload:ClipboardPayload)->Result<()> {
         let current = std::env::current_exe()?;
         let sibling = current.with_file_name("typerelay");
         let executable = if sibling.exists() { sibling } else if current.file_stem().is_some_and(|name|name == "typerelay-panel") { current } else { anyhow::bail!("Install the matching typerelay binary before copying"); };
-        Self::publish_snapshot(&BTreeMap::from([("text/plain;charset=utf-8".into(), text.into_bytes())]), executable)
+		let mut snapshot=BTreeMap::from([("text/plain;charset=utf-8".into(),payload.plain.into_bytes())]);if let Some(html)=payload.html{snapshot.insert("text/html".into(),html.into_bytes());}if let Some(rtf)=payload.rtf{snapshot.insert("text/rtf".into(),rtf.into_bytes());}Self::publish_snapshot(&snapshot,executable)
     }
     fn publish_snapshot(snapshot: &BTreeMap<String, Vec<u8>>, executable: std::path::PathBuf) -> Result<()> {
                 let mut child = Command::new(executable).arg("clipboard-serve").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()?;
@@ -104,21 +111,24 @@ impl PasteJob {
     }
 
     pub fn start(text: String) -> Self {
+		Self::start_payload(ClipboardPayload::text(text))
+	}
+	pub fn start_payload(payload:ClipboardPayload)->Self {
         let (progress_tx, progress) = mpsc::channel();
         let (pasted, pasted_rx) = mpsc::channel();
         let cancelled = Arc::new(AtomicBool::new(false));
         let cancellation = cancelled.clone();
         thread::spawn(move || {
-            let result = Self::serve(text, &cancellation, &progress_tx, pasted_rx);
+			let result = Self::serve(payload, &cancellation, &progress_tx, pasted_rx);
             if let Err(error) = result { let _ = progress_tx.send(Err(error)); }
         });
         Self { progress, pasted, cancelled, started: Instant::now() }
     }
 
-    fn serve(text: String, cancelled: &AtomicBool, progress: &Sender<Result<Progress>>, pasted: Receiver<()>) -> Result<()> {
+	fn serve(payload:ClipboardPayload, cancelled: &AtomicBool, progress: &Sender<Result<Progress>>, pasted: Receiver<()>) -> Result<()> {
         let mut lease = ClipboardLease::capture(cancelled)?;
         if cancelled.load(Ordering::SeqCst) { return Ok(()); }
-        lease.publish(text)?;
+		lease.publish(payload)?;
         progress.send(Ok(Progress::Ready)).context("Paste coordinator stopped")?;
         let deadline = Instant::now() + Duration::from_secs(3);
         while !cancelled.load(Ordering::SeqCst) {

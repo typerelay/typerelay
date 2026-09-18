@@ -63,12 +63,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap(); let path = dir.path().join("settings.yml");
         fs::write(&path, "sync_url: https://example.invalid/sync\n").unwrap();
         let mut reader = SettingsStore::open(path.clone()).unwrap();
-        assert_eq!(reader.settings.trigger_prefix, ",");
+        assert_eq!(reader.settings.trigger_prefix, ";");
         let mut writer = SettingsStore::open(path.clone()).unwrap();
-        writer.save("https://example.invalid/sync", ";").unwrap();
-        assert!(reader.reload().unwrap()); assert_eq!(reader.settings.trigger_prefix, ";");
+        writer.save("https://example.invalid/sync", ",").unwrap();
+        assert!(reader.reload().unwrap()); assert_eq!(reader.settings.trigger_prefix, ",");
         assert!(!reader.reload().unwrap());
         assert!(writer.save("https://example.invalid/sync", "bad").is_err());
-        assert_eq!(SettingsStore::open(path).unwrap().settings.trigger_prefix, ";");
+        assert_eq!(SettingsStore::open(path).unwrap().settings.trigger_prefix, ",");
     }
 }

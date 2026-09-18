@@ -14,6 +14,7 @@ node_modules/
 /apps/desktop/src-tauri/target/
 
 /apps/desktop/src-tauri/gen/
+/apps/desktop/src-tauri/binaries/
 
 # Local credentials, signing material and runtime databases
 *.pem
@@ -30,3 +31,22 @@ credentials*.json
 *.sqlite-wal
 *.sqlite-shm
 *.db
+
+# Generated documentation
+/docs/node_modules/
+/docs/.vitepress/cache/
+/docs/.vitepress/dist/
+/docs/.vitepress/data/
+/docs/public/openapi.json
+
+/.pnpm-store/
+
+# Mobile generated bundles and native build outputs
+/apps/mobile/dist/
+/apps/mobile/public/assets/generated/
+/apps/mobile/ios/App/App/public/
+/apps/mobile/ios/App/App/capacitor.config.json
+/apps/mobile/ios/App/build/
+/apps/mobile/native/
+/apps/mobile/android/app/src/main/jniLibs/
+/apps/mobile/android/local.properties

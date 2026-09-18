@@ -1,0 +1,36 @@
+extends layout
+block content
+	h1.mb-5 Audit Logs
+	form.row.align-items-center.g-3.mb-5(method="get")
+		each label, key in {account:'Account ID',actor:'Actor email or user ID',action:'Action',from:'From',to:'To'}
+			.col-md-2
+				label.form-label(for='audit-' + key)= label
+				input.form-control.form-control-sm(id='audit-' + key name=key value=query[key] type=['from','to'].includes(key) ? 'date' : 'text')
+		.col-md-2
+			label.form-label(for="audit-result") Result
+			select#audit-result.form-select.form-select-sm(name="result")
+				option(value="") All
+				option(value="success" selected=query.result === 'success') Success
+				option(value="failure" selected=query.result === 'failure') Failure
+		.col-12
+			button.btn.btn-outline-primary.btn-sm(type="submit") Filter
+	.table-responsive
+		table.table.bg-body
+			thead
+				tr
+					each heading in ['Date','Account','Actor','Action','Result']
+						th= heading
+			tbody
+				each row in rows
+					tr
+						td= (row.createdAt && row.createdAt.toISOString())
+						td= row.account || 'System'
+						td= row.actor
+						td= row.operation
+						td= row.status
+	.d-flex.gap-3
+		if page > 1
+			a.btn.btn-outline-secondary.btn-sm(href='?' + new URLSearchParams(Object.assign({},query,{page:page-1})).toString()) Previous
+		span Page #{page}
+		if more
+			a.btn.btn-outline-secondary.btn-sm(href='?' + new URLSearchParams(Object.assign({},query,{page:page+1})).toString()) Next

@@ -29,7 +29,7 @@ class Fixture {
 	static change(snippet, replace) { return { id: snippet.id, base_revision: snippet.revision, base: snippet, value: replace === null ? null : { trigger: snippet.trigger, replace } }; }
 }
 before(async () => {
-	await mongoose.connect(process.env.MONGODB_URI.replace('/typerelay?', '/typerelay_test?'));
+	await mongoose.connect(process.env.MONGO_URI.replace('/typerelay?', '/typerelay_test?'));
 	await mongoose.connection.dropDatabase();
 	await Promise.all(Object.values(mongoose.models).map(model => model.init()));
 	const account = await Account.create({ name: 'One' });
@@ -40,6 +40,37 @@ before(async () => {
 	Fixture.outsider = await Fixture.user('owner', (await Account.create({ name: 'Two' }))._id);
 });
 after(async () => { await mongoose.connection.dropDatabase(); await mongoose.disconnect(); });
+
+test('editing legacy snippets updates sort order while unchanged saves and retries preserve timestamps', async () => {
+	let { library } = await Fixture.create(Fixture.owner);
+	await Snippet.updateMany({ library: library._id }, { $unset: { createdAt: 1, updatedAt: 1 } }, { timestamps: false });
+	library = Libraries.view(Fixture.owner, await Libraries.get(Fixture.owner, library._id));
+	const edited = library.snippets[1];
+	const sibling = library.snippets[0];
+	const operation = randomUUID();
+	const changes = [Fixture.change(edited, 'Updated expansion')];
+	const result = await Fixture.upload(Fixture.owner, library, changes, operation);
+	assert.equal(result.library.snippets[0].id, edited.id);
+	assert.equal(result.library.snippets[0].revision, edited.revision + 1);
+	assert.ok(result.library.snippets[0].updatedAt instanceof Date);
+	const stored = await Snippet.findOne({ id: edited.id }).lean();
+	assert.equal(stored.content.text, 'Updated expansion');
+	assert.equal(+stored.updatedAt, +result.library.snippets[0].updatedAt);
+	assert.equal((await Snippet.findOne({ id: sibling.id }).lean()).updatedAt, undefined);
+	const retry = await Fixture.upload(Fixture.owner, library, changes, operation);
+	assert.equal(+retry.library.snippets[0].updatedAt, +stored.updatedAt);
+	const saved = result.library.snippets.find(snippet => snippet.id === sibling.id);
+	const untouched = await Fixture.upload(Fixture.owner, result.library, [Fixture.change(saved, saved.replace)]);
+	assert.equal(untouched.library.snippets[0].id, edited.id, 'Background sync of identical content must not reorder');
+	const unchanged = untouched.library.snippets.find(snippet => snippet.id === sibling.id);
+	assert.equal(unchanged.revision, sibling.revision);
+	assert.equal(unchanged.updatedAt, undefined);
+	const editedAgain = untouched.library.snippets.find(snippet => snippet.id === edited.id);
+	const same = await Fixture.upload(Fixture.owner, untouched.library, [Fixture.change(editedAgain, editedAgain.replace)]);
+	assert.equal(same.library.snippets[0].revision, stored.revision);
+	assert.equal(+same.library.snippets[0].updatedAt, +stored.updatedAt);
+
+});
 
 test('private libraries remain hidden from admins and other accounts', async () => {
 	const { library } = await Fixture.create(Fixture.member);
@@ -82,6 +113,7 @@ test('YAML managed export, multiline, deletion, invalid imports and duplicates',
 });
 test('two device independent edits merge and retry is idempotent', async () => {
 	const { library } = await Fixture.create(Fixture.owner);
+	assert.equal(+library.snippets[0].updatedAt, +library.snippets[1].updatedAt);
 	const op = randomUUID();
 	const first = await Fixture.upload(Fixture.owner, library, [Fixture.change(library.snippets[0], 'First edit')], op);
 	const retry = await Fixture.upload(Fixture.owner, library, [Fixture.change(library.snippets[0], 'First edit')], op);
@@ -89,7 +121,7 @@ test('two device independent edits merge and retry is idempotent', async () => {
 	await assert.rejects(Fixture.upload(Fixture.owner, library, [Fixture.change(library.snippets[0], 'Changed retry')], op), /Operation ID/);
 	const second = await Fixture.upload(Fixture.owner, library, [Fixture.change(library.snippets[1], 'Second edit')]);
 	assert.deepEqual(second.conflicts, []);
-	assert.deepEqual(second.library.snippets.map(snippet => snippet.replace), ['First edit', 'Second edit']);
+	assert.deepEqual(second.library.snippets.map(snippet => snippet.replace), ['Second edit', 'First edit']);
 });
 test('same snippet and edit/delete retain conflict; explicit resolution', async () => {
 	const { library } = await Fixture.create(Fixture.owner);
@@ -119,18 +151,43 @@ test('cursor access manifest reflects revocation and library deletion', async ()
 test('PKCE account binding, one-time code, rotating token, device revoke', async () => {
 	const verifier = Support.token();
 	const challenge = createHash('sha256').update(verifier).digest('base64url');
-	const body = { account: Fixture.owner.account, redirect_uri: 'http://127.0.0.1:43000/callback', client_id: 'typerelay-desktop', code_challenge_method: 'S256', code_challenge: challenge, state: Support.token() };
+	const body = { account: Fixture.owner.account, redirect_uri: 'http://127.0.0.1:43000/callback', client_id: 'typerelay-desktop', code_challenge_method: 'S256', code_challenge: challenge, state: Support.token(), client_type: 'desktop', os: 'macos' };
 	await assert.rejects(Auth.authorize(Fixture.member.user, { ...body, account: Fixture.outsider.account }), /denied/);
 	const redirect = new URL(await Auth.authorize(Fixture.owner.user, body));
 	const exchange = { grant_type: 'authorization_code', code: redirect.searchParams.get('code'), client_id: body.client_id, redirect_uri: body.redirect_uri, code_verifier: verifier };
 	await assert.rejects(Auth.exchange({ ...exchange, code_verifier: Support.token() }), /Invalid authorization/);
 	const tokens = await Auth.exchange(exchange);
+	const connected = await Device.findById(tokens.device).lean();
+	assert.equal(connected.client_type, 'desktop'); assert.equal(connected.os, 'macos'); assert.ok(connected.createdAt); assert.ok(connected.last_active);
+	await Device.updateOne({ _id: tokens.device }, { $set: { last_active: new Date(0) } });
 	assert.equal((await Auth.bearer(tokens.access_token)).account, Fixture.owner.account);
+	assert.ok((await Device.findById(tokens.device).lean()).last_active > new Date(0));
 	await assert.rejects(Auth.exchange(exchange), /Invalid authorization/);
 	const rotated = await Auth.exchange({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token });
 	await assert.rejects(Auth.exchange({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token }), /Invalid refresh/);
 	await Device.updateOne({ _id: tokens.device }, { $set: { revoked: true } });
 	await assert.rejects(Auth.bearer(rotated.access_token), /revoked/);
+});
+test('device enrollment accepts supported metadata and legacy clients without guessing', async () => {
+	for (const metadata of [{}, { client_type: 'cli', os: 'linux' }, { client_type: 'desktop', os: 'windows' }]) {
+		const verifier = Support.token();
+		const body = { account: Fixture.owner.account, redirect_uri: 'typerelay://oauth/callback', client_id: 'typerelay-desktop', code_challenge_method: 'S256', code_challenge: createHash('sha256').update(verifier).digest('base64url'), state: Support.token(), ...metadata };
+		await assert.rejects(Auth.authorize(Fixture.owner.user, { ...body, client_type: 'fake' }), /Invalid client type/);
+		await assert.rejects(Auth.authorize(Fixture.owner.user, { ...body, os: '<script>' }), /Invalid operating system/);
+		const url = new URL(await Auth.authorize(Fixture.owner.user, body));
+		const tokens = await Auth.exchange({ grant_type: 'authorization_code', code: url.searchParams.get('code'), client_id: body.client_id, redirect_uri: body.redirect_uri, code_verifier: verifier });
+		const device = await Device.findById(tokens.device).lean();
+		assert.equal(device.client_type, metadata.client_type); assert.equal(device.os, metadata.os);
+		await Device.updateOne({ _id: device._id }, { $set: { access_expires: new Date(0), last_active: new Date(0) } });
+		await assert.rejects(Auth.bearer(tokens.access_token), /expired/);
+		assert.equal(+(await Device.findById(device._id).lean()).last_active, 0);
+		await Auth.exchange({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token });
+		assert.ok(+(await Device.findById(device._id).lean()).last_active > 0);
+	}
+});
+test('desktop PKCE accepts only the registered app callback', () => {
+	assert.equal(Auth.redirect('typerelay://oauth/callback'), 'typerelay://oauth/callback');
+	assert.throws(() => Auth.redirect('typerelay://other/callback'), /Invalid desktop callback/);
 });
 test('membership administration cannot escalate admin to owner or touch owner', async () => {
 	const owner = await Member.findOne({ user: Fixture.owner.user, account: Fixture.account }).lean();
@@ -191,18 +248,32 @@ test('restore collisions roll back; expiry/purge erase content, conflicts and pr
 	const original = library;
 	({ library } = await Fixture.upload(ctx, library, [Fixture.change(library.snippets[0], null)]));
 	const target = (await Libraries.trash(ctx))[0];
+	const retainedSnippet = library.snippets[0];
+	({ library } = await Fixture.upload(ctx, library, [Fixture.change(retainedSnippet, null)]));
+	const retained = (await Libraries.trash(ctx)).find(row => row.id === retainedSnippet.id);
 	const collision = await Fixture.create(ctx, 'matches: [{trigger: hello, replace: Collision}]');
 	await assert.rejects(Libraries.mutate(ctx, randomUUID(), { target }, (fresh, session) => Libraries.trashAction(fresh, target, 'restore', session)), /[Dd]uplicate/);
-	assert.equal((await Libraries.trash(ctx))[0].id, target.id);
+	assert.ok((await Libraries.trash(ctx)).some(row => row.id === target.id));
 	await Conflict.create({ account: ctx.account, library: library._id, user: ctx.user, snippet: target.id, local: { replace: 'Old private content' } });
 	await Snippet.updateOne({ library: library._id, id: target.id }, { $set: { expires_at: new Date(Date.now() - 1000) } });
+	let { library: expiredLibrary } = await Fixture.create(ctx, 'matches: [{trigger: expired, replace: Expired}]');
+	const expiredLibraryTarget = { type: 'library', id: expiredLibrary._id, library: expiredLibrary._id, revision: expiredLibrary.revision };
+	({ library: expiredLibrary } = await Libraries.mutate(ctx, randomUUID(), { expiredLibraryTarget }, (fresh, session) => Libraries.trashAction(fresh, expiredLibraryTarget, 'trash', session)));
+	await Library.updateOne({ _id: expiredLibrary._id }, { $set: { expires_at: new Date(Date.now() - 1000) } });
 	await assert.rejects(Libraries.mutate(ctx, randomUUID(), { target }, (fresh, session) => Libraries.trashAction(fresh, target, 'restore', session)), /expired/);
-	await Libraries.cleanup();
+	const summary = await Libraries.cleanup();
+	assert.deepEqual(summary, { libraries: 1, snippets: 1 });
 	const purged = await Snippet.findOne({ library: library._id, id: target.id }).lean();
 	assert.equal(purged.state, 'purged');
 	assert.equal(purged.content, undefined);
 	assert.equal(purged.trigger, undefined);
+	assert.equal((await Snippet.findOne({ library: library._id, id: retained.id }).lean()).state, 'trashed');
+	assert.equal((await Library.findById(expiredLibrary._id).lean()).state, 'purged');
+	assert.ok((await Snippet.find({ library: expiredLibrary._id }).lean()).every(row => row.state === 'purged' && !row.content));
 	assert.equal(await Conflict.countDocuments({ library: library._id, snippet: target.id }), 0);
+	const tombstones = await Libraries.download(ctx, 0);
+	assert.ok(tombstones.tombstones.some(row => row.id === target.id));
+	assert.ok(tombstones.purged.includes(expiredLibrary._id));
 	await assert.rejects(Fixture.upload(ctx, original, [Fixture.change(original.snippets[0], 'Resurrect')]), /permanently purged/);
 	assert.ok((await Libraries.get(ctx, collision.library._id)).snippets.length);
 });
@@ -236,6 +307,7 @@ test('batch moves preserve IDs/order, update both libraries and retry idempotent
 	const moved = (await Libraries.get(ctx, destination._id)).snippets;
 	assert.deepEqual(moved.map(row => row.trigger), ['existing', 'hello', 'bye']);
 	assert.deepEqual(moved.slice(1).map(row => row.id), source.snippets.map(row => row.id));
+	assert.deepEqual(moved.slice(1).map(row => +row.updatedAt), source.snippets.map(row => +row.updatedAt));
 	assert.ok(first.libraries.every(row => row.revision === 2));
 	await assert.rejects(Fixture.upload(ctx, source, [Fixture.change(source.snippets[0], 'Stale edit')]), /moved/);
 	assert.equal(await Snippet.countDocuments({ account: ctx.account, id: source.snippets[0].id }), 1);
@@ -308,7 +380,7 @@ test('code metadata, optional abbreviations, import previews and idempotent impo
 	assert.equal(result.library.snippets[0].content.language, 'JavaScript');
 	const competing = await Fixture.upload(owner, result.library, [{ id: entry.id, base_revision: entry.revision, value: { ...Libraries.value(entry), title: 'Offline title' } }]);
 	assert.equal(competing.conflicts.length, 1, 'Concurrent metadata edits must retain a conflict');
-	await assert.rejects(Libraries.validate([{ trigger: 'literal', replace: '{{ invalid text mode }}' }]), /Code mode/);
+	await Libraries.validate([{ trigger: 'literal', replace: '{{ invalid text mode }}' }]);
 	const bad = { ...body, selected: [{ key: '1:0' }] };
 	await assert.rejects(Libraries.mutate(owner, randomUUID(), bad, (ctx, session) => Libraries.importSnippetsLab(ctx, bad, session)), /invalid/);
 	await assert.rejects(Libraries.snippetsLab({ contents: { snippets: [{ title: 'Missing' }] } }), /no fragments/);
@@ -327,7 +399,7 @@ test('beta importers parse CSV, HTML JSON and XML sets with review-only commands
 	await assert.rejects(Libraries.previewImport('textexpander', { source: 'abbreviation,snippet\nx,"bad' }), /Malformed CSV/);
 	const blaze = { folders: [{ name: 'Parent', snippets: [{ name: 'Rich', shortcut: ',html', html: '<p>Hello <b>world</b></p><p>Next<br>line<img src="https://invalid.test/x"></p>' }, { name: 'Dynamic', shortcut: 'form', body: 'Hello {formtext: name=Name}' }], children: [{ name: 'Child', snippets: [{ shortcut: 'child', body: '\tchild  \n' }, { name: 'Image', html: '<img src="x">' }] }] }] };
 	const rich = await Libraries.previewImport('textblaze', { source: blaze });
-	assert.equal(rich.entries[0].content.text, 'Hello world\nNext\nline\n');
+	assert.equal(rich.entries[0].content.type, 'rich_text'); assert.equal(rich.entries[0].content.text, 'Hello world\nNext\nline');
 	assert.ok(rich.entries[0].warnings.length); assert.equal(rich.entries[1].review, true);
 	assert.equal(rich.entries[2].name, 'Parent › Child'); assert.ok(rich.entries[3].error);
 	const xml = '<?xml version="1.0"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>name</key><string>Mac</string><key>clippings</key><array><dict><key>abbr</key><string>,mac</string><key>clip</key><string>\tMac &amp; λ\n</string></dict></array></dict></plist>';
@@ -357,4 +429,79 @@ test('shared import commit corrects abbreviations, stays private, retries and ro
 	assert.equal(next.libraries[0].name, 'Beta (2)'); assert.equal(next.libraries[0].snippets[0].trigger, null);
 	const admin = await Fixture.user('admin', owner.account);
 	await assert.rejects(Libraries.get(admin, libraries[0]._id), /not found/);
+});
+
+test('template metadata survives imports, edits, conflicts, moves and Trash', async () => {
+	const ctx = await Fixture.user('owner', (await Account.create({ name: 'Template tests' }))._id);
+	const content = { version: 1, type: 'template', text: 'Hi {{name}} {{date}}{{key:enter}}', variables: { name: { label: 'Customer', default: 'Nitai', required: true, multiline: false }, date: { timezone: 'utc', format: 'DD/MM/YYYY' } } };
+	const body = { name: 'Template', snippets: [{ id: randomUUID(), trigger: 'template', content }] };
+	let result = await Libraries.mutate(ctx, randomUUID(), body, (fresh, session) => Libraries.create(fresh, body, session).then(library => ({ library })));
+	let library = result.library; const first = library.snippets[0];
+	assert.deepEqual(first.content.variables, content.variables);
+	const yaml = await Yaml.export(library.snippets.map(Libraries.yaml));
+	const parsed = await Yaml.run(yaml.yaml); assert.equal(parsed.matches[0].type, 'template'); assert.equal(parsed.matches[0].variables.name.label, 'Customer');
+	const changed = { ...content, variables: { ...content.variables, name: { ...content.variables.name, label: 'Updated' } } };
+	result = await Fixture.upload(ctx, library, [{ id: first.id, base_revision: first.revision, value: { trigger: 'template', content: changed } }]); library = result.library;
+	const competing = await Fixture.upload(ctx, library, [{ id: first.id, base_revision: first.revision, value: { trigger: 'template', content: { ...content, text: 'Dear {{name}}' } } }]);
+	assert.equal(competing.conflicts.length, 1);
+	const conflict = await Conflict.findById(competing.conflicts[0]).lean(); assert.equal(conflict.local.content.type, 'template'); assert.equal(conflict.server.content.variables.name.label, 'Updated');
+	const destination = await Fixture.create(ctx, 'matches: []');
+	const move = { action: 'move', source_library: library._id, destination_library: destination.library._id, items: [{ id: first.id, base_revision: library.snippets[0].revision }] };
+	const moved = await Libraries.mutate(ctx, randomUUID(), move, (fresh, session) => Libraries.batch(fresh, move, session));
+	const entry = moved.libraries.find(item => item._id === destination.library._id).snippets[0]; assert.deepEqual(entry.content, changed);
+	const target = { type: 'snippet', id: entry.id, library: destination.library._id, revision: entry.revision };
+	await Libraries.mutate(ctx, randomUUID(), target, (fresh, session) => Libraries.trashAction(fresh, target, 'trash', session));
+	const row = (await Libraries.trash(ctx)).find(row => row.id === entry.id);
+	await Libraries.mutate(ctx, randomUUID(), row, (fresh, session) => Libraries.trashAction(fresh, row, 'restore', session));
+	assert.deepEqual((await Libraries.get(ctx, destination.library._id)).snippets[0].content, changed);
+	await assert.rejects(Libraries.validate([{ trigger: 'bad', type: 'template', replace: '{{shell:ls}}' }]), /variable name/);
+});
+
+test('mobile OAuth binds callback, client, device metadata and rotated refresh tokens', async () => {
+ for (const os of ['ios', 'android']) {
+  const verifier = Support.token();
+  const body = { account: Fixture.owner.account, redirect_uri: 'com.typerelay.mobile://oauth/callback', client_id: 'typerelay-mobile', client_type: 'mobile', os, code_challenge_method: 'S256', code_challenge: createHash('sha256').update(verifier).digest('base64url'), state: Support.token() };
+  await assert.rejects(Auth.authorize(Fixture.owner.user, { ...body, os: 'macos' }), /Invalid operating system/);
+  await assert.rejects(Auth.authorize(Fixture.owner.user, { ...body, client_type: 'desktop' }), /Invalid client type/);
+  const callback = new URL(await Auth.authorize(Fixture.owner.user, body));
+  const exchange = { grant_type: 'authorization_code', client_id: body.client_id, redirect_uri: body.redirect_uri, code: callback.searchParams.get('code'), code_verifier: verifier };
+  await assert.rejects(Auth.exchange({ ...exchange, client_id: 'typerelay-desktop' }), /Invalid authorization code/);
+  await assert.rejects(Auth.exchange({ ...exchange, code_verifier: Support.token() }), /Invalid authorization code/);
+  const tokens = await Auth.exchange(exchange);
+  await assert.rejects(Auth.exchange(exchange), /Invalid authorization code/);
+  const device = await Device.findById(tokens.device).lean();
+  assert.equal(device.os, os); assert.equal(device.client_type, 'mobile'); assert.equal(device.oauth_client, 'typerelay-mobile');
+  await assert.rejects(Auth.exchange({ grant_type: 'refresh_token', client_id: 'typerelay-desktop', refresh_token: tokens.refresh_token }), /Invalid refresh client/);
+  const rotated = await Auth.exchange({ grant_type: 'refresh_token', client_id: 'typerelay-mobile', refresh_token: tokens.refresh_token });
+  await assert.rejects(Auth.exchange({ grant_type: 'refresh_token', client_id: 'typerelay-mobile', refresh_token: tokens.refresh_token }), /Invalid refresh/);
+  assert.equal((await Auth.bearer(rotated.access_token)).device, tokens.device);
+  await Device.updateOne({ _id: tokens.device }, { $set: { revoked: true } });
+ }
+});
+test('mobile callbacks require exact registered scheme host and path', () => {
+ assert.equal(Auth.redirect('com.typerelay.mobile://oauth/callback', 'typerelay-mobile'), 'com.typerelay.mobile://oauth/callback');
+ for (const uri of ['not-a-url', 'typerelay://oauth/callback', 'http://127.0.0.1:8080/callback', 'com.typerelay.mobile://oauth/callback/extra', 'com.typerelay.mobile://user@oauth/callback', 'com.typerelay.mobile://oauth/callback?x=1', 'com.typerelay.mobile://oauth/callback#x', 'com.typerelay.mobile://evil/callback']) assert.throws(() => Auth.redirect(uri, 'typerelay-mobile'), /Invalid mobile callback/);
+ assert.throws(() => Auth.redirect('com.typerelay.mobile://oauth/callback', 'typerelay-desktop'), /Invalid desktop callback/);
+});
+
+test('browser preview callback is restricted to the configured development origin', async () => {
+ const previousEnvironment = process.env.NODE_ENV; const previousPreview = process.env.TYPERELAY_MOBILE_PREVIEW_URL;
+ try {
+  process.env.NODE_ENV = 'development'; process.env.TYPERELAY_MOBILE_PREVIEW_URL = 'https://preview.example.test/mobile';
+  const redirect = 'https://preview.example.test/mobile/oauth/callback';
+  assert.equal(Auth.redirect(redirect, 'typerelay-mobile'), redirect);
+  for (const uri of ['https://other.example.test/mobile/oauth/callback', 'https://preview.example.test/oauth/callback', redirect + '?query=1']) assert.throws(() => Auth.redirect(uri, 'typerelay-mobile'), /Invalid mobile callback/);
+  const verifier = Support.token();
+  const body = { account: Fixture.owner.account, client_id: 'typerelay-mobile', client_type: 'mobile', os: 'web', redirect_uri: redirect, code_challenge_method: 'S256', code_challenge: createHash('sha256').update(verifier).digest('base64url'), state: Support.token() };
+  const callback = new URL(await Auth.authorize(Fixture.owner.user, body));
+  const tokens = await Auth.exchange({ grant_type: 'authorization_code', client_id: body.client_id, redirect_uri: redirect, code_verifier: verifier, code: callback.searchParams.get('code') });
+  assert.equal((await Device.findById(tokens.device).lean()).os, 'web');
+  await Device.updateOne({ _id: tokens.device }, { $set: { revoked: true } });
+  process.env.NODE_ENV = 'production';
+  assert.throws(() => Auth.redirect(redirect, 'typerelay-mobile'), /Invalid mobile callback/);
+  assert.equal(Auth.redirect('com.typerelay.mobile://oauth/callback', 'typerelay-mobile'), 'com.typerelay.mobile://oauth/callback');
+ } finally {
+  if (previousEnvironment === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = previousEnvironment;
+  if (previousPreview === undefined) delete process.env.TYPERELAY_MOBILE_PREVIEW_URL; else process.env.TYPERELAY_MOBILE_PREVIEW_URL = previousPreview;
+ }
 });

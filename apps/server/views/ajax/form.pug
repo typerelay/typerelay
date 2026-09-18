@@ -2,21 +2,24 @@ if kind === 'library'
 	label.form-label.fw-bold(for="name") Library name
 	input#name.form-control.form-control-sm.mb-4(name="name" value=library ? library.name : '' required maxlength="100")
 	if library
-		.form-check.d-flex.align-items-center.ps-0.mb-4
-			input#shared.form-check-input.m-0(type="checkbox" name="shared" checked=library.shared)
-			label.form-check-label.ms-3(for="shared") Shared with team
-		label.form-label.fw-bold(for="editable") Editing
-		select#editable.form-select.form-select-sm.mb-4(name="editable")
-			option(value="false" selected=!library.editable) Creator and account admins only
-			option(value="true" selected=library.editable) Assigned members may edit
-		label.form-label.fw-bold(for="members-select") Members
-		select#members-select.form-select.form-select-sm.mb-4(name="members" multiple disabled=!library.shared)
-			each member in team.members
-				option(value=member.user selected=library.members.map(String).includes(String(member.user)))= member.profile.email
-		label.form-label.fw-bold(for="groups-select") Groups
-		select#groups-select.form-select.form-select-sm.mb-4(name="groups" multiple disabled=!library.shared)
-			each group in team.groups
-				option(value=group._id selected=library.groups.map(String).includes(String(group._id)))= group.name
+		if ctx.entitlements.capabilities.sharing
+			.form-check.d-flex.align-items-center.ps-0.mb-4
+				input#shared.form-check-input.m-0(type="checkbox" name="shared" checked=library.shared)
+				label.form-check-label.ms-3(for="shared") Shared with team
+			label.form-label.fw-bold(for="editable") Editing
+			select#editable.form-select.form-select-sm.mb-4(name="editable")
+				option(value="false" selected=!library.editable) Creator and account admins only
+				option(value="true" selected=library.editable) Assigned members may edit
+			label.form-label.fw-bold(for="members-select") Members
+			select#members-select.form-select.form-select-sm.mb-4(name="members" multiple disabled=!library.shared)
+				each member in team.members
+					option(value=member.user selected=library.members.map(String).includes(String(member.user)))= member.profile.email
+			label.form-label.fw-bold(for="groups-select") Groups
+			select#groups-select.form-select.form-select-sm.mb-4(name="groups" multiple disabled=!library.shared)
+				each group in team.groups
+					option(value=group._id selected=library.groups.map(String).includes(String(group._id)))= group.name
+		else if library.shared
+			.alert.alert-warning Sharing is disabled. Saving this library removes its stored sharing grants.
 		button.btn.btn-outline-danger.btn-sm(type="button" data-delete-library=library._id) Move library to Trash
 	else
 		label.form-label.fw-bold(for="yaml-file") Import YAML (optional)
@@ -34,21 +37,25 @@ if kind === 'move'
 		p.text-muted No other editable libraries are available.
 	p.text-muted Moved snippets inherit the destination library’s sharing and editing permissions.
 if kind === 'snippet' || kind === 'conflict'
-	.row.align-items-center
-		.col-md-9
-			label.form-label.fw-bold(for="snippet-title") Title (optional)
+	.row.align-items-center.g-0
+		.col-md-4
+			label.form-label.snippet-label(for="trigger") Abbreviation
+			.input-group.input-group-sm.mb-3
+				span.input-group-text(aria-hidden="true") ;
+				input#trigger.form-control.form-control-sm(name="trigger" value=snippet ? snippet.trigger : '' pattern="[a-z0-9\\-]{1,63}" autocapitalize="off" spellcheck="false")
+		.col-md-5
+			label.form-label.snippet-label(for="snippet-title") Title (optional)
 			input#snippet-title.form-control.form-control-sm.mb-3(name="title" value=snippet ? snippet.title : '' maxlength="500")
 		.col-md-3
-			label.form-label.fw-bold(for="snippet-type") Type
+			label.form-label.snippet-label(for="snippet-type") Type
 			select#snippet-type.form-select.form-select-sm.mb-3(name="type")
-				option(value="plain_text" selected=!snippet || (snippet.content && snippet.content.type) !== 'code') Text
+				option(value="plain_text" selected=!snippet || ['plain_text', 'template'].includes(snippet.content && snippet.content.type)) Text
 				option(value="code" selected=snippet && (snippet.content && snippet.content.type) === 'code') Code
-	label.form-label.fw-bold(for="trigger") Abbreviation (optional)
-	.input-group.input-group-sm.mb-4
-		span.input-group-text(aria-hidden="true") ,
-		input#trigger.form-control.form-control-sm(name="trigger" value=snippet ? snippet.trigger : '' pattern="[a-z0-9\\-]{1,63}" autocapitalize="off" spellcheck="false")
-	label.form-label.fw-bold(for="replace") Expansion
-	textarea#replace.form-control.form-control-sm.mb-4(name="replace")= '\n' + (snippet ? snippet.replace : '')
+				option(value="rich_text" selected=snippet && (snippet.content && snippet.content.type) === 'rich_text') Rich text
+	label.form-label.snippet-label(for="replace") Expansion
+	include template-editor
+	textarea#replace.form-control.form-control-sm.mb-4(name="replace" rows="8")= '\n' + (snippet ? snippet.replace : '')
+	include rich-editor
 	#code-editor.mb-3
 	#code-options.mb-3(hidden=!snippet || (snippet.content && snippet.content.type) !== 'code')
 		.row.align-items-center
@@ -67,14 +74,15 @@ if kind === 'snippet' || kind === 'conflict'
 					each width in [2, 4, 8]
 						option(value=width selected=width === 4)= width
 		p.small.text-muted Tab indents; Shift+Tab outdents. Press Escape then Tab to leave the editor. Existing whitespace stays unchanged.
-	button#copy-code.btn.btn-outline-secondary.btn-sm.mb-3(type="button") Copy
 	if kind === 'snippet' && snippet
-		label.form-label.fw-bold(for="destination-library") Library
-		select#destination-library.form-select.form-select-sm.mb-4(name="destination_library" disabled=!library.permissions.edit)
-			option(value=library._id selected)= library.name + (library.shared ? ' · Shared' : ' · Personal')
-			each destination in destinations
-				option(value=destination._id)= destination.name + (destination.shared ? ' · Shared' : ' · Personal')
-		p.text-muted Changing the library moves this snippet when you save. Destination sharing permissions apply.
+		details.snippet-advanced.mb-3
+			summary.small.mb-3 Advanced
+			label.form-label.fw-bold(for="destination-library") Move to library
+			select#destination-library.form-select.form-select-sm.mb-3(name="destination_library" disabled=!library.permissions.edit)
+				option(value=library._id selected)= library.name + (library.shared ? ' · Shared' : ' · Personal')
+				each destination in destinations
+					option(value=destination._id)= destination.name + (destination.shared ? ' · Shared' : ' · Personal')
+			p.small.text-muted.mb-0 Changing the library moves this snippet when you save. Destination sharing permissions apply.
 	if kind === 'conflict'
 		label.form-label.fw-bold(for="choice") Resolution
 		select#choice.form-select.form-select-sm(name="choice")
@@ -102,5 +110,5 @@ if kind === 'snippetslab' || kind === 'import'
 	if importFormat.beta
 		p.small.text-muted Beta: export layouts may vary between app versions. Review the preview before importing.
 	p.small.text-muted Imported libraries are private. Existing libraries are never replaced.
-	button#preview-import.btn.btn-outline-secondary.btn-sm.mb-3(type="button") Preview import
+	button#preview-import.btn.btn-outline-secondary.btn-sm.mb-3(type="button")= importFormat.name === 'TypeRelay bundle' ? 'Import bundle' : 'Preview import'
 	#import-preview

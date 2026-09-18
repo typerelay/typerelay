@@ -1,7 +1,7 @@
 extends layout
 block content
 	#workspace(data-account=account._id)
-		.row
+		.row#workspace-content(hidden=typeof news !== 'undefined' && news)
 			aside.col-md-4
 				.library-controls.d-flex.align-items-center.gap-3.mb-3
 					select#account-switch.form-select.form-select-sm(aria-label="Account")
@@ -22,7 +22,43 @@ block content
 				#editor.card.p-4
 					h2.fw-bold Select a library
 					p.text-muted Import YAML or create your first library.
-				#conflicts.mt-3
+		#conflicts.mt-3(hidden=typeof news !== 'undefined' && news)
+		if typeof productUpdatesEnabled !== 'undefined' && productUpdatesEnabled
+			#news-view(hidden=!news)
+				if news
+					include ajax/section/news
+		#rich-image-modal.modal.fade(tabindex="-1" aria-label="Add rich-text image" data-bs-backdrop="static" data-bs-keyboard="false")
+			.modal-dialog.modal-lg.modal-dialog-scrollable
+				.modal-content
+					.modal-header
+						h2.modal-title.h5.fw-bold Add image
+						button.btn-close(type="button" data-bs-dismiss="modal" aria-label="Close")
+					form#rich-image-form
+						.modal-body
+							label.form-label(for="rich-image-file") Upload image
+							input#rich-image-file.form-control.form-control-sm.mb-3(type="file" accept="image/png,image/jpeg,image/webp,image/gif")
+							label.form-label(for="rich-image-url") Or remote image URL
+							input#rich-image-url.form-control.form-control-sm.mb-3(type="url")
+							.row.align-items-center
+								.col-md-6
+									label.form-label(for="rich-image-alt") Alt text
+									input#rich-image-alt.form-control.form-control-sm.mb-3(maxlength="500")
+								.col-md-6
+									label.form-label(for="rich-image-title") Title
+									input#rich-image-title.form-control.form-control-sm.mb-3(maxlength="500")
+							.row.align-items-center
+								.col-md-6
+									label.form-label(for="rich-image-placement") Placement
+									select#rich-image-placement.form-select.form-select-sm.mb-3
+										option(value="inline") Inline
+										option(value="block") Block
+								.col-md-6
+									label.form-label(for="rich-image-width") Display width
+									input#rich-image-width.form-control.form-control-sm.mb-3(type="number" min="32" max="2048" value="640")
+							p.small.text-muted.mb-0 Remote images are cached privately for reliable offline insertion.
+						.modal-footer.justify-content-between
+							button.btn.btn-outline-secondary.btn-sm(type="button" data-bs-dismiss="modal") Cancel
+							button.btn.btn-primary.btn-sm(type="submit") Add image
 		#settings.modal.fade(tabindex="-1" aria-label="Settings" data-bs-backdrop="static" data-bs-keyboard="false")
 			.modal-dialog.modal-xl.modal-dialog-scrollable.settings-dialog
 				.modal-content
@@ -31,7 +67,12 @@ block content
 						button.btn-close(data-bs-dismiss="modal" aria-label="Close")
 					.modal-body.settings-body.p-0
 						nav.settings-nav.list-group.list-group-flush(role="tablist" aria-label="Settings sections" aria-orientation="vertical")
-							each label, key in {profile: 'Profile', security: 'Security', team: 'My team', devices: 'Connected devices'}
+							- var settingsSections = {profile: 'Profile', security: 'Security', team: 'My team', devices: 'Connected devices', tokens: 'Access tokens'}
+							if billingEnabled
+								- settingsSections.subscription = 'Subscription'
+								if ['owner', 'admin'].includes(ctx.role)
+									- settingsSections.whiteLabel = 'White-label'
+							each label, key in settingsSections
 								button.list-group-item.list-group-item-action(type="button" role="tab" id='settings-tab-' + key data-settings-tab=key aria-controls='settings-pane-' + key aria-selected=(key === 'profile').toString() tabindex=key === 'profile' ? '0' : '-1' class=key === 'profile' ? 'active' : '')= label
 						.settings-content
 							section.settings-pane(id="settings-pane-profile" role="tabpanel" aria-labelledby="settings-tab-profile" hidden=false)
@@ -48,34 +89,61 @@ block content
 								include ajax/security
 							section.settings-pane(id="settings-pane-team" role="tabpanel" aria-labelledby="settings-tab-team" hidden=true)
 								h3.h6.fw-bold Account and team
+								if !ctx.entitlements.capabilities.team
+									.alert.alert-warning Team management and sharing require Team. Existing extra members can be removed after a downgrade.
 								if ['owner', 'admin'].includes(ctx.role)
 									form#account-form.mb-3
 										label.form-label(for="account-name") Account name
 										input#account-name.form-control.form-control-sm.mb-3(name="name" value=account.name required)
 										.d-flex.justify-content-end
 											button.btn.btn-primary.btn-sm Save
-									form#invite-form.mb-3
-										label.form-label(for="invite-email") Invite by email
-										input#invite-email.form-control.form-control-sm.mb-3(name="email" type="email" required)
-										.d-flex.justify-content-end
-											button.btn.btn-primary.btn-sm Invite
+									if ctx.entitlements.capabilities.team
+										form#invite-form.mb-3
+											label.form-label(for="invite-email") Invite by email
+											input#invite-email.form-control.form-control-sm.mb-3(name="email" type="email" required)
+											.d-flex.justify-content-end
+												button.btn.btn-primary.btn-sm Invite
 								ul#invitations.list-group.mb-3
 									each invitation in team.invitations
 										include ajax/invitation
 								ul#members.list-group.mb-3
 									each member in team.members
 										include ajax/member
-								h3.h6.fw-bold Groups
-								ul#groups.list-group.mb-3
-									each group in team.groups
-										include ajax/group
-								if ['owner', 'admin'].includes(ctx.role)
-									button#new-group.btn.btn-outline-secondary.btn-sm.mb-5 New group
+								if ctx.entitlements.capabilities.team
+									h3.h6.fw-bold Groups
+									ul#groups.list-group.mb-3
+										each group in team.groups
+											include ajax/group
+									if ['owner', 'admin'].includes(ctx.role)
+										button#new-group.btn.btn-outline-secondary.btn-sm.mb-5 New group
 							section.settings-pane(id="settings-pane-devices" role="tabpanel" aria-labelledby="settings-tab-devices" hidden=true)
 								h3.h6.fw-bold Connected devices
 								ul#devices.list-group.mb-3
+							section.settings-pane(id="settings-pane-tokens" role="tabpanel" aria-labelledby="settings-tab-tokens" hidden=true)
+								h3.h6.fw-bold Access tokens and authorized integrations
+								#token-auth-required.alert.alert-warning(hidden role="status")
+									p.mb-3 For your security, token management requires a sign-in within the last 15 minutes. Sign in in a new tab, then retry here.
+									a.btn.btn-primary.btn-sm(href="/login" target="_blank" rel="noopener") Sign in
+									button#retry-tokens.btn.btn-outline-secondary.btn-sm.ms-3(type="button") Retry
+								if !ctx.entitlements.capabilities.api
+									.alert.alert-warning API and MCP access require Pro or Team. Existing tokens stay stored but cannot authenticate.
+								ul#access-tokens.list-group.mb-5
+								#access-token-form-container
+								if ctx.entitlements.capabilities.api
+									include ajax/access-token-form
+								div#token-secret.mb-3(hidden)
+									p Copy this token now. It will not be shown again.
+									code#token-secret-value
+									button#dismiss-token.btn.btn-outline-secondary.btn-sm.ms-3(type="button") Done
+							if billingEnabled
+								section.settings-pane(id="settings-pane-subscription" role="tabpanel" aria-labelledby="settings-tab-subscription" hidden=true)
+									include ajax/subscription
+								if ['owner', 'admin'].includes(ctx.role)
+									section.settings-pane(id="settings-pane-whiteLabel" role="tabpanel" aria-labelledby="settings-tab-whiteLabel" hidden=true)
+										include ajax/white-label
+		include ajax/template-fill
 		#form-modal.modal.fade(tabindex="-1" aria-label="Edit" data-bs-backdrop="static" data-bs-keyboard="false")
-			.modal-dialog.modal-lg.modal-dialog-scrollable
+			.modal-dialog.modal-xl.modal-dialog-scrollable
 				.modal-content
 					.modal-header
 						h2#form-title.modal-title.h5.fw-bold
@@ -98,8 +166,8 @@ block content
 						p Create a library or import a YAML file, then add abbreviations and expansions. The trigger prefix stays in your desktop settings.
 						h3.h6.fw-bold Connect your desktop
 						pre= 'typerelay connect --server ' + serverOrigin
-						pre typerelay enroll mysnippets.yml
-						p Only files you enroll are uploaded. Shared libraries available to you download automatically.
+						pre typerelay enroll "Library name"
+						p Only local libraries you enroll are uploaded. Shared libraries available to you download automatically.
 						h3.h6.fw-bold Sync and conflicts
 						p Press F5 in the TUI to sync now. Conflicts appear here for review; local drafts are kept in your TypeRelay sync/recovery directory.
 						a(href="https://github.com/typerelay/typerelay/tree/main/docs" target="_blank" rel="noopener") Documentation

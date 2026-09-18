@@ -7,7 +7,7 @@ import unittest
 
 class PanelIpcTests(unittest.TestCase):
     def test_isolated_requests_expire_and_full_notification_socket_never_blocks(self):
-        binary = pathlib.Path(__file__).resolve().parents[2] / "target/debug/examples/panel_ipc_probe"
+        binary = pathlib.Path(os.environ.get("CARGO_TARGET_DIR", pathlib.Path(__file__).resolve().parents[2] / "target")) / "debug/examples/panel_ipc_probe"
         if not binary.exists():
             self.skipTest("Build examples first")
         with tempfile.TemporaryDirectory(prefix="typerelay-panel-ipc-") as directory:

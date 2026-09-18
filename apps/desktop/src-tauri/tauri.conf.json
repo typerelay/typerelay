@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "TypeRelay",
-  "version": "0.10.0",
+  "version": "1.0.0",
   "identifier": "com.typerelay.panel",
   "build": {
     "frontendDist": "../dist",
@@ -24,6 +24,19 @@
     ],
     "security": {
       "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data:; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["typerelay"]
+      }
+    },
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY3MDE3QTExNTYyQUMyNDUKUldSRndpcFdFWG9COXlxeE15WUJCSmpMMnZab01wMFBHcWxUOHBtMzlmTHpTVExHTlFsK1BYUE8K",
+      "endpoints": [
+        "https://transfer.typerelay.com/apps/latest.json"
+      ]
     }
   },
   "bundle": {

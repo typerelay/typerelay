@@ -1,3 +1,16 @@
 li.list-group-item.d-flex.align-items-center.justify-content-between(data-device=device._id)
-	span= device.name
+	div
+		strong= device.name
+		div.small.text-muted= 'Client: ' + ({desktop: 'Desktop', cli: 'CLI / TUI', mobile: 'Mobile'}[device.client_type] || 'Unknown') + ' · OS: ' + ({macos: 'macOS', windows: 'Windows', linux: 'Linux', ios: 'iOS', android: 'Android', web: 'Browser preview'}[device.os] || 'Unknown')
+		div.small.text-muted
+			span= 'Connected: '
+			if device.createdAt
+				time(datetime=new Date(device.createdAt).toISOString() data-local-time)= new Date(device.createdAt).toISOString()
+			else
+				span Unknown
+			span= ' · Last active: '
+			if device.last_active
+				time(datetime=new Date(device.last_active).toISOString() data-local-time)= new Date(device.last_active).toISOString()
+			else
+				span Unknown
 	button.btn.btn-outline-danger.btn-sm(data-revoke-device=device._id) Revoke

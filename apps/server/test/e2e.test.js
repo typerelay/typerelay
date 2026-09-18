@@ -1,3 +1,4 @@
+import { BrowserSource } from './browser-source.js';
 import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, readdir, rm } from 'node:fs/promises';
@@ -6,8 +7,8 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { execFile, spawn } from 'node:child_process';
 import { JSDOM } from 'jsdom';
-import { randomUUID } from 'node:crypto';
-import { mongoose, Account, Member, User, Device, Ticket, Library } from '../model/index.js';
+import { randomUUID, createHash } from 'node:crypto';
+import { mongoose, Account, Member, User, Device, Ticket, Library, Conflict } from '../model/index.js';
 import { Support } from '../services/support.js';
 import { Auth } from '../services/auth.js';
 import { Libraries } from '../services/libraries.js';
@@ -37,9 +38,10 @@ class Fixture {
 before(async () => {
 	process.env.NODE_ENV = 'test';
 	process.env.PORT = '3140';
-	process.env.MONGODB_URI = process.env.MONGODB_URI.replace('/typerelay?', '/typerelay_e2e?');
+	process.env.MONGO_URI = process.env.MONGO_URI.replace('/typerelay?', '/typerelay_e2e?');
 	Fixture.root = await mkdtemp(join(tmpdir(), 'typerelay-e2e-'));
-	process.env.SESSION_SECRET_FILE = join(Fixture.root, 'session');
+	process.env.SESSION_SECRET = Support.token();
+	process.env.JWT_SECRET = Support.token();
 	const { Server } = await import('../app.js');
 	Fixture.server = await Server.start();
 	const user = await User.create({ email: randomUUID() + '@example.test', name: 'Test owner' });
@@ -77,7 +79,7 @@ test('actual desktop browser PKCE flow writes private credentials and settings',
 		const page = await Fixture.request(authorize.pathname + authorize.search);
 		assert.ok(page.headers.get('content-security-policy').includes("form-action 'self' " + new URL(authorize.searchParams.get('redirect_uri')).origin + ';'));
 		const dom = new JSDOM(await page.text(), { url: authorize.href, runScripts: 'outside-only' });
-		dom.window.eval((await readFile('./public/app.js', 'utf8')).replace("import { Abbreviation } from './abbreviation.js';", (await readFile('./public/abbreviation.js', 'utf8')).replace('export class', 'class')).replace('export { client };', ''));
+		dom.window.eval((await BrowserSource.script()).replace('export { client };', ''));
 		const form = dom.window.document.querySelector('form[action="/oauth/authorize"]');
 		form.elements.account.value = Fixture.account;
 		const submit = new dom.window.Event('submit', { bubbles: true, cancelable: true });
@@ -95,6 +97,23 @@ test('actual desktop browser PKCE flow writes private credentials and settings',
 		assert.equal((await Auth.bearer(credentials.access_token)).account, Fixture.account);
 		assert.ok((await readFile(join(root, 'typerelay/settings.yml'), 'utf8')).includes(Fixture.origin));
 	} finally { child.kill(); await completed.catch(() => {}); }
+});
+test('desktop scheme approval permits the browser redirect and exchanges its PKCE code', async () => {
+	const verifier = Support.token();
+	const request = { client_id: 'typerelay-desktop', redirect_uri: 'typerelay://oauth/callback', code_challenge: createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256', state: randomUUID(), account: Fixture.account };
+	const page = await Fixture.request('/oauth/authorize?' + new URLSearchParams(request));
+	assert.equal(page.status, 200);
+	assert.match(page.headers.get('content-security-policy'), /(?:^|;)form-action 'self' typerelay:;/);
+	const approval = await Fixture.request('/oauth/authorize', 'POST', request);
+	assert.equal(approval.status, 302);
+	const callback = new URL(approval.headers.get('location'));
+	assert.equal(callback.protocol, 'typerelay:');
+	assert.equal(callback.searchParams.get('state'), request.state);
+	const exchange = await Fixture.request('/oauth/token', 'POST', { grant_type: 'authorization_code', client_id: request.client_id, redirect_uri: request.redirect_uri, code_verifier: verifier, code: callback.searchParams.get('code') });
+	assert.equal(exchange.status, 200);
+	assert.equal((await Auth.bearer((await exchange.json()).access_token)).account, Fixture.account);
+	const home = await Fixture.request('/');
+	assert.match(home.headers.get('content-security-policy'), /(?:^|;)form-action 'self';/);
 });
 test('SQLite two-device edits, conflict recovery and generated YAML isolation', async () => {
 	const yaml = '# original comments\nmatches:\n- trigger: alpha\n  replace: First\n- trigger: beta\n  replace: Second\n';
@@ -270,7 +289,7 @@ test('web AJAX updates only affected snippets; preserves panel, filter and multi
 		const response = await fetch(new URL(path, Fixture.origin), { ...options, headers: { ...options.headers, Cookie: Fixture.cookie } });
 		return response;
 	};
-	const source = (await readFile('./public/app.js', 'utf8')).replace("import { Abbreviation } from './abbreviation.js';", (await readFile('./public/abbreviation.js', 'utf8')).replace('export class', 'class')).replace('new TypeRelay();', 'window.client = new TypeRelay();').replace('export { client };', '');
+	const source = (await BrowserSource.script()).replace('new TypeRelay();', 'window.client = new TypeRelay();').replace('export { client };', '');
 	dom.window.eval(source);
 	const client = dom.window.client;
 	await client.open(library._id);
@@ -408,7 +427,7 @@ test('web AJAX updates only affected snippets; preserves panel, filter and multi
 	await client.form('snippet', { library: library._id }, () => {});
 	assert.equal(dom.window.document.querySelector('#record-form button[type="submit"]').disabled, false);
 	const trigger = dom.window.document.querySelector('#trigger');
-	assert.equal(trigger.parentElement.querySelector('.input-group-text').textContent, ',');
+	assert.equal(trigger.parentElement.querySelector('.input-group-text').textContent, ';');
 	trigger.value = ',,my-test';
 	trigger.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
 	assert.equal(trigger.value, 'my-test');
@@ -452,7 +471,7 @@ test('web AJAX updates only affected snippets; preserves panel, filter and multi
 	assert.equal(dom.window.document.querySelector('#editor'), panel);
 	const list = dom.window.document.querySelector('#libraries');
 	assert.ok(list.compareDocumentPosition(dom.window.document.querySelector('#import-menu')) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING);
-	assert.equal(dom.window.document.querySelectorAll('[data-import-format]').length, 5);
+	assert.equal(dom.window.document.querySelectorAll('[data-import-format]').length, 6);
 	await client.onClick({ target: dom.window.document.querySelector('[data-import-format="textexpander"]') });
 	const importFile = dom.window.document.querySelector('#import-file');
 	assert.equal(importFile.accept, '.csv');
@@ -523,6 +542,83 @@ test('all Bootstrap modals resist Escape and background clicks but explicit clos
 	} finally { dom.window.close(); }
 });
 
+test('public API edits reach two SQLite clients and token settings update individual rows', async () => {
+	const token = await Fixture.json('access-tokens', 'POST', { name: 'API integration', scopes: ['content:read', 'content:write'], days: 1 });
+	assert.match(token.token, /^tr_pat_/); assert.ok(token.html.includes('data-access-token'));
+	const list = await Fixture.json('access-tokens'); assert.ok(!JSON.stringify(list).includes(token.token));
+	const headers = { Authorization: 'Token ' + token.token, 'Content-Type': 'application/json' };
+	const body = { operation_id: randomUUID(), name: 'Public API sync', snippets: [{ id: randomUUID(), title: 'API code', trigger: null, content: { version: 1, type: 'code', language: 'rust', text: '\t  fn api() {}\n\n' } }] };
+	const response = await fetch(Fixture.origin + '/api/v3/libraries', { method: 'POST', headers, body: JSON.stringify(body) });
+	assert.equal(response.status, 200); const created = await response.json();
+	for (const device of [Fixture.one, Fixture.two]) { await Fixture.cli(device, 'sync'); const state = await Fixture.state(device); const library = state.libraries.find(row => row._id === created.library.id); assert.ok(library); assert.equal(library.records[0].content.text, body.snippets[0].content.text); assert.equal(library.records[0].content.language, 'rust'); }
+	const dom = new JSDOM(await (await Fixture.request('/')).text(), { url: Fixture.origin, runScripts: 'outside-only' });
+	try {
+		const document = dom.window.document; const pane = document.querySelector('#settings-pane-tokens');
+		const script = (await BrowserSource.script()).replace('export { client };', 'window.testClient = client;');
+		dom.window.eval(script); const client = dom.window.testClient;
+		client.request = async () => token; client.toast = () => {};
+		const form = document.querySelector('#access-token-form'); form.elements.name.value = 'Test';
+		await client.onSubmit({ target: form, preventDefault() {}, submitter: form.querySelector('button[type=submit]') });
+		assert.equal(document.querySelector('#settings-pane-tokens'), pane);
+		assert.equal(document.querySelectorAll('[data-access-token="' + token.id + '"]').length, 1);
+		assert.equal(document.querySelector('#token-secret-value').textContent, token.token);
+		document.querySelector('#settings').dispatchEvent(new dom.window.Event('hidden.bs.modal'));
+		assert.equal(document.querySelector('#token-secret-value').textContent, '');
+	} finally { dom.window.close(); }
+	await Fixture.json('access-tokens/' + token.id, 'DELETE');
+	assert.equal((await fetch(Fixture.origin + '/api/v3/libraries', { headers })).status, 401);
+});
+test('integration approval uses native form submission and allows its approved redirect', async () => {
+	const registered = await Fixture.request('/integrations/register', 'POST', { client_name: 'Browser integration', redirect_uris: ['https://example.test/callback'], token_endpoint_auth_method: 'none' });
+	assert.equal(registered.status, 201); const client = await registered.json();
+	const verifier = Support.token();
+	const request = { client_id: client.client_id, redirect_uri: client.redirect_uris[0], response_type: 'code', state: Support.token(), code_challenge_method: 'S256', code_challenge: createHash('sha256').update(verifier).digest('base64url'), resource: Auth.apiResource(), scope: 'content:read' };
+	const page = await Fixture.request('/integrations/authorize?' + new URLSearchParams(request)); assert.equal(page.status, 200);
+	assert.ok(page.headers.get('content-security-policy').includes("form-action 'self' https://example.test"));
+	const dom = new JSDOM(await page.text()); const form = dom.window.document.querySelector('form'); assert.equal(form.action, '/integrations/authorize'); dom.window.close();
+	const approval = await Fixture.request('/integrations/authorize', 'POST', { ...request, account: Fixture.account }); assert.equal(approval.status, 302);
+	const code = new URL(approval.headers.get('location')).searchParams.get('code');
+	const response = await Fixture.request('/integrations/token', 'POST', { grant_type: 'authorization_code', code, client_id: client.client_id, redirect_uri: request.redirect_uri, resource: request.resource, code_verifier: verifier }); assert.equal(response.status, 200);
+	assert.equal(response.headers.get('cache-control'), 'no-store');
+	const denial = await Fixture.request('/integrations/authorize', 'POST', { ...request, decision: 'deny' }); assert.equal(new URL(denial.headers.get('location')).searchParams.get('error'), 'access_denied');
+});
+test('two offline clients retain templates and conflicts; protocol 4 is rejected', async () => {
+	const account=await Account.create({name:'Template devices'});await Member.create({account:account._id,user:Fixture.actor.user,role:'owner'});
+	const ctx=await Support.context(Fixture.actor.user,String(account._id));
+	const content={version:1,type:'template',text:'Hi {{name}} {{timestamp}}{{key:enter}}',variables:{name:{label:'Customer',default:'Nitai',required:true,multiline:false},timestamp:{timezone:'utc'}}};
+	const body={name:'Template devices',snippets:[{id:randomUUID(),trigger:'templatedevice',content}]};
+	const {library}=await Libraries.mutate(ctx,randomUUID(),body,async(fresh,session)=>({library:await Libraries.create(fresh,body,session)}));
+	const one=await Fixture.device('template-one',ctx.user,ctx.account);const two=await Fixture.device('template-two',ctx.user,ctx.account);
+	await Fixture.cli(one,'sync');await Fixture.cli(two,'sync');
+	assert.equal((await Fixture.state(two)).libraries.find(row=>row._id===library._id).records[0].content.variables.name.label,'Customer');
+	await Fixture.edit(one,library.name,'templatedevice','Hello {{name}}{{key:enter}}');
+	await Fixture.edit(two,library.name,'templatedevice','Dear {{name}}');
+	await Fixture.cli(one,'sync');await Fixture.cli(two,'sync');
+	const conflict=await Conflict.findOne({library:library._id,resolved:false}).lean();assert.ok(conflict);assert.equal(conflict.local.content.type,'template');assert.equal(conflict.local.content.variables.name.label,'Customer');
+	assert.equal((await Libraries.get(ctx,library._id)).snippets[0].content.variables.name.default,'Nitai');
+	const credential=JSON.parse(await readFile(join(one.config,'sync/credentials.json'),'utf8'));
+	const rejected=await fetch(Fixture.origin+'/api/v2/sync',{headers:{Authorization:'Bearer '+credential.access_token,'X-TypeRelay-Sync-Protocol':'4'}});assert.equal(rejected.status,426);assert.equal((await rejected.json()).protocol,6);
+});
+test('rich text, templates and binary assets sync without embedding bytes in library JSON', async () => {
+	const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
+	const upload = await fetch(Fixture.origin + '/api/v2/assets', { method: 'POST', headers: { Cookie: Fixture.cookie, 'Content-Type': 'image/png', 'X-CSRF-Token': Fixture.csrf, 'X-Account-Id': Fixture.account }, body: png });
+	assert.equal(upload.status, 200); const asset = await upload.json();
+	const markdown = `# Welcome **{{name}}**\n\n| A | B |\n|---|---|\n| C | D |\n\n<u onclick="bad()">underlined</u>\n\n<img src="typerelay-asset:${asset.id}" alt="Dot" width="64">\n\n{{key:enter}}\n\nDone`;
+	const content = { version: 2, type: 'rich_text', markdown, variables: { name: { label: 'Name', default: 'Nitai', required: true, multiline: false } } };
+	const { library } = await Fixture.json('libraries', 'POST', { name: 'Rich sync', snippets: [{ id: randomUUID(), title: 'Rich', trigger: 'rich', content }] });
+	const stored = library.snippets[0].content;
+	assert.equal(stored.version, 2); assert.equal(stored.type, 'rich_text'); assert.deepEqual(stored.assets, [asset.id]); assert.match(stored.text, /Welcome/); assert.doesNotMatch(JSON.stringify(library), /iVBOR/);
+	await Fixture.cli(Fixture.one, 'sync'); await Fixture.cli(Fixture.two, 'sync');
+	for (const device of [Fixture.one, Fixture.two]) { const state = await Fixture.state(device); const entry = state.libraries.find(item => item._id === library._id).records[0]; assert.equal(entry.content.markdown, markdown); assert.deepEqual(entry.content.assets, [asset.id]); }
+	const rendered = await (await Fixture.request('/api/v2/editor/' + library._id + '?format=json')).json();
+	assert.match(rendered.html, /<table>/); assert.match(rendered.html, /<u>underlined<\/u>/); assert.doesNotMatch(rendered.html, /onclick|<script/);
+	const exported = await Fixture.request('/api/v2/libraries/' + library._id + '/export-bundle'); assert.equal(exported.status, 200); const bundle = Buffer.from(await exported.arrayBuffer()); assert.equal(bundle.subarray(0, 2).toString(), 'PK');
+	const importedResponse = await fetch(Fixture.origin + '/api/v2/import/bundle', { method: 'POST', headers: { Cookie: Fixture.cookie, 'Content-Type': 'application/zip', 'X-CSRF-Token': Fixture.csrf, 'X-Account-Id': Fixture.account, 'X-Operation-Id': randomUUID() }, body: bundle });
+	const imported = await importedResponse.json(); assert.equal(importedResponse.status, 200, JSON.stringify(imported)); assert.equal(imported.library.snippets[0].content.markdown, markdown); assert.deepEqual(imported.library.snippets[0].content.assets, [asset.id]);
+	const credential = JSON.parse(await readFile(join(Fixture.one.config, 'sync/credentials.json'), 'utf8'));
+	const rejected = await fetch(Fixture.origin + '/api/v2/sync', { headers: { Authorization: 'Bearer ' + credential.access_token, 'X-TypeRelay-Sync-Protocol': '5' } });
+	assert.equal(rejected.status, 426); assert.equal((await rejected.json()).protocol, 6);
+});
 test('CSRF rejects writes, logout invalidates session', async () => {
 	const response = await fetch(Fixture.origin + '/api/v2/libraries', { method: 'POST', headers: { Cookie: Fixture.cookie, 'Content-Type': 'application/json', 'X-Account-Id': Fixture.account }, body: JSON.stringify({ name: 'Blocked' }) });
 	assert.equal(response.status, 403);

@@ -1,0 +1,7 @@
+button, a, select { cursor: pointer; }
+td { max-width: 24rem; overflow-wrap: anywhere; }
+.h-20px { height: 1.25rem; }
+.w-30px { width: 1.875rem; }
+.admin-section-content { min-width: 0; }
+.admin-section-nav .list-group-item { text-align: left; }
+.admin-email-preview { min-height: 20rem; background: white; }

@@ -1,0 +1,5 @@
+mixin panelNavigation(scope, sections)
+	.list-group.mb-5.admin-section-nav(role="tablist" aria-label=scope === 'settings' ? 'Settings sections' : 'Email templates' aria-orientation="vertical")
+		each section, index in sections
+			button.list-group-item.list-group-item-action(type="button" id=scope + '-nav-' + section.key role="tab" class=index === 0 ? 'active' : '' aria-selected=index === 0 ? 'true' : 'false' aria-controls=scope + '-panel-' + section.key tabindex=index === 0 ? '0' : '-1' data-admin-panel=section.key)
+				span= section.name

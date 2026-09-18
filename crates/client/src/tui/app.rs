@@ -6,7 +6,7 @@ use typerelay_core::Engine;
 use typerelay_client::{config::Match, editor::{EditorStore, OpenFile}, settings::SettingsStore};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Screen { Files, Browse, Edit, NewFile, Settings, Trash, Move, Confirm }
+pub enum Screen { Files, Browse, Edit, Image, NewFile, Settings, Trash, Move, Confirm }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Destination { Files, Browse, Settings, Trash, Quit }
 
@@ -24,6 +24,19 @@ pub struct App {
     title: TextArea<'static>,
     language: String,
     code: bool,
+    template: bool,
+	rich: bool,
+	rich_preview: bool,
+	rich_image:Option<ratatui_image::protocol::Protocol>,
+	image_source:TextArea<'static>,
+	image_alt:TextArea<'static>,
+	image_title:TextArea<'static>,
+	image_width:TextArea<'static>,
+	image_focus:usize,
+    variables: std::collections::BTreeMap<String,typerelay_core::template::Variable>,
+    template_dialog: Option<crate::template_dialog::Dialog>,
+    fill_base: Option<(String,i64)>,
+	rich_fill: Option<serde_json::Value>,
     preview_x: u16,
     expansion: TextArea<'static>,
     name: TextArea<'static>,
@@ -66,22 +79,26 @@ impl App {
         let files = store.files()?;
         let mut file_state = ListState::default();
         file_state.select(Some(0));
-        Ok(Self { store, settings, screen: Screen::Files, files, file_state, snippets_state: ListState::default(), file: None, search: TextArea::default(), search_focused: false, trigger: TextArea::default(), title: TextArea::default(), language: "plain_text".into(), code: false, preview_x: 0, expansion: TextArea::default(), name: TextArea::default(), url: TextArea::default(), editor_focus: 0, editing: None, original_entry: None, original_url: String::new(), prefix: TextArea::default(), original_prefix: String::new(), pending: None, pending_delete: None, selected_ids: std::collections::BTreeSet::new(), selection_anchor: None, move_destination: None, move_choices: Vec::new(), move_state: ListState::default(), move_from: Screen::Browse, move_items: Vec::new(), pending_batch: None, bulk_buttons: Vec::new(), pending_trash: None, trash_rows: Vec::new(), trash_state: ListState::default(), trash_buttons: Vec::new(), confirm_from: Screen::Files, status: "Choose a file, or create a new one".into(), error: false, quit: false, toolbar: Vec::new(), list_area: Rect::default(), field_areas: Vec::new(), save_area: Rect::default(), cancel_area: Rect::default(), confirm_buttons: Vec::new() })
+        Ok(Self { store, settings, screen: Screen::Files, files, file_state, snippets_state: ListState::default(), file: None, search: TextArea::default(), search_focused: false, trigger: TextArea::default(), title: TextArea::default(), language: "plain_text".into(), code: false, template:false, rich:false, rich_preview:false,rich_image:None,image_source:TextArea::default(),image_alt:TextArea::default(),image_title:TextArea::default(),image_width:Self::text("640"),image_focus:0, variables:Default::default(), template_dialog:None, fill_base:None, rich_fill:None, preview_x: 0, expansion: TextArea::default(), name: TextArea::default(), url: TextArea::default(), editor_focus: 0, editing: None, original_entry: None, original_url: String::new(), prefix: TextArea::default(), original_prefix: String::new(), pending: None, pending_delete: None, selected_ids: std::collections::BTreeSet::new(), selection_anchor: None, move_destination: None, move_choices: Vec::new(), move_state: ListState::default(), move_from: Screen::Browse, move_items: Vec::new(), pending_batch: None, bulk_buttons: Vec::new(), pending_trash: None, trash_rows: Vec::new(), trash_state: ListState::default(), trash_buttons: Vec::new(), confirm_from: Screen::Files, status: "Choose a file, or create a new one".into(), error: false, quit: false, toolbar: Vec::new(), list_area: Rect::default(), field_areas: Vec::new(), save_area: Rect::default(), cancel_area: Rect::default(), confirm_buttons: Vec::new() })
     }
     fn text(value: &str) -> TextArea<'static> { TextArea::new(value.split('\n').map(str::to_owned).collect()) }
     fn value(field: &TextArea<'_>) -> String { field.lines().join("\n") }
-    fn draft(&self) -> Match { Match { trigger: Self::value(&self.trigger), replace: Self::value(&self.expansion), title: Self::value(&self.title), kind: if self.code { "code" } else { "plain_text" }.into(), language: self.language.clone() } }
+    fn draft(&self) -> Match { let replacement=Self::value(&self.expansion);let dynamic=self.template||(!self.code&&!self.rich&&(!self.variables.is_empty()||replacement.contains("{{")));Match { variables: self.variables.clone(), trigger: Self::value(&self.trigger), replace: replacement, title: Self::value(&self.title), kind: if self.rich { "rich_text" } else if self.code { "code" } else if dynamic { "template" } else { "plain_text" }.into(), language: self.language.clone() } }
     fn next_editor_field(&mut self, backwards: bool) {
         let order = [2, 0, 1];
         let index = order.iter().position(|field| *field == self.editor_focus).unwrap_or(0);
         self.editor_focus = order[(index + if backwards { order.len() - 1 } else { 1 }) % order.len()];
     }
     fn effective_screen(&self) -> Screen { if self.screen == Screen::Confirm { self.confirm_from } else { self.screen } }
+	fn html(value:&str)->String{value.replace('&',"&amp;").replace('<',"&lt;").replace('>',"&gt;").replace('"',"&quot;")}
+	fn preview_image(&self)->Result<Option<ratatui_image::protocol::Protocol>>{let content=self.draft().value()["content"].clone();let Some(id)=content["assets"].as_array().and_then(|ids|ids.first()).and_then(|id|id.as_str())else{return Ok(None)};let(_,bytes)=typerelay_client::database::Database::open(&self.store.directory)?.asset(id)?.context("Rich-text image is unavailable")?;let image=image::load_from_memory(&bytes)?;#[allow(deprecated)]let mut picker=ratatui_image::picker::Picker::from_fontsize(ratatui_image::FontSize::new(8,16));let environment=std::env::var("TERM").unwrap_or_default().to_lowercase();if environment.contains("kitty"){picker.set_protocol_type(ratatui_image::picker::ProtocolType::Kitty);}else if std::env::var_os("ITERM_SESSION_ID").is_some(){picker.set_protocol_type(ratatui_image::picker::ProtocolType::Iterm2);}else if environment.contains("sixel"){picker.set_protocol_type(ratatui_image::picker::ProtocolType::Sixel);}Ok(Some(picker.new_protocol(image,ratatui::layout::Size::new(40,10),ratatui_image::Resize::Fit(None))?))}
+	fn image(&mut self)->Result<()>{let db=typerelay_client::database::Database::open(&self.store.directory)?;let asset=typerelay_client::assets::Assets::import(&db,&Self::value(&self.image_source))?;let alt=Self::html(&Self::value(&self.image_alt));let title=Self::html(&Self::value(&self.image_title));let width=Self::value(&self.image_width);anyhow::ensure!(width.parse::<u16>().is_ok_and(|value|(32..=2048).contains(&value)),"Image width must be 32–2048");self.expansion.insert_str(format!("<img src=\"typerelay-asset:{}\" alt=\"{alt}\" title=\"{title}\" width=\"{width}\">",asset["id"].as_str().context("Missing asset ID")?));self.screen=Screen::Edit;self.rich_preview=false;self.message("Image cached locally; synced devices download it automatically",false);Ok(())}
     fn dirty(&self) -> bool {
         match self.effective_screen() {
             Screen::Edit => self.original_entry.as_ref() != Some(&self.draft()) || self.move_destination.is_some(),
             Screen::Settings => Self::value(&self.url) != self.original_url || Self::value(&self.prefix) != self.original_prefix,
-            _ => false,
+            Screen::Image=>true,
+			_ => false,
         }
     }
     fn message(&mut self, text: impl Into<String>, error: bool) { self.status = text.into(); self.error = error; }
@@ -134,15 +151,15 @@ impl App {
         let file = self.file.as_ref().context("Choose a file first")?;
         typerelay_client::sync::Sync::editable(self.settings.config_dir(), &self.store.directory, &file.name)?;
         self.editing = if new { None } else { Some(self.selected().context("Select a snippet")?) };
-        let entry = self.editing.map(|index| file.entries[index].clone()).unwrap_or(Match { trigger: String::new(), replace: String::new(), ..Match::default() });
-        self.title = Self::text(&entry.title); self.language = entry.language.clone(); self.code = entry.kind == "code";
+        let entry = self.editing.map(|index| file.entries[index].clone()).unwrap_or(Match { variables: Default::default(), trigger: String::new(), replace: String::new(), ..Match::default() });
+		self.title = Self::text(&entry.title); self.language = entry.language.clone(); self.code = entry.kind == "code"; self.template=entry.kind=="template"; self.rich=entry.kind=="rich_text";self.rich_preview=false;self.rich_image=None; self.variables=entry.variables.clone();
         self.trigger = Self::text(&entry.trigger);
         self.trigger.move_cursor(ratatui_textarea::CursorMove::End);
         self.expansion = Self::text(&entry.replace); self.expansion.set_hard_tab_indent(true);
         self.original_entry = Some(entry);
         self.editor_focus = 0;
         self.screen = Screen::Edit;
-        self.message("Tab / Shift+Tab switch fields · Code: F2 leaves editor · F9 Text/Code · Ctrl+S saves", false);
+        self.message("Tab / Shift+Tab switch fields · Code: F2 leaves editor · F9 Type · Ctrl+S saves", false);
         Ok(())
     }
     fn save(&mut self) -> Result<()> {
@@ -167,7 +184,7 @@ impl App {
                 self.original_url = self.settings.settings.sync_url.clone();
                 self.original_prefix = self.settings.settings.trigger_prefix.clone();
                 self.screen = if self.file.is_some() { Screen::Browse } else { Screen::Files };
-                self.message("Settings saved. Connect with typerelay connect --server URL.", false);
+                self.message("Settings saved. Connect: typerelay connect --server URL · Disconnect: typerelay disconnect", false);
             }
             Screen::NewFile => {
                 self.file = Some(self.store.create(Self::value(&self.name).trim())?);
@@ -351,6 +368,17 @@ impl App {
         if let Err(error) = self.handle_inner(event) { self.message(format!("{error:#}"), true); }
     }
     fn handle_inner(&mut self, event: Event) -> Result<()> {
+        if let Some(dialog)=&mut self.template_dialog {
+            if let Some(outcome)=dialog.event(event) { match outcome {
+                crate::template_dialog::Outcome::Cancel=>(),
+				crate::template_dialog::Outcome::Definition{name,variable,insert}=>{if let Some(variable)=variable{self.variables.insert(name.clone(),variable);if !self.rich{self.template=true;}}
+                    if insert{self.expansion.insert_str(format!("{{{{{name}}}}}"));}},
+				crate::template_dialog::Outcome::Copy{rendered,values}=>{
+					if let Some((name,revision))=&self.fill_base{let current=self.store.open(name)?;anyhow::ensure!(current.revision==*revision,"Library changed; reopen the template before copying");}
+					if let Some(content)=self.rich_fill.take(){let(result,payload)=typerelay_client::panel::Panel::rich_payload(&self.store.directory,&content,values,false)?;typerelay_client::clipboard::PasteJob::copy_payload(payload)?;self.message(if result.enter_actions>0{"Copied rich text; Enter key actions omitted"}else{"Copied rich text"},false);}else{typerelay_client::clipboard::PasteJob::copy_text(rendered.text)?;self.message(if rendered.enter_actions>0{"Copied text; Enter key actions omitted"}else{"Copied"},false);}
+				}
+			} self.template_dialog=None; self.fill_base=None;self.rich_fill=None; } return Ok(());
+        }
         if let Event::Key(key) = event {
             if key.kind == KeyEventKind::Release { return Ok(()); }
             if self.screen == Screen::Move {
@@ -376,6 +404,7 @@ impl App {
             }
             if key.modifiers.contains(KeyModifiers::CONTROL) {
                 match key.code {
+					KeyCode::Char('s') if self.screen==Screen::Image=>return self.image(),
                     KeyCode::Char('a') if self.screen == Screen::Browse && !self.search_focused => {
                         let file = self.file.as_ref().context("Choose a library")?;
                         typerelay_client::database::Database::open(&self.store.directory)?.editable(&file.id)?;
@@ -392,17 +421,19 @@ impl App {
             match key.code {
                 KeyCode::F(1) => return self.toolbar_action(0),
                 KeyCode::F(2) if self.screen == Screen::Edit => { self.next_editor_field(key.modifiers.contains(KeyModifiers::SHIFT)); return Ok(()); }
-                KeyCode::F(9) if self.screen == Screen::Edit => { self.code = !self.code; self.message(if self.code { "Type: Code · Tab indents; F2 moves to the next field" } else { "Type: Text · Tab moves to the next field" }, false); return Ok(()); }
+                KeyCode::F(9) if self.screen == Screen::Edit => { if self.rich{self.rich=false;self.code=false;}else if self.code{self.code=false;self.rich=true;}else{self.code=true;self.rich=false;}self.template=false;self.rich_preview=false;self.message(if self.rich{"Type: Rich text · F12 source/preview · F11 variables"}else if self.code { "Type: Code · Tab indents; F2 moves to the next field" } else { "Type: Text · F11 variables" }, false); return Ok(()); }
+				KeyCode::F(12) if self.screen==Screen::Edit&&self.rich=>{self.rich_preview = !self.rich_preview;self.rich_image=if self.rich_preview{self.preview_image()?}else{None};self.message(if self.rich_preview{"Rich-text preview · F12 source"}else{"Rich-text Markdown source · F12 preview"},false);return Ok(());}
+				KeyCode::F(11) if self.screen == Screen::Edit && !self.code => { self.template_dialog=Some(crate::template_dialog::Dialog::variables(typerelay_core::template::Template{text:Self::value(&self.expansion),variables:self.variables.clone()})?);return Ok(()); }
                 KeyCode::F(10) if matches!(self.screen, Screen::Edit | Screen::Browse) => {
-                    let text = if self.screen == Screen::Edit { Self::value(&self.expansion) } else { self.selected().map(|i|self.file.as_ref().unwrap().entries[i].replace.clone()).unwrap_or_default() };
-                    typerelay_client::clipboard::PasteJob::copy_text(text)?;
-                    self.message("Copied", false); return Ok(());
+                    let entry=if self.screen==Screen::Edit {self.draft()}else{self.selected().map(|i|self.file.as_ref().unwrap().entries[i].clone()).unwrap_or_default()};
+					if entry.kind=="rich_text"{let content=entry.value()["content"].clone();let(result,_)=typerelay_client::panel::Panel::rich_payload(&self.store.directory,&content,Default::default(),true)?;if result.fields.is_empty(){let(result,payload)=typerelay_client::panel::Panel::rich_payload(&self.store.directory,&content,Default::default(),false)?;typerelay_client::clipboard::PasteJob::copy_payload(payload)?;self.message(if result.enter_actions>0{"Copied rich text; Enter key actions omitted"}else{"Copied rich text"},false);}else{self.fill_base=self.file.as_ref().map(|file|(file.name.clone(),file.revision));self.rich_fill=Some(content);self.template_dialog=Some(crate::template_dialog::Dialog::fill(typerelay_core::template::Template{text:entry.replace.clone(),variables:entry.variables.clone()})?);}}else if entry.kind=="template"{let template=typerelay_core::template::Template{text:entry.replace.clone(),variables:entry.variables.clone()};if template.fields().map_err(anyhow::Error::msg)?.is_empty(){let rendered=typerelay_client::templates::Templates::render(&entry.value()["content"],Default::default(),false)?;typerelay_client::clipboard::PasteJob::copy_text(rendered.text)?;self.message(if rendered.enter_actions>0{"Copied text; Enter key actions omitted"}else{"Copied"},false);}else{self.fill_base=self.file.as_ref().map(|file|(file.name.clone(),file.revision));self.template_dialog=Some(crate::template_dialog::Dialog::fill(template)?);}}else{typerelay_client::clipboard::PasteJob::copy_text(entry.replace)?;self.message("Copied",false);}return Ok(());
                 }
                 KeyCode::F(2) => return self.toolbar_action(1),
                 KeyCode::F(5) => return self.toolbar_action(2),
                 KeyCode::F(6) => return self.toolbar_action(3),
                 KeyCode::F(8) => return self.request_move(),
                 KeyCode::F(7) => return self.toolbar_action(5),
+				KeyCode::F(4) if self.screen==Screen::Edit&&self.rich=>{self.image_source=TextArea::default();self.image_alt=TextArea::default();self.image_title=TextArea::default();self.image_width=Self::text("640");self.image_focus=0;self.screen=Screen::Image;self.message("Add a local or remote image",false);return Ok(());}
                 KeyCode::F(4) if self.screen == Screen::Browse => return self.trash_request("trash"),
                 KeyCode::F(3) => return self.toolbar_action(4),
                 _ => (),
@@ -455,15 +486,18 @@ impl App {
                     KeyCode::Enter if self.editor_focus == 0 => self.editor_focus = 1,
                     _ if self.editor_focus == 0 => self.abbreviation_input(Event::Key(key)),
                     _ if self.editor_focus == 2 => Self::single_input(&mut self.title, Event::Key(key)),
+					_ if self.rich_preview=>(),
                     _ => { self.expansion.input(Event::Key(key)); }
                 },
+				Screen::Image=>match key.code{KeyCode::Esc=>self.screen=Screen::Edit,KeyCode::Tab|KeyCode::BackTab|KeyCode::F(2)=>{let backwards=key.code==KeyCode::BackTab||key.modifiers.contains(KeyModifiers::SHIFT);self.image_focus=if backwards{(self.image_focus+3)%4}else{(self.image_focus+1)%4};},KeyCode::Enter if self.image_focus==3=>self.image()?,_=>match self.image_focus{0=>Self::single_input(&mut self.image_source,Event::Key(key)),1=>Self::single_input(&mut self.image_alt,Event::Key(key)),2=>Self::single_input(&mut self.image_title,Event::Key(key)),_=>Self::single_input(&mut self.image_width,Event::Key(key))}},
                 Screen::NewFile => match key.code { KeyCode::Enter => self.save()?, KeyCode::Esc => self.apply(Destination::Files)?, _ => Self::single_input(&mut self.name, Event::Key(key)) },
                 Screen::Settings => match key.code { KeyCode::Esc => self.leave(Destination::Browse)?, KeyCode::Tab | KeyCode::BackTab => self.editor_focus = 1 - self.editor_focus, _ if self.editor_focus == 0 => Self::single_input(&mut self.url, Event::Key(key)), _ => Self::single_input(&mut self.prefix, Event::Key(key)) },
                 Screen::Confirm | Screen::Move => (),
             }
         } else if let Event::Paste(text) = event {
             match self.screen {
-                Screen::Edit if self.editor_focus == 1 => { self.expansion.insert_str(text.replace("\r\n", "\n").replace('\r', "\n")); }
+				Screen::Image=>match self.image_focus{0=>Self::single_input(&mut self.image_source,Event::Paste(text)),1=>Self::single_input(&mut self.image_alt,Event::Paste(text)),2=>Self::single_input(&mut self.image_title,Event::Paste(text)),_=>Self::single_input(&mut self.image_width,Event::Paste(text))},
+				Screen::Edit if self.editor_focus == 1&&!self.rich_preview => { self.expansion.insert_str(text.replace("\r\n", "\n").replace('\r', "\n")); }
                 Screen::Edit if self.editor_focus == 2 => Self::single_input(&mut self.title, Event::Paste(text)),
                 Screen::Edit => self.abbreviation_input(Event::Paste(text)),
                 Screen::Settings if self.editor_focus == 0 => Self::single_input(&mut self.url, Event::Paste(text)),
@@ -494,10 +528,10 @@ impl App {
                     if self.list_area.contains(position) { let index = usize::from(mouse.row.saturating_sub(self.list_area.y + 1)) + self.trash_state.offset(); if index < self.trash_rows.len() { self.trash_state.select(Some(index)); } return Ok(()); }
                 }
                 if let Some(index) = self.toolbar.iter().position(|area| area.contains(position)) { return self.toolbar_action(index); }
-                if self.save_area.contains(position) { return self.save(); }
-                if self.cancel_area.contains(position) { return self.leave(if self.screen == Screen::NewFile { Destination::Files } else { Destination::Browse }); }
+				if self.save_area.contains(position) { return if self.screen==Screen::Image{self.image()}else{self.save()}; }
+				if self.cancel_area.contains(position) {if self.screen==Screen::Image{self.screen=Screen::Edit;return Ok(());}return self.leave(if self.screen == Screen::NewFile { Destination::Files } else { Destination::Browse }); }
                 if let Some(index) = self.field_areas.iter().position(|area| area.contains(position)) {
-                    if self.screen == Screen::Browse { self.search_focused = true; } else { self.editor_focus = index; }
+					if self.screen == Screen::Browse { self.search_focused = true; }else if self.screen==Screen::Image{self.image_focus=index;} else { self.editor_focus = index; }
                 }
                 if self.list_area.contains(position) {
                     let row = usize::from(mouse.row.saturating_sub(self.list_area.y + 1));
@@ -537,6 +571,7 @@ impl App {
     pub fn draw(&mut self, frame: &mut Frame) {
         self.toolbar.clear(); self.trash_buttons.clear(); self.bulk_buttons.clear(); self.field_areas.clear(); self.list_area = Rect::default(); self.save_area = Rect::default(); self.cancel_area = Rect::default();
         let area = frame.area();
+        if let Some(dialog)=&mut self.template_dialog {dialog.draw(frame,area);return;}
         if area.width < 60 || area.height < 20 { frame.render_widget(Paragraph::new("TypeRelay — resize terminal to at least 60 × 20. Ctrl+Q exits."), area); return; }
         let rows = Layout::vertical([Constraint::Length(2), Constraint::Length(if area.width < 75 { 6 } else { 3 }), Constraint::Min(8), Constraint::Length(3)]).split(area);
         let title = self.file.as_ref().map(|file| format!("TypeRelay  /  {}", file.name)).unwrap_or("TypeRelay  /  Snippet editor".into());
@@ -586,23 +621,24 @@ impl App {
                 let items = filtered.iter().map(|index| ListItem::new(format!("[{}] {}", if self.selected_ids.contains(&self.file.as_ref().unwrap().ids[*index]) { "x" } else { " " }, entries[*index].label()))).collect::<Vec<_>>();
                 frame.render_stateful_widget(List::new(items).block(Self::border(format!("{} snippets — Enter to edit", filtered.len()), !self.search_focused)).highlight_style(Style::default().bg(Color::DarkGray)).highlight_symbol("› "), columns[0], &mut self.snippets_state);
                 let preview = self.selected().map(|index| self.file.as_ref().unwrap().entries[index].replace.clone()).unwrap_or("No matching snippets. F2 adds a snippet.".into());
-                frame.render_widget(Paragraph::new(preview).scroll((0, self.preview_x)).block(Self::border("Preview · ←/→ scroll · F10 Copy", false)), columns[1]);
+                frame.render_widget(Paragraph::new(preview).scroll((0, self.preview_x)).block(Self::border("Preview · ←/→ scroll · F10 Fill/Copy · F11 Variables", false)), columns[1]);
             }
+			Screen::Image=>{let parts=Layout::vertical([Constraint::Length(3),Constraint::Length(3),Constraint::Length(3),Constraint::Length(3),Constraint::Min(2),Constraint::Length(3)]).split(body);self.image_source.set_block(Self::border("Local path or HTTP/HTTPS URL",self.image_focus==0));self.image_alt.set_block(Self::border("Alt text",self.image_focus==1));self.image_title.set_block(Self::border("Title",self.image_focus==2));self.image_width.set_block(Self::border("Display width (32–2048)",self.image_focus==3));frame.render_widget(&self.image_source,parts[0]);frame.render_widget(&self.image_alt,parts[1]);frame.render_widget(&self.image_title,parts[2]);frame.render_widget(&self.image_width,parts[3]);frame.render_widget(Paragraph::new("PNG, JPEG, WebP, and GIF · 5 MiB input · remote images are cached for offline insertion"),parts[4]);self.field_areas.extend([parts[0],parts[1],parts[2],parts[3]]);self.form_buttons(frame,parts[5]);}
             Screen::Edit => {
                 let parts = Layout::vertical([Constraint::Length(3), Constraint::Length(3), Constraint::Min(3), Constraint::Length(0), Constraint::Length(2), Constraint::Length(3)]).split(body);
                 let metadata = Layout::horizontal([Constraint::Percentage(80), Constraint::Percentage(20)]).split(parts[0]);
                 let title_area = metadata[0];
-                frame.render_widget(Paragraph::new(if self.code { "Code · F9 toggles" } else { "Text · F9 toggles" }).style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)).block(Self::border("Type", false)), metadata[1]);
+                frame.render_widget(Paragraph::new(if self.rich{"Rich · F9"}else if self.code { "Code · F9 toggles" } else { "Text · F9 toggles" }).style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)).block(Self::border("Type", false)), metadata[1]);
                 let trigger_row = Layout::horizontal([Constraint::Length(5), Constraint::Length(1), Constraint::Min(1)]).split(parts[1]);
                 frame.render_widget(Paragraph::new(self.settings.settings.trigger_prefix.clone()).centered().block(Self::border("", false)).style(Style::default().fg(Color::Gray)), trigger_row[0]);
                 self.trigger.set_block(Self::border("Abbreviation (optional)", self.editor_focus == 0));
-                self.expansion.set_block(Self::border(if self.code { "Code · Tab inserts tab · F2 / Ctrl+Tab exit · Shift+Tab back" } else { "Text · Tab next field · Shift+Tab previous · F9 Code" }, self.editor_focus == 1));
+                self.expansion.set_block(Self::border(if self.rich{"Rich Markdown · F12 Preview · F11 Variables"}else if self.code { "Code · Tab inserts tab · F2 / Ctrl+Tab exit · Shift+Tab back" } else { "Text · F11 Variables · Tab next field" }, self.editor_focus == 1));
                 self.title.set_block(Self::border("Title (optional)", self.editor_focus == 2));
                 frame.render_widget(&self.title, title_area);
-                frame.render_widget(&self.trigger, trigger_row[2]); frame.render_widget(&self.expansion, parts[2]);
+				frame.render_widget(&self.trigger, trigger_row[2]);if self.rich&&self.rich_preview{if let Some(image)=&self.rich_image{let preview=Layout::horizontal([Constraint::Percentage(65),Constraint::Percentage(35)]).split(parts[2]);frame.render_widget(Paragraph::new(tui_markdown::from_str(&Self::value(&self.expansion))).wrap(Wrap{trim:false}).block(Self::border("Rich preview · F12 source",false)),preview[0]);frame.render_widget(ratatui_image::Image::new(image),preview[1]);}else{frame.render_widget(Paragraph::new(tui_markdown::from_str(&Self::value(&self.expansion))).wrap(Wrap{trim:false}).block(Self::border("Rich preview · F12 source",false)),parts[2]);}}else{frame.render_widget(&self.expansion, parts[2]);}
                 self.field_areas.extend([trigger_row[2], parts[2], title_area]);
                 let destination = self.move_destination.as_ref().and_then(|id| self.move_choices.iter().find(|library|library["_id"] == *id)).and_then(|library|library["name"].as_str()).unwrap_or("Current library");
-                frame.render_widget(Paragraph::new(format!("Library: {destination} · Ctrl+M / F8 changes destination · F9 Text/Code · F10 Copy")), parts[4]);
+                frame.render_widget(Paragraph::new(format!("Library: {destination} · Ctrl+M / F8 destination · F9 Type · F10 Fill/Copy · F11 Variables · F12 Preview")), parts[4]);
                 self.form_buttons(frame, parts[5]);
             }
             Screen::NewFile => {
@@ -616,7 +652,7 @@ impl App {
                 self.url.set_block(Self::border("URL to sync with", self.editor_focus == 0));
                 self.prefix.set_block(Self::border("Trigger prefix · e.g. , or ;", self.editor_focus == 1));
                 frame.render_widget(&self.url, parts[0]); frame.render_widget(&self.prefix, parts[1]);
-                frame.render_widget(Paragraph::new("Tab switches fields. The prefix is local to this machine.\nConnect with typerelay connect --server URL. F5 requests sync."), parts[2]);
+                frame.render_widget(Paragraph::new("Tab switches fields. The prefix is local to this machine.\nConnect: typerelay connect --server URL · Disconnect: typerelay disconnect · F5 syncs."), parts[2]);
                 self.field_areas.extend([parts[0], parts[1]]); self.form_buttons(frame, parts[3]);
             }
             Screen::Confirm => (),
@@ -720,6 +756,8 @@ mod tests {
         assert_eq!(entry.replace, "\t  {{ λ }}  \n\n");
         assert_eq!(entry.title, "Code title"); assert_eq!(entry.language, "Rust"); assert_eq!(entry.kind, "code"); assert!(entry.trigger.is_empty());
     }
+	#[test]
+	fn rich_source_preview_and_image_dialog_persist_assets(){let temp=tempfile::tempdir().unwrap();let png=base64::engine::general_purpose::STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=").unwrap();use base64::Engine as _;let path=temp.path().join("dot.png");std::fs::write(&path,png).unwrap();let mut app=Fixture::app(temp.path());app.file=Some(app.store.create("Rich").unwrap());app.screen=Screen::Browse;app.edit(true).unwrap();for _ in 0..2{Fixture::key(&mut app,KeyCode::F(9),KeyModifiers::NONE);}assert!(app.rich);app.expansion=App::text("# Heading\n\n| A | B |\n|---|---|\n| C | D |");Fixture::key(&mut app,KeyCode::F(12),KeyModifiers::NONE);assert!(app.rich_preview);let mut terminal=ratatui::Terminal::new(ratatui::backend::TestBackend::new(100,30)).unwrap();terminal.draw(|frame|app.draw(frame)).unwrap();Fixture::key(&mut app,KeyCode::F(12),KeyModifiers::NONE);app.image_source=App::text(path.to_str().unwrap());app.image_alt=App::text("Dot");app.image_title=App::text("Tiny");app.image_width=App::text("64");app.screen=Screen::Image;app.image().unwrap();assert!(App::value(&app.expansion).contains("typerelay-asset:"));app.save().unwrap();let entry=&app.store.open("Rich").unwrap().entries[0];assert_eq!(entry.kind,"rich_text");assert_eq!(entry.value()["content"]["assets"].as_array().unwrap().len(),1);}
     #[test]
     fn settings_prefix_changes_form_but_saved_trigger_is_bare() {
         let temp = tempfile::tempdir().unwrap(); let mut app = Fixture::app(temp.path());
@@ -746,8 +784,8 @@ mod tests {
     fn delete_selected_filtered_snippet_requires_confirmation_and_keeps_file() {
         let temp = tempfile::tempdir().unwrap(); let mut app = Fixture::app(temp.path());
         let file = app.store.create("mine").unwrap();
-        let file = app.store.save(&file, None, Match { trigger: "first".into(), replace: "Keep\nthis".into(), ..Match::default() }).unwrap();
-        app.file = Some(app.store.save(&file, None, Match { trigger: "second".into(), replace: "Remove".into(), ..Match::default() }).unwrap());
+        let file = app.store.save(&file, None, Match { variables: Default::default(), trigger: "first".into(), replace: "Keep\nthis".into(), ..Match::default() }).unwrap();
+        app.file = Some(app.store.save(&file, None, Match { variables: Default::default(), trigger: "second".into(), replace: "Remove".into(), ..Match::default() }).unwrap());
         app.screen = Screen::Browse;
         app.search = App::text("second");
         app.snippets_state.select(Some(0));
@@ -770,7 +808,7 @@ mod tests {
     fn delete_conflict_keeps_confirmation_and_search_delete_edits_query() {
         let temp = tempfile::tempdir().unwrap(); let mut app = Fixture::app(temp.path());
         let file = app.store.create("mine").unwrap();
-        app.file = Some(app.store.save(&file, None, Match { trigger: "first".into(), replace: "Keep".into(), ..Match::default() }).unwrap());
+        app.file = Some(app.store.save(&file, None, Match { variables: Default::default(), trigger: "first".into(), replace: "Keep".into(), ..Match::default() }).unwrap());
         app.screen = Screen::Browse; app.search_focused = true;
         Fixture::key(&mut app, KeyCode::Delete, KeyModifiers::NONE);
         assert_eq!(app.screen, Screen::Browse);
@@ -787,7 +825,7 @@ mod tests {
     fn mouse_delete_and_readonly_permissions() {
         let temp = tempfile::tempdir().unwrap(); let mut app = Fixture::app(temp.path());
         let file = app.store.create("mine").unwrap();
-        app.file = Some(app.store.save(&file, None, Match { trigger: "first".into(), replace: "Keep".into(), ..Match::default() }).unwrap());
+        app.file = Some(app.store.save(&file, None, Match { variables: Default::default(), trigger: "first".into(), replace: "Keep".into(), ..Match::default() }).unwrap());
         app.screen = Screen::Browse;
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
         terminal.draw(|frame| app.draw(frame)).unwrap();
@@ -798,7 +836,7 @@ mod tests {
         let button = app.confirm_buttons[0];
         app.handle(Event::Mouse(ratatui::crossterm::event::MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: button.x + 1, row: button.y + 1, modifiers: KeyModifiers::NONE }));
         assert!(app.file.as_ref().unwrap().entries.is_empty());
-        app.file = Some(app.store.save(app.file.as_ref().unwrap(), None, Match { trigger: "shared".into(), replace: "Read only".into(), ..Match::default() }).unwrap());
+        app.file = Some(app.store.save(app.file.as_ref().unwrap(), None, Match { variables: Default::default(), trigger: "shared".into(), replace: "Read only".into(), ..Match::default() }).unwrap());
         let db = typerelay_client::database::Database::open(&app.store.directory).unwrap();
         db.connection.execute("UPDATE libraries SET data=json_set(data,'$.permissions.edit',json('false'))", []).unwrap();
         Fixture::key(&mut app, KeyCode::F(3), KeyModifiers::NONE);
@@ -810,7 +848,7 @@ mod tests {
     fn trash_page_restores_and_empties_with_confirmation() {
         let temp = tempfile::tempdir().unwrap(); let mut app = Fixture::app(temp.path());
         let file = app.store.create("Local").unwrap();
-        app.file = Some(app.store.save(&file, None, Match { trigger: "hello".into(), replace: "Hello".into(), ..Match::default() }).unwrap());
+        app.file = Some(app.store.save(&file, None, Match { variables: Default::default(), trigger: "hello".into(), replace: "Hello".into(), ..Match::default() }).unwrap());
         app.screen = Screen::Browse;
         Fixture::key(&mut app, KeyCode::F(3), KeyModifiers::NONE);
         Fixture::key(&mut app, KeyCode::Char('d'), KeyModifiers::NONE);
@@ -840,7 +878,7 @@ mod tests {
         app.handle(Event::Paste("sales".into())); Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
         Fixture::key(&mut app, KeyCode::F(2), KeyModifiers::NONE);
         assert_eq!(App::value(&app.trigger), "");
-        app.handle(Event::Paste(",hello".into()));
+        app.handle(Event::Paste(";hello".into()));
         assert_eq!(App::value(&app.trigger), "hello");
         assert_eq!(app.draft().trigger, "hello");
         Fixture::key(&mut app, KeyCode::Tab, KeyModifiers::NONE);
@@ -864,6 +902,15 @@ mod tests {
         app.file = Some(app.store.create("mine").unwrap()); app.screen = Screen::Browse; app.edit(true).unwrap();
         app.trigger = App::text("invalid space"); app.expansion = App::text("My draft");
         Fixture::key(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL); assert_eq!(app.screen, Screen::Edit); assert!(app.error); assert_eq!(app.draft().replace, "My draft");
+    }
+    #[test]
+    fn sync_settings_show_connect_and_disconnect_commands() {
+        let temp = tempfile::tempdir().unwrap(); let mut app = Fixture::app(temp.path());
+        Fixture::key(&mut app, KeyCode::F(6), KeyModifiers::NONE);
+        let backend = ratatui::backend::TestBackend::new(100, 30); let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let screen = terminal.backend().buffer().content().iter().map(|cell|cell.symbol()).collect::<String>();
+        assert!(screen.contains("typerelay connect --server URL")); assert!(screen.contains("typerelay disconnect"));
     }
     #[test]
     fn renders_and_mouse_opens_new_file() {

@@ -1,0 +1,7 @@
+.mobile-select(data-mobile-select=id)
+	button.mobile-select-button(type="button" disabled=disabled aria-haspopup="listbox" aria-expanded="false")
+		span(data-mobile-select-label)= label
+		span.material-symbols-outlined expand_more
+	.mobile-select-menu(role="listbox" hidden)
+		each option in options
+			button(type="button" role="option" data-mobile-option=option.value aria-selected=option.value===value)= option.label

@@ -1,0 +1,120 @@
+x-environment: &environment
+  NODE_ENV: production
+  TYPERELAY_APP: web
+  PORT: 3000
+  APP_URL: ${APP_URL}
+  MCP_BASE_URL: ${MCP_BASE_URL}
+  API_BASE_URL: http://app:3000
+  MONGO_URI: mongodb://mongo:27017/typerelay?replicaSet=typerelay
+  MEMCACHED_SERVERS: ${MEMCACHED_SERVERS:-memcached:11211}
+  API_RATE_LIMIT_ENABLED: "${API_RATE_LIMIT_ENABLED:-true}"
+  API_RATE_LIMIT_WINDOW_MS: "${API_RATE_LIMIT_WINDOW_MS:-60000}"
+  API_RATE_LIMIT_GENERAL_PER_MINUTE: "${API_RATE_LIMIT_GENERAL_PER_MINUTE:-120}"
+  API_RATE_LIMIT_EXPENSIVE_PER_MINUTE: "${API_RATE_LIMIT_EXPENSIVE_PER_MINUTE:-60}"
+  API_RATE_LIMIT_UPLOAD_PER_MINUTE: "${API_RATE_LIMIT_UPLOAD_PER_MINUTE:-20}"
+  MCP_RATE_LIMIT_ENABLED: "${MCP_RATE_LIMIT_ENABLED:-true}"
+  MCP_RATE_LIMIT_WINDOW_MS: "${MCP_RATE_LIMIT_WINDOW_MS:-60000}"
+  MCP_IP_FLOOD_PER_MINUTE: "${MCP_IP_FLOOD_PER_MINUTE:-300}"
+  MCP_UNAUTH_PER_MINUTE: "${MCP_UNAUTH_PER_MINUTE:-30}"
+  MCP_AUTH_PER_MINUTE: "${MCP_AUTH_PER_MINUTE:-120}"
+  MCP_HEAVY_TOOL_PER_MINUTE: "${MCP_HEAVY_TOOL_PER_MINUTE:-30}"
+  MCP_TOOL_CONCURRENCY: "${MCP_TOOL_CONCURRENCY:-3}"
+  MCP_HEAVY_TOOL_CONCURRENCY: "${MCP_HEAVY_TOOL_CONCURRENCY:-1}"
+  SYSADMIN_EMAIL: "${SYSADMIN_EMAIL:-}"
+  SYSADMIN_PASSWORD: "${SYSADMIN_PASSWORD:-}"
+  GIT_ENCRYPTION_KEY: "${GIT_ENCRYPTION_KEY:-}"
+  SESSION_SECRET: ${SESSION_SECRET}
+  JWT_SECRET: ${JWT_SECRET}
+  SMTP_FROM: ${SMTP_FROM}
+  SMTP_SERVERS: ${SMTP_SERVERS}
+  ENABLE_SIGNUP: "${ENABLE_SIGNUP:-true}"
+  HELPMONKS_API_URL: "${HELPMONKS_API_URL:-}"
+  HELPMONKS_SIGNUP_API_URL: "${HELPMONKS_SIGNUP_API_URL:-}"
+  HELPMONKS_SIGNUP_HOST_ID: "${HELPMONKS_SIGNUP_HOST_ID:-}"
+  HELPMONKS_SIGNUP_SEQUENCE_ID: "${HELPMONKS_SIGNUP_SEQUENCE_ID:-}"
+  API_ALLOWED_ORIGINS: ${API_ALLOWED_ORIGINS:-}
+  MCP_ALLOWED_ORIGINS: ${MCP_ALLOWED_ORIGINS:-}
+  IS_DOCKER: "true"
+
+x-app: &app
+  image: ghcr.io/typerelay/typerelay:latest
+  environment: *environment
+  restart: unless-stopped
+  volumes:
+    - typerelay-server:/data
+
+services:
+  app:
+    <<: *app
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/health').then(response => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      mongo:
+        condition: service_healthy
+      memcached:
+        condition: service_started
+
+  scheduler:
+    <<: *app
+    command: [npm, run, start]
+    healthcheck:
+      disable: true
+    environment:
+      <<: *environment
+      TYPERELAY_APP: scheduler
+      SERVER_MODE: scheduler
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+  mcp:
+    <<: *app
+    working_dir: /opt/typerelay/apps/mcp
+    command: [npm, run, start]
+    ports:
+      - "${MCP_PORT:-3002}:3002"
+    environment:
+      <<: *environment
+      TYPERELAY_APP: mcp
+      PORT: 3002
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3002/health').then(response => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      app:
+        condition: service_healthy
+      memcached:
+        condition: service_started
+
+  memcached:
+    image: memcached:1.6.45-trixie@sha256:75c93cc91e76853da7c029e74d6e8dbd44774dd3713c93be8cd1971ad26120a4
+    command: [memcached, -m, "256", -I, 4m, -c, "1024", -t, "2"]
+    restart: unless-stopped
+
+  mongo:
+    image: mongo:8
+    command: [mongod, --replSet, typerelay, --bind_ip_all]
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          mongosh --quiet --eval 'try { rs.status().ok } catch(e) { rs.initiate({_id:"typerelay",members:[{_id:0,host:"mongo:27017"}]}) }'
+      interval: 3s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+volumes:
+  typerelay-server:
+  mongo_data:

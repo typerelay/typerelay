@@ -1,3 +1,4 @@
+- const newsEnabled = typeof productUpdatesEnabled !== 'undefined' && productUpdatesEnabled
 doctype html
 html(lang="en")
 	head
@@ -6,7 +7,10 @@ html(lang="en")
 		meta(name="csrf-token" content=csrf)
 		meta(name="style-nonce" content=styleNonce)
 		title TypeRelay
-		link(rel="icon" href="/assets/favicon.ico")
+		if whiteLabel && whiteLabel.favicon_url
+			link(rel="icon" href=whiteLabel.favicon_url)
+		else
+			link(rel="icon" href="/assets/favicon.ico")
 		link(rel="stylesheet" href="/vendor/bootstrap/css/bootstrap.min.css")
 		link(rel="stylesheet" href="/vendor/sweetalert2/sweetalert2.min.css")
 		link(rel="stylesheet" href="/assets/app.css")
@@ -16,9 +20,10 @@ html(lang="en")
 		script(src="/assets/auth.js" type="module")
 		script(src="/assets/app.js" type="module")
 	body
-		header.app-navbar.container-fluid.py-3.mb-5
+		header.app-navbar.container-fluid.py-3.mb-5(class=newsEnabled ? 'has-product-updates' : '')
 			a.brand-link(href="/")
-				img.brand(src="/assets/typerelay-logo.svg" alt="TypeRelay")
+				- const brandAsset = whiteLabel && (profile ? whiteLabel.logo_url : (whiteLabel.login_logo_url || whiteLabel.logo_url))
+				img.brand(src=brandAsset || '/assets/typerelay-logo.svg' alt=brandAsset ? 'Logo' : 'TypeRelay')
 			if profile
 				button#search-trigger.btn.global-search(type="button" aria-haspopup="dialog" aria-controls="search-modal")
 					svg.me-2(width="1.1rem" height="1.1rem" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true")
@@ -28,22 +33,49 @@ html(lang="en")
 					kbd.mx-2 /
 					span to search
 					kbd.ms-auto#search-shortcut Ctrl K
-				.dropdown.ms-auto
-					include ajax/avatar
-					ul.dropdown-menu.dropdown-menu-end
-						li
-							button.dropdown-item(type="button" data-bs-toggle="modal" data-bs-target="#settings") Settings
-						li
-							button.dropdown-item(type="button" data-bs-toggle="modal" data-bs-target="#trash") Trash
-						li
-							button.dropdown-item(type="button" data-bs-toggle="modal" data-bs-target="#help") Help
-						li
-							hr.dropdown-divider
-						li
-							button#logout.dropdown-item(type="button") Sign out
+				.d-flex.align-items-center.gap-3.ms-auto
+					if newsEnabled
+						a.btn.btn-sm.btn-link.d-inline-flex.align-items-center.text-nowrap.position-relative.me-2.product-updates-nav-link(href='/news?account=' + account._id title="What's new" aria-label="What's new" data-product-updates-nav)
+							//- Mailtwine's Tabler speakerphone icon (MIT).
+							svg.me-1(width="1.25rem" height="1.25rem" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true")
+								path(d="M18 8a3 3 0 0 1 0 6")
+								path(d="M10 8v11a1 1 0 0 1 -1 1h-1a1 1 0 0 1 -1 -1v-5")
+								path(d="M12 8l4.524 -3.77a.9 .9 0 0 1 1.476 .692v12.156a.9 .9 0 0 1 -1.476 .692l-4.524 -3.77h-8a1 1 0 0 1 -1 -1v-4a1 1 0 0 1 1 -1h8")
+							span.fw-semibold.d-none.d-md-inline What's new
+							span.badge.rounded-pill.text-bg-danger.d-none#product-updates-badge 0
+					include ajax/trial-button
+					.dropdown
+						include ajax/avatar
+						ul.dropdown-menu.dropdown-menu-end
+							li
+								button.dropdown-item(type="button" data-bs-toggle="modal" data-bs-target="#settings") Settings
+							li
+								hr.dropdown-divider
+							li
+								button.dropdown-item(type="button" data-bs-toggle="modal" data-bs-target="#trash") Trash
+							li
+								hr.dropdown-divider
+							li
+								a.dropdown-item(href="https://docs.typerelay.com" target="_blank" rel="noopener noreferrer") Docs
+							li
+								a.dropdown-item(href="https://typerelay.com/apps/" target="_blank" rel="noopener noreferrer") Apps
+							li
+								hr.dropdown-divider
+							li
+								button#logout.dropdown-item(type="button") Sign out
 		main.container
 			block content
+		if newsEnabled
+			#product-updates-modal-root
 		if profile
 			button#scroll-top.btn.btn-primary.btn-sm.scroll-top(type="button" aria-label="Scroll to top" aria-hidden="true" tabindex="-1")
 				span(aria-hidden="true") ↑
 				span.ms-2 Top
+
+		if typeof customCode !== 'undefined' && profile
+			if customCode.css
+				style(nonce=styleNonce)!= customCode.css
+			if customCode.js
+				script(nonce=styleNonce)!= customCode.js
+		if typeof managani !== 'undefined' && profile
+			script(async src=managani.url data-site-key=managani.key data-user-token=managani.token)

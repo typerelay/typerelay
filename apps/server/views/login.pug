@@ -9,7 +9,8 @@ block content
 			p.text-secondary.small.mb-2 Sign in with
 			.d-flex.gap-3.mb-3
 				button#magic-link-btn.btn.btn-primary.btn-sm.flex-fill(type="button") Magic Link
-				button#passkey-btn.btn.btn-primary.btn-sm.flex-fill(type="button") Passkey
+				if passkeysAvailable
+					button#passkey-btn.btn.btn-primary.btn-sm.flex-fill(type="button") Passkey
 			p.text-secondary.small.mb-3 Or continue with email and password
 			form#password-login-form
 				label.form-label(for="email") Email address
@@ -20,9 +21,10 @@ block content
 				input#password.form-control.form-control-sm.mb-3(type="password" name="password" autocomplete="current-password" required)
 				.d-flex.justify-content-end
 					button.btn.btn-primary.btn-sm(type="submit") Sign in
-			p.mt-3.mb-0
-				span No account yet?
-				a.ms-1(href="/signup") Create one
+			if !whiteLabel && signupEnabled
+				p.mt-3.mb-0
+					span No account yet?
+						a.ms-1(href="/signup") Create one
 		#magic-link-form.d-none
 			p.mb-3 Enter your email to receive a login link.
 			form#login

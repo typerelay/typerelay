@@ -1,8 +1,7 @@
 # Database-backed TypeRelay development
 
 Run docker compose up -d --build from the repository root.
-App: http://localhost:3040. Captured email: http://localhost:8040.
-MongoDB runs an isolated replica set. Production deployment remains separate.
+`APP_URL` and `MCP_BASE_URL` select the development endpoints. `DEV_TYPERELAY_MONGODB_URI`, `MEMCACHED_SERVERS`, and `SMTP_SERVERS` connect to the shared dbh development services; the development Compose file does not run MongoDB, Memcached, or SMTP containers. Production deployment remains separate.
 
 ## Storage version 2
 
@@ -26,13 +25,13 @@ Desktop migration backs up legacy YAML and sync state under backups/database-mig
 Interrupted v1 operations are reconciled against content-free server receipts before retrying through v2.
 The installer snapshots the stopped client's config under its private installation data directory and restores it if the upgrade fails.
 
-Old /api/v1 clients receive 426 and cannot upload. Install the matching v0.7 engine/TUI; credentials remain usable.
+Old `/api/v1` and pre-protocol-5 clients receive 426 and cannot upload. Install matching current engine, TUI and panel binaries; credentials remain usable.
 Keep backups until counts, IDs and text are verified. Backups and exports are outside Trash retention.
 
 ## Trash
 
 Both apps support snippets and libraries in Trash. Restore is refused after 30 days.
-Server cleanup runs at startup and hourly using transactions, not MongoDB TTL deletion.
+The dedicated server scheduler purges expired Trash daily at 02:30 using transactions, not MongoDB TTL deletion.
 Local-only cleanup runs on client startup and periodically.
 Synced deadlines start at server acceptance. Offline operations remain queued until authorized.
 Purge removes content, related conflicts and caches while retaining content-free IDs/receipts.
@@ -41,7 +40,17 @@ Offline devices apply changes on their next successful connection.
 
 ## Verification
 
-    docker compose run --rm --no-deps server node --test --test-force-exit test/*.test.js
+### In-app product updates
+
+The hosted web app reuses Mailtwine's news badge, archive and Bootstrap modal. Set `TYPERELAY_GHOST_CONTENT_API_KEY` in both the app and scheduler environments. On NadaMini, run `dbh-run secrets` after changing the development environment. The feature is disabled without a key and on self-hosted/custom-domain requests; native desktop is unchanged.
+
+Ghost posts from `https://typerelay.com` need the `product` tag to enter `/news`. Add the internal `#modal` tag to trigger the automatic popup. Sync runs on scheduler startup and every 15 minutes; failures preserve the cached feed. Existing users receive a one-time seen baseline when enabled, so historical posts stay in the archive without opening old popups. Read state is shared per user across accounts and browser sessions.
+
+Focused unit/browser tests: `node --test test/product-updates-service.test.js test/product-updates-browser.test.js test/scheduler.test.js` from `apps/server`. Database coverage is in `test/product-updates-integration.test.js`, using a disposable `typerelay_product_updates_test` database. Use `dbh-run test` for Docker-dependent tests on NadaMini. Production key provisioning and deployment are separate.
+
+### Existing suites
+
+    docker compose run --rm --no-deps app node --test --test-force-exit test/*.test.js
     cargo test --workspace
     cargo clippy --workspace --all-targets -- -D warnings
     python3 -m unittest discover -s scripts/tests
@@ -50,9 +59,8 @@ Server tests use disposable typerelay_test, typerelay_e2e and typerelay_security
 Tests cover migration, offline replay, conflicts, Trash/restore/purge, expiry, access revocation, staged collisions and incremental UI updates.
 Do not run the retired file-based desktop smoke scripts against the database client.
 
-## Move protocol upgrade (v0.8)
+## Move storage introduced in v0.8
 
-Install the matching v0.8 engine/TUI with the server. Desktop sync protocol is now 3; no account reconnection or content migration is required.
-New SQLite base_libraries/base_snippets tables retain canonical server data while pending moves project into the working tables. They are populated on the first full protocol-3 sync and are cleared alongside content on purge/revocation.
+SQLite `base_libraries` and `base_snippets` tables retain canonical server data while pending moves project into the working tables. They are populated on a full sync and are cleared alongside content on purge/revocation. Current desktop sync protocol is 5; protocol 3 was the historical move rollout.
 The departures table keeps content-free former-location markers to prevent local resurrection when a move destination is inaccessible.
 Pending enrollment remaps both source and destination references atomically.

@@ -1,14 +1,16 @@
 // Adapted from Streamient auth routes, profile/security views and passkey_service (AGPL-3.0).
 import bcrypt from 'bcryptjs';
+import { AdminSettings } from './admin_settings.js';
 import { generateSecret, generateURI, verifySync } from 'otplib';
 import QRCode from 'qrcode';
 import { generateRegistrationOptions, verifyRegistrationResponse, generateAuthenticationOptions, verifyAuthenticationResponse } from '@simplewebauthn/server';
-import { mongoose, User, Ticket, Passkey } from '../model/index.js';
+import { mongoose, User, Ticket, Passkey, Member } from '../model/index.js';
 import { Auth } from './auth.js';
 import { Support, Fault } from './support.js';
 
 export class Security {
 	static dummy = bcrypt.hashSync(Support.token(), 12);
+	static signupEnabled() { return process.env.ENABLE_SIGNUP === 'true'; }
 	static email(value) { const email = Support.text(value, 254).toLowerCase(); Support.assert(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email), 'Enter a valid email address'); return email; }
 	static fresh(req) { Support.assert((!req.ctx || (!req.ctx.device && req.ctx.user === req.session.user)) && req.session.user && req.session.auth_at > Date.now() - 15 * 60000, 'Please sign out and sign in again before changing security settings', 401); }
 	static async establish(req, id, verifiedFactor = false) {
@@ -18,22 +20,29 @@ export class Security {
 		await new Promise((resolve, reject) => req.session.regenerate(error => error ? reject(error) : resolve()));
 		req.session.csrf = Support.token();
 		req.session.return_to = destination;
+		let result;
 		if (user.totp_enabled && !verifiedFactor) {
 			req.session.pending_factor = { user: String(id), version: user.auth_version || 0, expires: Date.now() + 300000 };
-			return { requires2FA: true, csrf: req.session.csrf, redirect: '/auth/two-factor' };
+			result = { requires2FA: true, csrf: req.session.csrf, redirect: '/auth/two-factor' };
+		} else {
+			req.session.user = String(id);
+			req.session.auth_version = user.auth_version || 0;
+			req.session.auth_at = Date.now();
+			delete req.session.return_to;
+			result = { redirect: destination, csrf: req.session.csrf };
 		}
-		req.session.user = String(id);
-		req.session.auth_version = user.auth_version || 0;
-		req.session.auth_at = Date.now();
-		delete req.session.return_to;
-		return { redirect: destination, csrf: req.session.csrf };
+		// Persist before redirect headers expose the new cookie to a follow-up request.
+		await new Promise((resolve, reject) => req.session.save(error => error ? reject(error) : resolve()));
+		return result;
 	}
+
 	static async passwordLogin(req) {
 		const email = Security.email(req.body.email);
 		Support.assert(typeof req.body.password === 'string' && req.body.password.length <= 256, 'Invalid email or password', 401);
 		const user = await User.findOne({ email }).select('+password').lean();
 		const matches = await bcrypt.compare(req.body.password, user?.password || Security.dummy);
 		Support.assert(user?.password && matches, 'Invalid email or password', 401);
+		if (req.boundAccount) Support.assert(await Member.exists({ account: req.boundAccount, user: user._id }), 'Account access denied', 403);
 		return Security.establish(req, user._id);
 	}
 	static async verifyCode(user, code) {
@@ -51,10 +60,13 @@ export class Security {
 		await Security.verifyCode(user, req.body.code);
 		return Security.establish(req, user._id, true);
 	}
-	static async issue(email, kind, data, path, subject) {
+	static async issue(email, kind, data, path, name) {
 		const token = Support.token();
-		await Ticket.create({ hash: Support.hash(token), kind, email, data, expires: new Date(Date.now() + 900000) });
-		await Auth.mail.sendMail({ from: 'TypeRelay <security@typerelay.local>', to: email, subject, text: Auth.origin + path + '?token=' + token });
+		await mongoose.connection.transaction(async session => {
+			if (data.user) { const user = await User.updateOne({ _id: data.user }, { $inc: { activity_sequence: 1 } }, { session }); Support.assert(user.matchedCount, 'User no longer exists', 409); }
+			await Ticket.create([{ hash: Support.hash(token), kind, email, data, expires: new Date(Date.now() + 900000) }], { session });
+		});
+		await AdminSettings.send(kind, email, { url: Auth.origin + path + '?token=' + token, name });
 	}
 	static async profile(req) {
 		const name = Support.text(req.body.name);
@@ -63,7 +75,7 @@ export class Security {
 		if (email !== user.email) {
 			Security.fresh(req);
 			Support.assert(!await User.exists({ email }), 'Email address unavailable', 409);
-			await Security.issue(email, 'email-change', { user: String(user._id), old: user.email, version: user.auth_version || 0 }, '/auth/email', 'Confirm your TypeRelay email address');
+			await Security.issue(email, 'email-change', { user: String(user._id), old: user.email, version: user.auth_version || 0 }, '/auth/email', name);
 		}
 		await User.updateOne({ _id: user._id }, { $set: { name } });
 		return { name, email: user.email, pending_email: email !== user.email ? email : null };
@@ -91,7 +103,7 @@ export class Security {
 	static async forgot(email) {
 		email = Security.email(email);
 		const user = await User.findOne({ email }).lean();
-		if (user) await Security.issue(email, 'password-reset', { user: String(user._id), version: user.auth_version || 0 }, '/auth/reset-password', 'Reset your TypeRelay password');
+		if (user) await Security.issue(email, 'password-reset', { user: String(user._id), version: user.auth_version || 0 }, '/auth/reset-password', user.name);
 		return { message: 'If an account exists, a password reset link has been sent.' };
 	}
 	static async redeemReset(req) {
@@ -107,6 +119,7 @@ export class Security {
 		return { password: result.password };
 	}
 	static async passkeyOptions(req, register) {
+		Support.assert(!req.boundAccount, 'Use app.typerelay.com for passkeys', 403);
 		const rpID = new URL(Auth.origin).hostname;
 		let options;
 		if (register) {
@@ -122,6 +135,7 @@ export class Security {
 	}
 	static passkeyFailure() { throw new Fault(400, 'Passkey response could not be verified. Try again.'); }
 	static async passkeyVerify(req, register) {
+		Support.assert(!req.boundAccount, 'Use app.typerelay.com for passkeys', 403);
 		if (register) Security.fresh(req);
 		Support.assert(req.session.passkey, 'Passkey challenge expired; try again');
 		const ticket = await Ticket.findOneAndDelete({ hash: Support.hash(req.session.passkey), kind: register ? 'passkey-register' : 'passkey-login', expires: { $gt: new Date() } }).lean();
@@ -148,8 +162,8 @@ export class Security {
 	static mount(app, limit) {
 		app.use('/auth', (req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
 		app.get('/login', (req, res) => res.render('login'));
-		app.get('/signup', (req, res) => res.render('auth', { kind: 'signup' }));
-		app.post('/auth/signup', limit, async (req, res) => { await Auth.login(Security.email(req.body.email), req.body.name); res.json({ message: 'Check your email to finish creating your account.' }); });
+		app.get('/signup', (req, res) => req.boundAccount ? res.redirect(new URL('/signup', Auth.origin).toString()) : res.render('auth', { kind: 'signup' }));
+		app.post('/auth/signup', limit, async (req, res) => { Support.assert(Security.signupEnabled(), 'Signup is disabled', 403); Support.assert(!req.boundAccount, 'Create accounts at app.typerelay.com', 403); await Auth.login(Security.email(req.body.email), req.body.name); res.json({ message: 'Check your email to finish creating your account.' }); });
 		app.post('/auth/password', limit, async (req, res) => res.json(await Security.passwordLogin(req)));
 		app.get('/auth/two-factor', (req, res) => res.render('auth', { kind: 'factor' }));
 		app.post('/auth/two-factor', limit, async (req, res) => res.json(await Security.factor(req)));

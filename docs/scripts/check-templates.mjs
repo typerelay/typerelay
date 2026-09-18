@@ -1,0 +1,32 @@
+import { chromium } from '/usr/local/lib/node_modules/playwright-core/index.mjs';
+import { readFile } from 'node:fs/promises';
+import assert from 'node:assert/strict';
+const browser = await chromium.launch({ executablePath: '/usr/bin/chromium', args: ['--no-sandbox', '--unsafely-treat-insecure-origin-as-secure=http://template-server:3142'] });
+try {
+	const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+	page.on('pageerror', error => console.log('Browser error:', error.message));
+	const bodies = []; page.on('request', request => { if (request.postData()) bodies.push(request.postData()); });
+	await page.addInitScript(() => { Object.defineProperty(navigator, 'clipboard', { value: { writeText: async value => { window.copiedTemplate = value; } } }); });
+	const fixture = JSON.parse(await readFile('/fixtures/login.json', 'utf8'));
+	await page.goto(fixture.url); await page.waitForURL('http://template-server:3142/');
+	await page.getByRole('button', { name: 'Open library Templates', exact: true }).click();
+	await page.getByRole('button', { name: 'Edit', exact: true }).first().click();
+	await page.locator('#snippet-type').waitFor({ state: 'visible' });
+	assert.equal(await page.locator('#snippet-type').inputValue(), 'plain_text');
+	await page.locator('[data-variable="name"]').waitFor({ state: 'visible' });
+	await page.locator('[data-variable="name"] [data-vfield="label"]').fill('Person');
+	await page.locator('#record-form button[type=submit]').click();
+	await page.locator('#form-modal').waitFor({ state: 'hidden' });
+	await page.getByRole('button', { name: 'Fill and copy', exact: true }).first().click();
+	await page.locator('#template-fill').waitFor({ state: 'visible' });
+	await page.getByLabel('Person *', { exact: true }).fill('private-answer-{{key:enter}}');
+	await page.getByRole('button', { name: 'Copy filled text', exact: true }).click();
+	await page.waitForFunction(() => typeof window.copiedTemplate === 'string');
+	assert.ok((await page.evaluate(() => window.copiedTemplate)).startsWith('Hi private-answer-{{key:enter}} '));
+	await page.getByRole('button', { name: 'Edit', exact: true }).first().click();
+	await page.locator('[data-variable="name"] [data-vfield="label"]').waitFor({ state: 'visible' });
+	assert.equal(await page.locator('[data-variable="name"] [data-vfield="label"]').inputValue(), 'Person');
+	assert.ok(!bodies.some(body => body.includes('private-answer-')), 'Entered answers must never be uploaded');
+	await page.screenshot({ path: '/artifacts/template-editor.png' });
+	console.log('Text variables, local-only literal answers, metadata save and fill/copy passed');
+} finally { await browser.close(); }

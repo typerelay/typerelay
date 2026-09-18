@@ -1,0 +1,44 @@
+- var snippetVariables = (snippet && snippet.content && snippet.content.variables) || {}
+#template-options.mb-3(hidden data-variables=JSON.stringify(snippetVariables))
+	.input-group.input-group-sm(data-template-mutation)
+		label.input-group-text(for="variable-kind") Variables
+		select#variable-kind.form-select.form-select-sm(aria-label="Variable type")
+			option(value="custom") Text field
+			option(value="date") Date
+			option(value="time") Time
+			option(value="timestamp") Timestamp
+			option(value="key:enter") Enter keypress
+		label.input-group-text(for="variable-name") Name
+		input#variable-name.form-control.form-control-sm(autocomplete="off" aria-label="Variable name")
+		button#insert-variable.btn.btn-outline-secondary.btn-sm(type="button") Insert
+	#variable-definitions.mt-3
+	p#template-error.text-danger.mb-0(role="status")
+	pre#template-preview.small.mb-0(hidden)
+	template#variable-definition
+		fieldset.mb-3(data-variable)
+			legend.h6
+			.row
+				.col-md-6
+					label.form-label Prompt label (optional)
+					input.form-control.form-control-sm.mb-2(data-vfield="label")
+				.col-md-6(data-input-options)
+					label.form-label Prefilled answer (optional)
+					textarea.form-control.form-control-sm.mb-2(data-vfield="default" rows="1")
+			div(data-input-options)
+				label.form-check.form-check-inline
+					input.form-check-input(type="checkbox" data-vfield="required")
+					span.form-check-label Require an answer when used
+				label.form-check.form-check-inline
+					input.form-check-input(type="checkbox" data-vfield="multiline")
+					span.form-check-label Allow multiple lines
+			.row(data-time-options)
+				.col
+					label.form-label Format
+					select.form-select.form-select-sm(data-vfield="format")
+						each format in ['', 'YYYY-MM-DD', 'DD/MM/YYYY', 'MM/DD/YYYY', 'HH:mm', 'HH:mm:ss', 'YYYY-MM-DD HH:mm', 'ISO']
+							option(value=format)= format || 'Default'
+				.col
+					label.form-label Timezone
+					select.form-select.form-select-sm(data-vfield="timezone")
+						option(value="local") Local
+						option(value="utc") UTC

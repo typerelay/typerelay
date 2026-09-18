@@ -1,0 +1,165 @@
+main.mobile-app#workspace
+	section.auth-screen#login
+		.auth-brand
+			img(src="/mark.svg" alt="")
+			span.eyebrow TypeRelay mobile
+			h1 Your snippets, wherever you type.
+			p Search, edit, and sync your TypeRelay libraries. Then use the TypeRelay keyboard in any app.
+		.auth-card
+			form#login-form
+				label.mobile-field(for="server")
+					span Server URL
+					input#server(type="url" required value="https://app.typerelay.com" autocomplete="url")
+				button.primary-button.wide(type="submit")
+					span Sign in with browser
+					span.material-symbols-outlined arrow_forward
+			p#preview-notice.preview-notice(hidden) Browser preview uses your development account. Native keyboard behavior requires the installed app.
+	section#signed-in(hidden)
+		section.mobile-screen#snippets-screen(data-screen="snippets")
+			header.mobile-topbar
+				img(src="/mark.svg" alt="TypeRelay")
+				button.profile-button#profile(type="button" aria-label="Open settings")
+					span.material-symbols-outlined person
+			p#sync-status.visually-hidden(role="status") Offline snippets
+			.search-field
+				span.material-symbols-outlined search
+				input#search(type="search" aria-label="Search snippets" autocomplete="off" autocapitalize="none")
+				button#clear-search(type="button" aria-label="Clear search" hidden)
+					span.material-symbols-outlined close
+			select#library.visually-hidden(aria-label="Selected snippet library")
+				option(value="") All libraries
+			#library-filters.library-filters(role="group" aria-label="Filter by library")
+				button.library-filter.is-active(type="button" data-library-filter="") All
+			.notice-stack
+				div.notice-card#restore-draft(hidden)
+					button.notice-main#resume-draft(type="button")
+						span.material-symbols-outlined edit_note
+						span
+							strong Resume draft
+							small Continue your unsaved snippet
+					button.notice-dismiss#discard-draft(type="button" aria-label="Discard draft")
+						span.material-symbols-outlined close
+				button.notice-card.warning#conflicts(type="button" hidden)
+					span.material-symbols-outlined difference
+					span
+						strong Review conflicts
+						small Choose which version to keep
+					span.material-symbols-outlined chevron_right
+			#snippets.snippet-list
+			.empty-state#empty
+				span.material-symbols-outlined content_paste_search
+				h2 No snippets found
+				p Sync your libraries or try another search.
+		section.mobile-screen.settings-screen#settings-screen(data-screen="settings" hidden)
+			header.screen-header
+				button.header-action#settings-back(type="button" aria-label="Back to snippets")
+					span.material-symbols-outlined arrow_back
+				div
+					span.eyebrow TypeRelay
+					h1 Settings
+			section.settings-section
+				header.settings-section-header
+					span.settings-icon
+						span.material-symbols-outlined keyboard
+					div
+						h2 TypeRelay keyboard
+						p Insert snippets while working in other apps.
+				ol.keyboard-steps
+					li Enable TypeRelay in your device keyboard settings.
+					li Switch to TypeRelay from any text field.
+					li Search and tap a snippet to insert it.
+				p.settings-note iOS works without Full Access. Secure fields and some apps use the system keyboard.
+				button.secondary-button.wide#keyboard-settings(type="button")
+					span.material-symbols-outlined settings
+					span Open keyboard settings
+				.settings-subsection
+					h3 Swipe actions
+					p.settings-description Choose what happens when you swipe a snippet. A short swipe reveals the action; a far swipe completes it.
+					label.setting-select(for="swipe-left")
+						span Swipe left
+						select#swipe-left
+							option(value="copy") Copy
+							option(value="edit") Edit
+							option(value="delete") Delete
+							option(value="none") Nothing
+					label.setting-select(for="swipe-right")
+						span Swipe right
+						select#swipe-right
+							option(value="copy") Copy
+							option(value="edit") Edit
+							option(value="delete") Delete
+							option(value="none") Nothing
+					label.setting-select(for="swipe-right-far")
+						span Far swipe right
+						select#swipe-right-far
+							option(value="copy") Copy
+							option(value="edit") Edit
+							option(value="delete") Delete
+							option(value="none") Nothing
+			section.settings-section
+				header.settings-section-header
+					span.settings-icon
+						span.material-symbols-outlined cloud_sync
+					div
+						h2 Sync and account
+						p#settings-server Not signed in
+				.settings-row
+					span
+						strong Pending changes
+						small Saved locally until the next sync
+					strong#settings-pending 0
+				.settings-row
+					span
+						strong Conflicts
+						small Review concurrent changes
+					strong#settings-conflicts 0
+				.settings-button-row
+					button.secondary-button#reconnect(type="button")
+						span.material-symbols-outlined login
+						span Reconnect
+					button.secondary-button#settings-sync(type="button")
+						span.material-symbols-outlined sync
+						span Sync now
+			section.settings-section
+				h2 Recovery
+				p.settings-description TypeRelay preserves edits that the server could not apply safely.
+				button.secondary-button.wide#recovery(type="button")
+					span.material-symbols-outlined restore_page
+					span Recovered edits
+			section.settings-section
+				header.settings-section-header
+					span.settings-icon.danger-icon
+						span.material-symbols-outlined delete
+					div
+						h2 Trash
+						p Restore items or permanently delete them when permitted.
+				button.secondary-button.wide#trash(type="button")
+					span.material-symbols-outlined delete_sweep
+					span View Trash
+					span.settings-button-count#trash-count
+			section.settings-section.danger-section
+				h2 Account
+				p.settings-description Remove credentials, cached snippets, pending edits, and drafts from this device.
+				button.danger-button.wide#logout(type="button") Sign out
+			footer.settings-family(aria-label="Other tools from our team")
+				small More tools from our team
+				ul
+					li: a(href="https://razuna.com/" data-external) Razuna — Digital Asset Management
+					li: a(href="https://streamient.com/" data-external) Streamient — knowledge for AI and humans
+					li: a(href="https://managani.com/" data-external) Managani — product growth platform
+					li: a(href="https://helpmonks.com/" data-external) Helpmonks — email management
+		nav.bottom-nav#bottom-nav(aria-label="Primary navigation")
+			button.nav-button#add(type="button" aria-label="Add snippet")
+				span.material-symbols-outlined add
+				span Add
+			button.nav-button#nav-search(type="button" aria-label="Search snippets")
+				span.material-symbols-outlined search
+				span Search
+#form-modal.modal.mobile-flow.fade(tabindex="-1" data-bs-keyboard="false" aria-label="Snippet editor")
+	.modal-dialog
+		.modal-content
+			#editor-content
+#detail-modal.modal.mobile-flow.fade(tabindex="-1" data-bs-keyboard="false" aria-label="Snippet details")
+	.modal-dialog
+		.modal-content
+			#detail-content

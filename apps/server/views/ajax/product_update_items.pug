@@ -1,0 +1,5 @@
+include ../mixins/product_updates
+
+div(data-product-update-items-fragment data-next-cursor=product_updates.next_cursor)
+	each update in product_updates.updates
+		+productUpdateCard(update)

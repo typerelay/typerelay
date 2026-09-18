@@ -1,0 +1,15 @@
+mixin productUpdateCard(update)
+	article.card.product-update-card.mb-5(data-product-update-id=String(update._id))
+		if update.feature_image
+			img.card-img-top.product-update-card-image(src=update.feature_image alt=update.title loading="lazy")
+		.card-body
+			p.text-muted.small.mb-2= new Date(update.published_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
+			h2.h3.mb-3= update.title
+			p.mb-3.product-update-excerpt= update.excerpt
+			a.btn.btn-sm.btn-outline-primary(href=update.link target="_blank" rel="noopener noreferrer")
+				span Read more
+				//- Mailtwine's Tabler external-link icon (MIT).
+				svg.ms-1(width="1rem" height="1rem" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true")
+					path(d="M12 6h-6a2 2 0 0 0 -2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-6")
+					path(d="M11 13l9 -9")
+					path(d="M15 4h5v5")

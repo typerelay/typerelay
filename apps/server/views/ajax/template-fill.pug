@@ -1,0 +1,21 @@
+#template-fill.modal.fade(tabindex="-1" aria-label="Fill template" data-bs-backdrop="static" data-bs-keyboard="false")
+	.modal-dialog.modal-lg.modal-dialog-scrollable
+		.modal-content
+			.modal-header
+				h2.modal-title.h5 Fill template
+				button.btn-close(data-bs-dismiss="modal" aria-label="Close")
+			form#template-fill-form
+				.modal-body
+					#template-fill-fields
+					p#template-fill-error.text-danger(role="status")
+					label.form-label Preview
+					pre#template-fill-preview
+					p#template-fill-actions.small.text-muted
+				.modal-footer.justify-content-between
+					button.btn.btn-outline-secondary.btn-sm(type="button" data-bs-dismiss="modal") Cancel
+					button.btn.btn-primary.btn-sm(type="submit") Copy filled text
+	template#template-fill-field
+		.mb-3
+			label.form-label
+			input.form-control.form-control-sm(autocomplete="off")
+			textarea.form-control.form-control-sm(hidden)

@@ -1,0 +1,114 @@
+apply plugin: 'com.android.application'
+apply plugin: 'org.jetbrains.kotlin.android'
+
+def releaseKeystorePath = System.getenv("TYPERELAY_ANDROID_KEYSTORE_PATH")
+def releaseKeystorePassword = System.getenv("TYPERELAY_ANDROID_KEYSTORE_PASSWORD")
+def releaseKeyAlias = System.getenv("TYPERELAY_ANDROID_KEY_ALIAS")
+def releaseKeyPassword = System.getenv("TYPERELAY_ANDROID_KEY_PASSWORD")
+def allowUnsignedRelease = System.getenv("ALLOW_UNSIGNED_RELEASE") == "true"
+def releaseSigningConfigured = releaseKeystorePath && releaseKeystorePassword && releaseKeyAlias && releaseKeyPassword && file(releaseKeystorePath).exists()
+
+android {
+    kotlinOptions { jvmTarget = "21" }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_21; targetCompatibility JavaVersion.VERSION_21 }
+    namespace = "com.typerelay.mobile"
+    ndkVersion "28.2.13676358"
+    compileSdk = rootProject.ext.compileSdkVersion
+    signingConfigs {
+        release {
+            if (releaseSigningConfigured) {
+                storeFile file(releaseKeystorePath)
+                storePassword releaseKeystorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+            }
+        }
+    }
+    defaultConfig {
+        applicationId "com.typerelay.mobile"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode 1
+        versionName "0.1.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    buildTypes {
+        release {
+            if (releaseSigningConfigured) signingConfig signingConfigs.release
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+
+def mobileWebRoot = file('../..')
+def packagedWebIndex = file('src/main/assets/public/index.html')
+def mobileWebSources = files(
+    fileTree(dir: new File(mobileWebRoot, 'src'), include: '**/*'),
+    fileTree(dir: new File(mobileWebRoot, 'views'), include: '**/*'),
+    fileTree(dir: new File(mobileWebRoot, 'scripts'), include: '**/*'),
+    new File(mobileWebRoot, 'capacitor.config.ts'),
+    new File(mobileWebRoot, 'index.html'),
+    new File(mobileWebRoot, 'package.json'),
+    new File(mobileWebRoot, 'tsconfig.json'),
+    new File(mobileWebRoot, 'vite.config.ts'),
+    file('../../../../pnpm-lock.yaml'),
+    file('../../../../pnpm-workspace.yaml')
+)
+
+tasks.register('verifyFreshWebAssets') {
+    inputs.files(mobileWebSources)
+    doLast {
+        if (!packagedWebIndex.isFile()) throw new GradleException("Mobile web assets are missing. Run 'pnpm run mobile:build' and 'pnpm --filter @typerelay/mobile exec cap sync android' before building a release.")
+        def latestSource = mobileWebSources.files.findAll { it.isFile() }.max { it.lastModified() }
+        if (latestSource && packagedWebIndex.lastModified() < latestSource.lastModified()) throw new GradleException("Mobile web assets are stale. Run 'pnpm run mobile:build' and 'pnpm --filter @typerelay/mobile exec cap sync android' before building a release.")
+    }
+}
+
+tasks.matching { it.name == 'preReleaseBuild' }.configureEach { dependsOn('verifyFreshWebAssets') }
+
+gradle.taskGraph.whenReady { taskGraph ->
+    def requiresSignedRelease = taskGraph.allTasks.any { task -> task.project == project && task.name in ["bundleRelease", "assembleRelease"] }
+    if (requiresSignedRelease && !releaseSigningConfigured && !allowUnsignedRelease) throw new GradleException("Release signing is not configured. Set TYPERELAY_ANDROID_KEYSTORE_PATH, TYPERELAY_ANDROID_KEYSTORE_PASSWORD, TYPERELAY_ANDROID_KEY_ALIAS, and TYPERELAY_ANDROID_KEY_PASSWORD, or set ALLOW_UNSIGNED_RELEASE=true.")
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}
+
+// Refuse to produce an APK with a missing native bridge.
+preBuild.doFirst {
+    ['arm64-v8a', 'x86_64'].each { abi ->
+        if (!file("src/main/jniLibs/${abi}/libtyperelay_mobile.so").isFile()) throw new GradleException('Run pnpm native:android before building the app.')
+    }
+}

@@ -1,5 +1,7 @@
 # Code snippets (v0.9)
 
+> Historical delivery record. Current content and template behavior is documented under [Text and code snippets](../guide/snippets) and [Template variables](../guide/templates).
+
 Snippets have an optional `title` and nullable `trigger`. Empty abbreviations are stored as null; only populated active abbreviations are indexed and activated. Existing IDs and text remain unchanged.
 
 Content envelopes are `{version:1,type:"plain_text",text}` or `{version:1,type:"code",language,text}`. Code is literal, including template delimiters. Both types retain tabs, spaces, trailing whitespace and blank lines; CRLF becomes LF. Existing 64 KiB text and library limits apply. Unknown languages remain stored and use plain highlighting. No formatter, execution or variable interpolation is added.

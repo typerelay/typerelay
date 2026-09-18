@@ -75,7 +75,7 @@ Login follows Streamient/Mailtwine: password, Magic Link, Passkey, forgot-passwo
 - `GET/DELETE /api/v2/security/passkeys/:id`: render/remove an owned passkey.
 
 Security mutations and email-change requests require a browser sign-in within the last 15 minutes. Desktop tokens cannot authorize these mutations. Existing sessions without a recent authentication timestamp must sign out and back in.
-WebAuthn binds credentials to the configured `ORIGIN` and its hostname; remote sites require HTTPS. The local browser preview uses `http://localhost:3040`.
+WebAuthn binds credentials to the configured `APP_URL` and its hostname; remote sites require HTTPS. The local browser preview uses `http://localhost:3040`.
 
 The top-right initials avatar opens Settings, Help and Sign out. Profile saves preserve the settings panel, update only the avatar and current member row, and retain input focus.
 
@@ -89,7 +89,7 @@ The navbar search trigger opens a modal with `/`, Ctrl+K or Cmd+K. Slash is igno
 
 ## Trash and protocol transition
 
-/api/v1 returns 426 with protocol:2. Sync replies contain protocol:2, changed library metadata/records, accessible IDs, content-free tombstones, conflicts and Trash metadata.
+/api/v1 returns 426 with protocol 6. Sync replies contain protocol 6, changed library metadata/records, rich-text asset manifests, accessible IDs, content-free tombstones, conflicts and Trash metadata.
 Web presentation replace fields alias content.text; only the content envelope is stored.
 
 - GET /api/v2/trash: permitted, unexpired items and Pug fragments with can_restore/can_purge.
@@ -102,7 +102,7 @@ Ordinary deletion means Move to Trash. Restoring a library preserves independent
 Purge is creator/admin-only for shared libraries; private Trash remains creator-only.
 Restores validate active uniqueness/limits. Expired records cannot restore; cleanup runs hourly and on startup.
 
-Web abbreviation forms display a static comma prefix. Leading commas typed or pasted into the abbreviation are stripped by shared client/server normalization; stored abbreviations remain bare.
+Web abbreviation forms display a static semicolon prefix. Leading semicolons or legacy commas typed or pasted into the abbreviation are stripped by shared client/server normalization; stored abbreviations remain bare.
 
 ## Bulk selection and moves
 
@@ -112,8 +112,8 @@ Both libraries must be active, in the same account, and editable by the actor. M
 The transaction preserves IDs and relative order, appends to the destination, updates both library revisions/change events, and rejects the whole batch on stale selection or duplicates.
 Replies include libraries and item-level Pug updates; receipts retain IDs only.
 
-Desktop bearer requests now require X-TypeRelay-Sync-Protocol: 3. Older clients receive 426 before reads/writes; browser session routes remain v2.
-Sync responses use protocol:3 and include content-free source departure IDs, filtered to readable libraries. Stale source edits cannot recreate moved records.
+Desktop bearer requests require `X-TypeRelay-Sync-Protocol: 6`. Older clients receive 426 before reads/writes; browser session routes remain v2.
+Sync responses use protocol 6 and include content-free source departure IDs plus asset metadata, filtered to readable libraries. Stale source edits cannot recreate moved records. Image bytes use separate authenticated, hash-addressed transfers and never appear in library JSON.
 SQLite retains canonical server bases for pending projections; these bases are scrubbed on purge/revocation and cleared on disconnect.
 
 Web checkboxes support Select all/Deselect all and Shift+click ranges. The action bar appears for nonempty selection.

@@ -1,0 +1,25 @@
+form#fill-form
+	header.modal-header
+		button.flow-back(type="button" data-bs-dismiss="modal" aria-label="Back")
+			span.material-symbols-outlined arrow_back
+		div
+			span.eyebrow Use snippet
+			h2.modal-title= snippet.title || snippet.trigger || 'Untitled snippet'
+		span
+	.modal-body
+		each name in rendered.fields
+			- var definition = variables[name] || {}
+			label.mobile-field(for='answer-'+name)
+				span= definition.label || name
+				textarea(id='answer-'+name name=name rows=definition.multiline ? 3 : 1 required=definition.required)= definition.default || ''
+		span.eyebrow Preview
+		pre#insert-preview= rendered.text
+		if rendered.enter_actions
+			p.settings-note This snippet contains desktop Enter actions. Mobile cannot execute these actions. Edit the snippet before using it.
+		p.settings-note Formatting depends on the destination app. iOS keyboard insertion uses plain text.
+	.modal-footer.drawer-actions
+		if canEdit
+			button.secondary-button#edit-from-detail(type="button") Edit
+		.drawer-action-group
+			button.secondary-button(type="button" data-bs-dismiss="modal") Cancel
+			button.primary-button(type="submit" disabled=!!rendered.enter_actions) Copy snippet

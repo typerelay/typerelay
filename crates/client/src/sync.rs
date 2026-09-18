@@ -5,12 +5,12 @@ use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, fs, io::{Read, Write}, net::TcpListener, path::{Path, PathBuf}, time::{Duration, Instant}};
+use std::{collections::BTreeMap, fs, io::{ErrorKind, Read, Write}, net::{TcpListener, TcpStream}, path::{Path, PathBuf}, time::{Duration, Instant}};
 use uuid::Uuid;
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Credentials { pub server: String, pub access_token: String, pub refresh_token: String }
 #[derive(Debug)]
-struct ServerError { status: u16, message: String }
+pub struct ServerError { pub status: u16, message: String }
 impl std::fmt::Display for ServerError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(formatter, "Server {}: {}", self.status, self.message) }
 }
@@ -27,8 +27,13 @@ impl Sync {
     pub fn new(root: PathBuf, directory: PathBuf) -> Result<Self> {
         fs::create_dir_all(root.join("sync"))?;
         fs::create_dir_all(&directory)?;
-        Ok(Self { root, directory, client: reqwest::blocking::Client::builder().timeout(Duration::from_secs(15)).redirect(reqwest::redirect::Policy::none()).build()? })
+        let mut builder=reqwest::blocking::Client::builder().timeout(Duration::from_secs(15)).redirect(reqwest::redirect::Policy::none());
+        #[cfg(target_os="linux")]
+        if let Some(home)=std::env::var_os("HOME"){let database=PathBuf::from(home).join(".pki/nssdb");let certutil=Path::new("/usr/bin/certutil");if database.is_dir()&&certutil.is_file(){let database=format!("sql:{}",database.display());if let Ok(output)=std::process::Command::new(certutil).args(["-L","-d",&database]).output(){for nickname in Self::trusted_nss_nicknames(&String::from_utf8_lossy(&output.stdout)).into_iter().take(64){if let Ok(output)=std::process::Command::new(certutil).args(["-L","-d",&database,"-n",&nickname,"-a"]).output()&&output.status.success()&&let Ok(certificate)=reqwest::Certificate::from_pem(&output.stdout){builder=builder.add_root_certificate(certificate);}}}}}
+        Ok(Self { root, directory, client: builder.build()? })
     }
+    #[cfg(target_os="linux")]
+    fn trusted_nss_nicknames(list:&str)->Vec<String>{list.lines().filter_map(|line|{let line=line.trim();let(index,trust)=line.char_indices().rev().find(|(_,character)|character.is_whitespace()).map(|(index,_)|(index,line[index..].trim()))?;if trust.split(',').next().is_some_and(|flags|flags.contains('C')){Some(line[..index].trim().into())}else{None}}).collect()}
     fn path(&self, name: &str) -> PathBuf { self.root.join("sync").join(name) }
     fn lock(&self) -> Result<fs::File> {
         let file = fs::OpenOptions::new().create(true).truncate(false).read(true).write(true).open(self.path("worker.lock"))?;
@@ -44,16 +49,27 @@ impl Sync {
     fn response(response: reqwest::blocking::Response) -> Result<Value> {
         let status = response.status();
         let value: Value = response.json()?;
-        if !status.is_success() { return Err(ServerError { status: status.as_u16(), message: value["error"].as_str().unwrap_or("Request failed").into() }.into()); }
+        if !status.is_success() { return Err(ServerError { status: status.as_u16(), message: if status.as_u16()==426 {"Server and client versions must match: rich text requires sync protocol 6".into()}else{value["error"].as_str().unwrap_or("Request failed").into()} }.into()); }
         Ok(value)
+    }
+    fn callback(stream: &mut TcpStream, state: &str, timeout: Duration) -> Result<Option<BTreeMap<String, String>>> {
+        stream.set_read_timeout(Some(timeout))?;
+        let mut buffer = [0u8; 8192];
+        let length = match stream.read(&mut buffer) { Ok(0) => return Ok(None), Ok(length) => length, Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => return Ok(None), Err(error) => return Err(error.into()) };
+        let Ok(request) = std::str::from_utf8(&buffer[..length]) else { return Ok(None); };
+        let target = request.lines().next().unwrap_or("").split_whitespace().nth(1).unwrap_or("/");
+        let Ok(callback) = url::Url::parse(&format!("http://127.0.0.1{target}")) else { return Ok(None); };
+        let params: BTreeMap<_, _> = callback.query_pairs().into_owned().collect();
+        if callback.path() != "/callback" || params.get("state").map(String::as_str) != Some(state) { let _ = stream.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"); return Ok(None); }
+        Ok(Some(params))
     }
     fn request(&self, credentials: &mut Credentials, method: reqwest::Method, path: &str, body: Option<&Value>) -> Result<Value> {
         let send = |credentials: &Credentials| {
-            let request = self.client.request(method.clone(), format!("{}/api/v2/{path}", credentials.server)).bearer_auth(&credentials.access_token).header("X-TypeRelay-Sync-Protocol", "4");
+            let request = self.client.request(method.clone(), format!("{}/api/v2/{path}", credentials.server)).bearer_auth(&credentials.access_token).header("X-TypeRelay-Sync-Protocol", "6");
             if let Some(body) = body { request.json(body).send() } else { request.send() }
         };
         let mut response = send(credentials)?;
-        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED && !credentials.refresh_token.is_empty() {
             let tokens = Self::response(self.client.post(format!("{}/oauth/token", credentials.server)).json(&json!({"grant_type":"refresh_token","refresh_token":credentials.refresh_token})).send()?)?;
             credentials.access_token = tokens["access_token"].as_str().context("Missing access token")?.into();
             credentials.refresh_token = tokens["refresh_token"].as_str().context("Missing refresh token")?.into();
@@ -62,21 +78,46 @@ impl Sync {
         }
         Self::response(response)
     }
-    pub fn connect(&self, server: &str, open_browser: bool) -> Result<()> {
+	fn asset_request(&self,credentials:&Credentials,method:reqwest::Method,id:&str,mime:Option<&str>,body:Option<Vec<u8>>)->Result<reqwest::blocking::Response>{
+		let mut request=self.client.request(method,format!("{}/api/v2/assets/{id}",credentials.server)).bearer_auth(&credentials.access_token).header("X-TypeRelay-Sync-Protocol","6");
+		if let Some(mime)=mime{request=request.header(reqwest::header::CONTENT_TYPE,mime);}
+		if let Some(body)=body{request=request.body(body);}
+		let response=request.send()?;
+		if !response.status().is_success(){let status=response.status();let message=response.text().unwrap_or_default();return Err(ServerError{status:status.as_u16(),message:serde_json::from_str::<Value>(&message).ok().and_then(|value|value["error"].as_str().map(str::to_owned)).unwrap_or_else(||"Asset transfer failed".into())}.into());}
+		Ok(response)
+	}
+	pub fn download_asset(&self, credentials: &Credentials, db: &Database, metadata: &Value) -> Result<()> {
+        let id = metadata["id"].as_str().context("Missing asset ID")?;
+        ensure!(id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit()), "Invalid asset ID");
+        if db.asset(id)?.is_some() { return Ok(()); }
+        let size = metadata["size"].as_u64().context("Missing asset size")?;
+        ensure!(size > 0 && size <= 2 * 1048576, "Invalid asset size");
+        let mut bytes = Vec::new();
+        self.asset_request(credentials, reqwest::Method::GET, id, None, None)?.take(2 * 1048576 + 1).read_to_end(&mut bytes)?;
+        ensure!(bytes.len() == size as usize, "Asset size mismatch");
+        ensure!(format!("{:x}", Sha256::digest(&bytes)) == id, "Asset hash mismatch");
+        db.put_asset(metadata, &bytes, true)
+    }
+    fn download_assets(&self, credentials: &Credentials, db: &Database, response: &Value) -> Result<()> { for metadata in response["assets"].as_array().into_iter().flatten() { self.download_asset(credentials, db, metadata)?; } Ok(()) }
+
+	fn upload_assets(&self,credentials:&Credentials,db:&Database)->Result<()> {for (metadata,bytes) in db.pending_assets()?{let id=metadata["id"].as_str().context("Missing asset ID")?;self.asset_request(credentials,reqwest::Method::PUT,id,metadata["mime_type"].as_str(),Some(bytes))?;db.mark_asset_uploaded(id)?;}Ok(())}
+    pub fn connect(&self, server: &str, open_browser: bool, app_callback: bool) -> Result<()> {
         let _lock = self.lock()?;
         ensure!(!self.path("credentials.json").exists(), "Already connected; disconnect before changing accounts");
         let server = server.trim_end_matches('/');
         let url = url::Url::parse(server)?;
         ensure!(url.scheme() == "https" || (url.scheme() == "http" && matches!(url.host_str(), Some("localhost" | "127.0.0.1"))), "Use HTTPS (HTTP is permitted only on loopback)");
         ensure!(url.path() == "/" && url.query().is_none() && url.fragment().is_none() && url.username().is_empty(), "Use the server origin without a path or credentials");
-        let listener = TcpListener::bind("127.0.0.1:0")?;
-        listener.set_nonblocking(true)?;
-        let redirect = format!("http://127.0.0.1:{}/callback", listener.local_addr()?.port());
+        let mut settings = crate::settings::SettingsStore::open(self.root.join("settings.yml"))?; let prefix=settings.settings.trigger_prefix.clone();settings.save(server,&prefix)?;
+        let listener = if app_callback { None } else { let listener = TcpListener::bind("127.0.0.1:0")?; listener.set_nonblocking(true)?; Some(listener) };
+        let redirect = listener.as_ref().map(|listener|format!("http://127.0.0.1:{}/callback",listener.local_addr().unwrap().port())).unwrap_or_else(||"typerelay://oauth/callback".into());
+        let callback_path = self.path("oauth-callback"); let _ = fs::remove_file(&callback_path);
         let verifier = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
         let state = Uuid::new_v4().simple().to_string();
         let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
         let mut authorize = url::Url::parse(&format!("{server}/oauth/authorize"))?;
-        authorize.query_pairs_mut().extend_pairs([("client_id", "typerelay-desktop"), ("redirect_uri", &redirect), ("code_challenge", &challenge), ("code_challenge_method", "S256"), ("state", &state), ("device_name", "TypeRelay desktop")]);
+        authorize.query_pairs_mut().extend_pairs([("client_id", "typerelay-desktop"), ("redirect_uri", &redirect), ("code_challenge", &challenge), ("code_challenge_method", "S256"), ("state", &state), ("device_name", if app_callback { "TypeRelay desktop" } else { "TypeRelay CLI / TUI" }), ("client_type", if app_callback { "desktop" } else { "cli" })]);
+        if matches!(std::env::consts::OS, "macos" | "windows" | "linux") { authorize.query_pairs_mut().append_pair("os", std::env::consts::OS); }
         println!("Open this URL in your browser:\n{authorize}");
         #[cfg(target_os = "linux")] { if open_browser { let _ = std::process::Command::new("xdg-open").arg(authorize.as_str()).spawn(); } }
         #[cfg(target_os = "macos")] { if open_browser { std::process::Command::new("open").arg(authorize.as_str()).spawn()?; } }
@@ -84,20 +125,19 @@ impl Sync {
         let deadline = Instant::now() + Duration::from_secs(300);
         loop {
             ensure!(Instant::now() < deadline, "Browser sign-in timed out");
+            if app_callback && let Ok(callback) = fs::read_to_string(&callback_path) {
+                let _ = fs::remove_file(&callback_path); let callback = url::Url::parse(&callback)?;
+                ensure!(callback.scheme()=="typerelay"&&callback.host_str()==Some("oauth")&&callback.path()=="/callback","Invalid desktop callback");
+                let params:BTreeMap<_,_>=callback.query_pairs().into_owned().collect();
+                ensure!(params.get("state")==Some(&state),"Invalid desktop callback state");
+                let tokens = Self::response(self.client.post(format!("{server}/oauth/token")).json(&json!({"grant_type":"authorization_code","client_id":"typerelay-desktop","code":params.get("code"),"redirect_uri":redirect,"code_verifier":verifier})).send()?)?;
+                self.secret(&Credentials { server: server.into(), access_token: tokens["access_token"].as_str().context("Missing token")?.into(), refresh_token: tokens["refresh_token"].as_str().context("Missing token")?.into() })?;return Ok(());
+            }
+            let Some(listener)=&listener else {std::thread::sleep(Duration::from_millis(100));continue;};
             match listener.accept() {
                 Ok((mut stream, _)) => {
-                    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
-                    let mut buffer = [0u8; 8192];
-                    let length = stream.read(&mut buffer)?;
-                    let request = std::str::from_utf8(&buffer[..length])?;
-                    let target = request.lines().next().unwrap_or("").split_whitespace().nth(1).unwrap_or("/");
-                    let callback = url::Url::parse(&format!("http://127.0.0.1{target}"))?;
-                    let params: BTreeMap<_, _> = callback.query_pairs().into_owned().collect();
-                    if callback.path() != "/callback" || params.get("state") != Some(&state) { let _ = stream.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"); continue; }
+                    let Some(params) = Self::callback(&mut stream, &state, Duration::from_secs(2))? else { continue; };
                     let tokens = Self::response(self.client.post(format!("{server}/oauth/token")).json(&json!({"grant_type":"authorization_code","client_id":"typerelay-desktop","code":params.get("code"),"redirect_uri":redirect,"code_verifier":verifier})).send()?)?;
-                    let mut settings = crate::settings::SettingsStore::open(self.root.join("settings.yml"))?;
-                    let prefix = settings.settings.trigger_prefix.clone();
-                    settings.save(server, &prefix)?;
                     self.secret(&Credentials { server: server.into(), access_token: tokens["access_token"].as_str().context("Missing token")?.into(), refresh_token: tokens["refresh_token"].as_str().context("Missing token")?.into() })?;
                     stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 37\r\nConnection: close\r\n\r\nTypeRelay connected. Close this tab.\n")?;
                     println!("Connected. Enroll selected files with: typerelay enroll FILE.yml");
@@ -108,6 +148,7 @@ impl Sync {
             }
         }
     }
+    pub fn receive_callback(root:&Path,url:&str)->Result<bool>{let callback=url::Url::parse(url)?;if callback.scheme()!="typerelay"||callback.host_str()!=Some("oauth")||callback.path()!="/callback"{return Ok(false);}fs::create_dir_all(root.join("sync"))?;Paths::atomic_write(&root.join("sync/oauth-callback"),url.as_bytes(),false)?;Ok(true)}
     pub fn enroll(&self, name: &str) -> Result<()> {
         let _lock = self.lock()?;
         self.credentials()?;
@@ -135,19 +176,29 @@ impl Sync {
     }
     pub fn cycle(&self) -> Result<()> {
         let _lock = self.lock()?;
+        let mut credentials = self.credentials()?;
+        self.cycle_inner(&mut credentials)
+    }
+    /// Mobile supplies an access token only. Refresh and credential persistence remain in native secure storage.
+    pub fn cycle_authenticated(&self, credentials: &mut Credentials) -> Result<()> {
+        let _lock = self.lock()?;
+        self.cycle_inner(credentials)
+    }
+    fn cycle_inner(&self, credentials: &mut Credentials) -> Result<()> {
         let db = Database::open(&self.directory)?;
         db.cleanup()?;
-        let mut credentials = self.credentials()?;
-        self.legacy(&mut credentials, &db)?;
-        let cursor = if db.pending()?.is_empty() && db.meta("sync_protocol")? == Some(json!(4)) { db.meta("cursor")?.and_then(|value| value.as_u64()).unwrap_or(0) } else { 0 };
-        let response = self.request(&mut credentials, reqwest::Method::GET, &format!("sync?cursor={cursor}"), None)?;
-        ensure!(response["protocol"] == 4, "Server upgrade required: sync protocol 4");
+        self.legacy(credentials, &db)?;
+        let cursor = if db.pending()?.is_empty() && db.meta("sync_protocol")? == Some(json!(6)) { db.meta("cursor")?.and_then(|value| value.as_u64()).unwrap_or(0) } else { 0 };
+        let response = self.request(credentials, reqwest::Method::GET, &format!("sync?cursor={cursor}"), None)?;
+        ensure!(response["protocol"] == 6, "Server upgrade required: sync protocol 6");
+		self.download_assets(&credentials,&db,&response)?;
         db.apply(&response, None)?;
-        db.set_meta("sync_protocol", &json!(4))?;
+        db.set_meta("sync_protocol", &json!(6))?;
+		self.upload_assets(&credentials,&db)?;
         while let Some((seq, operation)) = db.pending()?.into_iter().next() {
             let id = operation["library"].as_str().context("Missing library")?;
-            let path = match operation["kind"].as_str() { Some("create") => "libraries".to_owned(), Some("edit") => format!("libraries/{id}/snippets"), Some("trash") => "trash/action".into(), Some("batch") => "snippets/batch".into(), _ => anyhow::bail!("Unknown pending operation") };
-            let result = self.request(&mut credentials, reqwest::Method::POST, &path, Some(&operation["body"]));
+            let path = match operation["kind"].as_str() { Some("create") => "libraries".to_owned(), Some("edit") => format!("libraries/{id}/snippets"), Some("trash") => "trash/action".into(), Some("batch") => "snippets/batch".into(), Some("resolve") => format!("conflicts/{}", operation["conflict"].as_str().context("Missing conflict")?), _ => anyhow::bail!("Unknown pending operation") };
+            let result = self.request(credentials, reqwest::Method::POST, &path, Some(&operation["body"]));
             match result {
                 Ok(result) => db.apply(&result, Some((seq, &operation)))?,
                 Err(error) => {
@@ -160,22 +211,21 @@ impl Sync {
                         db.set_meta("last_failure", &json!(message))?;
                         transaction.commit()?;
                         // Full refresh rolls back rejected optimistic moves on both sides.
-                        let fresh = self.request(&mut credentials, reqwest::Method::GET, "sync?cursor=0", None)?;
+                        let fresh = self.request(credentials, reqwest::Method::GET, "sync?cursor=0", None)?;
                         db.apply(&fresh, None)?;
                     } else { return Err(error); }
                 }
             }
         }
-        let cursor = if db.pending()?.is_empty() && db.meta("sync_protocol")? == Some(json!(4)) { db.meta("cursor")?.and_then(|value| value.as_u64()).unwrap_or(0) } else { 0 };
-        db.apply(&self.request(&mut credentials, reqwest::Method::GET, &format!("sync?cursor={cursor}"), None)?, None)?;
+        let cursor = if db.pending()?.is_empty() && db.meta("sync_protocol")? == Some(json!(6)) { db.meta("cursor")?.and_then(|value| value.as_u64()).unwrap_or(0) } else { 0 };
+		let response=self.request(credentials,reqwest::Method::GET,&format!("sync?cursor={cursor}"),None)?;self.download_assets(&credentials,&db,&response)?;db.apply(&response,None)?;
         let conflicts = db.meta("conflicts")?.and_then(|value|value.as_array().map(Vec::len)).unwrap_or(0);
         Paths::atomic_write(&self.path("status"), format!("Synced. {conflicts} conflicts. {} Resolve: {}/", db.meta("last_failure")?.and_then(|value|value.as_str().map(str::to_owned)).unwrap_or_default(), credentials.server).as_bytes(), false)?;
         Ok(())
     }
     pub fn disconnect(&self) -> Result<()> {
         let _lock = self.lock()?;
-        let mut credentials = self.credentials()?;
-        self.request(&mut credentials, reqwest::Method::DELETE, "connection", None)?;
+        if let Ok(mut credentials)=self.credentials(){let _=self.request(&mut credentials,reqwest::Method::DELETE,"connection",None);}
         let db = Database::open(&self.directory)?;
         let transaction = db.connection.unchecked_transaction()?;
         db.connection.execute("UPDATE libraries SET synced=0", [])?;
@@ -183,7 +233,7 @@ impl Sync {
         for (seq, operation) in db.pending()? { db.recover_operation(&operation)?; db.connection.execute("DELETE FROM outbox WHERE seq=?1", [seq])?; }
         db.set_meta("cursor", &json!(0))?;
         transaction.commit()?;
-        fs::remove_file(self.path("credentials.json"))?;
+        match fs::remove_file(self.path("credentials.json")){Ok(())=>(),Err(error)if error.kind()==ErrorKind::NotFound=>(),Err(error)=>return Err(error.into())}
         Ok(())
     }
     pub fn editable(_root: &Path, directory: &Path, name: &str) -> Result<()> { let db = Database::open(directory)?; db.editable(&db.editor(name)?.id) }
@@ -225,5 +275,36 @@ mod tests {
         assert!(!ServerError::rejected(&anyhow::anyhow!("connection refused at http://127.0.0.1:40901"), true));
         assert!(!ServerError::rejected(&ServerError { status: 503, message: "Try again".into() }.into(), true));
         assert!(ServerError::rejected(&ServerError { status: 409, message: "Selection changed".into() }.into(), true));
+    }
+    #[test]
+    fn disconnect_succeeds_when_server_is_unavailable() {
+        let root = tempfile::tempdir().unwrap(); let directory = root.path().join("snippets");
+        let sync = Sync::new(root.path().into(), directory.clone()).unwrap();
+        sync.secret(&Credentials { server: "http://127.0.0.1:9".into(), access_token: "offline".into(), refresh_token: "offline".into() }).unwrap();
+        Database::open(&directory).unwrap().set_meta("cursor", &json!(42)).unwrap();
+        sync.disconnect().unwrap();
+        assert!(!root.path().join("sync/credentials.json").exists());
+        assert_eq!(Database::open(&directory).unwrap().meta("cursor").unwrap(), Some(json!(0)));
+        sync.disconnect().unwrap();
+    }
+    #[test]
+    fn idle_browser_connection_does_not_cancel_callback_listener() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let _client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut stream, _) = listener.accept().unwrap();
+        assert_eq!(Sync::callback(&mut stream, "expected", Duration::from_millis(10)).unwrap(), None);
+    }
+    #[test]
+    fn registered_app_callback_is_validated_before_delivery() {
+        let root=tempfile::tempdir().unwrap();
+        assert!(!Sync::receive_callback(root.path(),"https://example.test/callback?code=x").unwrap());
+        assert!(Sync::receive_callback(root.path(),"typerelay://oauth/callback?code=x&state=y").unwrap());
+        assert_eq!(fs::read_to_string(root.path().join("sync/oauth-callback")).unwrap(),"typerelay://oauth/callback?code=x&state=y");
+    }
+    #[cfg(target_os="linux")]
+    #[test]
+    fn only_ssl_trusted_nss_certificates_are_loaded() {
+        let list="Certificate Nickname  Trust Attributes\n\nDBH Caddy Local Authority  C,,\nEmail only  ,C,\nUntrusted  ,,,\n";
+        assert_eq!(Sync::trusted_nss_nicknames(list),vec!["DBH Caddy Local Authority"]);
     }
 }

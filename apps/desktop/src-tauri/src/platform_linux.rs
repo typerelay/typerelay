@@ -28,3 +28,5 @@ impl Target {
     pub fn focused(&self) -> Result<bool> { let window = Hyprland::query("activewindow")?; Ok(window["address"] == self.address && window["pid"] == self.pid && Self::start(self.pid).ok().as_ref() == Some(&self.start)) }
 }
 pub fn fallback_allowed()->bool { Hyprland::query("activewindow").is_ok_and(|window|window["pid"] == std::process::id()) }
+pub fn open_url(url:&str)->Result<()> { std::process::Command::new("xdg-open").arg(url).spawn().context("Could not open the TypeRelay web app")?;Ok(()) }
+pub fn open_tui()->Result<()> { let executable=std::env::current_exe()?.with_file_name("typerelay-tui");ensure!(executable.is_file(),"TypeRelay TUI is missing from this installation");std::process::Command::new("foot").args(["--app-id=com.typerelay.tui","--title=TypeRelay TUI"]).arg(executable).spawn().context("Could not open TypeRelay TUI")?;Ok(()) }

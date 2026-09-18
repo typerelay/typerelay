@@ -1,0 +1,11 @@
+doctype html
+html(lang="en")
+	head
+		meta(charset="utf-8")
+		meta(http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'")
+		title Email preview
+	body
+		if message.html
+			!= message.html
+		else
+			pre= message.text

@@ -1,0 +1,15 @@
+include ../../mixins/product_updates
+
+#product-updates-news(data-latest-update-id=product_updates.latest_update_id data-next-cursor=product_updates.next_cursor)
+	.d-flex.flex-wrap.gap-3.justify-content-between.align-items-center.mb-5
+		h1.mb-0 What's new
+		span.text-muted Product updates from TypeRelay
+	#product-updates-list
+		each update in product_updates.updates
+			+productUpdateCard(update)
+	if !product_updates.updates.length
+		.card.mb-5
+			.card-body.text-center.text-muted No product updates yet.
+	button.btn.btn-sm.btn-outline-secondary.product-updates-load-more(type="button" class=(!product_updates.next_cursor ? 'd-none' : '') data-product-updates-load-more)
+		.spinner-border.spinner-border-sm.me-2.d-none(data-product-updates-spinner)
+		span Load more

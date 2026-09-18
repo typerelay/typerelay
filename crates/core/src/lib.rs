@@ -1,4 +1,6 @@
 //! Platform-independent matching. Neither keyboard devices nor snippet sources live here.
+pub mod template;
+pub mod rich_text;
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -10,6 +12,7 @@ pub struct Snippet {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Snapshot {
     snippets: BTreeMap<String, Snippet>,
+    templates: BTreeMap<String, TemplateExpansion>,
 }
 
 impl Snapshot {
@@ -28,9 +31,12 @@ impl Snapshot {
                 return Err("Duplicate trigger".into());
             }
         }
-        Ok(Self { snippets: indexed })
+        Ok(Self { snippets: indexed, templates: BTreeMap::new() })
     }
 
+    pub fn set_template(&mut self, abbreviation: &str, template: template::Template) -> Result<(), String> { let template=template.normalize()?; let prompted=!template.fields()?.is_empty(); self.templates.insert(abbreviation.into(), TemplateExpansion { abbreviation: abbreviation.into(), identity: None, prompted, rich:false }); Ok(()) }
+    pub fn set_rich(&mut self, abbreviation: &str, prompted: bool) { self.templates.insert(abbreviation.into(), TemplateExpansion { abbreviation: abbreviation.into(), identity: None, prompted, rich:true }); }
+    pub fn identify(&mut self, abbreviation: &str, identity: Identity) { if let Some(template) = self.templates.get_mut(abbreviation) { template.identity = Some(identity); } }
     pub fn len(&self) -> usize { self.snippets.len() }
     pub fn is_empty(&self) -> bool { self.snippets.is_empty() }
 }
@@ -38,8 +44,13 @@ impl Snapshot {
 #[derive(Debug, Clone, Copy)]
 pub enum Input { Character(char), Backspace, Space, Cancel }
 
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Identity { pub id: String, pub library: String, pub revision: i64 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TemplateExpansion { pub prompted: bool, pub rich: bool, pub abbreviation: String, pub identity: Option<Identity> }
 #[derive(Debug, PartialEq, Eq)]
 pub struct Expansion {
+    pub template: Option<TemplateExpansion>,
     pub erase: usize,
     pub text: String,
 }
@@ -55,7 +66,7 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub const DEFAULT_PREFIX: char = ',';
+    pub const DEFAULT_PREFIX: char = ';';
     pub fn new(snapshot: Snapshot) -> Self { Self { snapshot, pending: String::new(), prefix: Self::DEFAULT_PREFIX } }
 
     pub fn validate_prefix(value: &str) -> Result<char, String> {
@@ -83,7 +94,7 @@ impl Engine {
             Input::Cancel => self.pending.clear(),
             Input::Backspace => { self.pending.pop(); }
             Input::Space => {
-                let expansion = self.pending.strip_prefix(self.prefix).and_then(|abbreviation| self.snapshot.snippets.get(abbreviation)).map(|s| Expansion { erase: self.pending.len(), text: s.replacement.clone() });
+                let expansion = self.pending.strip_prefix(self.prefix).and_then(|abbreviation| self.snapshot.snippets.get(abbreviation)).map(|s| Expansion { template: self.snapshot.templates.get(&s.trigger).cloned(), erase: self.pending.len(), text: s.replacement.clone() });
                 self.pending.clear();
                 return expansion;
             }
@@ -113,22 +124,24 @@ mod tests {
     #[test]
     fn waits_for_space_and_allows_overlap() {
         let mut engine = Engine::new(Fixture::snapshot());
-        Fixture::type_text(&mut engine, ",brbmore");
-        assert_eq!(engine.feed(Input::Space), Some(Expansion { erase: 8, text: "Later".into() }));
+        Fixture::type_text(&mut engine, ";brbmore");
+        assert_eq!(engine.feed(Input::Space), Some(Expansion { template: None, erase: 8, text: "Later".into() }));
+        Fixture::type_text(&mut engine, ";brb");
+        assert_eq!(engine.feed(Input::Space), Some(Expansion { template: None, erase: 4, text: "Be right back.".into() }));
         assert_eq!(engine.feed(Input::Space), None);
     }
     #[test]
     fn edits_and_cancellation() {
         let mut engine = Engine::new(Fixture::snapshot());
-        Fixture::type_text(&mut engine, ",brbm");
+        Fixture::type_text(&mut engine, ";brbm");
         engine.feed(Input::Backspace);
         assert_eq!(engine.feed(Input::Space).unwrap().erase, 4);
-        Fixture::type_text(&mut engine, ",brb");
+        Fixture::type_text(&mut engine, ";brb");
         engine.feed(Input::Cancel);
         assert_eq!(engine.feed(Input::Space), None);
-        Fixture::type_text(&mut engine, "ordinary,unknown");
+        Fixture::type_text(&mut engine, "ordinary;unknown");
         assert_eq!(engine.feed(Input::Space), None);
-        Fixture::type_text(&mut engine, ",brx");
+        Fixture::type_text(&mut engine, ";brx");
         engine.feed(Input::Backspace);
         engine.feed(Input::Character('b'));
         assert!(engine.feed(Input::Space).is_some());
@@ -136,22 +149,22 @@ mod tests {
     #[test]
     fn snapshot_swap_cancels_partial_trigger() {
         let mut engine = Engine::new(Fixture::snapshot());
-        Fixture::type_text(&mut engine, ",brb");
+        Fixture::type_text(&mut engine, ";brb");
         engine.replace_snapshot(Snapshot::new(vec![]).unwrap());
         assert_eq!(engine.feed(Input::Space), None);
     }
     #[test]
     fn prefix_changes_do_not_change_snippets_and_cancel_pending_matches() {
         let mut engine = Engine::new(Fixture::snapshot());
-        Fixture::type_text(&mut engine, ",brb");
-        engine.set_prefix(";").unwrap();
-        assert!(engine.feed(Input::Space).is_none());
-        Fixture::type_text(&mut engine, ",brb");
+        Fixture::type_text(&mut engine, ";brb");
+        engine.set_prefix(",").unwrap();
         assert!(engine.feed(Input::Space).is_none());
         Fixture::type_text(&mut engine, ";brb");
-        assert_eq!(engine.feed(Input::Space).unwrap(), Expansion { erase: 4, text: "Be right back.".into() });
+        assert!(engine.feed(Input::Space).is_none());
+        Fixture::type_text(&mut engine, ",brb");
+        assert_eq!(engine.feed(Input::Space).unwrap(), Expansion { template: None, erase: 4, text: "Be right back.".into() });
         for prefix in ["", "::", "a", "-", " ", ":"] { assert!(engine.set_prefix(prefix).is_err()); }
-        assert_eq!(engine.prefix(), ';');
+        assert_eq!(engine.prefix(), ',');
     }
     #[test]
     fn rejects_unsafe_or_ambiguous_configuration() {
@@ -167,7 +180,7 @@ mod tests {
         let text = "Sincerely,\r\nNitai\r\nCeo & Founder\r\n\r\n\tCafé\n";
         let snapshot = Snapshot::new(vec![Snippet { trigger: "naf".into(), replacement: text.into() }]).unwrap();
         let mut engine = Engine::new(snapshot);
-        Fixture::type_text(&mut engine, ",naf");
+        Fixture::type_text(&mut engine, ";naf");
         let expansion = engine.feed(Input::Space).unwrap();
         assert_eq!(expansion.text, "Sincerely,\nNitai\nCeo & Founder\n\n\tCafé\n");
         assert!(expansion.requires_paste());
@@ -176,8 +189,8 @@ mod tests {
 
     #[test]
     fn long_paragraphs_use_paste_and_short_text_stays_native() {
-        assert!(Expansion { erase: 4, text: "a".repeat(600) }.requires_paste());
-        assert!(!Expansion { erase: 4, text: "Be right back.".into() }.requires_paste());
+        assert!(Expansion { template: None, erase: 4, text: "a".repeat(600) }.requires_paste());
+        assert!(!Expansion { template: None, erase: 4, text: "Be right back.".into() }.requires_paste());
         assert!(Snapshot::new(vec![Snippet { trigger: "long".into(), replacement: "a".repeat(65536) }]).is_ok());
         assert!(Snapshot::new(vec![Snippet { trigger: "long".into(), replacement: "a".repeat(65537) }]).is_err());
     }

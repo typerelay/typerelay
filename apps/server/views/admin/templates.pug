@@ -1,0 +1,14 @@
+extends layout
+include navigation
+block content
+	h1.mb-5 Email Templates
+	.row.align-items-start(data-admin-panels="templates")
+		.col-md-3.col-lg-2
+			+panelNavigation('templates', templates)
+		.col-md-9.col-lg-10.admin-section-content
+			each template, index in templates
+				section(id='templates-panel-' + template.key role="tabpanel" aria-labelledby='templates-nav-' + template.key data-admin-panel-content=template.key hidden=index !== 0)
+					h2.mb-3= template.name
+					p.text-muted.mb-5 HTML email with a plain-text fallback. Links and expiration remain managed by Type Relay.
+					- const inline = true
+					include ../ajax/admin-template-form

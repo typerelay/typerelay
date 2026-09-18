@@ -1,37 +1,14 @@
-# TypeRelay
+# TypeRelay documentation
 
-TypeRelay provides text expansion, offline snippet editing and team synchronization.
-The current keyboard adapter supports Omarchy/Hyprland on Linux with a US layout.
+Start with the repository [README](../README.md) for the project overview, installation, development and contribution workflow.
 
-Use typerelay-tui to create libraries, edit snippets and manage Trash. The web app adds account/team management, sharing and conflict resolution.
-Type a prefix plus abbreviation, then Space to expand; the default prefix is a comma.
+User and integration documentation is organized under:
 
-## Storage and setup
+- [Guide](guide/index.md) — first use, accounts, teams, sharing, snippets, sync, imports and Trash
+- [Desktop](desktop/index.md)
+- [CLI and TUI](cli/index.md)
+- [Self-hosting](selfhosted/index.md)
+- [MCP](mcp/index.md)
+- [API](api/index.md)
 
-- Server: MongoDB library documents and individual snippet documents.
-- Desktop: SQLite at ~/.config/typerelay/snippets/typerelay.sqlite.
-- YAML: import/export only. Editing an exported file does not change stored snippets.
-- Settings: ~/.config/typerelay/settings.yml; the prefix is local to each machine.
-
-See [installation](INSTALLATION.md), [TUI](TUI.md) and [storage/migration](web/development.md).
-
-Development app: http://localhost:3040. Mailpit: http://localhost:8040.
-
-    typerelay connect --server http://localhost:3040
-    typerelay import /path/to/snippets.yml --name Personal
-    typerelay enroll Personal
-    typerelay sync
-    typerelay export Personal /path/to/export.yml
-
-Only explicitly enrolled libraries upload. Assigned shared libraries download automatically.
-The engine reads validated database snapshots. Networking runs in a separate worker.
-
-## Expansion and recovery
-
-Static text supports Unicode, multiline paragraphs, tabs and trailing newlines.
-Dynamic templates, timestamp evaluation and field prompts are deferred.
-Abbreviations use lowercase ASCII letters, digits and hyphens, 1–63 characters, unique across active libraries.
-
-Trash supports restore for 30 days. Empty Trash requires confirmation; only creators/admins can purge shared content.
-Local-only expiry runs in the client; synced expiry runs on the server. Offline devices apply changes on reconnection.
-Exports and migration backups are outside Trash retention.
+Maintainer implementation and release notes live under `development/`, `web/` and excluded delivery pages. They are not the user guide and may describe historical migrations; current behavior is defined by the public sections above.

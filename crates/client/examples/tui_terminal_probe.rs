@@ -12,7 +12,7 @@ impl Probe {
         let (_guard, mut screen) = terminal::TerminalSession::enter()?;
         screen.draw(|frame| frame.render_widget(ratatui::widgets::Paragraph::new("TypeRelay terminal probe"), frame.area()))?;
         while running.load(Ordering::SeqCst) && terminal::TerminalSession::connected() {
-            if ratatui::crossterm::event::poll(Duration::from_millis(100))? && let ratatui::crossterm::event::Event::Key(key) = ratatui::crossterm::event::read()? && key.code == ratatui::crossterm::event::KeyCode::Char('q') { break; }
+            if ratatui::crossterm::event::poll(Duration::from_millis(100))? && let ratatui::crossterm::event::Event::Key(key) = terminal::TerminalSession::normalize(ratatui::crossterm::event::read()?) && key.code == ratatui::crossterm::event::KeyCode::Char('q') { break; }
         }
         Ok(())
     }

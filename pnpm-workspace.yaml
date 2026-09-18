@@ -1,0 +1,18 @@
+ignoreWorkspaceRootCheck: true
+linkWorkspacePackages: deep
+injectWorkspacePackages: true
+minimumReleaseAge: 0
+packages:
+  - "apps/*"
+  - "docs"
+allowBuilds:
+  cbor-extract: false
+  esbuild: true
+  protobufjs: false
+  vue-demi: true
+overrides:
+  hashery: 3.0.1
+  '@types/node@^22.0.0': 22.20.2
+  is-core-module: 2.16.2
+patchedDependencies:
+  connect-mongo@6.0.0: apps/server/patches/connect-mongo@6.0.0.patch

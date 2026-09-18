@@ -1,1 +1,1 @@
-{"identifier":"panel","windows":["panel"],"permissions":["core:default"]}
+{"identifier":"panel","windows":["panel"],"permissions":["core:default","deep-link:default"]}

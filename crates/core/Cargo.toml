@@ -4,3 +4,13 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+ammonia = "4"
+html-escape = "0.2"
+pulldown-cmark = "0.13"
+regex = "1"
+base64 = "0.22"

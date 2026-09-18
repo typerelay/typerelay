@@ -1,17 +1,18 @@
 {
   "name": "typerelay-desktop",
   "private": true,
-  "version": "0.10.0",
+  "version": "1.0.0",
   "type": "module",
   "packageManager": "pnpm@12.0.0",
   "scripts": {
     "build": "node build.mjs",
+    "build:macos:local": "node scripts/build-macos-local.mjs",
     "tauri": "tauri",
     "test": "node --test test/*.test.mjs"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2",
-    "jsdom": "^26.1.0",
-    "pug": "^3.0.3"
+    "@tauri-apps/cli": "^2.11.4",
+    "jsdom": "^30.1.0",
+    "pug": "^3.0.4"
   }
 }

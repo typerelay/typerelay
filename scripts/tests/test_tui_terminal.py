@@ -12,7 +12,7 @@ import unittest
 
 class TerminalTests(unittest.TestCase):
     def launch(self):
-        binary = pathlib.Path(__file__).resolve().parents[2] / "target/debug/examples/tui_terminal_probe"
+        binary = pathlib.Path(os.environ.get("CARGO_TARGET_DIR", pathlib.Path(__file__).resolve().parents[2] / "target")) / "debug/examples/tui_terminal_probe"
         if not binary.exists():
             self.skipTest("Build examples first: cargo build --examples")
         master, slave = pty.openpty()

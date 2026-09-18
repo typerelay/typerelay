@@ -1,42 +1,237 @@
-name: typerelay
+x-env: &env
+  NODE_ENV: development
+  TYPERELAY_MOBILE_PREVIEW_URL: "${TYPERELAY_MOBILE_PREVIEW_URL:-http://localhost:5174}"
+  TYPERELAY_APP: web
+  TYPERELAY_GHOST_CONTENT_API_KEY: "${TYPERELAY_GHOST_CONTENT_API_KEY:-}"
+  PORT: 3040
+  MONGO_URI: ${DEV_TYPERELAY_MONGODB_URI}
+  MEMCACHED_SERVERS: ${MEMCACHED_SERVERS}
+  API_RATE_LIMIT_ENABLED: "${API_RATE_LIMIT_ENABLED:-true}"
+  API_RATE_LIMIT_WINDOW_MS: "${API_RATE_LIMIT_WINDOW_MS:-60000}"
+  API_RATE_LIMIT_GENERAL_PER_MINUTE: "${API_RATE_LIMIT_GENERAL_PER_MINUTE:-120}"
+  API_RATE_LIMIT_EXPENSIVE_PER_MINUTE: "${API_RATE_LIMIT_EXPENSIVE_PER_MINUTE:-60}"
+  API_RATE_LIMIT_UPLOAD_PER_MINUTE: "${API_RATE_LIMIT_UPLOAD_PER_MINUTE:-20}"
+  MCP_RATE_LIMIT_ENABLED: "${MCP_RATE_LIMIT_ENABLED:-true}"
+  MCP_RATE_LIMIT_WINDOW_MS: "${MCP_RATE_LIMIT_WINDOW_MS:-60000}"
+  MCP_IP_FLOOD_PER_MINUTE: "${MCP_IP_FLOOD_PER_MINUTE:-300}"
+  MCP_UNAUTH_PER_MINUTE: "${MCP_UNAUTH_PER_MINUTE:-30}"
+  MCP_AUTH_PER_MINUTE: "${MCP_AUTH_PER_MINUTE:-120}"
+  MCP_HEAVY_TOOL_PER_MINUTE: "${MCP_HEAVY_TOOL_PER_MINUTE:-30}"
+  MCP_TOOL_CONCURRENCY: "${MCP_TOOL_CONCURRENCY:-3}"
+  MCP_HEAVY_TOOL_CONCURRENCY: "${MCP_HEAVY_TOOL_CONCURRENCY:-1}"
+  APP_URL: ${APP_URL:-http://localhost:3040}
+  MCP_BASE_URL: ${MCP_BASE_URL:-http://localhost:3041}
+  API_BASE_URL: http://app:3040
+  SMTP_SERVERS: ${SMTP_SERVERS}
+  SMTP_FROM: ${SMTP_FROM}
+  SYSADMIN_EMAIL: "sysadmin@localhost"
+  SYSADMIN_PASSWORD: "sysadminpassword"
+  GIT_ENCRYPTION_KEY: "${GIT_ENCRYPTION_KEY:-}"
+  SESSION_SECRET: ${SESSION_SECRET}
+  JWT_SECRET: ${JWT_SECRET}
+  ENABLE_SIGNUP: "${ENABLE_SIGNUP:-true}"
+  HELPMONKS_API_URL: "${HELPMONKS_API_URL:-}"
+  HELPMONKS_SIGNUP_API_URL: "${HELPMONKS_SIGNUP_API_URL:-}"
+  HELPMONKS_SIGNUP_HOST_ID: "${HELPMONKS_SIGNUP_HOST_ID:-}"
+  HELPMONKS_SIGNUP_SEQUENCE_ID: "${HELPMONKS_SIGNUP_SEQUENCE_ID:-}"
+  IS_DOCKER: "true"
+  DOCS_DIR: /documentation/.vitepress/dist
+  # STRIPE
+  STRIPE_SECRET_KEY: "${STRIPE_SECRET_KEY:-}"
+  STRIPE_WEBHOOK_SECRET: "${STRIPE_WEBHOOK_SECRET:-}"
+  STRIPE_PRO_PRICE_ID: "${STRIPE_PRO_PRICE_ID:-}"
+  STRIPE_BASIC_PRICE_ID: "${STRIPE_BASIC_PRICE_ID:-}"
+  STRIPE_FREE_PRICE_ID: "${STRIPE_FREE_PRICE_ID:-}"
+  STRIPE_PORTAL_CONFIG_ID: "${STRIPE_PORTAL_CONFIG_ID:-}"
+  BILLING_ENABLED: "${BILLING_ENABLED:-}"
+
 services:
-  mongo:
-    image: mongo:8
-    command: ["mongod", "--replSet", "typerelay", "--bind_ip_all"]
-    volumes:
-      - typerelay-mongo:/data/db
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - >-
-          mongosh --quiet --eval 'try { rs.status().ok } catch(e) { rs.initiate({_id:"typerelay",members:[{_id:0,host:"mongo:27017"}]}) }'
-      interval: 3s
-      timeout: 5s
-      retries: 30
-  mail:
-    image: axllent/mailpit:v1.27
-    ports:
-      - "127.0.0.1:8040:8025"
-  server:
+  mobile:
+    image: typerelay-mobile-dev:local
+    command: ["pnpm", "exec", "vite", "--config", "/opt/typerelay/apps/mobile/vite.config.ts", "--host", "0.0.0.0", "--port", "5174", "--strictPort"]
     build:
       context: .
       dockerfile: apps/server/Dockerfile
+      target: mobile
+    restart: unless-stopped
+    working_dir: /opt/typerelay/apps/mobile
+    ports:
+      - "127.0.0.1:5174:5174"
+    environment:
+      NODE_ENV: development
+      TYPERELAY_MOBILE_PREVIEW: "true"
+      MOBILE_API_URL: http://app:3040
+      MOBILE_API_ORIGIN: "${APP_URL:-http://localhost:3040}"
+      MOBILE_PREVIEW_ORIGIN: "${TYPERELAY_MOBILE_PREVIEW_URL:-http://localhost:5174}"
+      __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: mobile.typerelay.orb.local
+    volumes:
+      - ./apps/mobile:/opt/typerelay/apps/mobile
+      - ./apps/server:/opt/typerelay/apps/server:ro
+      - typerelay-root-node-modules:/opt/typerelay/node_modules:ro
+      - typerelay-mobile-node-modules:/opt/typerelay/apps/mobile/node_modules
+      - typerelay-node-modules:/opt/typerelay/apps/server/node_modules:ro
+      - typerelay-mobile-preview:/data/mobile-preview
+    depends_on:
+      app:
+        condition: service_healthy
+    labels:
+      - dev.orbstack.http-port=5174
+
+  init:
+    extends:
+      file: ./compose.base.yml
+      service: base
+    user: root
+    environment: *env
+    command: [corepack, pnpm, --dir, /opt/typerelay, --filter, "@typerelay/server", install, --frozen-lockfile]
+    restart: "no"
+
+  app:
+    extends:
+      file: ./compose.base.yml
+      service: base
     ports:
       - "127.0.0.1:3040:3040"
     environment:
-      MONGODB_URI: mongodb://mongo:27017/typerelay?replicaSet=typerelay
-      ORIGIN: http://localhost:3040
-      SMTP_HOST: mail
-      SESSION_SECRET_FILE: /data/session-secret
+      <<: *env
+      TYPERELAY_HOSTED_EDITION: "${TYPERELAY_HOSTED_EDITION:-false}"
+      BILLING_ENABLED: "${BILLING_ENABLED:-false}"
+      STRIPE_SECRET_KEY: "${STRIPE_SECRET_KEY:-}"
+      STRIPE_WEBHOOK_SECRET: "${STRIPE_WEBHOOK_SECRET:-}"
+      STRIPE_FREE_PRICE_ID: "${STRIPE_FREE_PRICE_ID:-}"
+      STRIPE_PRO_PRICE_ID: "${STRIPE_PRO_PRICE_ID:-}"
+      STRIPE_TEAM_PRICE_ID: "${STRIPE_TEAM_PRICE_ID:-}"
+      STRIPE_PORTAL_CONFIG_ID: "${STRIPE_PORTAL_CONFIG_ID:-}"
+      WHITE_LABEL_ENABLED: "${WHITE_LABEL_ENABLED:-false}"
+      WHITE_LABEL_CNAME_TARGET: "${WHITE_LABEL_CNAME_TARGET:-custom.typerelay.com}"
+      WHITE_LABEL_ASSETS_DIR: /data/white-label
+      CLOUDFLARE_API_TOKEN: "${CLOUDFLARE_API_TOKEN:-}"
+      CLOUDFLARE_ZONE_ID: "${CLOUDFLARE_ZONE_ID:-}"
     volumes:
       - typerelay-server:/data
-      - ./apps/server:/app
-      - typerelay-node-modules:/app/node_modules
+      - ./docs:/documentation:ro
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3040/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
     depends_on:
-      mongo:
+      init:
+        condition: service_completed_successfully
+  scheduler:
+    extends:
+      file: ./compose.base.yml
+      service: base
+    command: [node, scripts/start.js]
+    healthcheck:
+      disable: true
+    environment:
+      <<: *env
+      TYPERELAY_APP: scheduler
+      SERVER_MODE: scheduler
+      WHITE_LABEL_ASSETS_DIR: /data/white-label
+      STRIPE_TEAM_PRICE_ID: "${STRIPE_TEAM_PRICE_ID:-}"
+      TYPERELAY_HOSTED_EDITION: "${TYPERELAY_HOSTED_EDITION:-false}"
+      BILLING_ENABLED: "${BILLING_ENABLED:-false}"
+      WHITE_LABEL_ENABLED: "${WHITE_LABEL_ENABLED:-false}"
+      WHITE_LABEL_CNAME_TARGET: "${WHITE_LABEL_CNAME_TARGET:-custom.typerelay.com}"
+      CLOUDFLARE_API_TOKEN: "${CLOUDFLARE_API_TOKEN:-}"
+      CLOUDFLARE_ZONE_ID: "${CLOUDFLARE_ZONE_ID:-}"
+    restart: unless-stopped
+    volumes:
+      - typerelay-server:/data
+    deploy:
+      replicas: 1
+    depends_on:
+      init:
+        condition: service_completed_successfully
+  docs:
+    profiles: [tools]
+    image: node:24-bookworm-slim
+    working_dir: /repo
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    environment:
+      npm_config_cache: /tmp/npm-cache
+    volumes:
+      - .:/repo
+    ports:
+      - "127.0.0.1:5173:5173"
+    command: [sh, -c, "npx --yes pnpm@12.0.0 --filter @typerelay/docs install --frozen-lockfile && npx --yes pnpm@12.0.0 --filter @typerelay/docs build"]
+  mcp:
+    image: typerelay-mcp
+    build:
+      context: .
+      dockerfile: apps/mcp/Dockerfile
+    ports:
+      - "127.0.0.1:3041:3041"
+    environment:
+      <<: *env
+      TYPERELAY_APP: mcp
+      PORT: 3041
+    restart: unless-stopped
+    depends_on:
+      app:
         condition: service_healthy
-      mail:
-        condition: service_started
+  mcp-tools:
+    profiles: [tools]
+    image: node:24-bookworm-slim
+    working_dir: /repo
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    environment:
+      npm_config_cache: /tmp/npm-cache
+    volumes:
+      - .:/repo
+    command: [sh, -c, "npx --yes pnpm@12.0.0 --filter @typerelay/mcp install --frozen-lockfile && npx --yes pnpm@12.0.0 --filter @typerelay/mcp test"]
+  browser-check:
+    depends_on:
+      app:
+        condition: service_healthy
+    profiles: [tools]
+    build:
+      context: .
+      dockerfile: docs/Dockerfile.test
+    volumes:
+      - .:/repo:ro
+      - /tmp/typerelay-docs-artifacts:/artifacts
+  template-server:
+    profiles: [tools]
+    extends:
+      file: ./compose.base.yml
+      service: base
+    user: "0:0"
+    command: [node, test/template-browser-server.js]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3142/fixture-ready').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - /tmp/typerelay-template-fixture:/fixtures
+    depends_on:
+      init:
+        condition: service_completed_successfully
+  template-browser:
+    profiles: [tools]
+    build:
+      context: .
+      dockerfile: docs/Dockerfile.test
+    command: [node, scripts/check-templates.mjs]
+    volumes:
+      - .:/repo:ro
+      - /tmp/typerelay-template-fixture:/fixtures:ro
+      - /tmp/typerelay-docs-artifacts:/artifacts
+  rust-tools:
+    profiles: [tools]
+    build:
+      context: .
+      dockerfile: scripts/Dockerfile.rust-tools
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    environment:
+      CARGO_HOME: /tmp/typerelay-cargo
+      CARGO_TARGET_DIR: /repo/target/templates
+    volumes:
+      - .:/repo
+    command: [cargo, test, --workspace]
   secrets:
     profiles: [tools]
     image: ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
@@ -45,6 +240,8 @@ services:
     command: [git, /repo, "--log-opts=--all --full-history", --redact]
 
 volumes:
-  typerelay-mongo:
   typerelay-server:
+  typerelay-root-node-modules:
   typerelay-node-modules:
+  typerelay-mobile-node-modules:
+  typerelay-mobile-preview:

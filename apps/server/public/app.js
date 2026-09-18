@@ -1,4 +1,7 @@
+import { ProductNews } from './product-updates.js';
+import { TemplateEditor, TemplateFill } from './template-editor.js';
 import { Abbreviation } from './abbreviation.js';
+import { RichTextRuntime } from './rich-text-runtime.js';
 class TypeRelay {
 	account = document.querySelector('#workspace')?.dataset.account;
 	libraries = new Map();
@@ -12,15 +15,19 @@ class TypeRelay {
 	polling = false;
 	trashItems = [];
 	searchVersion = 0;
+	tokensVersion = 0;
+	devicesVersion = 0;
 	openVersion = 0;
 	searchTimer = null;
 	searchFocus = null;
 	submit = null;
 	constructor() {
+		this.templateEditor = new TemplateEditor(this); this.templateFill = new TemplateFill(this);
 		document.querySelectorAll('.library').forEach(node => this.libraries.set(node.dataset.id, JSON.parse(node.dataset.record)));
 		document.addEventListener('input', event => { if ((event.target.id === 'trigger' || event.target.hasAttribute('data-import-trigger')) && !event.isComposing) Abbreviation.field(event.target); });
 		document.addEventListener('compositionend', event => { if (event.target.id === 'trigger') Abbreviation.field(event.target); });
 		document.addEventListener('submit', event => this.onSubmit(event));
+		document.querySelector('#settings')?.addEventListener('hidden.bs.modal', () => { const secret = document.querySelector('#token-secret-value'); if (secret) secret.textContent = ''; document.querySelector('#token-secret')?.setAttribute('hidden', ''); });
 		document.addEventListener('click', event => this.onClick(event).catch(error => this.toast(error.message, 'error')));
 		document.querySelector('#search')?.addEventListener('input', () => {
 			this.searchVersion++;
@@ -43,9 +50,12 @@ class TypeRelay {
 			if (event.target.hasAttribute('data-import-key')) { const field = document.querySelector('[data-import-trigger="' + event.target.dataset.importKey + '"]'); if (field) field.disabled = !event.target.checked || field.dataset.review === 'true'; }
 			if (event.target.id === 'import-file') { this.importSource = null; document.querySelector('#import-preview').replaceChildren(); document.querySelector('#record-form button[type=submit]').disabled = true; }
 			if (event.target.id === 'yaml-file' && event.target.files[0]) document.querySelector('#yaml').value = await event.target.files[0].text();
+			if (event.target.hasAttribute('data-white-label-file') && event.target.files[0]) await this.whiteLabelUpload(event.target).catch(error => this.toast(error.message, 'error'));
 		});
 		document.querySelector('#form-modal')?.addEventListener('hidden.bs.modal', () => {
-			this.codeVersion = (this.codeVersion || 0) + 1; this.codeView?.destroy(); this.codeView = null;
+			const modal = document.querySelector('#form-modal');
+			if (modal.dataset.preserveEditor === 'true') { delete modal.dataset.preserveEditor; return; }
+			this.codeVersion = (this.codeVersion || 0) + 1; this.codeView?.destroy(); this.codeView = null; this.richView?.destroy(); this.richView = null;
 			if (this.returnSettings) { this.returnSettings = false; bootstrap.Modal.getOrCreateInstance(document.querySelector('#settings')).show(); }
 		});
 		document.querySelector('#trash')?.addEventListener('show.bs.modal', () => this.loadTrash().catch(error => this.toast(error.message, 'error')));
@@ -58,6 +68,8 @@ class TypeRelay {
 			this.devices().catch(() => {});
 			const invitation = new URL(location.href).searchParams.get('invite');
 			if (invitation) this.accept(invitation);
+			this.productNews = new ProductNews(this);
+			if (location.hash === '#settings-subscription') { bootstrap.Modal.getOrCreateInstance(document.querySelector('#settings')).show(); this.settingsTab('subscription'); }
 		}
 	}
 	updateScrollTop() {
@@ -72,17 +84,25 @@ class TypeRelay {
 	toast(title, icon = 'success') { return Swal.fire({ toast: true, position: 'top-end', title, icon, timer: 3500, showConfirmButton: false }); }
 	async request(path, method = 'GET', body, raw = false) {
 		const response = await fetch(path.startsWith('/') ? path : '/api/v2/' + path, { method, headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': document.querySelector('meta[name=csrf-token]').content, 'X-Account-Id': this.account || '' }, body: body ? JSON.stringify({ operation_id: this.submitting ? this.formOperation : crypto.randomUUID(), ...body }) : undefined });
-		if (!response.ok) throw new Error((await response.json()).error);
+		if (!response.ok) { const result = await response.json(); if (result.code === 'reauthentication_required') document.querySelector('#token-auth-required')?.removeAttribute('hidden'); const error = new Error(result.error); Object.assign(error, result); throw error; }
+		if (response.headers.get('X-CSRF-Token')) document.querySelector('meta[name=csrf-token]').content = response.headers.get('X-CSRF-Token');
 		return raw ? response.text() : response.json();
 	}
-	fragment(html) { const template = document.createElement('template'); template.innerHTML = html; return template.content.firstElementChild; }
-	update(selector, container, html) {
+	async upload(path, data) {
+		const response = await fetch('/api/v2/' + path, { method: 'POST', headers: { 'X-CSRF-Token': document.querySelector('meta[name=csrf-token]').content, 'X-Account-Id': this.account || '' }, body: data });
+		if (!response.ok) { const result = await response.json(); const error = new Error(result.error); Object.assign(error, result); throw error; }
+		return response.json();
+	}
+	async bundle(file) { const response = await fetch('/api/v2/import/bundle', { method: 'POST', headers: { 'Content-Type': 'application/zip', 'X-CSRF-Token': document.querySelector('meta[name=csrf-token]').content, 'X-Account-Id': this.account || '', 'X-Operation-Id': this.formOperation }, body: file }); const result = await response.json(); if (!response.ok) throw new Error(result.error); return result; }
+	fragment(html) { const template = document.createElement('template'); template.innerHTML = html; for (const time of template.content.querySelectorAll('time[data-local-time]')) time.textContent = new Date(time.dateTime).toLocaleString(); return template.content.firstElementChild; }
+	update(selector, container, html, before) {
 		const old = document.querySelector(selector);
 		const next = this.fragment(html);
 		const outerFocused = old === document.activeElement;
 		const focused = old?.contains(document.activeElement) ? [...old.querySelectorAll('button,input,select,textarea,a')].indexOf(document.activeElement) : -1;
 		const scroll = { x: window.scrollX, y: window.scrollY };
 		if (old) old.replaceWith(next); else document.querySelector(container).append(next);
+		if (before !== undefined) document.querySelector(container).insertBefore(next, before);
 		if (outerFocused) next.focus({ preventScroll: true });
 		else if (focused >= 0) next.querySelectorAll('button,input,select,textarea,a')[focused]?.focus({ preventScroll: true });
 		if (window.scrollX !== scroll.x || window.scrollY !== scroll.y) window.scrollTo(scroll.x, scroll.y);
@@ -114,9 +134,14 @@ class TypeRelay {
 			document.querySelector('[data-add-snippet]').hidden = !library.permissions.edit;
 			const ids = new Set(library.snippets.map(snippet => snippet.id));
 			document.querySelectorAll('[data-snippet]').forEach(node => { if (!ids.has(node.dataset.snippet)) node.remove(); });
-			for (const fragment of result.fragments) {
+			let before = null;
+			const fragments = new Map(result.fragments.map(fragment => [fragment.id, fragment]));
+			for (const snippet of [...library.snippets].reverse()) {
+				const fragment = fragments.get(snippet.id);
+				if (!fragment) continue;
 				const node = document.querySelector('[data-snippet="' + fragment.id + '"]');
-				if (!node || Number(node.dataset.revision) < fragment.revision || prior?.permissions.edit !== library.permissions.edit) this.update('[data-snippet="' + fragment.id + '"]', '#snippets', fragment.html);
+				if (!node || Number(node.dataset.revision) < fragment.revision || prior?.permissions.edit !== library.permissions.edit) this.update('[data-snippet="' + fragment.id + '"]', '#snippets', fragment.html, before);
+				before = document.querySelector('[data-snippet="' + fragment.id + '"]');
 			}
 		}
 		document.querySelector('[data-id="' + library._id + '"]')?.classList.toggle('active-library', this.selected === library._id);
@@ -151,6 +176,38 @@ class TypeRelay {
 		});
 		document.querySelectorAll('.settings-pane').forEach(pane => { pane.hidden = pane.id !== 'settings-pane-' + id; });
 		if (focus) tab.focus();
+		if (id === 'tokens') this.tokens().catch(error => this.toast(error.message, 'error'));
+		if (id === 'devices') this.devices().catch(error => this.toast(error.message, 'error'));
+		if (id === 'whiteLabel') this.refreshWhiteLabel().catch(error => this.toast(error.message, 'error'));
+		if (id === 'subscription') this.refreshBilling().catch(error => this.toast(error.message, 'error'));
+	}
+	applyBilling(result) {
+		if (result.subscription_html && document.querySelector('#settings-pane-subscription')) this.update('#subscription-content', '#settings-pane-subscription', result.subscription_html);
+		if (result.trial_html) this.update('#billing-nav-action', 'header .d-flex', result.trial_html);
+		if (result.tokens_form_html && !document.querySelector('#access-token-form')) document.querySelector('#access-token-form-container')?.replaceChildren(this.fragment(result.tokens_form_html));
+	}
+	async refreshBilling() { if (document.querySelector('#settings-pane-subscription')) this.applyBilling(await this.request('billing/fragments')); }
+	applyWhiteLabel(result) {
+		if (result.html) this.update('#white-label-content', '#settings-pane-whiteLabel', result.html);
+		if (result.brand_html) this.update('header .brand', '.brand-link', result.brand_html);
+		if (result.settings) document.querySelector('link[rel="icon"]').href = result.settings.favicon_url || '/assets/favicon.ico';
+	}
+	async whiteLabelRequest(path, method = 'GET', body) { try { const result = await this.request(path, method, body); this.applyWhiteLabel(result); return result; } catch (error) { this.applyWhiteLabel(error); throw error; } }
+	async refreshWhiteLabel() { await this.whiteLabelRequest('white-label'); }
+	async whiteLabelUpload(input) {
+		const button = input;
+		button.disabled = true;
+		try { const data = new FormData(); data.append('file', input.files[0]); this.applyWhiteLabel(await this.upload('white-label/assets/' + input.dataset.whiteLabelFile, data)); this.toast('Brand asset saved'); } finally { button.disabled = false; }
+	}
+	async tokens() {
+		const version = ++this.tokensVersion;
+		let rows;
+		try { rows = await this.request('access-tokens'); } catch (error) { if (error.code === 'reauthentication_required') return; throw error; }
+		if (version !== this.tokensVersion) return;
+		document.querySelector('#token-auth-required').hidden = true;
+		const ids = new Set(rows.map(row => row.id));
+		for (const row of rows) this.update('[data-access-token="' + row.id + '"]', '#access-tokens', row.html);
+		for (const node of document.querySelectorAll('[data-access-token]')) if (!ids.has(node.dataset.accessToken)) node.remove();
 	}
 	keyboard(event) {
 		if (!this.account || event.isComposing) return;
@@ -201,13 +258,30 @@ class TypeRelay {
 		});
 
 	}
-	snippetValue(fields) { return { trigger: fields.get('trigger') || null, title: fields.get('title') || '', content: { version: 1, type: fields.get('type') || 'plain_text', text: fields.get('replace'), ...(fields.get('type') === 'code' ? { language: fields.get('language') || 'plain_text' } : {}) } }; }
+	async snippetValue(fields) { const type = fields.get('type') || 'plain_text'; const text = fields.get('replace'); const dynamic = type !== 'code' && (type === 'rich_text' || Object.keys(this.templateEditor.variables || {}).length || /(^|[^\\])\{\{/.test(text)); const template = dynamic ? await this.templateEditor.content() : null; if (type === 'rich_text') return { trigger: fields.get('trigger') || null, title: fields.get('title') || '', content: { version: 2, type, markdown: this.richView?.content() || text, variables: template?.variables || {} } }; const storedType = type === 'plain_text' && dynamic ? 'template' : type; return { trigger: fields.get('trigger') || null, title: fields.get('title') || '', content: { version: 1, type: storedType, text, ...(storedType === 'template' ? { variables: template.variables } : {}), ...(type === 'code' ? { language: fields.get('language') || 'plain_text' } : {}) } }; }
+	async assetFile(file) { const response = await fetch('/api/v2/assets', { method: 'POST', headers: { 'Content-Type': file.type, 'X-CSRF-Token': document.querySelector('meta[name=csrf-token]').content, 'X-Account-Id': this.account || '' }, body: file }); if (!response.ok) throw new Error((await response.json()).error); return response.json(); }
+	async richAssets(content) { const first = await RichTextRuntime.render(content, {}, true); const assets = {}; for (const id of first.assets) { const response = await fetch('/api/v2/assets/' + id, { headers: { 'X-Account-Id': this.account || '' } }); if (!response.ok) throw new Error('Could not load rich-text image'); const blob = await response.blob(); assets[id] = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(blob); }); } return assets; }
+	async copyRich(content, values = {}) { const assets = await this.richAssets(content); const rendered = await RichTextRuntime.render(content, values, false, new Date(), assets); try { await navigator.clipboard.write([new ClipboardItem({ 'text/plain': new Blob([rendered.text], { type: 'text/plain' }), 'text/html': new Blob([rendered.html], { type: 'text/html' }) })]); } catch { await navigator.clipboard.writeText(rendered.text); this.toast('This browser copied the plain-text fallback'); } return rendered; }
 	async codeEditor() {
+		this.templateEditor.attach();
 		const version = this.codeVersion = (this.codeVersion || 0) + 1;
 		if (!document.querySelector('#snippet-type')) return;
 		const code = document.querySelector('#snippet-type').value === 'code';
+		const rich = document.querySelector('#snippet-type').value === 'rich_text';
 		document.querySelector('#code-options').hidden = !code;
-		if (!code) { this.codeView?.destroy(); this.codeView = null; return; }
+		document.querySelector('#rich-options').hidden = !rich;
+		if (!code) { this.codeView?.destroy(); this.codeView = null; }
+		if (!rich) { this.richView?.destroy(); this.richView = null; }
+		if (rich) {
+			const { RichEditor } = await import('./generated/rich-editor.js');
+			if (version !== this.codeVersion || !document.querySelector('#snippet-type')) return;
+			if (!this.richView) {
+				this.richView = new RichEditor(document.querySelector('#replace'), document.querySelector('#rich-editor'), document.querySelector('#rich-toolbar'), { readonly: !!this.codeReadonly, upload: file => this.assetFile(file), remote: url => this.request('assets/remote', 'POST', { url }), refresh: id => this.request('assets/' + id + '/refresh', 'POST', {}), onError: error => this.toast(error.message, 'error') });
+				document.querySelector('[data-rich-image-file]').addEventListener('change', async event => { const file = event.target.files[0]; if (!file) return; try { const asset = await this.assetFile(file); this.richView.editor.chain().focus().setImage({ src: 'typerelay-asset:' + asset.id, alt: file.name }).run(); } catch (error) { this.toast(error.message, 'error'); } finally { event.target.value = ''; } });
+			}
+			return;
+		}
+		if (!code) return;
 		const { CodeEditor } = await import('./generated/code-editor.js');
 		if (version !== this.codeVersion || !document.querySelector('#snippet-type')) return;
 		const selector = document.querySelector('#code-language');
@@ -222,7 +296,7 @@ class TypeRelay {
 	}
 	async editSnippet(library, id) {
 		await this.form('snippet', { library: library._id, snippet: id || '' }, async fields => {
-			const value = this.snippetValue(fields);
+			const value = await this.snippetValue(fields);
 			const destination = fields.get('destination_library');
 			if (id && destination && destination !== library._id) {
 				const item = library.snippets.find(entry => entry.id === id);
@@ -230,7 +304,8 @@ class TypeRelay {
 			} else await this.snippet(id, value, library);
 		});
 		if (!library.permissions.edit) {
-			this.codeReadonly = true; this.codeView?.setReadonly(true);
+			this.codeReadonly = true; this.codeView?.setReadonly(true); this.richView?.setReadonly(true);
+			document.querySelectorAll('[data-vfield],#insert-variable,#variable-kind,#variable-name').forEach(field => field.disabled = true);
 			document.querySelectorAll('#form-fields select').forEach(field => { field.disabled = true; });
 			document.querySelector('#form-title').textContent = 'Snippet · Read-only';
 			document.querySelectorAll('#form-fields input,#form-fields textarea').forEach(field => { field.readOnly = true; });
@@ -238,7 +313,7 @@ class TypeRelay {
 		}
 	}
 	async form(kind, params, submit) {
-		this.codeView?.destroy(); this.codeView = null; this.codeReadonly = false;
+		this.codeView?.destroy(); this.codeView = null; this.richView?.destroy(); this.richView = null; this.codeReadonly = false;
 		document.querySelector('#form-title').textContent = ({ library: 'Library', snippet: 'Snippet', group: 'Group', conflict: 'Resolve conflict', move: 'Move snippets', snippetslab: 'Import SnippetsLab', import: 'Import snippets' })[kind];
 		document.querySelector('#form-fields').replaceChildren();
 		const template = document.createElement('template');
@@ -256,7 +331,7 @@ class TypeRelay {
 	}
 	async onSubmit(event) {
 		const form = event.target;
-		if (!['login', 'profile-form', 'account-form', 'invite-form', 'record-form'].includes(form.id)) return;
+		if (!['login', 'access-token-form', 'profile-form', 'account-form', 'invite-form', 'record-form', 'team-seats-form', 'change-to-pro-form', 'change-to-team-form', 'checkout-team-form', 'white-label-domain-form'].includes(form.id)) return;
 		event.preventDefault();
 		const abbreviation = form.querySelector('#trigger');
 		if (abbreviation) Abbreviation.field(abbreviation);
@@ -264,7 +339,12 @@ class TypeRelay {
 		const button = event.submitter;
 		if (button) button.disabled = true;
 		try {
+			if (form.id === 'team-seats-form' || form.id === 'change-to-team-form') { const result = await this.request('billing/change', 'POST', { plan: 'team', seats: Number(data.get('seats')) }); if (result.url) location.assign(result.url); else { this.applyBilling(result); this.toast('Change scheduled'); } return; }
+			if (form.id === 'change-to-pro-form') { const result = await this.request('billing/change', 'POST', { plan: 'pro', seats: 1 }); this.applyBilling(result); this.toast('Change scheduled'); return; }
+			if (form.id === 'checkout-team-form') { const result = await this.request('billing/checkout', 'POST', { plan: 'team', seats: Number(data.get('seats')) }); location.assign(result.url); return; }
+			if (form.id === 'white-label-domain-form') { await this.whiteLabelRequest('white-label/domain', 'PUT', { hostname: data.get('hostname') }); this.toast('Domain saved'); return; }
 			if (form.id === 'login') this.toast((await this.request('/auth/login', 'POST', { email: data.get('email') })).message);
+			if (form.id === 'access-token-form') { ++this.tokensVersion; const row = await this.request('access-tokens', 'POST', { name: form.elements.name.value, days: Number(form.elements.days.value), scopes: [...form.querySelectorAll('[name=scopes]:checked')].map(input => input.value) }); ++this.tokensVersion; this.update('[data-access-token="' + row.id + '"]', '#access-tokens', row.html); document.querySelector('#token-secret-value').textContent = row.token; document.querySelector('#token-secret').hidden = false; form.reset(); return; }
 			if (form.id === 'profile-form') {
 				const result = await this.request('profile', 'PATCH', { name: data.get('name'), email: data.get('email') });
 				this.update('#account-avatar', 'header .dropdown', result.avatar);
@@ -277,7 +357,7 @@ class TypeRelay {
 				document.querySelector('#account-switch').selectedOptions[0].textContent = data.get('name');
 				this.toast('Account saved');
 			}
-			if (form.id === 'invite-form') { const result = await this.request('team/invitations', 'POST', { email: data.get('email') }); this.update('[data-invitation="' + result.invitation + '"]', '#invitations', await this.request('fragments/invitation/' + result.invitation, 'GET', null, true)); this.toast('Invitation sent'); }
+			if (form.id === 'invite-form') { const result = await this.request('team/invitations', 'POST', { email: data.get('email') }); this.update('[data-invitation="' + result.invitation + '"]', '#invitations', await this.request('fragments/invitation/' + result.invitation, 'GET', null, true)); await this.refreshBilling(); this.toast('Invitation sent'); }
 			if (form.id === 'record-form') { this.submitting = true; await this.submit(data); bootstrap.Modal.getInstance(document.querySelector('#form-modal')).hide(); this.toast('Saved'); }
 		} catch (error) { this.toast(error.message, 'error'); }
 		finally { this.submitting = false; if (button) button.disabled = false; }
@@ -355,6 +435,16 @@ class TypeRelay {
 		if (card && !window.getSelection()?.toString()) return this.open(card.dataset.id);
 		const button = event.target.closest('button');
 		if (!button) return;
+		if (button.dataset.settingsOpen) { bootstrap.Modal.getOrCreateInstance(document.querySelector('#settings')).show(); this.settingsTab(button.dataset.settingsOpen); return; }
+		if (button.hasAttribute('data-start-trial')) { button.disabled = true; try { this.applyBilling(await this.request('billing/trial', 'POST', {})); this.toast('Pro trial started'); } finally { button.disabled = false; } return; }
+		if (button.dataset.checkoutPlan) { button.disabled = true; try { location.assign((await this.request('billing/checkout', 'POST', { plan: button.dataset.checkoutPlan, seats: 1 })).url); } finally { button.disabled = false; } return; }
+		if (button.hasAttribute('data-billing-portal')) { button.disabled = true; try { location.assign((await this.request('billing/portal', 'POST', {})).url); } finally { button.disabled = false; } return; }
+		if (button.hasAttribute('data-checkout-team')) { document.querySelector('#checkout-team-form').hidden = false; document.querySelector('#checkout-team-seats').focus(); return; }
+		if (button.hasAttribute('data-cancel-team-checkout')) { document.querySelector('#checkout-team-form').hidden = true; return; }
+		if (button.dataset.whiteLabelDelete && await this.confirm('Remove this brand asset?')) { this.applyWhiteLabel(await this.request('white-label/assets/' + button.dataset.whiteLabelDelete, 'DELETE')); return; }
+		if (button.hasAttribute('data-white-label-verify')) { button.disabled = true; try { await this.whiteLabelRequest('white-label/domain/verify', 'POST', {}); this.toast('Domain verification started'); } finally { button.disabled = false; } return; }
+		if (button.hasAttribute('data-white-label-refresh')) { button.disabled = true; try { await this.whiteLabelRequest('white-label/domain/refresh', 'POST', {}); } finally { button.disabled = false; } return; }
+		if (button.hasAttribute('data-white-label-remove-domain') && await this.confirm('Remove this custom domain?')) { await this.whiteLabelRequest('white-label/domain', 'DELETE'); return; }
 		if (button.hasAttribute('data-bulk-move')) return this.batchAction('move');
 		if (button.hasAttribute('data-bulk-trash')) return this.batchAction('trash');
 		if (button.hasAttribute('data-restore-trash')) {
@@ -375,6 +465,9 @@ class TypeRelay {
 		if (button.id === 'scroll-top') { window.scrollTo({ top: 0, behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }); return; }
 		if (button.id === 'search-trigger') return this.openSearch();
 		if (button.dataset.settingsTab) return this.settingsTab(button.dataset.settingsTab);
+		if (button.id === 'dismiss-token') { document.querySelector('#token-secret-value').textContent = ''; document.querySelector('#token-secret').hidden = true; return; }
+		if (button.id === 'retry-tokens') { button.disabled = true; try { await this.tokens(); } finally { button.disabled = false; } return; }
+		if (button.dataset.revokeToken && await this.confirm('Revoke this integration?')) { button.disabled = true; ++this.tokensVersion; try { await this.request('access-tokens/' + button.dataset.revokeToken, 'DELETE'); ++this.tokensVersion; document.querySelector('[data-access-token="' + button.dataset.revokeToken + '"]')?.remove(); } finally { button.disabled = false; } return; }
 		if (button.dataset.searchLibrary) {
 			const id = button.dataset.searchLibrary;
 			const snippet = button.dataset.searchSnippet;
@@ -394,17 +487,17 @@ class TypeRelay {
 		}
 		const data = button.dataset;
 		const library = this.libraries.get(this.selected);
-		if (button.dataset.copySnippet) { await navigator.clipboard.writeText(this.libraries.get(this.selected).snippets.find(item => item.id === button.dataset.copySnippet).replace); return this.toast('Copied'); }
-		if (button.id === 'copy-code') { await navigator.clipboard.writeText(document.querySelector('#replace').value); return this.toast('Copied'); }
+		if (button.dataset.copySnippet) { const library = this.libraries.get(this.selected); const entry = library.snippets.find(item => item.id === button.dataset.copySnippet); if (['template', 'rich_text'].includes(entry.content.type)) return this.templateFill.open(entry.content, async () => { const current = await this.request('library-view/' + library._id); if (!current.library.snippets.some(item => item.id === entry.id && item.revision === entry.revision)) throw new Error('Snippet changed; reopen it before copying.'); }); await navigator.clipboard.writeText(entry.replace); return this.toast('Copied'); }
 		if (button.dataset.importFormat) { this.importSource = null; this.importFormat = button.dataset.importFormat; return this.form('import', { format: this.importFormat }, async () => {
 			const selected = [...document.querySelectorAll('[data-import-key]:checked')].map(input => ({ key: input.dataset.importKey, trigger: Abbreviation.normalize(document.querySelector('[data-import-trigger="' + input.dataset.importKey + '"]').value) }));
 			await this.applyBatch(await this.request('import/' + this.importFormat, 'POST', { source: this.importSource, filename: this.importFilename, selected }), false);
 		}); }
 		if (button.id === 'preview-import') {
 			const file = document.querySelector('#import-file').files[0];
-			if (!file || file.size > 8 * 1048576) throw new Error('Choose an export up to 8 MiB');
+			if (!file || file.size > (this.importFormat === 'typerelay' ? 16 : 8) * 1048576) throw new Error('Choose an export within the size limit');
 			button.disabled = true; document.querySelector('#record-form button[type=submit]').disabled = true;
 			try {
+				if (this.importFormat === 'typerelay') { await this.apply(await this.bundle(file)); bootstrap.Modal.getInstance(document.querySelector('#form-modal')).hide(); this.toast('Bundle imported'); return; }
 				this.importSource = await file.text(); this.importFilename = file.name;
 				const preview = await this.request('import/' + this.importFormat + '/preview', 'POST', { source: this.importSource, filename: this.importFilename });
 				document.querySelector('#import-preview').replaceChildren(this.fragment(preview.html));
@@ -430,6 +523,7 @@ class TypeRelay {
 			await this.request('team/members/' + id, 'PATCH', data.role ? { role: data.next } : {});
 			if (data.removeMember) document.querySelector('[data-member="' + id + '"]').remove();
 			else this.update('[data-member="' + id + '"]', '#members', await this.request('fragments/member/' + id, 'GET', null, true));
+			await this.refreshBilling();
 		}
 		if (button.id === 'new-group' || data.editGroup) {
 			const group = data.editGroup ? JSON.parse(data.editGroup) : null;
@@ -443,11 +537,11 @@ class TypeRelay {
 			document.querySelector('[data-group="' + data.deleteGroup + '"]').remove();
 			bootstrap.Modal.getInstance(document.querySelector('#form-modal')).hide();
 		}
-		if (data.revokeInvitation && await this.confirm('Revoke this invitation?')) { await this.request('team/invitations/' + data.revokeInvitation, 'DELETE'); document.querySelector('[data-invitation="' + data.revokeInvitation + '"]').remove(); }
-		if (data.revokeDevice && await this.confirm('Revoke this device?')) { await this.request('devices/' + data.revokeDevice, 'DELETE'); document.querySelector('[data-device="' + data.revokeDevice + '"]').remove(); }
+		if (data.revokeInvitation && await this.confirm('Revoke this invitation?')) { await this.request('team/invitations/' + data.revokeInvitation, 'DELETE'); document.querySelector('[data-invitation="' + data.revokeInvitation + '"]').remove(); await this.refreshBilling(); }
+		if (data.revokeDevice && await this.confirm('Revoke this device?')) { button.disabled = true; ++this.devicesVersion; try { await this.request('devices/' + data.revokeDevice, 'DELETE'); ++this.devicesVersion; document.querySelector('[data-device="' + data.revokeDevice + '"]')?.remove(); } finally { button.disabled = false; } }
 		if (data.resolve) return this.form('conflict', { library: data.library, conflict: data.resolve }, async fields => {
 			const current = (await this.request('library-view/' + data.library)).library;
-			const result = await this.request('conflicts/' + data.resolve, 'POST', { base_revision: current.revision, choice: fields.get('choice'), value: this.snippetValue(fields) });
+			const result = await this.request('conflicts/' + data.resolve, 'POST', { base_revision: current.revision, choice: fields.get('choice'), value: await this.snippetValue(fields) });
 			await this.apply(result);
 			document.querySelector('[data-conflict="' + data.resolve + '"]').remove();
 		});
@@ -491,7 +585,19 @@ class TypeRelay {
 		document.querySelector('#empty-trash').textContent = 'Empty Trash (' + count + ')';
 		document.querySelector('#trash-empty').hidden = result.items.length !== 0;
 	}
-	async devices() { for (const device of await this.request('devices')) this.update('[data-device="' + device._id + '"]', '#devices', await this.request('fragments/device/' + device._id, 'GET', null, true)); }
+	async devices() {
+		const version = ++this.devicesVersion;
+		const devices = await this.request('devices');
+		for (const device of devices) {
+			if (version !== this.devicesVersion) return;
+			const html = await this.request('fragments/device/' + device._id, 'GET', null, true);
+			if (version !== this.devicesVersion) return;
+			this.update('[data-device="' + device._id + '"]', '#devices', html);
+		}
+		if (version !== this.devicesVersion) return;
+		const ids = new Set(devices.map(device => device._id));
+		for (const node of document.querySelectorAll('[data-device]')) if (!ids.has(node.dataset.device)) node.remove();
+	}
 	async accept(token) { if (await this.confirm('Join this TypeRelay team?')) { const result = await this.request('team/accept', 'POST', { token }); location.href = '/?account=' + result.account; } }
 }
 const client = new TypeRelay();

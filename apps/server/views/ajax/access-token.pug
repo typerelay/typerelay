@@ -1,0 +1,17 @@
+li.list-group-item(data-access-token=String(grant._id))
+	.d-flex.align-items-center.justify-content-between
+		div
+			strong= grant.name
+			div.small.text-muted= grant.kind + ' · ' + grant.scopes.join(', ')
+			div.small.text-muted
+				if grant.expires
+					span= 'Expires: '
+					time(datetime=new Date(grant.expires).toISOString() data-local-time)= new Date(grant.expires).toISOString()
+				else
+					span Never expires
+				span= ' · Last used: '
+				if grant.last_used
+					time(datetime=new Date(grant.last_used).toISOString() data-local-time)= new Date(grant.last_used).toISOString()
+				else
+					span Never
+		button.btn.btn-outline-danger.btn-sm.ms-3(type="button" data-revoke-token=String(grant._id)) Revoke

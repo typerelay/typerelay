@@ -1,0 +1,15 @@
+extends layout
+block content
+	.row.justify-content-center
+		.col-md-6.col-lg-4
+			.card.card-body
+				h1.h3.mb-5 System administrator sign in
+				form(data-admin-login)
+					.mb-3
+						label.form-label(for="email") Email
+						input#email.form-control.form-control-sm(type="email" name="email" required autocomplete="username")
+					.mb-3
+						label.form-label(for="password") Password
+						input#password.form-control.form-control-sm(type="password" name="password" required autocomplete="current-password")
+					.d-flex.justify-content-end
+						button.btn.btn-primary.btn-sm(type="submit") Sign in

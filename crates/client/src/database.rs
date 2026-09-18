@@ -3,7 +3,7 @@ use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Duration, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
-use std::{fs, path::{Path, PathBuf}, time::Duration as StdDuration};
+use std::{fs,io::{Read,Write}, path::{Path, PathBuf}, time::Duration as StdDuration};
 use typerelay_core::Snapshot;
 use uuid::Uuid;
 
@@ -22,7 +22,10 @@ impl Database {
             CREATE TABLE IF NOT EXISTS base_snippets(id TEXT PRIMARY KEY,library TEXT NOT NULL,data TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS outbox(seq INTEGER PRIMARY KEY AUTOINCREMENT,operation TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS recovery(id TEXT PRIMARY KEY,library TEXT,snippet TEXT,data TEXT NOT NULL);")?;
+            CREATE TABLE IF NOT EXISTS recovery(id TEXT PRIMARY KEY,library TEXT,snippet TEXT,data TEXT NOT NULL);
+			CREATE TABLE IF NOT EXISTS assets(id TEXT PRIMARY KEY,mime_type TEXT NOT NULL,size INTEGER NOT NULL,width INTEGER NOT NULL,height INTEGER NOT NULL,animated INTEGER NOT NULL DEFAULT 0,source_urls TEXT NOT NULL DEFAULT '[]',data BLOB NOT NULL,uploaded INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS snippet_assets(snippet TEXT NOT NULL,asset TEXT NOT NULL,PRIMARY KEY(snippet,asset));
+            CREATE INDEX IF NOT EXISTS snippet_asset_asset ON snippet_assets(asset);")?;
         let db = Self { connection, directory: directory.to_owned() };
         db.migrate()?;
         Ok(db)
@@ -44,8 +47,11 @@ impl Database {
         statement.query_map([id], |row| row.get::<_, String>(0))?.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
     }
     fn put_record(&self, library: &str, entry: &Value) -> Result<()> {
-        self.connection.execute("INSERT INTO snippets(id,library,data) VALUES(?1,?2,?3) ON CONFLICT(id) DO UPDATE SET library=excluded.library,data=excluded.data", params![entry["id"].as_str().context("Missing snippet ID")?, library, entry.to_string()])?;
-        Ok(())
+		let id=entry["id"].as_str().context("Missing snippet ID")?;
+		self.connection.execute("INSERT INTO snippets(id,library,data) VALUES(?1,?2,?3) ON CONFLICT(id) DO UPDATE SET library=excluded.library,data=excluded.data", params![id, library, entry.to_string()])?;
+		self.connection.execute("DELETE FROM snippet_assets WHERE snippet=?1",[id])?;
+		if let Some(assets)=entry["content"]["assets"].as_array(){for asset in assets{self.connection.execute("INSERT OR IGNORE INTO snippet_assets(snippet,asset) VALUES(?1,?2)",params![id,asset.as_str().context("Invalid asset reference")?])?;}}
+		Ok(())
     }
     fn put_library(&self, library: &Value, name: &str, synced: bool) -> Result<()> {
         self.connection.execute("INSERT INTO libraries(id,name,data,synced) VALUES(?1,?2,?3,?4) ON CONFLICT(id) DO UPDATE SET name=excluded.name,data=excluded.data,synced=excluded.synced,version=version+1", params![library["_id"].as_str().context("Missing library ID")?, name, library.to_string(), synced])?;
@@ -55,8 +61,8 @@ impl Database {
     pub fn entries(records: &[Value]) -> Result<Vec<Match>> {
         records.iter().filter(|entry| entry["state"] == "active").map(|entry| {
             let content = &entry["content"];
-            ensure!(content["version"] == 1 && (content["type"] == "plain_text" || content["type"] == "code"), "Unsupported snippet content");
-            Ok(Match { trigger: entry["trigger"].as_str().unwrap_or_default().into(), replace: content["text"].as_str().context("Missing text")?.into(), title: entry["title"].as_str().unwrap_or_default().into(), kind: content["type"].as_str().unwrap().into(), language: content["language"].as_str().unwrap_or("plain_text").into() })
+            ensure!((content["version"] == 1 && matches!(content["type"].as_str(),Some("plain_text")|Some("code")|Some("template")))||(content["version"]==2&&content["type"]=="rich_text"), "Unsupported snippet content");
+			Ok(Match { variables: serde_json::from_value(content.get("variables").cloned().unwrap_or_else(||json!({})))?, trigger: entry["trigger"].as_str().unwrap_or_default().into(), replace: if content["type"]=="rich_text"{content["markdown"].as_str().context("Missing rich text")?}else{content["text"].as_str().context("Missing text")?}.into(), title: entry["title"].as_str().unwrap_or_default().into(), kind: content["type"].as_str().unwrap().into(), language: content["language"].as_str().unwrap_or("plain_text").into() })
         }).collect()
     }
     pub fn snapshot(&self) -> Result<Snapshot> {
@@ -78,7 +84,14 @@ impl Database {
             total += bytes.len(); entries.extend(next);
         }
         ensure!(count <= 256 && total <= 8 * 1048576, "Active library limits exceeded");
-        Bridge::validate(&entries)
+        let mut snapshot = Bridge::validate(&entries)?;
+        for library in self.libraries()?.iter().filter(|library| library["state"] == "active") {
+            for record in self.records(library["_id"].as_str().unwrap())?.iter().filter(|record|record["state"] == "active" && matches!(record["content"]["type"].as_str(),Some("template")|Some("rich_text"))) {
+				for asset in record["content"]["assets"].as_array().into_iter().flatten(){let exists:bool=self.connection.query_row("SELECT EXISTS(SELECT 1 FROM assets WHERE id=?1)",[asset.as_str().unwrap_or("")],|row|row.get(0))?;ensure!(exists,"Rich text image is not available locally");}
+				snapshot.identify(record["trigger"].as_str().unwrap_or_default(), typerelay_core::Identity { id: record["id"].as_str().context("Missing ID")?.into(), library: library["_id"].as_str().unwrap().into(), revision: record["revision"].as_i64().context("Missing revision")? });
+			}
+        }
+        Ok(snapshot)
     }
     fn validate_transaction(&self) -> Result<()> { self.validated_snapshot().map(|_| ()) }
     pub fn names(&self) -> Result<Vec<String>> {
@@ -108,8 +121,12 @@ impl Database {
         let mut statement = self.connection.prepare("SELECT seq,operation FROM outbox ORDER BY seq")?;
         statement.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?.map(|row| { let (seq, text) = row?; Ok((seq, serde_json::from_str(&text)?)) }).collect()
     }
+	pub fn put_asset(&self,metadata:&Value,data:&[u8],uploaded:bool)->Result<()> {let id=metadata["id"].as_str().context("Missing asset ID")?;ensure!(id.len()==64&&id.bytes().all(|byte|byte.is_ascii_hexdigit()),"Invalid asset ID");ensure!(data.len()<=2*1048576,"Asset exceeds 2 MiB");self.connection.execute("INSERT INTO assets(id,mime_type,size,width,height,animated,source_urls,data,uploaded,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(id) DO UPDATE SET mime_type=excluded.mime_type,size=excluded.size,width=excluded.width,height=excluded.height,animated=excluded.animated,source_urls=excluded.source_urls,data=excluded.data,uploaded=MAX(assets.uploaded,excluded.uploaded)",params![id,metadata["mime_type"].as_str().context("Missing asset MIME")?,data.len() as i64,metadata["width"].as_i64().unwrap_or(0),metadata["height"].as_i64().unwrap_or(0),metadata["animated"].as_bool().unwrap_or(false),metadata["source_urls"].to_string(),data,uploaded,Utc::now().timestamp()])?;Ok(())}
+	pub fn asset(&self,id:&str)->Result<Option<(Value,Vec<u8>)>> {self.connection.query_row("SELECT mime_type,size,width,height,animated,source_urls,data,uploaded FROM assets WHERE id=?1",[id],|row|{let sources:String=row.get(5)?;Ok((json!({"id":id,"mime_type":row.get::<_,String>(0)?,"size":row.get::<_,i64>(1)?,"width":row.get::<_,i64>(2)?,"height":row.get::<_,i64>(3)?,"animated":row.get::<_,bool>(4)?,"source_urls":serde_json::from_str::<Value>(&sources).unwrap_or(json!([])),"uploaded":row.get::<_,bool>(7)?}),row.get(6)?))}).optional().map_err(Into::into)}
+	pub fn pending_assets(&self)->Result<Vec<(Value,Vec<u8>)>> {let mut statement=self.connection.prepare("SELECT id FROM assets WHERE uploaded=0 ORDER BY id")?;let ids=statement.query_map([],|row|row.get::<_,String>(0))?.collect::<std::result::Result<Vec<_>,_>>()?;ids.into_iter().map(|id|self.asset(&id)?.context("Asset disappeared")).collect()}
+	pub fn mark_asset_uploaded(&self,id:&str)->Result<()> {self.connection.execute("UPDATE assets SET uploaded=1 WHERE id=?1",[id])?;Ok(())}
     pub fn edit(&self, file: &OpenFile, index: Option<usize>, entry: Option<Match>) -> Result<OpenFile> {
-        let transaction = self.connection.unchecked_transaction()?;
+        let transaction = if self.connection.is_autocommit() { Some(self.connection.unchecked_transaction()?) } else { None };
         self.editable(&file.id)?;
         let current = self.editor(&file.name)?;
         ensure!(current.revision == file.revision, "Library changed outside the TUI; draft kept. Reopen before saving");
@@ -131,7 +148,7 @@ impl Database {
         library["revision"] = json!(library["revision"].as_i64().unwrap_or(1) + 1);
         self.put_library(&library, &file.name, self.synced(&file.id)?)?;
         self.validate_transaction()?;
-        transaction.commit()?;
+        if let Some(transaction) = transaction { transaction.commit()?; }
         self.editor(&file.name)
     }
     pub fn destinations(&self, source: &str) -> Result<Vec<Value>> {
@@ -228,12 +245,12 @@ impl Database {
             if library["state"] == "purged" { continue; }
             let can_manage = library["permissions"]["manage"] == true;
             if library["state"] == "trashed" {
-                if !Self::expired(&library) && can_manage { result.push(json!({"type":"library","id":id,"library":id,"name":library["name"],"revision":library["revision"],"can_purge":can_manage,"expires_at":library["expires_at"]})); }
+                if !Self::expired(&library) && can_manage { result.push(json!({"type":"library","id":id,"library":id,"name":library["name"],"revision":library["revision"],"can_restore":true,"can_purge":can_manage,"expires_at":library["expires_at"]})); }
                 continue;
             }
             if library["state"] != "active" || library["permissions"]["edit"] != true { continue; }
             for record in self.records(id)? {
-                if record["state"] == "trashed" && !Self::expired(&record) { result.push(json!({"type":"snippet","id":record["id"],"library":id,"name":record["title"].as_str().filter(|v|!v.is_empty()).or(record["trigger"].as_str()).unwrap_or("Untitled snippet"),"revision":record["revision"],"can_purge":can_manage,"expires_at":record["expires_at"]})); }
+                if record["state"] == "trashed" && !Self::expired(&record) { result.push(json!({"type":"snippet","id":record["id"],"library":id,"name":record["title"].as_str().filter(|v|!v.is_empty()).or(record["trigger"].as_str()).unwrap_or("Untitled snippet"),"library_name":library["name"],"revision":record["revision"],"can_restore":true,"can_purge":can_manage,"expires_at":record["expires_at"]})); }
             }
         }
         Ok(result)
@@ -302,10 +319,12 @@ impl Database {
                 for record in self.records(&id)? { if record["state"] == "trashed" && Self::expired(&record) { self.scrub(&id, record["id"].as_str())?; } }
             }
         }
+		let cutoff=(Utc::now()-Duration::days(30)).timestamp();self.connection.execute("DELETE FROM assets WHERE created_at<=?1 AND NOT EXISTS(SELECT 1 FROM snippet_assets WHERE asset=assets.id) AND NOT EXISTS(SELECT 1 FROM base_snippets WHERE data LIKE '%'||assets.id||'%') AND NOT EXISTS(SELECT 1 FROM outbox WHERE operation LIKE '%'||assets.id||'%') AND NOT EXISTS(SELECT 1 FROM recovery WHERE data LIKE '%'||assets.id||'%')",[cutoff])?;
         transaction.commit()?;
         Ok(())
     }
-    pub fn export(&self, name: &str, destination: &Path) -> Result<()> { let file = self.editor(name)?; Paths::atomic_write(destination, Bridge::export(&file.entries)?.as_bytes(), true) }
+	pub fn export(&self,name:&str,destination:&Path)->Result<()> {let file=self.editor(name)?;if destination.to_string_lossy().ends_with(".typerelay.zip"){let output=fs::File::create(destination)?;let mut zip=zip::ZipWriter::new(output);let options=zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);zip.start_file("bundle.json",options)?;let assets:[String;0]=[];let ids:std::collections::BTreeSet<String>=file.entries.iter().flat_map(|entry|entry.value()["content"]["assets"].as_array().cloned().unwrap_or_default()).filter_map(|id|id.as_str().map(str::to_owned)).collect();zip.write_all(serde_json::to_string(&json!({"version":1,"name":name,"assets":if ids.is_empty(){assets.to_vec()}else{ids.iter().cloned().collect()}}))?.as_bytes())?;zip.start_file("snippets.yml",options)?;zip.write_all(Bridge::export(&file.entries)?.as_bytes())?;for id in ids{let(metadata,bytes)=self.asset(&id)?.context("Bundle asset is missing")?;zip.start_file(format!("metadata/{id}.json"),options)?;zip.write_all(metadata.to_string().as_bytes())?;zip.start_file(format!("assets/{id}"),options)?;zip.write_all(&bytes)?;}zip.finish()?;Ok(())}else{Paths::atomic_write(destination,Bridge::export(&file.entries)?.as_bytes(),true)}}
+	pub fn import_bundle(&self,name:&str,source:&Path)->Result<OpenFile>{let file=fs::File::open(source)?;let mut archive=zip::ZipArchive::new(file)?;ensure!(archive.len()<=1000,"Bundle has too many files");let mut manifest=String::new();archive.by_name("snippets.yml")?.take(1048577).read_to_string(&mut manifest)?;ensure!(manifest.len()<=1048576,"Bundle manifest exceeds 1 MiB");let document:Document=serde_saphyr::from_str(&manifest)?;Bridge::validate(&document.matches)?;let ids:std::collections::BTreeSet<String>=document.matches.iter().flat_map(|entry|entry.value()["content"]["assets"].as_array().cloned().unwrap_or_default()).filter_map(|id|id.as_str().map(str::to_owned)).collect();for id in ids{let mut bytes=Vec::new();archive.by_name(&format!("assets/{id}"))?.take(2*1048576+1).read_to_end(&mut bytes)?;ensure!(bytes.len()<=2*1048576,"Bundle asset exceeds 2 MiB");let mut metadata=crate::assets::Assets::accept(self,&bytes,&id,false)?;if let Ok(file)=archive.by_name(&format!("metadata/{id}.json")){let mut value=String::new();file.take(65537).read_to_string(&mut value)?;if let Ok(saved)=serde_json::from_str::<Value>(&value){metadata["source_urls"]=saved["source_urls"].clone();self.put_asset(&metadata,&bytes,false)?;}}}self.import(name,&manifest)}
     pub fn import(&self, name: &str, source: &str) -> Result<OpenFile> {
         let parsed = Bridge::execute(crate::bridge::Request { yaml: Some(source.into()), matches: None, export: false, edits: vec![] })?;
         let name = Self::name(name)?;
@@ -620,10 +639,11 @@ impl Database {
             for (position, entry) in document.matches.iter().enumerate() {
                 let previous = baseline.iter().find(|record| record["trigger"] == entry.trigger);
                 let snippet_id = previous.and_then(|record| record["id"].as_str()).map(str::to_owned).unwrap_or_else(|| Uuid::new_v4().to_string());
-                let content = json!({"version":1,"type":"plain_text","text":entry.replace});
-                let record = json!({"id":snippet_id,"trigger":entry.trigger,"content":content,"position":position,"state":"active","revision":previous.map(|record| record["revision"].clone()).unwrap_or(json!(1))});
+                let value=entry.value();
+                let content = value["content"].clone();
+                let record = json!({"id":snippet_id,"trigger":value["trigger"],"title":entry.title,"content":content,"position":position,"state":"active","revision":previous.map(|record| record["revision"].clone()).unwrap_or(json!(1))});
                 self.put_record(&id, &record)?;
-                if managed.is_some() && previous.is_none_or(|record| record["replace"] != entry.replace) { changes.push(json!({"id":snippet_id,"base_revision":previous.map(|record|record["revision"].clone()),"base":previous,"value":{"trigger":entry.trigger,"content":content}})); }
+                if managed.is_some() && previous.is_none_or(|record| record["replace"] != entry.replace) { changes.push(json!({"id":snippet_id,"base_revision":previous.map(|record|record["revision"].clone()),"base":previous,"value":value})); }
             }
             for previous in &baseline {
                 if !document.matches.iter().any(|entry| previous["trigger"] == entry.trigger) {
@@ -682,13 +702,13 @@ mod tests {
     impl Fixture {
         fn new() -> Self { let temp = tempfile::tempdir().unwrap(); let directory = temp.path().join("snippets"); fs::create_dir_all(&directory).unwrap(); Self { _temp: temp, directory } }
         fn db(&self) -> Database { Database::open(&self.directory).unwrap() }
-        fn entry(trigger: &str, text: &str) -> Match { Match { trigger: trigger.into(), replace: text.into(), ..Match::default() } }
+        fn entry(trigger: &str, text: &str) -> Match { Match { variables: Default::default(), trigger: trigger.into(), replace: text.into(), ..Match::default() } }
     }
     #[test]
     fn code_optional_trigger_roundtrip_move_and_trash() {
         let fixture = Fixture::new(); let db = fixture.db();
         let file = db.create("Code").unwrap();
-        let entry = Match { trigger: String::new(), title: "Example".into(), kind: "code".into(), language: "RustLexer".into(), replace: "\t  {{ λ }}  \n$|$\n\n".into() };
+        let entry = Match { variables: Default::default(), trigger: String::new(), title: "Example".into(), kind: "code".into(), language: "RustLexer".into(), replace: "\t  {{ λ }}  \n$|$\n\n".into() };
         let file = db.edit(&file, None, Some(entry.clone())).unwrap();
         let file = db.edit(&file, None, Some(entry.clone())).unwrap();
         assert!(db.snapshot().unwrap().is_empty());
@@ -699,7 +719,7 @@ mod tests {
         let mut activated = entry.clone(); activated.trigger = "code".into();
         let file = db.edit(&file, Some(0), Some(activated.clone())).unwrap();
         let mut engine = typerelay_core::Engine::new(db.snapshot().unwrap());
-        for c in ",code".chars() { engine.feed(typerelay_core::Input::Character(c)); }
+        for c in ";code".chars() { engine.feed(typerelay_core::Input::Character(c)); }
         assert_eq!(engine.feed(typerelay_core::Input::Space).unwrap().text, entry.replace);
         let destination = db.create("Destination").unwrap();
         db.edit_move(&file, 0, activated.clone(), &destination.id).unwrap();
@@ -868,5 +888,7 @@ mod tests {
         assert_eq!(operation["body"]["destination_library"], "222222222222222222222222");
         assert_eq!(db.records("222222222222222222222222").unwrap()[0]["id"], source.ids[0]);
     }
+	#[test]
+	fn rich_text_assets_and_bundle_round_trip_without_inline_binary(){let source=tempfile::tempdir().unwrap();let db=Database::open(source.path()).unwrap();let png=base64::engine::general_purpose::STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=").unwrap();use base64::Engine as _;let id=format!("{:x}",sha2::Sha256::digest(&png));use sha2::Digest as _;let metadata=json!({"id":id.clone(),"mime_type":"image/png","size":png.len(),"width":1,"height":1,"animated":false,"source_urls":[]});db.put_asset(&metadata,&png,false).unwrap();let file=db.create("Rich").unwrap();let markdown=format!("# Hello\n\n<img src=\"typerelay-asset:{id}\" alt=\"dot\">");let entry=Match{trigger:"rich".into(),replace:markdown.clone(),kind:"rich_text".into(),..Default::default()};db.edit(&file,None,Some(entry)).unwrap();let bundle=source.path().join("rich.typerelay.zip");db.export("Rich",&bundle).unwrap();let destination=tempfile::tempdir().unwrap();let target=Database::open(destination.path()).unwrap();let imported=target.import_bundle("Imported",&bundle).unwrap();assert_eq!(imported.entries[0].replace,markdown);assert!(target.asset(&id).unwrap().is_some());assert!(std::fs::metadata(bundle).unwrap().len()<100_000);}
 
 }

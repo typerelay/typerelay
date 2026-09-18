@@ -1,0 +1,24 @@
+{
+  "originHash" : "fa3fcedecb3878645eae662dcd28e8e6091391f68ebdd7f29740686383e0fb5a",
+  "pins" : [
+    {
+      "identity" : "capacitor-swift-pm",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/ionic-team/capacitor-swift-pm.git",
+      "state" : {
+        "revision" : "0b6882e9a3288342aacf36348e5a94e4f1dd7b13",
+        "version" : "8.5.2"
+      }
+    },
+    {
+      "identity" : "keychain-swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/evgenyneu/keychain-swift.git",
+      "state" : {
+        "revision" : "265806607b45687a3d646e4c9837c31c90f202e8",
+        "version" : "21.0.0"
+      }
+    }
+  ],
+  "version" : 3
+}

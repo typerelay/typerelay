@@ -1,0 +1,27 @@
+// Disposable browser fixture. Never uses the application's database or sends mail.
+import { writeFileSync, copyFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { Auth } from '../services/auth.js';
+import { Support } from '../services/support.js';
+import { User, Account, Member, Ticket, mongoose } from '../model/index.js';
+import { Libraries } from '../services/libraries.js';
+import '../scripts/build-editor.js';
+process.env.NODE_ENV = 'test';
+process.env.PORT = '3142';
+process.env.MONGO_URI = 'mongodb://mongo:27017/typerelay_template_browser?replicaSet=typerelay';
+process.env.SESSION_SECRET = Support.token();
+process.env.JWT_SECRET = Support.token();
+Auth.origin = 'http://template-server:3142';
+copyFileSync('/usr/local/share/typerelay/template.wasm', '/data/editor/template.wasm');
+const { Server } = await import('../app.js');
+const server = await Server.start();
+const user = await User.create({ email: randomUUID() + '@example.test', name: 'Template test' });
+const account = await Account.create({ name: 'Template browser test' });
+await Member.create({ user: user._id, account: account._id, role: 'owner' });
+const ctx = await Support.context(String(user._id), String(account._id));
+const body = { name: 'Templates', snippets: [{ id: randomUUID(), trigger: 'hello', content: { version: 1, type: 'template', text: 'Hi {{name}} {{date}}{{key:enter}}', variables: { name: { label: 'Customer', required: true }, date: { timezone: 'utc' } } } }] };
+await Libraries.mutate(ctx, randomUUID(), body, async (fresh, session) => ({ library: await Libraries.create(fresh, body, session) }));
+const token = Support.token(); await Ticket.create({ hash: Support.hash(token), kind: 'login', email: user.email, expires: new Date(Date.now() + 600000) });
+writeFileSync('/fixtures/login.json', JSON.stringify({ url: Auth.origin + '/auth/callback?token=' + token }));
+server.listeners('request')[0].get('/fixture-ready', (req, res) => res.json({ ready: true }));
+process.on('SIGTERM', async () => { server.close(); await mongoose.connection.dropDatabase(); await mongoose.disconnect(); process.exit(0); });

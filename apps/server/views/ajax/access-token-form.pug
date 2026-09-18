@@ -1,0 +1,15 @@
+form#access-token-form
+	label.form-label(for="token-name") Name
+	input#token-name.form-control.form-control-sm.mb-3(name="name" required maxlength="100")
+	label.form-label(for="token-days") Expiry in days
+	input#token-days.form-control.form-control-sm(name="days" type="number" min="0" max="365" value="90" required aria-describedby="token-days-help")
+	div#token-days-help.form-text.mb-3 Set to 0 for unlimited
+	fieldset.mb-3
+		legend.h6 Permissions
+		each scope in integrationScopes
+			.form-check
+				input.form-check-input(type="checkbox" name="scopes" value=scope id='scope-' + scope checked=scope === 'content:read')
+				label.form-check-label(for='scope-' + scope)= scope
+	.d-flex.justify-content-between
+		button.btn.btn-outline-secondary.btn-sm(type="reset") Cancel
+		button.btn.btn-primary.btn-sm Create token
