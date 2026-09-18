@@ -8,6 +8,7 @@ import { mongoose, User, Account, Member, Ticket, Device, Integration, Integrati
 import { Support } from './support.js';
 import { Billing } from './billing.js';
 import { SignupNotifications } from './signup_notifications.js';
+import { StarterContent } from './starter_content.js';
 import bcrypt from 'bcryptjs';
 
 export class Auth {
@@ -68,6 +69,7 @@ export class Auth {
 				[user] = await User.create([{ email: ticket.email, name: ticket.data?.name || ticket.email.split('@')[0] }], { session });
 				[account] = await Account.create([{ name: user.name + '’s team' }], { session });
 				await Member.create([{ account: account._id, user: user._id, role: 'owner' }], { session });
+				await StarterContent.create(account, user, session);
 				if (Billing.hosted()) signupNotification = await SignupNotifications.create(user, account, session);
 			}
 		});

@@ -7,12 +7,15 @@ const cbor = new Encoder({ useRecords: false, useTag259ForMaps: false, tagUint8A
 import { generateSync } from 'otplib';
 import { JSDOM } from 'jsdom';
 import bcrypt from 'bcryptjs';
-import { mongoose, User, Account, Ticket, Member, Passkey, Device, SignupNotification, Integration, IntegrationToken, OAuthClient } from '../model/index.js';
+import { mongoose, User, Account, Ticket, Member, Passkey, Device, SignupNotification, Integration, IntegrationToken, OAuthClient, Library, Snippet, SnippetAsset, Change } from '../model/index.js';
 import { Support } from '../services/support.js';
 import { Auth } from '../services/auth.js';
 import { Security } from '../services/security.js';
 import { SignupNotifications } from '../services/signup_notifications.js';
 import { Team } from '../services/team.js';
+import { Billing } from '../services/billing.js';
+import { RichText } from '../services/rich_text.js';
+import { StarterContent } from '../services/starter_content.js';
 
 class Browser {
 	cookie = ''; csrf = ''; account = '';
@@ -112,6 +115,7 @@ test('confirmed hosted signups notify Type Relay through a durable retrying outb
 	let record;
 	for (let attempt = 0; attempt < 100; attempt++) { record = await SignupNotification.findOne({ user: user._id }).lean(); if (record?.attempts) break; await new Promise(resolve => setTimeout(resolve, 10)); }
 	assert.equal(record.status, 'pending'); assert.equal(record.attempts, 1);
+	assert.equal(await Library.countDocuments({ account: record.account, state: 'active' }), 1); assert.equal(await Snippet.countDocuments({ account: record.account, state: 'active' }), 6);
 	await SignupNotification.updateOne({ _id: record._id }, { $set: { next_attempt_at: new Date(0) } });
 	const delivered = [];
 	assert.deepEqual(await SignupNotifications.reconcile(async message => delivered.push(message)), { checked: 1, sent: 1, retrying: 0, failed: 0 });
@@ -129,6 +133,32 @@ test('self-hosted signup confirmation creates no operational notification', asyn
 	const confirmation = Fixture.mailUrl(Fixture.mails.findLast(mail => mail.to === email));
 	const user = await User.findById(await Auth.consume(confirmation.searchParams.get('token'))).lean();
 	assert.equal(await SignupNotification.exists({ user: user._id }), null);
+	const member = await Member.findOne({ user: user._id, role: 'owner' }).lean();
+	const library = await Library.findOne({ account: member.account, creator: user._id }).lean();
+	assert.equal(library.name, 'My snippets'); assert.equal(library.shared, false); assert.equal(library.state, 'active');
+	const snippets = await Snippet.find({ library: library._id, state: 'active' }).sort({ position: 1 }).lean();
+	assert.deepEqual(snippets.map(snippet => snippet.trigger), ['welcome', 'jslog', 'rich', 'sig', 'status', 'support']);
+	assert.deepEqual(snippets.map(snippet => snippet.content.type), ['template', 'code', 'rich_text', 'template', 'template', 'rich_text']);
+	assert.equal(snippets[0].content.variables.name.label, 'Name'); assert.equal(snippets[1].content.language, 'javascript');
+	assert.equal(snippets[4].content.variables.date.format, 'YYYY-MM-DD'); assert.equal(snippets[4].content.variables.date.timezone, 'local');
+	const icon = await SnippetAsset.findOne({ account: member.account }).lean();
+	assert.ok(icon); assert.deepEqual(snippets[2].content.assets, [icon.id]); assert.equal(await Change.countDocuments({ account: member.account, library: library._id }), 1);
+	const support = RichText.render({ ...snippets[5].content, values: { name: 'Alex' }, preview: false, assets: {} });
+	assert.match(support.html, /Hi Alex/); assert.match(support.html, /href="https:\/\/typerelay\.com\/"/); assert.match(support.html, /href="https:\/\/docs\.typerelay\.com\/mcp\/"/); assert.match(support.html, /href="https:\/\/app\.typerelay\.com\/"/); assert.match(support.rtf, /TypeRelay Support/); assert.match(support.text, /open the in-app chat/);
+	assert.deepEqual(await Billing.usage(member.account), { libraries: 1, snippets: 6, people: 1, invitations: 0, machines: 0 });
+	await Auth.login(email); const repeat = Fixture.mailUrl(Fixture.mails.findLast(mail => mail.to === email)); assert.equal(await Auth.consume(repeat.searchParams.get('token')), String(user._id)); assert.equal(await Library.countDocuments({ account: member.account }), 1);
+});
+test('starter content rolls back with its account transaction', async () => {
+	let account; let user;
+	await assert.rejects(mongoose.connection.transaction(async session => {
+		[user] = await User.create([{ email: randomUUID() + '@example.test', name: 'Rollback Owner' }], { session });
+		[account] = await Account.create([{ name: 'Rollback account' }], { session });
+		await Member.create([{ account: account._id, user: user._id, role: 'owner' }], { session });
+		await StarterContent.create(account, user, session);
+		throw new Error('rollback starter content');
+	}), /rollback starter content/);
+	assert.equal(await User.exists({ _id: user._id }), null); assert.equal(await Account.exists({ _id: account._id }), null); assert.equal(await Member.exists({ account: account._id }), null);
+	assert.equal(await Library.exists({ account: account._id }), null); assert.equal(await Snippet.exists({ account: account._id }), null); assert.equal(await SnippetAsset.exists({ account: account._id }), null); assert.equal(await Change.exists({ account: account._id }), null);
 });
 test('team admins directly add new or existing users without replacing existing passwords', async () => {
 	const owner = await User.create({ email: randomUUID() + '@example.test', name: 'Team Owner' });

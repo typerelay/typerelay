@@ -7,6 +7,7 @@ import { Auth } from './auth.js';
 import { Security } from './security.js';
 import { Billing } from './billing.js';
 import { WhiteLabel } from './white_label.js';
+import { StarterContent } from './starter_content.js';
 
 export class AdminAccounts {
 	static owned = ['Member', 'Group', 'SignupNotification', 'Library', 'Snippet', 'SnippetAsset', 'Device', 'Change', 'Operation', 'Conflict', 'Integration', 'OAuthClient', 'ApiAudit', 'AdminAudit'];
@@ -71,6 +72,7 @@ export class AdminAccounts {
 			user = await Models.User.findOneAndUpdate({ email }, { $setOnInsert: { name: ownerName, email }, $inc: { activity_sequence: 1 } }, { upsert: true, returnDocument: 'after', session }).lean();
 			[account] = await Models.Account.create([{ name }], { session });
 			await Models.Member.create([{ account: account._id, user: user._id, role: 'owner' }], { session });
+			await StarterContent.create(account, user, session);
 		});
 		const warnings = [];
 		try { await Billing.initializeAccount(account, user); } catch { warnings.push('Billing initialization failed; account created.'); }
