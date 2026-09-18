@@ -8,6 +8,7 @@ import { operations } from '../server/api/catalog.js';
 import { ApiSchema } from '../server/api/openapi.js';
 import { McpCache } from './cache.js';
 import { McpRateLimit } from './rate_limit.js';
+import { recordException, shutdownObservability } from '@typerelay/observability';
 
 export class McpApi {
 	constructor(base, authorization) { this.base = base; this.authorization = authorization; }
@@ -83,16 +84,25 @@ export class TypeRelayMcp {
 				await transport.handleRequest(req, res, req.body);
 			} catch (error) {
 				if (res.headersSent) return;
+				if (!error.status || error.status >= 500) recordException(error);
 				if (error.status === 401) res.set('WWW-Authenticate', 'Bearer resource_metadata="' + metadata + '"');
 				res.status(error.status || 500).json({ error: error.status ? error.message : 'MCP request failed' });
 			}
 		});
 		app.all('/mcp', (req, res) => res.set('Allow', 'POST').status(405).json({ error: 'Use POST with Streamable HTTP' }));
-		app.use((error, req, res, next) => res.status(error.status || 500).json({ error: error.status === 413 ? 'Request too large' : 'Invalid request' }));
+		app.use((error, req, res, next) => { if (!error.status || error.status >= 500) recordException(error); res.status(error.status || 500).json({ error: error.status === 413 ? 'Request too large' : 'Invalid request' }); });
 		return app;
 	}
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-	if (McpRateLimit.getConfig().enabled) await McpCache.connect();
-	TypeRelayMcp.app().listen(Number(process.env.PORT || 3041), '0.0.0.0');
+	try {
+		if (McpRateLimit.getConfig().enabled) await McpCache.connect();
+		const port = Number(process.env.PORT || 3041);
+		TypeRelayMcp.app().listen(port, '0.0.0.0', () => console.log(JSON.stringify({ event: 'service_started', service: process.env.OTEL_SERVICE_NAME || 'typerelay-mcp', mode: 'mcp', port, version: process.env.APP_VERSION || 'development' })));
+	} catch (error) {
+		recordException(error);
+		console.error(JSON.stringify({ event: 'service_start_failed', service: process.env.OTEL_SERVICE_NAME || 'typerelay-mcp', error: error.message || String(error) }));
+		await shutdownObservability();
+		process.exit(1);
+	}
 }

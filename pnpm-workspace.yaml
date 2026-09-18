@@ -4,6 +4,7 @@ injectWorkspacePackages: true
 minimumReleaseAge: 0
 packages:
   - "apps/*"
+  - "apps/server/observability"
   - "docs"
 allowBuilds:
   cbor-extract: false

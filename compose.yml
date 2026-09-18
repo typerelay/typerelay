@@ -122,7 +122,7 @@ services:
     extends:
       file: ./compose.base.yml
       service: base
-    command: [node, scripts/start.js]
+    command: [npm, run, start]
     healthcheck:
       disable: true
     environment:

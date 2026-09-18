@@ -6,12 +6,13 @@
   "license": "AGPL-3.0",
   "packageManager": "pnpm@12.0.0",
   "scripts": {
-    "start": "node server.js",
+    "start": "node --import @typerelay/observability/register server.js",
     "test": "node --test test/*.test.js"
   },
   "dependencies": {
     "@managani/cache": "0.1.5",
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "@typerelay/observability": "workspace:*",
     "express": "^5.2.1",
     "express-rate-limit": "^8.7.0",
     "mongoose": "^9.10.1",
