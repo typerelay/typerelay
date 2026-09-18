@@ -4,6 +4,7 @@ import { Member, Group, User, Ticket, Account, Device } from '../model/index.js'
 import { Support } from './support.js';
 import { Auth } from './auth.js';
 import { Billing } from './billing.js';
+import { Security } from './security.js';
 
 export class Team {
 	static async list(ctx) {
@@ -22,6 +23,34 @@ export class Team {
 		const [inviter, account] = await Promise.all([User.findById(ctx.user).select('name').lean(), Account.findById(ctx.account).select('name').lean()]);
 		await AdminSettings.send('invite', email, { url: Auth.origin + '/?invite=' + token, inviterName: inviter?.name || 'Your team', tenantName: account?.name || 'your team' });
 		return { invited: email, invitation: String(invitation._id) };
+	}
+	static async add(ctx, body) {
+		Support.assert(Support.admin(ctx), 'Admin required', 403);
+		Billing.assertTeam(ctx);
+		Support.assert(typeof body.send_welcome_email === 'boolean', 'Choose whether to send an email');
+		const email = Security.email(body.email);
+		const result = await AccountAccess.write(ctx.account, async session => {
+			await Ticket.deleteMany({ account: ctx.account, kind: 'invite', email }, { session });
+			await Billing.assertSeatCapacity(ctx, 1, session);
+			let user = await User.findOne({ email }).session(session).lean();
+			Support.assert(!user || !await Member.exists({ account: ctx.account, user: user._id }).session(session), 'User is already a member of this account', 409);
+			let temporaryPassword;
+			if (!user) {
+				const name = Support.text(body.name);
+				const password = await Security.password(body.password || '');
+				temporaryPassword = password.password;
+				const [created] = await User.create([{ email, name, password: password.hash }], { session });
+				user = { _id: created._id, email: created.email, name: created.name };
+			}
+			const [member] = await Member.create([{ account: ctx.account, user: user._id, role: 'member' }], { session });
+			await Support.change(ctx.account, null, 'membership', session);
+			return { member: { ...member.toObject(), profile: user }, created_user: Boolean(temporaryPassword), temporary_password: temporaryPassword };
+		});
+		if (body.send_welcome_email) {
+			const account = await Account.findById(ctx.account).select('name').lean();
+			await AdminSettings.send('team-member-added', result.member.profile.email, { url: Auth.origin + '/login', name: result.member.profile.name, tenantName: account?.name || 'your team' }).catch(error => console.error(`Team member email failed: ${error.message}`));
+		}
+		return result;
 	}
 	static async accept(ctx, token, session) {
 		const user = await User.findById(ctx.user).session(session).lean();

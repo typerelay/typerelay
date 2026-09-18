@@ -12,6 +12,12 @@ export class Security {
 	static dummy = bcrypt.hashSync(Support.token(), 12);
 	static signupEnabled() { return process.env.ENABLE_SIGNUP === 'true'; }
 	static email(value) { const email = Support.text(value, 254).toLowerCase(); Support.assert(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email), 'Enter a valid email address'); return email; }
+	static async password(value = '') {
+		Support.assert(typeof value === 'string' && value.length <= 256, 'Invalid password');
+		const password = value || Support.token().slice(0, 22);
+		Support.assert(password.length >= 8, 'Password must be at least 8 characters');
+		return { password, hash: await bcrypt.hash(password, 12) };
+	}
 	static fresh(req) { Support.assert((!req.ctx || (!req.ctx.device && req.ctx.user === req.session.user)) && req.session.user && req.session.auth_at > Date.now() - 15 * 60000, 'Please sign out and sign in again before changing security settings', 401); }
 	static async establish(req, id, verifiedFactor = false) {
 		const user = await User.findById(id).lean();
@@ -25,6 +31,7 @@ export class Security {
 			req.session.pending_factor = { user: String(id), version: user.auth_version || 0, expires: Date.now() + 300000 };
 			result = { requires2FA: true, csrf: req.session.csrf, redirect: '/auth/two-factor' };
 		} else {
+			await User.updateOne({ _id: id }, { $set: { last_login: new Date() } });
 			req.session.user = String(id);
 			req.session.auth_version = user.auth_version || 0;
 			req.session.auth_at = Date.now();
@@ -94,8 +101,7 @@ export class Security {
 		return { redirect: '/' };
 	}
 	static async resetPassword(userId, session) {
-		const password = Support.token().slice(0, 22);
-		const hash = await bcrypt.hash(password, 12);
+		const { password, hash } = await Security.password();
 		const user = await User.findOneAndUpdate({ _id: userId }, { $set: { password: hash }, $inc: { auth_version: 1 } }, { returnDocument: 'after', session }).lean();
 		Support.assert(user, 'Account missing', 401);
 		return { password, version: user.auth_version };

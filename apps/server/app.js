@@ -9,7 +9,7 @@ import helmet from 'helmet';
 import { rateLimit } from 'express-rate-limit';
 import { mkdir, rm } from 'node:fs/promises';
 import formidable from 'formidable';
-import { mongoose, User, Account, Member, Device, Conflict, Group, Ticket, Operation } from './model/index.js';
+import { mongoose, User, Account, Member, Device, Conflict, Ticket, Operation } from './model/index.js';
 import { Auth } from './services/auth.js';
 import { Support, Yaml } from './services/support.js';
 import { Libraries } from './services/libraries.js';
@@ -24,6 +24,8 @@ import { Assets } from './services/assets.js';
 import { ProductUpdates } from './services/product_updates.js';
 import { Bundles } from './services/bundles.js';
 import { recordException, shutdownObservability } from '@typerelay/observability';
+import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 export class Server {
 	static async start() {
@@ -42,8 +44,20 @@ export class Server {
 		app.set('view engine', 'pug');
 		app.set('views', './views');
 		app.use((req, res, next) => { res.locals.styleNonce = Support.token(); next(); });
-		app.use('/docs', helmet({ contentSecurityPolicy: false }), express.static(process.env.DOCS_DIR || '/docs', { extensions: ['html'] }));
-		app.use(helmet({ contentSecurityPolicy: { directives: { 'upgrade-insecure-requests': Auth.origin.startsWith('https:') ? [] : null, 'script-src': ["'self'", "'wasm-unsafe-eval'"], 'style-src': ["'self'", (req, res) => "'nonce-" + res.locals.styleNonce + "'"], 'style-src-attr': ["'unsafe-inline'"], 'img-src': ["'self'", 'data:', ...(ProductUpdates.enabled() ? ['https:', 'http:'] : [])] } } }));
+		const docsOptions = { extensions: ['html'], immutable: true, index: 'index.html', maxAge: '7d' };
+		const docsRoot = process.env.DOCS_ROOT_DIR || fileURLToPath(new URL('./docs-dist-root/', import.meta.url));
+		const docsHosts = (process.env.TYPERELAY_DOCS_VANITY_HOSTS || 'docs.typerelay.com').split(',').map(host => host.trim().toLowerCase()).filter(Boolean);
+		if (existsSync(docsRoot)) {
+			const docsHeaders = helmet({ contentSecurityPolicy: false });
+			const docsStatic = express.static(docsRoot, docsOptions);
+			app.use((req, res, next) => {
+				if (!docsHosts.includes(req.hostname.toLowerCase())) return next();
+				docsHeaders(req, res, error => error ? next(error) : docsStatic(req, res, () => res.status(404).sendFile(docsRoot + '/404.html')));
+			});
+		}
+		const docsDist = process.env.DOCS_DIR || fileURLToPath(new URL('./docs-dist/', import.meta.url));
+		if (existsSync(docsDist)) app.use('/docs', helmet({ contentSecurityPolicy: false }), express.static(docsDist, docsOptions), (req, res) => res.status(404).sendFile(docsDist + '/404.html'));
+		app.use(helmet({ contentSecurityPolicy: { directives: { 'upgrade-insecure-requests': Auth.origin.startsWith('https:') ? [] : null, 'script-src': ["'self'", "'wasm-unsafe-eval'"], 'style-src': ["'self'", (req, res) => "'nonce-" + res.locals.styleNonce + "'"], 'style-src-elem': ["'self'", "'unsafe-inline'"], 'style-src-attr': ["'unsafe-inline'"], 'img-src': ["'self'", 'data:', ...(ProductUpdates.enabled() ? ['https:', 'http:'] : [])] } } }));
 		app.use(AccountAccess.middleware);
 		app.post('/billing/webhook', express.raw({ type: 'application/json' }), async (req, res) => { Support.assert(req.headers['stripe-signature'], 'Missing Stripe-Signature', 400); try { await Billing.handleWebhook(req.body, req.headers['stripe-signature']); res.json({ received: true }); } catch (error) { error.status ||= 400; throw error; } });
 		app.use(express.json({ limit: '12mb' }), express.urlencoded({ extended: false, limit: '32kb' }));
@@ -211,12 +225,13 @@ export class Server {
 		app.get('/api/v2/sync', async (req, res) => res.json(await Libraries.download(req.ctx, Number(req.query.cursor || 0))));
 		app.post('/api/v2/conflicts/:id', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.resolve(ctx, req.params.id, req.body, session))));
 		app.get('/api/v2/team', async (req, res) => res.json(await Team.list(req.ctx)));
+		app.post('/api/v2/team/members', async (req, res) => { const result = await Team.add(req.ctx, req.body); res.json({ ...result, html: pug.renderFile('./views/ajax/member.pug', { member: result.member, ctx: req.ctx }) }); });
 		app.post('/api/v2/team/invitations', async (req, res) => res.json(await Team.invite(req.ctx, req.body.email)));
 		app.delete('/api/v2/team/invitations/:id', async (req, res) => { Support.assert(Support.admin(req.ctx), 'Admin required', 403); await Ticket.deleteOne({ _id: Support.id(req.params.id), account: req.ctx.account, kind: 'invite' }); res.json({ deleted: req.params.id }); });
 		app.post('/api/v2/team/accept', async (req, res) => res.json(await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Team.accept(ctx, req.body.token, session))));
 		app.patch('/api/v2/team/members/:id', async (req, res) => res.json(await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Team.member(ctx, req.params.id, req.body, session))));
-		app.post('/api/v2/team/groups', async (req, res) => res.json(await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Team.group(ctx, null, req.body, session))));
-		app.patch('/api/v2/team/groups/:id', async (req, res) => res.json(await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Team.group(ctx, req.params.id, req.body, session))));
+		app.post('/api/v2/team/groups', async (req, res) => { const result = await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Team.group(ctx, null, req.body, session)); const team = await Team.list(req.ctx); res.json({ ...result, html: pug.renderFile('./views/ajax/group.pug', { group: result.group, team, ctx: req.ctx }) }); });
+		app.patch('/api/v2/team/groups/:id', async (req, res) => { const result = await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Team.group(ctx, req.params.id, req.body, session)); if (result.group) { const team = await Team.list(req.ctx); result.html = pug.renderFile('./views/ajax/group.pug', { group: result.group, team, ctx: req.ctx }); } res.json(result); });
 		app.delete('/api/v2/connection', async (req, res) => { Support.assert(req.ctx.device, 'Device authentication required', 401); await Device.updateOne({ _id: req.ctx.device, user: req.ctx.user, account: req.ctx.account }, { $set: { revoked: true } }); res.json({ disconnected: true }); });
 		app.get('/api/v2/devices', async (req, res) => res.json(await Device.find({ account: req.ctx.account, user: req.ctx.user, revoked: false }).select('_id name client_type os createdAt last_active').lean()));
 		app.delete('/api/v2/devices/:id', async (req, res) => { await Device.updateOne({ _id: Support.id(req.params.id), account: req.ctx.account, user: req.ctx.user }, { $set: { revoked: true } }); res.json({ deleted: req.params.id }); });
@@ -228,15 +243,13 @@ export class Server {
 		app.patch('/api/v2/account', async (req, res) => { Support.assert(Support.admin(req.ctx), 'Admin required', 403); await Account.updateOne({ _id: req.ctx.account }, { $set: { name: Support.text(req.body.name) } }); res.json({ name: req.body.name }); });
 		app.get('/api/v2/forms/:kind', async (req, res) => {
 			const kind = req.params.kind;
-			if (kind === 'group') Billing.assertTeam(req.ctx);
 			if (kind === 'import') Support.assert(Object.hasOwn(Libraries.importFormats, req.query.format || ''), 'Unknown import format');
-			Support.assert(['library', 'snippet', 'group', 'conflict', 'move', 'snippetslab', 'import'].includes(kind), 'Unknown form');
+			Support.assert(['library', 'snippet', 'conflict', 'move', 'snippetslab', 'import'].includes(kind), 'Unknown form');
 			const library = req.query.library ? Libraries.view(req.ctx, await Libraries.get(req.ctx, req.query.library, null, true)) : null;
-			const group = req.query.group ? await Group.findOne({ _id: Support.id(req.query.group), account: req.ctx.account }).lean() : null;
 			const conflict = req.query.conflict ? await Conflict.findOne({ _id: Support.id(req.query.conflict), account: req.ctx.account, library: library?._id, resolved: false }).lean() : null;
 			if (kind === 'conflict') Support.assert(conflict && library.permissions.edit, 'Conflict not found', 404);
 			const current = library?.records.find(snippet => snippet.id === conflict?.snippet) || null;
-			res.render('ajax/form', { kind, importFormat: Libraries.importFormats[kind === 'snippetslab' ? 'snippetslab' : req.query.format], destinations: library ? (await Libraries.list(req.ctx)).filter(item => item.permissions.edit && item._id !== library._id) : [], library, group, conflict, current, snippet: kind === 'conflict' ? (conflict.local ? Libraries.entry(conflict.local) : current) : library?.snippets.find(snippet => snippet.id === req.query.snippet), team: await Team.list(req.ctx), ctx: req.ctx });
+			res.render('ajax/form', { kind, importFormat: Libraries.importFormats[kind === 'snippetslab' ? 'snippetslab' : req.query.format], destinations: library ? (await Libraries.list(req.ctx)).filter(item => item.permissions.edit && item._id !== library._id) : [], library, conflict, current, snippet: kind === 'conflict' ? (conflict.local ? Libraries.entry(conflict.local) : current) : library?.snippets.find(snippet => snippet.id === req.query.snippet), team: await Team.list(req.ctx), ctx: req.ctx });
 		});
 		app.get('/api/v2/editor/:id', async (req, res) => {
 			const library = Libraries.view(req.ctx, await Libraries.get(req.ctx, req.params.id));
@@ -267,7 +280,7 @@ export class Server {
 			const team = await Team.list(req.ctx);
 			const record = team[req.params.type === 'group' ? 'groups' : 'members'].find(item => String(item._id) === req.params.id);
 			Support.assert(record, 'Record missing', 404);
-			res.render('ajax/' + req.params.type, { [req.params.type]: record, ctx: req.ctx });
+			res.render('ajax/' + req.params.type, { [req.params.type]: record, team, ctx: req.ctx });
 		});
 		app.use((error, req, res, next) => {
 			if (res.headersSent) return next(error);

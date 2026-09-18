@@ -1,4 +1,10 @@
-li.list-group-item.d-flex.align-items-center.justify-content-between(data-group=group._id)
-	span= group.name
+li.list-group-item(data-group=group._id)
+	.group-display.d-flex.align-items-center.justify-content-between
+		span= group.name
+		if ['owner', 'admin'].includes(ctx.role)
+			.d-flex.align-items-center.gap-3
+				button.btn.btn-outline-secondary.btn-sm(type="button" data-edit-group) Edit
+				button.btn.btn-outline-danger.btn-sm(type="button" data-delete-group=group._id) Delete
 	if ['owner', 'admin'].includes(ctx.role)
-		button.btn.btn-outline-secondary.btn-sm(data-edit-group=JSON.stringify(group)) Edit
+		- var groupForm = group
+		include group-form

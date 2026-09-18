@@ -6,9 +6,11 @@ import { Billing } from './billing.js';
 import { WhiteLabel } from './white_label.js';
 import { Helpmonks } from './helpmonks.js';
 import { recordException } from '@typerelay/observability';
+import { SignupNotifications } from './signup_notifications.js';
+import { Auth } from './auth.js';
 
 export class Scheduler {
-	static start({ CronClass = Cron, cleanup = () => Libraries.cleanup(), expireTrials = () => Billing.runTrialExpiry(), enrollTrialUsers = () => Helpmonks.enrollTrialUsers(), reconcileWhiteLabel = () => WhiteLabel.reconcile(), purgeAccounts = () => AdminAccounts.recover(), syncProductUpdates = () => ProductUpdates.syncProductUpdates(), productUpdatesEnabled = ProductUpdates.enabled(), logger = console } = {}) {
+	static start({ CronClass = Cron, cleanup = () => Libraries.cleanup(), expireTrials = () => Billing.runTrialExpiry(), enrollTrialUsers = () => Helpmonks.enrollTrialUsers(), reconcileSignupNotifications = () => SignupNotifications.reconcile(message => Auth.mail.sendMail(message)), reconcileWhiteLabel = () => WhiteLabel.reconcile(), purgeAccounts = () => AdminAccounts.recover(), syncProductUpdates = () => ProductUpdates.syncProductUpdates(), productUpdatesEnabled = ProductUpdates.enabled(), logger = console } = {}) {
 		let running = false;
 		const cleanupJob = new CronClass('30 2 * * *', { protect: true }, async () => {
 			if (running) return;
@@ -29,6 +31,9 @@ export class Scheduler {
 		const helpmonksJob = new CronClass('* * * * *', { protect: true }, async () => {
 			try { const summary = await enrollTrialUsers(); if (summary.checked) logger.log(`Helpmonks trial sequence complete: enrolled ${summary.enrolled}, retrying ${summary.retrying}, failed ${summary.failed}`); } catch (error) { recordException(error); logger.error(`Helpmonks trial sequence failed: ${error.message}`); }
 		});
+		const signupNotificationJob = new CronClass('* * * * *', { protect: true }, async () => {
+			try { const summary = await reconcileSignupNotifications(); if (summary.checked) logger.log(`Signup notifications complete: sent ${summary.sent}, retrying ${summary.retrying}, failed ${summary.failed}`); } catch (error) { recordException(error); logger.error(`Signup notification reconciliation failed: ${error.message}`); }
+		});
 		const whiteLabelJob = new CronClass('*/5 * * * *', { protect: true }, async () => {
 			try { const summary = await reconcileWhiteLabel(); if (summary.checked) logger.log(`White-label reconciliation complete: checked ${summary.checked}, updated ${summary.updated}, failed ${summary.failed}`); } catch (error) { recordException(error); logger.error(`White-label reconciliation failed: ${error.message}`); }
 		});
@@ -44,6 +49,6 @@ export class Scheduler {
 			productUpdatesJob = new CronClass('*/15 * * * *', { protect: true }, sync);
 			void sync();
 		}
-		return { cleanupJob, trialJob, helpmonksJob, whiteLabelJob, deletionJob, productUpdatesJob };
+		return { cleanupJob, trialJob, helpmonksJob, signupNotificationJob, whiteLabelJob, deletionJob, productUpdatesJob };
 	}
 }

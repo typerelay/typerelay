@@ -135,7 +135,7 @@ test('settings encrypt and mask secrets; custom code only enters authenticated a
 	await Fixture.json('/admin/api/settings/custom-code', 'PUT', { js: '</script>', css: '', origins: [] }, 400);
 	const locals = { styleNonce: 'nonce-test' }; const headers = { 'Content-Security-Policy': "script-src 'self'; style-src 'self'" }; const response = { locals, getHeader: key => headers[key], setHeader: (key, value) => { headers[key] = value; } };
 	await AdminSettings.application({}, response, { _id: new M.User()._id, name: 'Test', email: 'test@example.test' }, { account: 'account', role: 'owner', entitlements: { plan: 'team' } });
-	assert.ok(locals.managani.token); assert.match(headers['Content-Security-Policy'], /nonce-nonce-test/); assert.match(headers['Content-Security-Policy'], /cdn.example.test/);
+	assert.ok(locals.managani.token); assert.match(headers['Content-Security-Policy'], /nonce-nonce-test/); assert.match(headers['Content-Security-Policy'], /style-src-elem 'self' https:\/\/cdn\.example\.test/); assert.match(headers['Content-Security-Policy'], /font-src 'self' https:\/\/cdn\.example\.test/);
 	for (const path of ['/admin', '/admin/login', '/login', '/signup']) { const html = await (await Fixture.request(path)).text(); assert.ok(!html.includes('window.adminFixture')); assert.ok(!html.includes('managani.js')); }
 	const adminCookie = Fixture.cookie; const adminCsrf = Fixture.csrf;
 	const token = Support.token(); await M.Ticket.create({ hash: Support.hash(token), kind: 'login', email: 'owner@example.test', expires: new Date(Date.now() + 60000) });
@@ -154,7 +154,7 @@ test('purge drains in-flight operations, retries external failure, removes every
 	const account = await M.Account.create({ name: 'Purge everything', white_label: { cloudflare_hostname_id: 'hostname' } }); const survivor = await M.Account.create({ name: 'Keep me' }); const id = String(account._id);
 	await M.Member.create([{ account: account._id, user: shared._id, role: 'owner' }, { account: account._id, user: orphan._id, role: 'member' }, { account: survivor._id, user: shared._id, role: 'owner' }]);
 	await M.Passkey.create([{ user: orphan._id, credential_id: 'orphan-key' }, { user: shared._id, credential_id: 'shared-key' }]);
-	for (const name of AdminAccounts.owned.filter(name => name !== 'Member')) await M[name].create({ account: account._id, user: orphan._id, id: name, name, operation: randomUUID(), hash: randomUUID() });
+	for (const name of AdminAccounts.owned.filter(name => name !== 'Member')) await M[name].create({ account: account._id, user: orphan._id, id: name, name, operation: randomUUID(), hash: randomUUID(), ...(name === 'SignupNotification' ? { email: orphan.email, message_id: '<purge@typerelay.test>' } : {}) });
 	const grant = await M.Integration.findOne({ account: account._id }).lean(); await M.IntegrationToken.create({ grant: grant._id, hash: randomUUID() });
 	await M.Ticket.create([{ hash: randomUUID(), account: account._id }, { hash: randomUUID(), data: { account: id } }, { hash: randomUUID(), data: { grant: grant._id } }, { hash: randomUUID(), email: orphan.email, data: { user: String(orphan._id) } }]);
 	await M.MigrationBackup.create([{ key: randomUUID(), source_collection: 'accounts', payload: account.toObject() }, { key: randomUUID(), source_collection: 'libraries', payload: { account: account._id, snippets: [{ secret: 'purge me' }] } }, { key: 'survivor-backup', payload: { account: survivor._id } }]);

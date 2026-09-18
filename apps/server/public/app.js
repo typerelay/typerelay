@@ -62,6 +62,7 @@ class TypeRelay {
 		window.addEventListener('scroll', () => this.updateScrollTop(), { passive: true });
 		window.addEventListener('resize', () => this.updateScrollTop());
 		this.updateScrollTop();
+		if (document.querySelector('#team-member-form')) this.rotateTeamPassword(false);
 		if (this.account) {
 			this.poll().catch(error => this.toast(error.message, 'error'));
 			setInterval(() => this.poll().catch(() => {}), 30000);
@@ -82,6 +83,22 @@ class TypeRelay {
 		button.tabIndex = visible ? 0 : -1;
 	}
 	toast(title, icon = 'success') { return Swal.fire({ toast: true, position: 'top-end', title, icon, timer: 3500, showConfirmButton: false }); }
+	generateTeamPassword() {
+		if (!window.crypto?.getRandomValues) throw new Error('Secure random generation is unavailable');
+		const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'; const values = new Uint8Array(32); window.crypto.getRandomValues(values);
+		return Array.from(values, value => alphabet[value & 63]).join('');
+	}
+	rotateTeamPassword(announce = true) {
+		const input = document.querySelector('#team-member-password'); const status = document.querySelector('#team-member-password-status'); const submit = document.querySelector('#team-member-form button[type="submit"]');
+		try { input.value = this.generateTeamPassword(); if (status) status.textContent = announce ? 'New password generated.' : ''; if (submit) submit.disabled = false; }
+		catch (error) { input.value = ''; if (status) status.textContent = 'Password generation failed. Reload this page and try again.'; if (submit) submit.disabled = true; }
+	}
+	async copyTeamPassword() {
+		const input = document.querySelector('#team-member-password'); const status = document.querySelector('#team-member-password-status');
+		if (!input.value) throw new Error('No password to copy');
+		if (navigator.clipboard?.writeText && window.isSecureContext) { await navigator.clipboard.writeText(input.value); if (status) status.textContent = ''; this.toast('Password copied'); return; }
+		input.focus({ preventScroll: true }); input.select(); input.setSelectionRange?.(0, input.value.length); if (status) status.textContent = 'Password selected. Press ' + (/Mac|iPhone|iPad|iPod/.test(navigator.platform) ? 'Cmd+C' : 'Ctrl+C') + ' to copy.';
+	}
 	async request(path, method = 'GET', body, raw = false) {
 		const response = await fetch(path.startsWith('/') ? path : '/api/v2/' + path, { method, headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': document.querySelector('meta[name=csrf-token]').content, 'X-Account-Id': this.account || '' }, body: body ? JSON.stringify({ operation_id: this.submitting ? this.formOperation : crypto.randomUUID(), ...body }) : undefined });
 		if (!response.ok) { const result = await response.json(); if (result.code === 'reauthentication_required') document.querySelector('#token-auth-required')?.removeAttribute('hidden'); const error = new Error(result.error); Object.assign(error, result); throw error; }
@@ -331,7 +348,8 @@ class TypeRelay {
 	}
 	async onSubmit(event) {
 		const form = event.target;
-		if (!['login', 'access-token-form', 'profile-form', 'account-form', 'invite-form', 'record-form', 'team-seats-form', 'change-to-pro-form', 'change-to-team-form', 'checkout-team-form', 'white-label-domain-form'].includes(form.id)) return;
+		const groupForm = form.hasAttribute('data-group-form');
+		if (!groupForm && !['login', 'access-token-form', 'profile-form', 'account-form', 'team-member-form', 'record-form', 'team-seats-form', 'change-to-pro-form', 'change-to-team-form', 'checkout-team-form', 'white-label-domain-form'].includes(form.id)) return;
 		event.preventDefault();
 		const abbreviation = form.querySelector('#trigger');
 		if (abbreviation) Abbreviation.field(abbreviation);
@@ -357,7 +375,20 @@ class TypeRelay {
 				document.querySelector('#account-switch').selectedOptions[0].textContent = data.get('name');
 				this.toast('Account saved');
 			}
-			if (form.id === 'invite-form') { const result = await this.request('team/invitations', 'POST', { email: data.get('email') }); this.update('[data-invitation="' + result.invitation + '"]', '#invitations', await this.request('fragments/invitation/' + result.invitation, 'GET', null, true)); await this.refreshBilling(); this.toast('Invitation sent'); }
+			if (form.id === 'team-member-form') {
+				const result = await this.request('team/members', 'POST', { name: data.get('name'), email: data.get('email'), password: data.get('password'), send_welcome_email: data.has('send_welcome_email') });
+				this.update('[data-member="' + result.member._id + '"]', '#members', result.html);
+				form.reset();
+				this.rotateTeamPassword(false);
+				await this.refreshBilling(); this.toast('User added');
+			}
+			if (groupForm) {
+				const id = form.dataset.groupId;
+				const result = await this.request('team/groups' + (id ? '/' + id : ''), id ? 'PATCH' : 'POST', { name: data.get('name'), users: data.getAll('users') });
+				this.update('[data-group="' + result.group._id + '"]', '#groups', result.html);
+				if (!id) { form.reset(); form.classList.add('d-none'); }
+				this.toast('Group saved');
+			}
 			if (form.id === 'record-form') { this.submitting = true; await this.submit(data); bootstrap.Modal.getInstance(document.querySelector('#form-modal')).hide(); this.toast('Saved'); }
 		} catch (error) { this.toast(error.message, 'error'); }
 		finally { this.submitting = false; if (button) button.disabled = false; }
@@ -466,6 +497,8 @@ class TypeRelay {
 		if (button.id === 'search-trigger') return this.openSearch();
 		if (button.dataset.settingsTab) return this.settingsTab(button.dataset.settingsTab);
 		if (button.id === 'dismiss-token') { document.querySelector('#token-secret-value').textContent = ''; document.querySelector('#token-secret').hidden = true; return; }
+		if (button.id === 'team-member-copy-password') { await this.copyTeamPassword(); return; }
+		if (button.id === 'team-member-rotate-password') { this.rotateTeamPassword(); return; }
 		if (button.id === 'retry-tokens') { button.disabled = true; try { await this.tokens(); } finally { button.disabled = false; } return; }
 		if (button.dataset.revokeToken && await this.confirm('Revoke this integration?')) { button.disabled = true; ++this.tokensVersion; try { await this.request('access-tokens/' + button.dataset.revokeToken, 'DELETE'); ++this.tokensVersion; document.querySelector('[data-access-token="' + button.dataset.revokeToken + '"]')?.remove(); } finally { button.disabled = false; } return; }
 		if (button.dataset.searchLibrary) {
@@ -525,17 +558,12 @@ class TypeRelay {
 			else this.update('[data-member="' + id + '"]', '#members', await this.request('fragments/member/' + id, 'GET', null, true));
 			await this.refreshBilling();
 		}
-		if (button.id === 'new-group' || data.editGroup) {
-			const group = data.editGroup ? JSON.parse(data.editGroup) : null;
-			return this.form('group', group ? { group: group._id } : {}, async fields => {
-				const result = await this.request('team/groups' + (group ? '/' + group._id : ''), group ? 'PATCH' : 'POST', { name: fields.get('name'), users: fields.getAll('users') });
-				this.update('[data-group="' + result.group._id + '"]', '#groups', await this.request('fragments/group/' + result.group._id, 'GET', null, true));
-			});
-		}
+		if (button.id === 'new-group') { const form = document.querySelector('#group-create-form'); form.classList.remove('d-none'); form.elements.name.focus(); return; }
+		if ('editGroup' in data) { const row = button.closest('[data-group]'); row.querySelector('.group-display').hidden = true; const form = row.querySelector('[data-group-form]'); form.classList.remove('d-none'); form.elements.name.focus(); return; }
+		if ('cancelGroup' in data) { const form = button.closest('[data-group-form]'); form.reset(); form.classList.add('d-none'); form.closest('[data-group]')?.querySelector('.group-display').removeAttribute('hidden'); return; }
 		if (data.deleteGroup && await this.confirm('Delete this group and its grants?')) {
 			await this.request('team/groups/' + data.deleteGroup, 'PATCH', { deleted: true });
 			document.querySelector('[data-group="' + data.deleteGroup + '"]').remove();
-			bootstrap.Modal.getInstance(document.querySelector('#form-modal')).hide();
 		}
 		if (data.revokeInvitation && await this.confirm('Revoke this invitation?')) { await this.request('team/invitations/' + data.revokeInvitation, 'DELETE'); document.querySelector('[data-invitation="' + data.revokeInvitation + '"]').remove(); await this.refreshBilling(); }
 		if (data.revokeDevice && await this.confirm('Revoke this device?')) { button.disabled = true; ++this.devicesVersion; try { await this.request('devices/' + data.revokeDevice, 'DELETE'); ++this.devicesVersion; document.querySelector('[data-device="' + data.revokeDevice + '"]')?.remove(); } finally { button.disabled = false; } }

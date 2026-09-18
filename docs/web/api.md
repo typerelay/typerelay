@@ -45,6 +45,7 @@ Changes to separate snippet IDs merge. Divergent changes to one ID retain local/
 ## Account/team/devices
 
 - `GET /api/v2/team`: members and flat groups.
+- `POST /api/v2/team/members {name,email,password?,send_welcome_email}`: admin/owner directly adds a member. Existing users keep their profile and password. New users receive the supplied password or a generated one returned once as `temporary_password`; the email notification is optional.
 - `POST /api/v2/team/invitations {email}`: admin/owner; seven-day email-bound invite.
 - `DELETE /api/v2/team/invitations/:id`: admin/owner revokes a pending invitation.
 - `POST /api/v2/team/accept {operation_id,token}`: signed-in matching email.

@@ -1,0 +1,10 @@
+form.group-form.d-none(id=groupForm ? 'group-form-' + groupForm._id : 'group-create-form' class=groupForm ? 'mt-3' : 'mb-5' data-group-form data-group-id=groupForm ? groupForm._id : '')
+	label.form-label(for=groupForm ? 'group-name-' + groupForm._id : 'group-name-new') Group name
+	input.form-control.form-control-sm.mb-3(id=groupForm ? 'group-name-' + groupForm._id : 'group-name-new' name="name" value=groupForm ? groupForm.name : '' required)
+	label.form-label(for=groupForm ? 'group-users-' + groupForm._id : 'group-users-new') Members
+	select.form-select.form-select-sm.mb-3(id=groupForm ? 'group-users-' + groupForm._id : 'group-users-new' name="users" multiple)
+		each member in team.members
+			option(value=member.user selected=groupForm && groupForm.users.map(String).includes(String(member.user)))= member.profile.email
+	.d-flex.justify-content-between
+		button.btn.btn-outline-secondary.btn-sm(type="button" data-cancel-group) Cancel
+		button.btn.btn-primary.btn-sm(type="submit") Save
