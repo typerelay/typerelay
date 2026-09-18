@@ -9,8 +9,8 @@
   },
   "devDependencies": {
     "vitepress": "^1.6.4",
-    "vitepress-openapi": "^0.2.4",
+    "vitepress-openapi": "^0.2.5",
     "vitepress-plugin-tabs": "^0.9.1",
-    "vue": "^3.5.41"
+    "vue": "^3.5.43"
   }
 }
