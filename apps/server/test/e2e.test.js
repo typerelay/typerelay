@@ -376,12 +376,14 @@ test('web AJAX updates only affected snippets; preserves panel, filter and multi
 	assert.doesNotMatch(dom.window.document.querySelector('#settings-pane-security').textContent, /then copy it before closing/);
 	const settings = dom.window.document.querySelector('#settings');
 	const memberForm = dom.window.document.querySelector('#team-member-form');
-	memberForm.elements.name.value = 'Browser teammate'; memberForm.elements.email.value = randomUUID() + '@example.test'; memberForm.elements.password.value = '';
+	assert.ok(memberForm.closest('.team-settings-card')); assert.equal(memberForm.elements.password.readOnly, true); assert.equal(memberForm.elements.password.value.length, 32);
+	const firstPassword = memberForm.elements.password.value; await client.onClick({ target: dom.window.document.querySelector('#team-member-rotate-password') }); assert.notEqual(memberForm.elements.password.value, firstPassword);
+	memberForm.elements.name.value = 'Browser teammate'; memberForm.elements.email.value = randomUUID() + '@example.test';
 	memberForm.elements.send_welcome_email.checked = false;
 	await client.onSubmit({ target: memberForm, preventDefault() {}, submitter: memberForm.querySelector('[type="submit"]') });
 	assert.equal(dom.window.document.querySelector('#settings'), settings);
 	assert.ok(dom.window.document.querySelector('#members').textContent.includes('Browser teammate'));
-	assert.ok(!dom.window.document.querySelector('#team-member-password-result').classList.contains('d-none'));
+	assert.equal(memberForm.elements.password.value.length, 32);
 	const createGroup = dom.window.document.querySelector('#group-create-form');
 	await client.onClick({ target: dom.window.document.querySelector('#new-group') });
 	assert.ok(!createGroup.classList.contains('d-none'));
@@ -398,7 +400,7 @@ test('web AJAX updates only affected snippets; preserves panel, filter and multi
 	assert.equal(dom.window.document.querySelector('#settings'), settings);
 	assert.ok(![...dom.window.document.querySelectorAll('h1')].some(node => node.textContent === 'Your libraries'));
 	assert.ok(dom.window.document.querySelector('header #search-trigger'));
-	assert.match(await readFile(new URL('../public/app.css', import.meta.url), 'utf8'), /\.global-search:hover, \.global-search:focus-visible/);
+	const appCss = await readFile(new URL('../public/app.css', import.meta.url), 'utf8'); assert.match(appCss, /\.global-search:hover, \.global-search:focus-visible/); assert.match(appCss, /#passkeys:empty \{ display: none; \}/);
 	// Every part of the card loads its library, including the count/badge area.
 	const card = dom.window.document.querySelector('[data-id="' + library._id + '"]');
 	client.selected = null;

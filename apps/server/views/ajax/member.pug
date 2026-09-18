@@ -1,6 +1,26 @@
-li.list-group-item.d-flex.align-items-center.justify-content-between(data-member=member._id)
-	span= member.profile.name + ' · ' + member.profile.email + ' · ' + member.role
-	if ctx.entitlements.capabilities.team && ctx.role === 'owner' && member.role !== 'owner'
-		button.btn.btn-outline-secondary.btn-sm(data-role=member._id data-next=member.role === 'admin' ? 'member' : 'admin')= member.role === 'admin' ? 'Make member' : 'Make admin'
-	if ['owner', 'admin'].includes(ctx.role) && member.role !== 'owner' && (ctx.role === 'owner' || member.role === 'member')
-		button.btn.btn-outline-danger.btn-sm(data-remove-member=member._id) Remove
+.team-member.d-flex.justify-content-between.align-items-start.gap-3(data-member=member._id)
+	.flex-grow-1
+		.d-flex.align-items-center.gap-2
+			strong= member.profile.name
+			if String(member.user) === String(ctx.user)
+				span.badge.text-bg-light You
+		.text-muted.small= member.profile.email
+		if member.profile.last_login
+			time.text-muted.small.d-block(data-local-time datetime=new Date(member.profile.last_login).toISOString())= 'Last login ' + new Date(member.profile.last_login).toLocaleDateString()
+		else
+			small.text-muted.d-block No recent login recorded
+	.d-flex.align-items-center.gap-2
+		if member.role === 'owner'
+			span.badge.text-bg-dark.text-uppercase Owner
+		else if member.role === 'admin'
+			span.badge.text-bg-secondary.text-uppercase Admin
+		if ctx.entitlements.capabilities.team && ctx.role === 'owner' && member.role !== 'owner'
+			button.btn.btn-outline-secondary.btn-sm(type="button" data-role=member._id data-next=member.role === 'admin' ? 'member' : 'admin')= member.role === 'admin' ? 'Make member' : 'Make admin'
+		if ['owner', 'admin'].includes(ctx.role) && member.role !== 'owner' && (ctx.role === 'owner' || member.role === 'member')
+			button.btn.btn-outline-danger.btn-sm.team-member-remove(type="button" data-remove-member=member._id aria-label="Remove " + member.profile.name title="Remove member")
+				svg(width="1rem" height="1rem" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true")
+					path(d="M4 7h16")
+					path(d="M10 11v6")
+					path(d="M14 11v6")
+					path(d="M5 7l1 14h12l1-14")
+					path(d="M9 7V4h6v3")

@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 const objectid = mongoose.Schema.Types.ObjectId;
 const mixed = mongoose.Schema.Types.Mixed;
 const asset = new mongoose.Schema({ url: String, storage_key: { type: String, select: false }, mime_type: String, size: Number, width: Number, height: Number, updated_at: Date }, { _id: false });
-const User = mongoose.model('User', new mongoose.Schema({ email: { type: String, unique: true }, name: String, password: { type: String, select: false }, totp_secret: { type: String, select: false }, totp_enabled: { type: Boolean, default: false }, totp_step: { type: Number, select: false }, auth_version: { type: Number, default: 0 }, activity_sequence: { type: Number, default: 0 }, product_updates_seen_at: { type: Date, default: Date.now, select: false } }, { timestamps: true }));
+const User = mongoose.model('User', new mongoose.Schema({ email: { type: String, unique: true }, name: String, password: { type: String, select: false }, totp_secret: { type: String, select: false }, totp_enabled: { type: Boolean, default: false }, totp_step: { type: Number, select: false }, auth_version: { type: Number, default: 0 }, activity_sequence: { type: Number, default: 0 }, last_login: { type: Date, default: null }, product_updates_seen_at: { type: Date, default: Date.now, select: false } }, { timestamps: true }));
 const Passkey = mongoose.model('Passkey', new mongoose.Schema({ user: { type: objectid, index: true }, credential_id: { type: String, unique: true }, public_key: { type: String, select: false }, counter: Number, transports: [String], name: String }, { timestamps: true }));
 const accountSchema = new mongoose.Schema({
 	name: String,

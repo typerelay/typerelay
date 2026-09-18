@@ -29,6 +29,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .dropdown-item { cursor: pointer; }
 #totp-qr { max-width: 12rem; width: 100%; }
 #totp-secret { overflow-wrap: anywhere; }
+#passkeys:empty { display: none; }
 #settings .modal-body { padding: 1.5rem; }
 .global-search { display: flex; align-items: center; gap: .2rem; min-width: 0; width: 100%; max-width: 32rem; margin: 0; background: #fff; border: .0625rem solid #e7dfd2; color: #71685e; font-size: .875rem; text-align: left; }
 .global-search:hover, .global-search:focus-visible { border-color: #a15c40; background: #fffdf8; color: #302d29; outline: none; }
@@ -43,6 +44,9 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .settings-nav .list-group-item { border: 0; border-radius: 0; padding: .85rem 1.25rem; }
 .settings-nav .active { background: #a15c40; color: white; }
 .settings-content { flex: 1; min-width: 0; overflow-y: auto; padding: 1.5rem; }
+.team-settings-card { border-color: #d7dfea; background: #f7f9fc; }
+.team-member + .team-member { margin-top: 1.25rem; }
+.team-member-remove { display: inline-flex; width: 2.25rem; height: 2.25rem; align-items: center; justify-content: center; padding: 0; }
 .search-preview { white-space: pre-wrap; overflow-wrap: anywhere; }
 .search-result:focus { outline: .125rem solid #a15c40; outline-offset: -.125rem; background: #f8f5ee; }
 @media (max-width: 40rem) {

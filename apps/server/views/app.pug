@@ -88,50 +88,89 @@ block content
 							section.settings-pane(id="settings-pane-security" role="tabpanel" aria-labelledby="settings-tab-security" hidden=true)
 								include ajax/security
 							section.settings-pane(id="settings-pane-team" role="tabpanel" aria-labelledby="settings-tab-team" hidden=true)
-								h3.h6.fw-bold Account and team
+								h3.h6.fw-bold.mb-4 My Team
 								if !ctx.entitlements.capabilities.team
 									.alert.alert-warning Team management and sharing require Team. Existing extra members can be removed after a downgrade.
-								if ['owner', 'admin'].includes(ctx.role)
-									form#account-form.mb-3
-										label.form-label(for="account-name") Account name
-										input#account-name.form-control.form-control-sm.mb-3(name="name" value=account.name required)
-										.d-flex.justify-content-end
-											button.btn.btn-primary.btn-sm Save
+								.row.g-4.mb-5
+									if ['owner', 'admin'].includes(ctx.role) && ctx.entitlements.capabilities.team
+										.col-lg-5
+											.card.team-settings-card.h-100
+												.card-body
+													h6.card-title.d-flex.align-items-center.gap-2.mb-3
+														svg(width="1.25rem" height="1.25rem" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true")
+															circle(cx="9" cy="7" r="4")
+															path(d="M3 21v-2a6 6 0 0 1 6-6h2")
+															path(d="M19 8v6")
+															path(d="M16 11h6")
+														span Add teammate
+													form#team-member-form
+														label.form-label(for="team-member-name") Name
+														input#team-member-name.form-control.form-control-sm.mb-3(name="name" required autocomplete="name")
+														label.form-label(for="team-member-email") Email
+														input#team-member-email.form-control.form-control-sm.mb-3(name="email" type="email" required autocomplete="email")
+														label.form-label(for="team-member-password") Password
+														.input-group.input-group-sm
+															input#team-member-password.form-control.form-control-sm(name="password" type="text" readonly autocomplete="off" spellcheck="false" aria-describedby="team-member-password-help team-member-password-status")
+															button#team-member-copy-password.btn.btn-outline-secondary.btn-sm.d-inline-flex.align-items-center(type="button" aria-label="Copy password" title="Copy password")
+																svg(width="0.875rem" height="0.875rem" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true")
+																	rect(x="9" y="9" width="13" height="13" rx="2")
+																	path(d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1")
+																span.ms-1 Copy
+															button#team-member-rotate-password.btn.btn-outline-secondary.btn-sm.d-inline-flex.align-items-center(type="button" aria-label="Rotate password" title="Rotate password")
+																svg(width="0.875rem" height="0.875rem" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true")
+																	path(d="M20 7h-5V2")
+																	path(d="M20 7a9 9 0 1 0 2 9")
+																span.ms-1 Rotate
+														p#team-member-password-help.small.text-muted.mt-2.mb-1 Generated for new Type Relay users. Existing users keep their password.
+														p#team-member-password-status.small.text-muted.mb-3(aria-live="polite")
+														.form-check.mb-3
+															input#team-member-send-welcome.form-check-input.h-20px.w-30px(type="checkbox" name="send_welcome_email" checked)
+															label.form-check-label(for="team-member-send-welcome") Send email notification
+														.text-end
+															button.btn.btn-primary.btn-sm(type="submit") Add user
+									.col-12(class=['owner', 'admin'].includes(ctx.role) && ctx.entitlements.capabilities.team ? 'col-lg-7' : '')
+										.card.team-settings-card.h-100
+											.card-body
+												h6.card-title.d-flex.align-items-center.gap-2.mb-3
+													svg(width="1.25rem" height="1.25rem" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true")
+														path(d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2")
+														circle(cx="9" cy="7" r="4")
+														path(d="M22 21v-2a4 4 0 0 0-3-3.87")
+														path(d="M16 3.13a4 4 0 0 1 0 7.75")
+													span Members
+												#members.team-member-list
+													each member in team.members
+														include ajax/member
+												if team.invitations.length
+													h6.mt-4.mb-3 Pending invitations
+													#invitations.list-group.list-group-flush
+														each invitation in team.invitations
+															include ajax/invitation
+												else
+													#invitations
+								.row.g-4
 									if ctx.entitlements.capabilities.team
-										form#team-member-form.mb-3
-											label.form-label(for="team-member-name") Name (new users only)
-											input#team-member-name.form-control.form-control-sm.mb-3(name="name" autocomplete="name")
-											label.form-label(for="team-member-email") Email
-											input#team-member-email.form-control.form-control-sm.mb-3(name="email" type="email" required autocomplete="email")
-											label.form-label(for="team-member-password") Password
-											input#team-member-password.form-control.form-control-sm.mb-3(name="password" type="text" minlength="8" maxlength="256" autocomplete="off" aria-describedby="team-member-password-help")
-											p#team-member-password-help.small.text-muted Leave blank to generate a password. Existing users keep their password.
-											.form-check.mb-3
-												input#team-member-send-welcome.form-check-input.h-20px.w-30px(type="checkbox" name="send_welcome_email" checked)
-												label.form-check-label(for="team-member-send-welcome") Send email notification
-											.d-flex.justify-content-end
-												button.btn.btn-primary.btn-sm Add user
-										#team-member-password-result.d-none.mb-3
-											label.form-label(for="team-member-generated-password") Temporary password
-											.input-group.input-group-sm
-												input#team-member-generated-password.form-control.form-control-sm(type="text" readonly autocomplete="off")
-												button#copy-team-member-password.btn.btn-outline-secondary.btn-sm(type="button") Copy
-												button#dismiss-team-member-password.btn.btn-primary.btn-sm(type="button") Done
-								ul#invitations.list-group.mb-3
-									each invitation in team.invitations
-										include ajax/invitation
-								ul#members.list-group.mb-3
-									each member in team.members
-										include ajax/member
-								if ctx.entitlements.capabilities.team
-									h3.h6.fw-bold Groups
-									ul#groups.list-group.mb-3
-										each group in team.groups
-											include ajax/group
+										.col-lg-7
+											.card.team-settings-card
+												.card-body
+													h6.card-title.mb-3 Groups
+													ul#groups.list-group.list-group-flush.mb-3
+														each group in team.groups
+															include ajax/group
+													if ['owner', 'admin'].includes(ctx.role)
+														button#new-group.btn.btn-outline-secondary.btn-sm.mb-3(type="button") New group
+														- var groupForm = null
+														include ajax/group-form
 									if ['owner', 'admin'].includes(ctx.role)
-										button#new-group.btn.btn-outline-secondary.btn-sm.mb-3(type="button") New group
-										- var groupForm = null
-										include ajax/group-form
+										.col-lg-5
+											.card.team-settings-card
+												.card-body
+													h6.card-title.mb-3 Account
+													form#account-form
+														label.form-label(for="account-name") Account name
+														input#account-name.form-control.form-control-sm.mb-3(name="name" value=account.name required)
+														.text-end
+															button.btn.btn-primary.btn-sm Save
 							section.settings-pane(id="settings-pane-devices" role="tabpanel" aria-labelledby="settings-tab-devices" hidden=true)
 								h3.h6.fw-bold Connected devices
 								ul#devices.list-group.mb-3

@@ -27,7 +27,7 @@ class TypeRelay {
 		document.addEventListener('input', event => { if ((event.target.id === 'trigger' || event.target.hasAttribute('data-import-trigger')) && !event.isComposing) Abbreviation.field(event.target); });
 		document.addEventListener('compositionend', event => { if (event.target.id === 'trigger') Abbreviation.field(event.target); });
 		document.addEventListener('submit', event => this.onSubmit(event));
-		document.querySelector('#settings')?.addEventListener('hidden.bs.modal', () => { const secret = document.querySelector('#token-secret-value'); if (secret) secret.textContent = ''; document.querySelector('#token-secret')?.setAttribute('hidden', ''); const password = document.querySelector('#team-member-generated-password'); if (password) password.value = ''; document.querySelector('#team-member-password-result')?.classList.add('d-none'); });
+		document.querySelector('#settings')?.addEventListener('hidden.bs.modal', () => { const secret = document.querySelector('#token-secret-value'); if (secret) secret.textContent = ''; document.querySelector('#token-secret')?.setAttribute('hidden', ''); });
 		document.addEventListener('click', event => this.onClick(event).catch(error => this.toast(error.message, 'error')));
 		document.querySelector('#search')?.addEventListener('input', () => {
 			this.searchVersion++;
@@ -62,6 +62,7 @@ class TypeRelay {
 		window.addEventListener('scroll', () => this.updateScrollTop(), { passive: true });
 		window.addEventListener('resize', () => this.updateScrollTop());
 		this.updateScrollTop();
+		if (document.querySelector('#team-member-form')) this.rotateTeamPassword(false);
 		if (this.account) {
 			this.poll().catch(error => this.toast(error.message, 'error'));
 			setInterval(() => this.poll().catch(() => {}), 30000);
@@ -82,6 +83,22 @@ class TypeRelay {
 		button.tabIndex = visible ? 0 : -1;
 	}
 	toast(title, icon = 'success') { return Swal.fire({ toast: true, position: 'top-end', title, icon, timer: 3500, showConfirmButton: false }); }
+	generateTeamPassword() {
+		if (!window.crypto?.getRandomValues) throw new Error('Secure random generation is unavailable');
+		const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'; const values = new Uint8Array(32); window.crypto.getRandomValues(values);
+		return Array.from(values, value => alphabet[value & 63]).join('');
+	}
+	rotateTeamPassword(announce = true) {
+		const input = document.querySelector('#team-member-password'); const status = document.querySelector('#team-member-password-status'); const submit = document.querySelector('#team-member-form button[type="submit"]');
+		try { input.value = this.generateTeamPassword(); if (status) status.textContent = announce ? 'New password generated.' : ''; if (submit) submit.disabled = false; }
+		catch (error) { input.value = ''; if (status) status.textContent = 'Password generation failed. Reload this page and try again.'; if (submit) submit.disabled = true; }
+	}
+	async copyTeamPassword() {
+		const input = document.querySelector('#team-member-password'); const status = document.querySelector('#team-member-password-status');
+		if (!input.value) throw new Error('No password to copy');
+		if (navigator.clipboard?.writeText && window.isSecureContext) { await navigator.clipboard.writeText(input.value); if (status) status.textContent = ''; this.toast('Password copied'); return; }
+		input.focus({ preventScroll: true }); input.select(); input.setSelectionRange?.(0, input.value.length); if (status) status.textContent = 'Password selected. Press ' + (/Mac|iPhone|iPad|iPod/.test(navigator.platform) ? 'Cmd+C' : 'Ctrl+C') + ' to copy.';
+	}
 	async request(path, method = 'GET', body, raw = false) {
 		const response = await fetch(path.startsWith('/') ? path : '/api/v2/' + path, { method, headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': document.querySelector('meta[name=csrf-token]').content, 'X-Account-Id': this.account || '' }, body: body ? JSON.stringify({ operation_id: this.submitting ? this.formOperation : crypto.randomUUID(), ...body }) : undefined });
 		if (!response.ok) { const result = await response.json(); if (result.code === 'reauthentication_required') document.querySelector('#token-auth-required')?.removeAttribute('hidden'); const error = new Error(result.error); Object.assign(error, result); throw error; }
@@ -362,8 +379,7 @@ class TypeRelay {
 				const result = await this.request('team/members', 'POST', { name: data.get('name'), email: data.get('email'), password: data.get('password'), send_welcome_email: data.has('send_welcome_email') });
 				this.update('[data-member="' + result.member._id + '"]', '#members', result.html);
 				form.reset();
-				document.querySelector('#team-member-generated-password').value = ''; document.querySelector('#team-member-password-result').classList.add('d-none');
-				if (result.temporary_password) { document.querySelector('#team-member-generated-password').value = result.temporary_password; document.querySelector('#team-member-password-result').classList.remove('d-none'); }
+				this.rotateTeamPassword(false);
 				await this.refreshBilling(); this.toast('User added');
 			}
 			if (groupForm) {
@@ -481,8 +497,8 @@ class TypeRelay {
 		if (button.id === 'search-trigger') return this.openSearch();
 		if (button.dataset.settingsTab) return this.settingsTab(button.dataset.settingsTab);
 		if (button.id === 'dismiss-token') { document.querySelector('#token-secret-value').textContent = ''; document.querySelector('#token-secret').hidden = true; return; }
-		if (button.id === 'copy-team-member-password') { await navigator.clipboard.writeText(document.querySelector('#team-member-generated-password').value); this.toast('Password copied'); return; }
-		if (button.id === 'dismiss-team-member-password') { document.querySelector('#team-member-generated-password').value = ''; document.querySelector('#team-member-password-result').classList.add('d-none'); return; }
+		if (button.id === 'team-member-copy-password') { await this.copyTeamPassword(); return; }
+		if (button.id === 'team-member-rotate-password') { this.rotateTeamPassword(); return; }
 		if (button.id === 'retry-tokens') { button.disabled = true; try { await this.tokens(); } finally { button.disabled = false; } return; }
 		if (button.dataset.revokeToken && await this.confirm('Revoke this integration?')) { button.disabled = true; ++this.tokensVersion; try { await this.request('access-tokens/' + button.dataset.revokeToken, 'DELETE'); ++this.tokensVersion; document.querySelector('[data-access-token="' + button.dataset.revokeToken + '"]')?.remove(); } finally { button.disabled = false; } return; }
 		if (button.dataset.searchLibrary) {

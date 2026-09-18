@@ -31,6 +31,7 @@ export class Security {
 			req.session.pending_factor = { user: String(id), version: user.auth_version || 0, expires: Date.now() + 300000 };
 			result = { requires2FA: true, csrf: req.session.csrf, redirect: '/auth/two-factor' };
 		} else {
+			await User.updateOne({ _id: id }, { $set: { last_login: new Date() } });
 			req.session.user = String(id);
 			req.session.auth_version = user.auth_version || 0;
 			req.session.auth_at = Date.now();
