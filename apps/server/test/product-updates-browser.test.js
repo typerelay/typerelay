@@ -125,7 +125,7 @@ test('empty archive and escaped Ghost content render with Mailtwine modal contro
 	assert.ok(html.includes('&lt;script&gt;')); assert.ok(!html.includes('<script>'));
 	assert.match(html, /modal-dialog-centered modal-dialog-scrollable modal-lg/);
 	assert.match(html, /Got it/); assert.match(html, /Read more/); assert.match(html, /data-bs-keyboard="false"/);
-	assert.match(await readFile('./public/app.css', 'utf8'), /--bs-offcanvas-width:\s*var\(--fw-drawer-width, 37\.5rem\)/);
+	assert.match(await readFile('./public/app.css', 'utf8'), /--bs-offcanvas-width:\s*40vw/);
 });
 
 test('concurrent acknowledgements cannot restore an older badge count', async () => {

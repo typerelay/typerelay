@@ -8,10 +8,10 @@ html(lang="en")
 		link(rel="icon" href="/assets/favicon.ico")
 		link(rel="stylesheet" href="/vendor/bootstrap/css/bootstrap.min.css")
 		link(rel="stylesheet" href="/vendor/sweetalert2/sweetalert2.min.css")
-		link(rel="stylesheet" href="/assets/admin.css")
+		link(rel="stylesheet" href='/assets/' + assetVersion + '/admin.css')
 		script(src="/vendor/bootstrap/js/bootstrap.bundle.min.js" defer)
 		script(src="/vendor/sweetalert2/sweetalert2.min.js" defer)
-		script(src="/assets/admin.js" type="module")
+		script(src='/assets/' + assetVersion + '/admin.js' type="module")
 	body.bg-body-tertiary
 		nav.navbar.navbar-expand.navbar-dark.bg-dark.mb-5
 			.container-fluid.flex-wrap.gap-3

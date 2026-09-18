@@ -114,7 +114,7 @@ Repository layout:
 - `apps/mcp` — MCP-to-API adapter
 - `docs` — VitePress user, integration and development documentation
 
-Run the checks relevant to your change and the repository policy check before opening a pull request:
+Run the checks relevant to your change and the repository policy check before pushing:
 
 ```fish
 docker compose run --rm app npm test
@@ -131,9 +131,9 @@ docker compose down -v
 
 ## Contributing
 
-Contributions and [bug reports](https://github.com/typerelay/typerelay/issues) are welcome. TypeRelay uses Git flow: branch from `develop`, use `feature/…` or `bugfix/…`, and open the pull request against `develop`. Include focused tests and describe manual verification where desktop input behavior changes.
+Contributions and [bug reports](https://github.com/typerelay/typerelay/issues) are welcome. Maintainer and Codex work stays on `develop`: pull before starting, commit focused changes and push `develop` directly. Do not create a topic branch or pull request unless the task explicitly requests one. External pull requests target `develop` without a required branch-name convention. Include focused tests and describe manual verification where desktop input behavior changes.
 
-Read the [development workflow](docs/development/git-flow.md) before contributing. Please do not include real snippets, credentials, signing material or local SQLite databases in issues, fixtures or commits.
+Read the [development workflow](docs/development/workflow.md) before contributing. Please do not include real snippets, credentials, signing material or local SQLite databases in issues, fixtures or commits.
 
 ## Security and attribution
 
