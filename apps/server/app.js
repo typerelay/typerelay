@@ -41,10 +41,11 @@ export class Server {
 		await Promise.all(Object.values(mongoose.models).map(model => model.createIndexes()));
 		await StorageMigration.run();
 		const app = express();
+		const assetVersion = String(process.env.APP_VERSION || 'development').replace(/[^A-Za-z0-9._-]/g, '-');
 		if (process.env.IS_DOCKER === 'true') app.set('trust proxy', 1);
 		app.set('view engine', 'pug');
 		app.set('views', './views');
-		app.use((req, res, next) => { res.locals.styleNonce = Support.token(); next(); });
+		app.use((req, res, next) => { res.locals.styleNonce = Support.token(); res.locals.assetVersion = assetVersion; next(); });
 		const docsOptions = { extensions: ['html'], immutable: true, index: 'index.html', maxAge: '7d' };
 		const docsRoot = process.env.DOCS_ROOT_DIR || fileURLToPath(new URL('./docs-dist-root/', import.meta.url));
 		const docsHosts = (process.env.TYPERELAY_DOCS_VANITY_HOSTS || 'docs.typerelay.com').split(',').map(host => host.trim().toLowerCase()).filter(Boolean);
@@ -62,8 +63,10 @@ export class Server {
 		app.use(AccountAccess.middleware);
 		app.post('/billing/webhook', express.raw({ type: 'application/json' }), async (req, res) => { Support.assert(req.headers['stripe-signature'], 'Missing Stripe-Signature', 400); try { await Billing.handleWebhook(req.body, req.headers['stripe-signature']); res.json({ received: true }); } catch (error) { error.status ||= 400; throw error; } });
 		app.use(express.json({ limit: '12mb' }), express.urlencoded({ extended: false, limit: '32kb' }));
+		const publicAssets = express.static('public');
 		app.use('/assets/generated', express.static('/data/editor'));
-		app.use('/assets', express.static('public'));
+		app.use('/assets/:assetVersion', (req, res, next) => req.params.assetVersion === assetVersion ? publicAssets(req, res, next) : res.sendStatus(404));
+		app.use('/assets', publicAssets);
 		app.use('/vendor/webauthn', express.static('node_modules/@simplewebauthn/browser/dist/bundle'));
 		app.use('/vendor/bootstrap', express.static('node_modules/bootstrap/dist'));
 		app.use('/vendor/sweetalert2', express.static('node_modules/sweetalert2/dist'));
