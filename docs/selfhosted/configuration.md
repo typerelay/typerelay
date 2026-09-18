@@ -17,6 +17,8 @@ docker compose -f compose.prod.yml up -d
 
 `MCP_BASE_URL` is the public MCP host without `/mcp`; TypeRelay appends the resource path. `SMTP_SERVERS` accepts `name`, `host`, `port`, `secure`, `user`, `pass`, and `from`. Set `ENABLE_SIGNUP=false` to remove the signup form and block signup requests. Optional `APP_PORT` and `MCP_PORT` change the published ports from `3000` and `3002`. `API_BASE_URL` and `MONGO_URI` are wired internally by the production Compose file. Keep credentials outside Git and put both public services behind HTTPS.
 
+Set `TYPERELAY_GHOST_CONTENT_API_KEY` to enable the What's new drawer and synchronize public TypeRelay product updates. Production Compose passes it to both the application and scheduler.
+
 ## Email delivery
 
 Working SMTP is required for account creation, Magic Link sign-in, password recovery, email changes and team invitations. Configure at least one server in `SMTP_SERVERS` before enabling sign-up or inviting users. Multiple entries are used round-robin; each may override `from`, otherwise `SMTP_FROM` is used. Port 465 defaults to TLS; other ports default to STARTTLS-style non-implicit TLS unless `secure` is set explicitly.

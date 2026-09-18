@@ -1,11 +1,10 @@
 import { Parser } from 'htmlparser2';
 import { mongoose, ProductUpdate, User } from '../model/index.js';
-import { Billing } from './billing.js';
 import { Support } from './support.js';
 
 // Mailtwine product-update behavior, adapted to TypeRelay's class-based services.
 export class ProductUpdates {
-	static enabled() { return Billing.hosted() && Boolean(process.env.TYPERELAY_GHOST_CONTENT_API_KEY); }
+	static enabled() { return Boolean(process.env.TYPERELAY_GHOST_CONTENT_API_KEY); }
 	static eligible(req) { return ProductUpdates.enabled() && Boolean(req.session?.user) && !req.boundAccount; }
 	static plainText(value) {
 		let text = ''; let ignored = 0;

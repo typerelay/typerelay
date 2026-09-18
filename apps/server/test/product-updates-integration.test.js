@@ -87,5 +87,6 @@ test('real authenticated routes enforce CSRF, persist monotonic seen state and r
 	assert.equal((await Fixture.request('/ajax/product-updates/status')).status, 404);
 	assert.equal((await Fixture.request('/news')).status, 302);
 	process.env.TYPERELAY_GHOST_CONTENT_API_KEY = 'fixture-key'; process.env.TYPERELAY_HOSTED_EDITION = 'false';
-	assert.equal((await Fixture.request('/ajax/product-updates/status')).status, 404);
+	assert.deepEqual(await (await Fixture.request('/ajax/product-updates/status')).json(), { new_count: 0, has_modal: false });
+	assert.equal((await Fixture.request('/news')).status, 200);
 });
