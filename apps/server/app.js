@@ -24,6 +24,8 @@ import { Assets } from './services/assets.js';
 import { ProductUpdates } from './services/product_updates.js';
 import { Bundles } from './services/bundles.js';
 import { recordException, shutdownObservability } from '@typerelay/observability';
+import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 export class Server {
 	static async start() {
@@ -42,7 +44,19 @@ export class Server {
 		app.set('view engine', 'pug');
 		app.set('views', './views');
 		app.use((req, res, next) => { res.locals.styleNonce = Support.token(); next(); });
-		app.use('/docs', helmet({ contentSecurityPolicy: false }), express.static(process.env.DOCS_DIR || '/docs', { extensions: ['html'] }));
+		const docsOptions = { extensions: ['html'], immutable: true, index: 'index.html', maxAge: '7d' };
+		const docsRoot = process.env.DOCS_ROOT_DIR || fileURLToPath(new URL('./docs-dist-root/', import.meta.url));
+		const docsHosts = (process.env.TYPERELAY_DOCS_VANITY_HOSTS || 'docs.typerelay.com').split(',').map(host => host.trim().toLowerCase()).filter(Boolean);
+		if (existsSync(docsRoot)) {
+			const docsHeaders = helmet({ contentSecurityPolicy: false });
+			const docsStatic = express.static(docsRoot, docsOptions);
+			app.use((req, res, next) => {
+				if (!docsHosts.includes(req.hostname.toLowerCase())) return next();
+				docsHeaders(req, res, error => error ? next(error) : docsStatic(req, res, () => res.status(404).sendFile(docsRoot + '/404.html')));
+			});
+		}
+		const docsDist = process.env.DOCS_DIR || fileURLToPath(new URL('./docs-dist/', import.meta.url));
+		if (existsSync(docsDist)) app.use('/docs', helmet({ contentSecurityPolicy: false }), express.static(docsDist, docsOptions), (req, res) => res.status(404).sendFile(docsDist + '/404.html'));
 		app.use(helmet({ contentSecurityPolicy: { directives: { 'upgrade-insecure-requests': Auth.origin.startsWith('https:') ? [] : null, 'script-src': ["'self'", "'wasm-unsafe-eval'"], 'style-src': ["'self'", (req, res) => "'nonce-" + res.locals.styleNonce + "'"], 'style-src-elem': ["'self'", "'unsafe-inline'"], 'style-src-attr': ["'unsafe-inline'"], 'img-src': ["'self'", 'data:', ...(ProductUpdates.enabled() ? ['https:', 'http:'] : [])] } } }));
 		app.use(AccountAccess.middleware);
 		app.post('/billing/webhook', express.raw({ type: 'application/json' }), async (req, res) => { Support.assert(req.headers['stripe-signature'], 'Missing Stripe-Signature', 400); try { await Billing.handleWebhook(req.body, req.headers['stripe-signature']); res.json({ received: true }); } catch (error) { error.status ||= 400; throw error; } });

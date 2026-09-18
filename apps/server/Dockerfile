@@ -9,7 +9,7 @@ RUN rustup target add wasm32-unknown-unknown && cargo build --release --locked -
 FROM node:24-bookworm-slim AS workspace-dependencies
 RUN npm install -g pnpm@12.0.0
 WORKDIR /opt/typerelay
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml README.md ./
 COPY apps/server/package.json ./apps/server/package.json
 COPY apps/server/patches ./apps/server/patches
 COPY apps/server/observability/package.json ./apps/server/observability/package.json
@@ -17,10 +17,12 @@ COPY apps/mcp/package.json ./apps/mcp/package.json
 COPY apps/mobile/package.json ./apps/mobile/package.json
 COPY apps/desktop/package.json ./apps/desktop/package.json
 COPY docs/package.json ./docs/package.json
-RUN pnpm --filter @typerelay/server --filter @typerelay/mcp --filter @typerelay/mobile install --frozen-lockfile
+RUN pnpm --filter @typerelay/server --filter @typerelay/mcp --filter @typerelay/mobile --filter @typerelay/docs install --frozen-lockfile
 COPY apps/server ./apps/server
 COPY apps/mcp ./apps/mcp
 COPY apps/mobile ./apps/mobile
+COPY docs ./docs
+RUN pnpm --filter @typerelay/docs build && mv docs/.vitepress/dist docs/.vitepress/dist-prefixed && TYPERELAY_DOCS_BASE=/ pnpm --filter @typerelay/docs build && mv docs/.vitepress/dist docs/.vitepress/dist-root && mv docs/.vitepress/dist-prefixed docs/.vitepress/dist
 RUN pnpm --filter @typerelay/server deploy --prod /opt/deploy/server && pnpm --filter @typerelay/mcp deploy --prod /opt/deploy/mcp && pnpm --filter @typerelay/mobile deploy /opt/deploy/mobile
 
 # Development-only mobile frontend and its shared Rust storage bridge.
@@ -45,6 +47,8 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml /opt/typerelay/
 WORKDIR /opt/typerelay/apps/server
 COPY --from=workspace-dependencies /opt/deploy/server ./
 COPY --from=workspace-dependencies /opt/deploy/mcp ../mcp
+COPY --from=workspace-dependencies /opt/typerelay/docs/.vitepress/dist ./docs-dist
+COPY --from=workspace-dependencies /opt/typerelay/docs/.vitepress/dist-root ./docs-dist-root
 COPY docs/web/Streamient-LICENSE docs/web/Mailtwine-LICENSE docs/web/attribution.md /opt/typerelay/notices/
 COPY --from=rust /src/target/release/typerelay-yaml /src/target/release/typerelay /usr/local/bin/
 COPY --from=rust /src/target/wasm32-unknown-unknown/release/typerelay_template_wasm.wasm /usr/local/share/typerelay/template.wasm
