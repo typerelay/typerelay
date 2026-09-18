@@ -47,7 +47,7 @@ class MobileApp {
  static async busy(control: HTMLButtonElement, operation: () => Promise<void>) { control.disabled = true; try { await operation(); } catch (error) { MobileApp.error(error); } finally { control.disabled = false; } }
  static subscribe = (listener: () => void) => { MobileApp.listeners.add(listener); return () => MobileApp.listeners.delete(listener); };
  static snapshot = () => MobileApp.state;
- static async load() { MobileApp.state = await Native.call('state'); for (const listener of MobileApp.listeners) listener(); }
+ static async load() { const state = await Native.call('state'); if (Auth.tokens && state.mobile_bridge_version !== 2) throw new Error('The mobile native bridge is out of date. Rebuild or update the mobile app.'); MobileApp.state = state; for (const listener of MobileApp.listeners) listener(); }
  static async sync() {
   if (!Auth.tokens || !MobileApp.active) return;
   if (!MobileApp.syncJob) MobileApp.syncJob = (async () => {

@@ -169,7 +169,7 @@ impl Mobile {
             libraries.push(library);
         }
         let snapshot_libraries = libraries.iter().cloned().map(|mut library| { library.as_object_mut().unwrap().remove("editor_revision"); library }).collect::<Vec<_>>();
-        let result = json!({"generation": format!("{:x}", Sha256::digest(serde_json::to_vec(&snapshot_libraries)?)), "libraries": libraries, "pending": db.pending()?.len(), "conflicts": db.meta("conflicts")?.unwrap_or(json!([])), "draft": db.meta("mobile_draft")?, "last_failure":db.meta("last_failure")?});
+        let result = json!({"mobile_bridge_version":2,"generation": format!("{:x}", Sha256::digest(serde_json::to_vec(&snapshot_libraries)?)), "libraries": libraries, "pending": db.pending()?.len(), "conflicts": db.meta("conflicts")?.unwrap_or(json!([])), "draft": db.meta("mobile_draft")?, "last_failure":db.meta("last_failure")?});
         transaction.commit()?;
         Ok(result)
     }

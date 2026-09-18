@@ -31,6 +31,7 @@ fn offline_edits_survive_restart_and_use_the_existing_outbox() {
 fn keyboard_generation_is_stable_across_connections_and_rejects_stale_selection() {
     let fixture = Fixture::new();
     let first = fixture.call(json!({"action":"state"})).unwrap();
+    assert_eq!(first["mobile_bridge_version"], 2);
     assert_eq!(first["generation"], fixture.call(json!({"action":"state"})).unwrap()["generation"]);
     let request = json!({"action":"keyboard_render","generation":first["generation"],"library":fixture.library,"id":"snippet-one"});
     assert_eq!(fixture.call(request.clone()).unwrap()["text"], "Hello");

@@ -167,6 +167,7 @@ h1, h2, h3, p { margin: 0; }
 .mobile-flow { padding: 0 !important; }
 .mobile-flow .modal-dialog { width: min(100%, 48rem); height: 100dvh; max-width: none; margin: 0 auto; }
 .mobile-flow .modal-content { height: 100dvh; border: 0; border-radius: 0; background: var(--bg); overflow: hidden; }
+#editor-content, #detail-content { height: 100%; min-height: 0; }
 .mobile-editor, #fill-form, #detail-content > div { display: flex; height: 100%; flex-direction: column; }
 .flow-header, .mobile-flow .modal-header { display: grid; flex: none; grid-template-columns: 2.8rem 1fr auto; align-items: center; gap: 0.75rem; padding: max(0.75rem, env(safe-area-inset-top)) 1rem 0.75rem; border-bottom: 0.0625rem solid var(--line); background: color-mix(in srgb, var(--surface-strong), transparent 4%); }
 .flow-header > div { min-width: 0; }
