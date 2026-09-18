@@ -8,7 +8,7 @@
   },
   "packageManager": "pnpm@12.0.0",
   "scripts": {
-    "start": "node --import @typerelay/observability/register scripts/start.js",
+    "start": "node --disable-warning=ExperimentalWarning --import @typerelay/observability/register scripts/start.js",
     "stripe:provision": "node scripts/provision-stripe.js",
     "test": "node --test --test-force-exit test/*.test.js",
     "build": "node scripts/build-editor.js"

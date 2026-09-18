@@ -6,7 +6,7 @@
   "license": "AGPL-3.0",
   "packageManager": "pnpm@12.0.0",
   "scripts": {
-    "start": "node --import @typerelay/observability/register server.js",
+    "start": "node --disable-warning=ExperimentalWarning --import @typerelay/observability/register server.js",
     "test": "node --test test/*.test.js"
   },
   "dependencies": {
