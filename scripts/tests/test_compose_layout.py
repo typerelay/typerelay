@@ -73,7 +73,7 @@ class ComposeLayoutTests(unittest.TestCase):
             self.assertNotIn("apps/mcp/pnpm-lock.yaml", source)
 
     def test_every_backend_preloads_shared_observability(self):
-        preload = "node --import @typerelay/observability/register"
+        preload = "node --disable-warning=ExperimentalWarning --import @typerelay/observability/register"
         self.assertIn(preload, self.server_package)
         self.assertIn(preload, self.mcp_package)
         self.assertIn("command: [npm, run, start]", self.development)
