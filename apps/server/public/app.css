@@ -1,3 +1,4 @@
+@font-face { font-family: "Inter Variable"; src: url("fonts/inter-latin-wght-normal.woff2") format("woff2"); font-style: normal; font-weight: 100 900; font-display: swap; }
 :root { --bs-primary: #a15c40; --bs-primary-rgb: 161,92,64; }
 body { background: #f8f5ee; color: #302d29; }
 header { border-bottom: .0625rem solid #e7dfd2; }
@@ -20,6 +21,73 @@ textarea { min-height: 12rem; white-space: pre-wrap; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .snippet { border-top: .0625rem solid #e7dfd2; padding: 1rem 0; }
 .form-check-input { height: 1.25rem; width: 1.25rem; flex-shrink: 0; }
+
+/* Auth shell mirrors Mailtwine's split authentication presentation. */
+.auth-page {
+	--auth-teal: #2fbfa3;
+	--auth-teal-bright: #35e0bd;
+	--auth-teal-deep: #0e7a68;
+	--auth-ink: #080808;
+	--auth-panel-subtle: #f8fafc;
+	--auth-line: #d9e0ea;
+	--auth-text: #172033;
+	--auth-muted: #667085;
+	--auth-primary-soft: #e3f5ef;
+	--bs-body-font-family: "Inter Variable", Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+	--bs-body-color: var(--auth-text);
+	--bs-border-color: var(--auth-line);
+	--bs-primary: var(--auth-teal-deep);
+	--bs-primary-rgb: 14, 122, 104;
+	--bs-link-color: var(--auth-teal-deep);
+	--bs-link-hover-color: var(--auth-ink);
+	min-height: 100vh;
+	overflow: auto;
+	background: #fff;
+	background-image: var(--auth-cover-image, linear-gradient(135deg, #f8fafc 0%, #e5e7eb 52%, #fff7ed 100%));
+	background-position: center;
+	background-repeat: no-repeat;
+	background-size: cover;
+	color: var(--auth-text);
+	font-family: var(--bs-body-font-family);
+	font-size: .875rem;
+}
+
+.auth-page .auth-shell { width: 100%; min-height: 100vh; }
+.auth-page .auth-panel { min-height: 100vh; border-top: .125rem solid var(--auth-teal-deep) !important; background: rgb(255 255 255 / 88%); backdrop-filter: blur(.375rem); }
+.auth-page .auth-container { width: 100%; max-width: 25rem; margin-right: auto; margin-left: auto; }
+.auth-page .auth-cover-column { min-height: 100vh; background: #fff6dc; }
+.auth-page .auth-cover { position: relative; background-color: #e5e7eb; background-image: var(--auth-cover-image, linear-gradient(135deg, #f8fafc 0%, #e5e7eb 52%, #fff7ed 100%)), linear-gradient(135deg, #f8fafc 0%, #e5e7eb 52%, #fff7ed 100%); background-position: center; background-repeat: no-repeat; background-size: cover; }
+.auth-page .auth-cover::after { position: absolute; content: ""; inset: 0; background: linear-gradient(90deg, rgb(255 255 255 / 5%), rgb(15 23 42 / 18%)); }
+.auth-page .auth-logo { text-align: left; }
+.auth-page .auth-logo .navbar-brand { display: inline-flex; margin: 0; padding: 0; }
+.auth-page .auth-brand { width: 12rem; max-width: 100%; height: 3rem; object-fit: contain; object-position: left center; }
+.auth-page .h2 { font-size: 1.25rem; font-weight: 600; line-height: 1.2; }
+.auth-page .text-muted, .auth-page .text-secondary { color: var(--auth-muted) !important; }
+.auth-page a { color: var(--auth-teal-deep); }
+.auth-page a:hover { color: var(--auth-ink); }
+.auth-page .form-label { color: var(--auth-text); font-weight: 600; }
+.auth-page .form-control, .auth-page .form-select { border-color: var(--auth-line); border-radius: .375rem; background-color: #fff; color: var(--auth-text); font-size: .875rem; }
+.auth-page .form-control:focus, .auth-page .form-select:focus { border-color: var(--auth-teal-deep); box-shadow: 0 0 0 .25rem rgb(47 191 163 / 30%); }
+.auth-page .btn { border-radius: .375rem; }
+.auth-page .btn-primary { --bs-btn-bg: var(--auth-teal); --bs-btn-color: var(--auth-ink); --bs-btn-border-color: var(--auth-ink); --bs-btn-hover-bg: var(--auth-teal-bright); --bs-btn-hover-color: var(--auth-ink); --bs-btn-hover-border-color: var(--auth-ink); --bs-btn-active-bg: var(--auth-teal-deep); --bs-btn-active-color: #fff; --bs-btn-active-border-color: var(--auth-ink); --bs-btn-disabled-bg: var(--auth-teal); --bs-btn-disabled-color: var(--auth-ink); --bs-btn-disabled-border-color: var(--auth-ink); border-width: .125rem; box-shadow: .125rem .125rem 0 0 var(--auth-ink); font-weight: 600; }
+.auth-page .btn-primary:active { box-shadow: none; transform: translate(.125rem, .125rem); }
+.auth-page .btn-outline-secondary { --bs-btn-color: var(--auth-text); --bs-btn-border-color: var(--auth-line); --bs-btn-hover-bg: var(--auth-panel-subtle); --bs-btn-hover-color: var(--auth-ink); --bs-btn-hover-border-color: var(--auth-ink); }
+.auth-page .btn-link { color: var(--auth-teal-deep); text-decoration: none; }
+.auth-page .btn-link:hover { color: var(--auth-ink); text-decoration: underline; }
+.auth-page .auth-methods { display: flex; flex-wrap: wrap; gap: .75rem; margin-bottom: 1.25rem; }
+.auth-page .auth-method-btn { display: inline-flex; flex: 0 0 auto; min-width: 8rem; min-height: 2.25rem; align-items: center; justify-content: center; padding: .45rem .8rem; font-size: .875rem; }
+.auth-page .auth-method-icon { width: 1rem; height: 1rem; }
+.auth-page .auth-container:has(.integration-authorize-page) { max-width: 28rem; }
+.integration-eyebrow { color: var(--auth-teal-deep); font-size: .6875rem; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+.integration-section > h2 { color: var(--auth-muted); font-size: .6875rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.integration-scope-list { overflow: hidden; border: .0625rem solid var(--auth-line); border-radius: .5rem; box-shadow: .125rem .125rem 0 0 var(--auth-ink); }
+.integration-scope-list .list-group-item { position: relative; padding: .65rem .75rem .65rem 2.1rem; border: 0; border-bottom: .0625rem solid var(--auth-line); background: var(--auth-panel-subtle); }
+.integration-scope-list .list-group-item:last-child { border-bottom: 0; }
+.integration-scope-list .list-group-item::before { position: absolute; top: .6rem; left: .8rem; color: var(--auth-teal-deep); content: "✓"; font-weight: 800; }
+
+@media (max-width: 61.99875rem) {
+	.auth-page .auth-panel { background: rgb(255 255 255 / 94%); }
+}
 
 .btn { white-space: nowrap; }
 .btn-link { --bs-btn-color: #74422e; --bs-btn-hover-color: #9c593d; }

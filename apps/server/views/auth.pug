@@ -1,52 +1,67 @@
-extends layout
+extends auth-layout
+block head
+	- const authTitles = { signup: 'Sign Up', forgot: 'Forgot Password', factor: 'Two-Factor Authentication', reset: 'Password Reset', email: 'Confirm Email' }
+	title= (authTitles[kind] || 'Account') + ' — Type Relay'
 block content
-	section.auth.card.p-4
-		if kind === 'signup'
-			if signupEnabled
-				h1.h2.mb-3.fw-bold Create your account
-				form#signup-form
+	if kind === 'signup'
+		if signupEnabled
+			h1.h2.mb-2 Create your account
+			p.text-muted.mb-5 Start using Type Relay.
+			form#signup-form
+				.mb-3
 					label.form-label(for="name") Name
-					input#name.form-control.form-control-sm.mb-3(name="name" autocomplete="name" required)
+					input#name.form-control.form-control-sm(name="name" autocomplete="name" required autofocus)
+				.mb-4
 					label.form-label(for="email") Email address
-					input#email.form-control.form-control-sm.mb-3(type="email" name="email" autocomplete="email" required)
-					.d-flex.justify-content-end
-						button.btn.btn-primary.btn-sm Sign up
-			else
-				h1.h2.mb-3.fw-bold Sign up disabled
-				p.mb-0 Sign up is currently disabled.
-		if kind === 'forgot'
-			h1.h2.mb-3.fw-bold Reset password
-			p Enter your email to receive a password reset link.
-			form#forgot-form
+					input#email.form-control.form-control-sm(type="email" name="email" autocomplete="email" required)
+				button.btn.btn-primary.btn-sm.w-100 Sign up
+			.mt-5.text-center
+				a(href="/login") Already have an account?
+		else
+			h1.h2.mb-2 Sign up disabled
+			p.text-muted.mb-0 Sign up is currently disabled.
+	if kind === 'forgot'
+		h1.h2.mb-2 Reset password
+		p.text-muted.mb-5 Enter your email to reset your password.
+		form#forgot-form
+			.mb-3
 				label.form-label(for="email") Email address
-				input#email.form-control.form-control-sm.mb-3(type="email" name="email" autocomplete="email" required)
-				.d-flex.justify-content-end
-					button.btn.btn-primary.btn-sm Send reset link
-		if kind === 'factor'
-			h1.h2.mb-3.fw-bold Two-factor authentication
-			form#factor-form
-				label.form-label(for="code") Authentication code
-				input#code.form-control.form-control-sm.mb-3(name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required)
-				.d-flex.justify-content-end
-					button.btn.btn-primary.btn-sm Verify
-		if kind === 'reset'
-			h1.h2.mb-3.fw-bold Reset your password
-			p Generate a new random password, then copy it and use it to sign in.
-			form#redeem-reset-form
-				input(type="hidden" name="token" value=token)
-				.d-flex.justify-content-end
-					button.btn.btn-primary.btn-sm Generate password
-			#public-password-result.d-none.mt-3
-				label.form-label(for="new-password") Your new password
-				input#new-password.form-control.form-control-sm.mb-3(type="text" readonly autocomplete="off")
-				.d-flex.justify-content-between
-					button#copy-password.btn.btn-outline-secondary.btn-sm(type="button") Copy
-					a.btn.btn-primary.btn-sm(href="/login") I copied it — continue to login
-		if kind === 'email'
-			h1.h2.mb-3.fw-bold Confirm your email address
-			form#confirm-email-form
-				input(type="hidden" name="token" value=token)
-				.d-flex.justify-content-end
-					button.btn.btn-primary.btn-sm Confirm email address
-		p.mt-3.mb-0
+				input#email.form-control.form-control-sm(type="email" name="email" autocomplete="email" required autofocus)
+			button.btn.btn-primary.btn-sm.w-100 Send reset link
+		.mt-5
 			a(href="/login") Back to login
+	if kind === 'factor'
+		h1.h2.mb-2 Two-factor authentication
+		p.text-muted.mb-5 Enter your six-digit code.
+		form#factor-form
+			.mb-3
+				label.form-label(for="code") Authentication code
+				input#code.form-control.form-control-sm(name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required autofocus)
+			button.btn.btn-primary.btn-sm.w-100 Verify
+		.mt-5
+			a(href="/login") Back to login
+	if kind === 'reset'
+		h1.h2.mb-2 Reset your password
+		p.text-muted.mb-4 Generate a new random password, then copy it and use it to sign in.
+		form#redeem-reset-form
+			input(type="hidden" name="token" value=token)
+			button.btn.btn-primary.btn-sm.w-100 Generate password
+		#public-password-result.d-none.mt-4
+			label.form-label(for="new-password") Your new password
+			input#new-password.form-control.form-control-sm.mb-3(type="text" readonly autocomplete="off")
+			.d-flex.align-items-center.justify-content-between.gap-3
+				button#copy-password.btn.btn-outline-secondary.btn-sm(type="button") Copy
+				a.btn.btn-primary.btn-sm(href="/login") I copied it — continue to login
+		.mt-5
+			a(href="/login") Back to login
+	if kind === 'email'
+		h1.h2.mb-2 Confirm your email address
+		p.text-muted.mb-5 Confirm this change to your Type Relay account.
+		form#confirm-email-form
+			input(type="hidden" name="token" value=token)
+			button.btn.btn-primary.btn-sm.w-100 Confirm email address
+		.mt-5
+			a(href="/login") Back to login
+
+block scripts
+	script(src='/assets/' + assetVersion + '/auth.js' type="module")

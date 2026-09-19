@@ -1,20 +1,28 @@
-extends layout
+extends auth-layout
+block head
+	title Authorize Integration — Type Relay
 block content
-	section.auth.card.p-4
-		h1.h4.fw-bold Authorize integration
-		p.mb-3= client.name + ' requests access to your TypeRelay account.'
-		ul.mb-3
-			each scope in scopes
-				li= scope
+	.integration-authorize-page
+		.integration-authorize-hero.mb-5
+			.integration-eyebrow.mb-2 OAuth consent
+			h1.h2.mb-2= client.name + ' wants to access your account'
+			p.text-muted.mb-0 Authorize this integration through Type Relay.
+		section.integration-section.mb-4
+			h2.mb-2 Requested access
+			ul.list-group.integration-scope-list
+				each scope in scopes
+					li.list-group-item= scope
 		form(method="post" action="/integrations/authorize")
 			input(type="hidden" name="_csrf" value=csrf)
 			each value, key in request
 				if ['client_id', 'redirect_uri', 'code_challenge', 'code_challenge_method', 'state', 'resource', 'scope', 'response_type'].includes(key)
 					input(type="hidden" name=key value=value)
-			label.form-label(for="integration-account") Account
-			select#integration-account.form-select.form-select-sm.mb-3(name="account")
-				each account in accounts
-					option(value=account._id)= account.name
-			.d-flex.justify-content-between
+			.mb-4
+				label.form-label(for="integration-account") Account
+				select#integration-account.form-select.form-select-sm(name="account")
+					each account in accounts
+						option(value=account._id)= account.name
+			.d-flex.align-items-center.justify-content-between.gap-3
 				button.btn.btn-outline-secondary.btn-sm(type="submit" name="decision" value="deny") Cancel
-				button.btn.btn-primary.btn-sm Authorize
+				button.btn.btn-primary.btn-sm(type="submit" name="decision" value="approve") Authorize
+		p.text-muted.small.text-center.mt-4.mb-0 Only authorize access if you trust this application.

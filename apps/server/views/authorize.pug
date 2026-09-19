@@ -1,17 +1,19 @@
-extends layout
+extends auth-layout
+block head
+	title Connect Your Device — Type Relay
 block content
-	section.auth.card.p-4
-		h1.mb-3.fw-bold Connect your device
-		p.mb-3 TypeRelay will sync libraries available to the selected account.
-		form(method="post" action="/oauth/authorize")
-			input(type="hidden" name="_csrf" value=csrf)
-			each value, key in request
-				if ['client_id', 'redirect_uri', 'code_challenge', 'code_challenge_method', 'state', 'device_name', 'client_type', 'os'].includes(key)
-					input(type="hidden" name=key value=value)
+	h1.h2.mb-2 Connect your device
+	p.text-muted.mb-5 Type Relay will sync libraries available to the selected account.
+	form(method="post" action="/oauth/authorize")
+		input(type="hidden" name="_csrf" value=csrf)
+		each value, key in request
+			if ['client_id', 'redirect_uri', 'code_challenge', 'code_challenge_method', 'state', 'device_name', 'client_type', 'os'].includes(key)
+				input(type="hidden" name=key value=value)
+		.mb-4
 			label.form-label(for="account") Account
-			select#account.form-select.form-select-sm.mb-3(name="account")
+			select#account.form-select.form-select-sm(name="account")
 				each account in accounts
 					option(value=account._id)= account.name
-			.d-flex.justify-content-between
-				a.btn.btn-outline-secondary.btn-sm(href="/") Cancel
-				button.btn.btn-primary.btn-sm(type="submit") Connect device
+		.d-flex.align-items-center.justify-content-between.gap-3
+			a.btn.btn-outline-secondary.btn-sm(href="/") Cancel
+			button.btn.btn-primary.btn-sm(type="submit") Connect device

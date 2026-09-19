@@ -2,6 +2,7 @@ import { BrowserSource } from './browser-source.js';
 import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID, randomBytes, createHash, generateKeyPairSync, sign } from 'node:crypto';
+import { readdir, readFile } from 'node:fs/promises';
 import { Encoder } from 'cbor-x';
 const cbor = new Encoder({ useRecords: false, useTag259ForMaps: false, tagUint8Array: false });
 import { generateSync } from 'otplib';
@@ -322,6 +323,18 @@ test('real signed passkey registration/login, challenge replay and ownership', a
 	await browser.json('/api/v2/security/passkeys/' + result.key._id, 'DELETE');
 	assert.equal(await Passkey.exists({ _id: result.key._id }), null);
 });
+test('auth pages use the Mailtwine split shell and exact background collection', async () => {
+	const backgrounds = (await readdir(new URL('../public/auth/backgrounds/', import.meta.url))).sort();
+	assert.deepEqual(backgrounds, ['alex-shuper-4Z9xd1SoO5o-unsplash.webp', 'and-machines-KGrxK6LJ0qI-unsplash.webp', 'marko-brecic-0Mn7tjzKJws-unsplash.webp', 'oleg-ivanov-nyDHxhrbwUs-unsplash.webp', 'pawel-czerwinski--qMHrn-QiCw-unsplash.webp', 'pawel-czerwinski-OSlqY4G_sVQ-unsplash.webp', 'pawel-czerwinski-mLE5YBnUsa8-unsplash.webp', 'pawel-czerwinski-plv4_0R9-dc-unsplash.webp', 'pham-nhat-JFSJ-AtU2sM-unsplash.webp', 'philip-oroni-7e-_dFrz3-8-unsplash.webp', 'philip-oroni-9yDNQ35T_fA-unsplash.webp', 'susan-wilkinson-hBUvCP_CL5w-unsplash.webp', 'susan-wilkinson-nqxDy9r_UFo-unsplash.webp']);
+	for (const name of backgrounds) { const bytes = await readFile(new URL('../public/auth/backgrounds/' + name, import.meta.url)); assert.equal(bytes.subarray(0, 4).toString(), 'RIFF'); assert.equal(bytes.subarray(8, 12).toString(), 'WEBP'); }
+	const browser = new Browser();
+	for (const [path, title, selector] of [['/', 'Login — Type Relay', '#password-login-form'], ['/login', 'Login — Type Relay', '#magic-link-btn'], ['/signup', 'Sign Up — Type Relay', '#signup-form'], ['/forgot-password', 'Forgot Password — Type Relay', '#forgot-form'], ['/auth/two-factor', 'Two-Factor Authentication — Type Relay', '#factor-form'], ['/auth/reset-password?token=test', 'Password Reset — Type Relay', '#redeem-reset-form']]) {
+		const response = await browser.call(path); const dom = new JSDOM(await response.text()); const document = dom.window.document;
+		assert.equal(document.title, title); assert.ok(document.body.classList.contains('auth-page')); assert.ok(document.querySelector('.auth-panel')); assert.ok(document.querySelector('.auth-cover')); assert.equal(document.querySelector('.auth-brand').alt, 'Type Relay'); assert.ok(document.querySelector(selector));
+		const cover = document.body.getAttribute('style').match(/url\("([^"?]+\.webp)"\)/)?.[1]; assert.ok(cover); assert.ok(backgrounds.includes(decodeURIComponent(cover.split('/').at(-1)))); const image = await browser.call(cover); assert.equal(image.status, 200); assert.equal(image.headers.get('content-type'), 'image/webp'); dom.window.close();
+	}
+});
+
 test('login exposes all requested methods and native OAuth form remains unaffected', async () => {
 	const browser = new Browser();
 	const response = await browser.call('/');
@@ -337,13 +350,18 @@ test('login exposes all requested methods and native OAuth form remains unaffect
 	dom.window.close();
 });
 
+test('signed-in email confirmation uses the shared auth shell', async () => {
+	const { browser } = await Fixture.account(); const response = await browser.call('/auth/email?token=test'); const dom = new JSDOM(await response.text());
+	assert.equal(dom.window.document.title, 'Confirm Email — Type Relay'); assert.ok(dom.window.document.body.classList.contains('auth-page')); assert.ok(dom.window.document.querySelector('.auth-cover')); assert.ok(dom.window.document.querySelector('#confirm-email-form')); dom.window.close();
+});
+
 test('magic-link request shows a persistent confirmation and preserves the form on failure', async () => {
 	const browser = new Browser();
 	const dom = new JSDOM(await (await browser.call('/')).text(), { url: Fixture.origin, runScripts: 'outside-only' });
 	try {
 		const document = dom.window.document;
 		dom.window.eval((await BrowserSource.script()).replace('export { client };', 'window.testClient = client;'));
-		const client = dom.window.testClient; const form = document.querySelector('#login'); const panel = form.closest('section'); const email = form.elements.email; const button = form.querySelector('button[type=submit]'); const href = dom.window.location.href; const calls = [];
+		const client = dom.window.testClient; const form = document.querySelector('#login'); const panel = form.closest('.auth-panel'); const email = form.elements.email; const button = form.querySelector('button[type=submit]'); const href = dom.window.location.href; const calls = [];
 		email.value = 'person@example.test';
 		client.toast = () => assert.fail('Successful magic-link request must not show a toast');
 		client.request = async (...args) => { calls.push(args); return { message: 'Check your email for a sign-in link.' }; };
@@ -351,7 +369,7 @@ test('magic-link request shows a persistent confirmation and preserves the form 
 		assert.equal(calls.length, 1); assert.equal(calls[0][0], '/auth/login'); assert.equal(calls[0][1], 'POST'); assert.equal(calls[0][2].email, 'person@example.test');
 		assert.ok(document.querySelector('#magic-link-form').classList.contains('d-none'));
 		assert.ok(!document.querySelector('#magic-link-sent').classList.contains('d-none'));
-		assert.equal(form.closest('section'), panel); assert.equal(dom.window.location.href, href);
+		assert.equal(form.closest('.auth-panel'), panel); assert.equal(dom.window.location.href, href);
 		document.querySelector('#magic-link-form').classList.remove('d-none'); document.querySelector('#magic-link-sent').classList.add('d-none');
 		let error;
 		client.toast = (message, icon) => { error = { message, icon }; };
