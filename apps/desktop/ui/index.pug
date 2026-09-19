@@ -111,7 +111,8 @@ html(lang="en")
 								button#sync.secondary(type="button") Sync now
 								span.action-group
 									button#disconnect.secondary(type="button") Disconnect
-									button.primary(type="submit") Authenticate
+									button#authenticate.primary(type="submit") Authenticate
+							p#connection-status.settings-description(role="status" aria-live="polite") Not connected
 						form#enroll-form.setting-section
 							h3 Libraries on this device
 							p Synced libraries are available offline. Select local-only libraries to upload.
@@ -119,6 +120,10 @@ html(lang="en")
 							.form-actions
 								span
 								button.primary(type="submit") Upload selected
+						section#conflict-section.setting-section(hidden)
+							h3 Needs review
+							p#conflict-count.settings-description
+							div#sync-conflicts
 		template#result-template
 			li(role="option" aria-selected="false")
 				.row
@@ -131,6 +136,39 @@ html(lang="en")
 				input(type="checkbox")
 				span.library-name
 				span.library-sync-state.status-pill
+		template#conflict-template
+			article.sync-conflict
+				button.conflict-open.secondary(type="button")
+				div.conflict-detail(hidden)
+					h3 Base record
+					pre.conflict-base
+					h3 Local record
+					pre.conflict-local
+					h3 Server record
+					pre.conflict-server
+					form.conflict-form
+						label Resolution
+						select.conflict-choice.form-select-sm(name="choice")
+							option(value="merged") Edit merge
+							option(value="local") Keep local
+							option(value="server") Keep server
+						label Title
+						input.conflict-title.form-control-sm(name="title" maxlength="500")
+						label Abbreviation
+						input.conflict-trigger.form-control-sm(name="trigger" pattern="[a-z0-9\\-]{1,63}")
+						label Type
+						select.conflict-type.form-select-sm(name="type")
+							option(value="plain_text") Text
+							option(value="template") Template
+							option(value="code") Code
+							option(value="rich_text") Rich text
+						label Content
+						textarea.conflict-body.form-control-sm(name="body" rows="8")
+						label Language
+						input.conflict-language.form-control-sm(name="language")
+						.form-actions
+							button.conflict-cancel.secondary(type="button") Cancel
+							button.primary(type="submit") Resolve
 
 		template#fill-field
 			div

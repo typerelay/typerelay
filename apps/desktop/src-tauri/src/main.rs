@@ -2,7 +2,9 @@
 mod platform;
 mod tray;
 mod update;
-use anyhow::{Context,Result};
+use anyhow::Result;
+#[cfg(not(target_os="linux"))]
+use anyhow::Context;
 use serde_json::{json,Value};
 use std::{sync::{Mutex,atomic::{AtomicBool,Ordering}},path::PathBuf};
 use tauri::{Manager,Emitter};
@@ -12,7 +14,7 @@ use tauri_plugin_dialog::DialogExt;
 #[cfg(not(target_os="linux"))]
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
-struct Runtime { root:PathBuf, target:Mutex<Option<platform::Target>>, last:Mutex<Option<platform::Target>>, erase:Mutex<usize>, busy:AtomicBool, syncing:AtomicBool, prompting:AtomicBool, prompt_hit:Mutex<Option<Hit>>, settings:AtomicBool, status:Mutex<String>, #[cfg(any(target_os="windows",target_os="macos"))] expansion_started:AtomicBool, #[cfg(target_os="linux")] registration:Mutex<Option<typerelay_client::desktop::Registration>> }
+struct Runtime { root:PathBuf, target:Mutex<Option<platform::Target>>, last:Mutex<Option<platform::Target>>, erase:Mutex<usize>, busy:AtomicBool, syncing:AtomicBool, authenticating:AtomicBool, cancel_auth:AtomicBool, auth_error:Mutex<String>, prompting:AtomicBool, prompt_hit:Mutex<Option<Hit>>, settings:AtomicBool, status:Mutex<String>, #[cfg(any(target_os="windows",target_os="macos"))] expansion_started:AtomicBool, #[cfg(target_os="linux")] registration:Mutex<Option<typerelay_client::desktop::Registration>> }
 impl Runtime {
 	fn callback_argument(args:&[String])->Option<&str>{args.iter().find(|arg|arg.starts_with("typerelay://oauth/callback?code=")).map(String::as_str)}
 	fn receive_callback(args:&[String])->bool{let Some(url)=Self::callback_argument(args)else{return false;};Paths::config_dir().and_then(|root|Sync::receive_callback(&root,url).map(|_|())).is_ok()}
@@ -177,7 +179,8 @@ fn initialize(app:tauri::AppHandle)->std::result::Result<Value,String> {
 		let notifications=platform::NativeNotifications::allowed();
 		#[cfg(not(target_os="macos"))]
 		let notifications:Option<bool>=None;
-		Ok(json!({"config":settings,"prompt":state.prompt_hit.lock().unwrap().clone(),"server":typerelay_client::settings::SettingsStore::open(state.root.join("settings.yml")).ok().map(|s|s.settings.sync_url).unwrap_or_default(),"connected":state.root.join("sync/credentials.json").exists(),"theme":Runtime::theme(),"settings":state.settings.load(Ordering::SeqCst),"status":*state.status.lock().unwrap(),"update":app.state::<update::UpdateState>().value(),"accessibility":accessibility,"input_monitoring":input_monitoring,"notifications":notifications,"empty":empty}))
+		let connected=state.root.join("sync/credentials.json").exists();let authenticating=state.authenticating.load(Ordering::SeqCst);
+		Ok(json!({"config":settings,"prompt":state.prompt_hit.lock().unwrap().clone(),"server":typerelay_client::settings::SettingsStore::open(state.root.join("settings.yml")).ok().map(|s|s.settings.sync_url).unwrap_or_default(),"connected":connected,"connection_state":if authenticating{"authenticating"}else if connected{"connected"}else{"disconnected"},"auth_error":*state.auth_error.lock().unwrap(),"theme":Runtime::theme(),"settings":state.settings.load(Ordering::SeqCst),"status":*state.status.lock().unwrap(),"update":app.state::<update::UpdateState>().value(),"accessibility":accessibility,"input_monitoring":input_monitoring,"notifications":notifications,"empty":empty}))
 }
 #[tauri::command]
 async fn search(app:tauri::AppHandle,query:String)->std::result::Result<Vec<Hit>,String> {
@@ -268,23 +271,26 @@ fn save_settings(app:tauri::AppHandle,config:PanelSettings)->std::result::Result
 }
 #[tauri::command]
 async fn connect(app:tauri::AppHandle,url:String)->std::result::Result<(),String> {
-    app.state::<Runtime>().status.lock().unwrap().clear();
-    app.state::<Runtime>().settings.store(false,Ordering::SeqCst);Runtime::hide(&app);
-    let root=app.state::<Runtime>().root.clone();
-    let result=tauri::async_runtime::spawn_blocking(move ||Sync::new(root.clone(),root.join("snippets")).and_then(|sync|sync.connect(&url,true,true)).map_err(|e|e.to_string())).await.map_err(|e|e.to_string())?;
-    app.state::<Runtime>().status.lock().unwrap().clear();
-    app.state::<Runtime>().settings.store(true,Ordering::SeqCst);Runtime::open(&app,true);result
+	let state=app.state::<Runtime>();if state.authenticating.swap(true,Ordering::SeqCst){return Err("Authentication is already in progress".into());}state.cancel_auth.store(false,Ordering::SeqCst);state.auth_error.lock().unwrap().clear();let _=app.emit("auth-state",json!({"state":"authenticating","message":"Complete sign-in in any browser."}));
+	let root=state.root.clone();let worker=app.clone();let result=match tauri::async_runtime::spawn_blocking(move||Sync::new(root.clone(),root.join("snippets")).and_then(|sync|sync.connect_cancellable(&url,true,true,&worker.state::<Runtime>().cancel_auth)).map_err(|error|error.to_string())).await{Ok(result)=>result,Err(error)=>Err(error.to_string())};
+	let state=app.state::<Runtime>();state.authenticating.store(false,Ordering::SeqCst);let connected=state.root.join("sync/credentials.json").exists();if let Err(error)=&result{*state.auth_error.lock().unwrap()=error.clone();}let _=app.emit("auth-state",json!({"state":if connected{"connected"}else{"disconnected"},"message":result.as_ref().map(|_|"Connected").unwrap_or_else(|error|error.as_str())}));result
 }
 #[tauri::command]
+fn cancel_connect(app:tauri::AppHandle){app.state::<Runtime>().cancel_auth.store(true,Ordering::SeqCst);}
+#[tauri::command]
 async fn disconnect(app:tauri::AppHandle)->std::result::Result<(),String> {
-    let root=app.state::<Runtime>().root.clone();
-    tauri::async_runtime::spawn_blocking(move ||Sync::new(root.clone(),root.join("snippets")).and_then(|sync|sync.disconnect()).map_err(|e|e.to_string())).await.map_err(|e|e.to_string())?
+	app.state::<Runtime>().cancel_auth.store(true,Ordering::SeqCst);let root=app.state::<Runtime>().root.clone();
+	tauri::async_runtime::spawn_blocking(move||{let waiting=std::time::Instant::now();loop{let result=Sync::new(root.clone(),root.join("snippets")).and_then(|sync|sync.disconnect());match result{Err(error)if error.to_string().contains("Sync already running")&&waiting.elapsed()<std::time::Duration::from_secs(3)=>std::thread::sleep(std::time::Duration::from_millis(100)),outcome=>return outcome.map_err(|error|error.to_string())}}}).await.map_err(|error|error.to_string())?
 }
 #[tauri::command]
 async fn libraries(app:tauri::AppHandle)->std::result::Result<Value,String>{
     let directory=app.state::<Runtime>().root.join("snippets");
     tauri::async_runtime::spawn_blocking(move ||Panel::libraries(&directory).map_err(|e|e.to_string())).await.map_err(|e|e.to_string())?
 }
+#[tauri::command]
+async fn conflicts(app:tauri::AppHandle)->std::result::Result<Value,String>{let directory=app.state::<Runtime>().root.join("snippets");tauri::async_runtime::spawn_blocking(move||Panel::conflicts(&directory).map_err(|error|error.to_string())).await.map_err(|error|error.to_string())?}
+#[tauri::command]
+async fn resolve_conflict(app:tauri::AppHandle,id:String,choice:String,value:Option<Value>)->std::result::Result<(),String>{let root=app.state::<Runtime>().root.clone();tauri::async_runtime::spawn_blocking(move||Sync::new(root.clone(),root.join("snippets")).and_then(|sync|sync.resolve_conflict(&id,&choice,value)).map_err(|error|error.to_string())).await.map_err(|error|error.to_string())?}
 #[tauri::command]
 async fn enroll(app:tauri::AppHandle,names:Vec<String>)->std::result::Result<(),String>{let root=app.state::<Runtime>().root.clone();tauri::async_runtime::spawn_blocking(move||->Result<()>{let sync=Sync::new(root.clone(),root.join("snippets"))?;for name in names{sync.enroll(&name)?;}Ok(())}).await.map_err(|e|e.to_string())?.map_err(|e|e.to_string())}
 #[tauri::command]
@@ -321,7 +327,7 @@ fn main() {
         {use tauri_plugin_deep_link::DeepLinkExt;#[cfg(target_os="linux")]app.deep_link().register_all()?;let callback_root=root.clone();app.deep_link().on_open_url(move|event|for url in event.urls(){let _=Sync::receive_callback(&callback_root,url.as_str());});if let Some(urls)=app.deep_link().get_current()?{for url in urls{let _=Sync::receive_callback(&root,url.as_str());}}}
         Sync::worker(root.clone(),root.join("snippets"));
         let config=Panel::settings(&root)?;
-		app.manage(Runtime{root:root.clone(),target:Mutex::new(None),last:Mutex::new(None),erase:Mutex::new(0),busy:AtomicBool::new(false),syncing:AtomicBool::new(false),prompting:AtomicBool::new(false),prompt_hit:Mutex::new(None),settings:AtomicBool::new(false),status:Mutex::new(String::new()),#[cfg(any(target_os="windows",target_os="macos"))] expansion_started:AtomicBool::new(false),#[cfg(target_os="linux")] registration:Mutex::new(None)});
+		app.manage(Runtime{root:root.clone(),target:Mutex::new(None),last:Mutex::new(None),erase:Mutex::new(0),busy:AtomicBool::new(false),syncing:AtomicBool::new(false),authenticating:AtomicBool::new(false),cancel_auth:AtomicBool::new(false),auth_error:Mutex::new(String::new()),prompting:AtomicBool::new(false),prompt_hit:Mutex::new(None),settings:AtomicBool::new(false),status:Mutex::new(String::new()),#[cfg(any(target_os="windows",target_os="macos"))] expansion_started:AtomicBool::new(false),#[cfg(target_os="linux")] registration:Mutex::new(None)});
 		app.manage(update::UpdateState::default());
 		#[cfg(target_os="macos")]
 		let missing_permissions={let (accessibility,input_monitoring)=Runtime::permissions();app.state::<Runtime>().update_permission_status(accessibility,input_monitoring);if accessibility&&input_monitoring&&let Err(error)=Runtime::start_expansion(app.handle()){*app.state::<Runtime>().status.lock().unwrap()=format!("TypeRelay could not start Input Monitoring: {error:#}");}!(accessibility&&input_monitoring)};
@@ -358,7 +364,7 @@ fn main() {
     }).on_window_event(|window,event|match event {
         tauri::WindowEvent::CloseRequested{api,..}=>{api.prevent_close();set_prompt_view(window.app_handle().clone(),false);Runtime::hide(window.app_handle());},
         tauri::WindowEvent::Focused(false)if Runtime::hide_on_focus_loss() && !window.app_handle().state::<Runtime>().busy.load(Ordering::SeqCst) && !window.app_handle().state::<Runtime>().settings.load(Ordering::SeqCst) && !window.app_handle().state::<Runtime>().prompting.load(Ordering::SeqCst)=> {Runtime::hide(window.app_handle());},_=>()
-    }).invoke_handler(tauri::generate_handler![initialize,search,insert,copy_snippet,prepare_template,set_prompt_view,set_settings_view,dismiss,notify,sync_now,save_settings,connect,disconnect,libraries,enroll,open_accessibility_settings,open_input_monitoring_settings,open_notification_settings,open_tui,open_web_app]).run(tauri::generate_context!());
+    }).invoke_handler(tauri::generate_handler![initialize,search,insert,copy_snippet,prepare_template,set_prompt_view,set_settings_view,dismiss,notify,sync_now,save_settings,connect,cancel_connect,disconnect,libraries,conflicts,resolve_conflict,enroll,open_accessibility_settings,open_input_monitoring_settings,open_notification_settings,open_tui,open_web_app]).run(tauri::generate_context!());
     if let Err(error)=result {eprintln!("TypeRelay panel: {error}");std::process::exit(1);}
 }
 

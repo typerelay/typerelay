@@ -51,7 +51,7 @@ typerelay sync
 
 Search, expansion and editing continue without a network connection. Each change and its stable operation ID are committed to SQLite together, then retried unchanged. Temporary network and server failures leave the queue intact.
 
-When a server rejects a stale or unauthorized operation, TypeRelay keeps recoverable local content in its recovery store, removes the rejected queue item and refreshes authoritative state. The TUI sync status reports the failure. Permanently purged server content cannot be restored locally.
+When a server rejects a stale or unauthorized operation, TypeRelay keeps recoverable local content in its recovery store, removes the rejected queue item and refreshes authoritative state. The TUI sync status reports the failure. Permanently purged server content cannot be restored locally. Before a detached library is reconciled after reconnecting, TypeRelay creates a SQLite backup under the local `backups` directory.
 
 ## Conflicts
 
@@ -61,7 +61,7 @@ Different snippet IDs merge independently. If the same snippet changed from an o
 - keep the current server version; or
 - edit and save a merged version.
 
-You need current edit access to resolve a conflict. Other libraries and non-conflicting changes continue to sync.
+Review conflicts in **Desktop Settings → Sync → Needs review**. It shows the base, local and server records and lets you keep either side or edit a merged record. You need current edit access to resolve a conflict. Other libraries and non-conflicting changes continue to sync.
 
 ## Permission changes and revocation
 
@@ -77,7 +77,7 @@ Use the account’s **Connected devices** settings to revoke a machine remotely,
 typerelay disconnect
 ```
 
-Local disconnect revokes the current device, removes its credentials, marks synchronized libraries as local and preserves snippets. Pending changes are moved to recovery. After reconnecting, run a first sync so accessible server libraries are recognized again, then explicitly enroll only the remaining local libraries you want to upload. Changing only the server URL never redirects existing credentials.
+Local disconnect revokes the current device, removes its credentials, marks synchronized libraries as local and preserves snippets and their last server baselines. Pending changes are moved to recovery. When the same account reconnects, independent local and server edits are merged by stable snippet ID and same-snippet changes become reviewable conflicts. Libraries from another server or account remain independent local libraries. Changing only the server URL never redirects existing credentials.
 
 ## Compatibility
 

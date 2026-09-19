@@ -58,6 +58,34 @@ impl Database {
         Ok(())
     }
     pub fn synced(&self, id: &str) -> Result<bool> { Ok(self.connection.query_row("SELECT synced FROM libraries WHERE id=?1", [id], |row| row.get(0))?) }
+	fn sync_value(record:&Value)->Option<Value>{(record["state"]=="active").then(||json!({"trigger":record["trigger"],"title":record.get("title").cloned().unwrap_or(Value::Null),"content":record["content"]}))}
+	fn preserve_collision(&self,id:&str)->Result<()> {let replacement=Uuid::new_v4().to_string();self.remap(id,&replacement)?;let mut library=self.library(&replacement)?;library["_id"]=json!(replacement);self.connection.execute("UPDATE libraries SET data=?2,synced=0,version=version+1 WHERE id=?1",params![replacement,library.to_string()])?;Ok(())}
+	pub fn reconcile_detached(&self,response:&Value,server:&str,account:Option<&str>)->Result<()> {
+		let Some(mut detached)=self.meta("detached")? else{return Ok(());};
+		let provenance=detached["server"]==server&&!detached["account"].as_str().is_some_and(|stored|account!=Some(stored));
+		let Some(ids)=detached["libraries"].as_array().cloned()else{return Ok(());};
+		let remotes=response["libraries"].as_array().cloned().unwrap_or_default();
+		let matched:Vec<String>=ids.iter().filter_map(Value::as_str).filter(|id|remotes.iter().any(|remote|remote["_id"]==*id)).map(str::to_owned).collect();
+		if matched.is_empty(){return Ok(());}
+		let backup=self.directory.parent().context("Missing configuration directory")?.join("backups").join(format!("reconnect-{}",Uuid::new_v4()));
+		fs::create_dir_all(&backup)?;self.connection.backup(rusqlite::MAIN_DB,backup.join("typerelay.sqlite"),None)?;
+		let transaction=self.connection.unchecked_transaction()?;
+		let mut moved=std::collections::BTreeSet::new();
+		if provenance {let mut bases=std::collections::BTreeMap::new();let mut locals=std::collections::BTreeMap::new();for library in &matched{let exists:bool=self.connection.query_row("SELECT EXISTS(SELECT 1 FROM base_libraries WHERE id=?1)",[library],|row|row.get(0))?;if !exists{continue;}let mut statement=self.connection.prepare("SELECT data FROM base_snippets WHERE library=?1")?;for text in statement.query_map([library],|row|row.get::<_,String>(0))?.collect::<std::result::Result<Vec<_>,_>>()?{let record:Value=serde_json::from_str(&text)?;if let Some(id)=record["id"].as_str(){bases.insert(id.to_owned(),(library.clone(),record));}}for record in self.records(library)?{if let Some(id)=record["id"].as_str(){locals.insert(id.to_owned(),(library.clone(),record));}}}for (id,(source,base)) in &bases{let Some((destination,local))=locals.get(id).filter(|(_,record)|Self::sync_value(record).is_some())else{continue;};if source==destination{continue;}let mut item=json!({"id":id,"base_revision":base["revision"]});if Self::sync_value(base)!=Self::sync_value(local){item["value"]=Self::sync_value(local).unwrap();}self.queue(&json!({"kind":"batch","library":source,"records":[base],"body":{"operation_id":Uuid::new_v4().to_string(),"action":"move","source_library":source,"destination_library":destination,"items":[item]}}))?;moved.insert(id.clone());}}
+		for id in &matched {
+			let base_library:Option<String>=self.connection.query_row("SELECT data FROM base_libraries WHERE id=?1",[id],|row|row.get(0)).optional()?;
+			if !provenance||base_library.is_none(){self.preserve_collision(id)?;continue;}let base_library:Value=serde_json::from_str(base_library.as_ref().unwrap())?;
+			let mut statement=self.connection.prepare("SELECT data FROM base_snippets WHERE library=?1")?;
+			let bases=statement.query_map([id],|row|row.get::<_,String>(0))?.collect::<std::result::Result<Vec<_>,_>>()?.into_iter().map(|text|serde_json::from_str::<Value>(&text)).collect::<std::result::Result<Vec<_>,_>>()?;
+			let locals=self.records(id)?;let mut record_ids=std::collections::BTreeSet::new();
+			for record in bases.iter().chain(locals.iter()){if let Some(record_id)=record["id"].as_str(){record_ids.insert(record_id.to_owned());}}
+			let mut changes=Vec::new();
+			for record_id in record_ids {if moved.contains(&record_id){continue;}let base=bases.iter().find(|record|record["id"]==record_id);let local=locals.iter().find(|record|record["id"]==record_id);let base_value=base.and_then(Self::sync_value);let local_value=local.and_then(Self::sync_value);if base_value==local_value{continue;}changes.push(json!({"id":record_id,"base_revision":base.and_then(|record|record["revision"].as_i64()),"base":base.cloned().unwrap_or(Value::Null),"value":local_value}));}
+			if !changes.is_empty(){self.queue(&json!({"kind":"edit","library":id,"body":{"operation_id":Uuid::new_v4().to_string(),"base_revision":base_library["revision"],"changes":changes}}))?;}
+		}
+		detached["libraries"]=Value::Array(ids.into_iter().filter(|id|!matched.iter().any(|matched|id==matched)).collect());self.set_meta("detached",&detached)?;self.set_meta("last_reconnect_backup",&json!(backup))?;
+		transaction.commit()?;Ok(())
+	}
     pub fn entries(records: &[Value]) -> Result<Vec<Match>> {
         records.iter().filter(|entry| entry["state"] == "active").map(|entry| {
             let content = &entry["content"];
@@ -827,6 +855,24 @@ mod tests {
         assert_eq!(db.editor("Offline").unwrap().entries[0].replace, "Offline edit");
         assert_eq!(db.pending().unwrap().len(), 1);
     }
+	#[test]
+	fn detached_reconnect_backs_up_and_overlays_local_edits_on_new_server_base() {
+		let fixture=Fixture::new();let db=fixture.db();let id="0123456789abcdef01234567";
+		let original=json!({"_id":id,"name":"Mine","revision":3,"state":"active","permissions":{"read":true,"edit":true,"manage":true},"records":[{"id":"snippet-0000000001","trigger":"one","title":"","content":{"version":1,"type":"plain_text","text":"One"},"revision":1,"state":"active","position":0},{"id":"snippet-0000000002","trigger":"two","title":"","content":{"version":1,"type":"plain_text","text":"Two"},"revision":1,"state":"active","position":1}]});
+		db.apply(&json!({"libraries":[original],"accessible":[id]}),None).unwrap();db.connection.execute("UPDATE libraries SET synced=0 WHERE id=?1",[id]).unwrap();db.set_meta("detached",&json!({"server":"https://app.example.test","account":"account-one","libraries":[id]})).unwrap();
+		let file=db.editor("Mine").unwrap();db.edit(&file,Some(0),Some(Fixture::entry("one","Local one"))).unwrap();assert!(db.pending().unwrap().is_empty());
+		let remote=json!({"_id":id,"name":"Mine","revision":4,"state":"active","permissions":{"read":true,"edit":true,"manage":true},"records":[{"id":"snippet-0000000001","trigger":"one","title":"","content":{"version":1,"type":"plain_text","text":"One"},"revision":1,"state":"active","position":0},{"id":"snippet-0000000002","trigger":"two","title":"","content":{"version":1,"type":"plain_text","text":"Server two"},"revision":2,"state":"active","position":1}]});let response=json!({"libraries":[remote],"accessible":[id],"cursor":4});
+		db.reconcile_detached(&response,"https://app.example.test",Some("account-one")).unwrap();assert_eq!(db.pending().unwrap().len(),1);let backup=PathBuf::from(db.meta("last_reconnect_backup").unwrap().unwrap().as_str().unwrap());assert!(backup.join("typerelay.sqlite").is_file());
+		db.apply(&response,None).unwrap();let entries=db.editor("Mine").unwrap().entries;assert_eq!(entries[0].replace,"Local one");assert_eq!(entries[1].replace,"Server two");
+	}
+	#[test]
+	fn detached_library_from_another_account_is_preserved_as_independent_local_data() {
+		let fixture=Fixture::new();let db=fixture.db();let id="0123456789abcdef01234567";let original=json!({"_id":id,"name":"Mine","revision":1,"state":"active","permissions":{"read":true,"edit":true,"manage":true},"records":[{"id":"snippet-0000000001","trigger":"one","title":"","content":{"version":1,"type":"plain_text","text":"Local"},"revision":1,"state":"active","position":0}]});db.apply(&json!({"libraries":[original],"accessible":[id]}),None).unwrap();db.connection.execute("UPDATE libraries SET synced=0 WHERE id=?1",[id]).unwrap();db.set_meta("detached",&json!({"server":"https://app.example.test","account":"old-account","libraries":[id]})).unwrap();let remote=json!({"_id":id,"name":"Mine","revision":2,"state":"active","permissions":{"read":true,"edit":true,"manage":true},"records":[{"id":"snippet-0000000002","trigger":"two","title":"","content":{"version":1,"type":"plain_text","text":"Remote"},"revision":1,"state":"active","position":0}]});let response=json!({"libraries":[remote],"accessible":[id]});db.reconcile_detached(&response,"https://app.example.test",Some("new-account")).unwrap();db.apply(&response,None).unwrap();let libraries=db.libraries().unwrap();assert_eq!(libraries.len(),2);assert_eq!(db.snapshot().unwrap().len(),2);assert_eq!(libraries.iter().filter(|library|db.synced(library["_id"].as_str().unwrap()).unwrap()).count(),1);
+	}
+	#[test]
+	fn detached_reconnect_replays_a_local_move_as_one_revisioned_batch() {
+		let fixture=Fixture::new();let db=fixture.db();let source="0123456789abcdef01234567";let destination="1123456789abcdef01234567";let record=json!({"id":"snippet-0000000001","trigger":"one","title":"","content":{"version":1,"type":"plain_text","text":"One"},"revision":1,"state":"active","position":0});let source_remote=json!({"_id":source,"name":"Source","revision":1,"state":"active","permissions":{"read":true,"edit":true,"manage":true},"records":[record]});let destination_remote=json!({"_id":destination,"name":"Destination","revision":1,"state":"active","permissions":{"read":true,"edit":true,"manage":true},"records":[]});db.apply(&json!({"libraries":[source_remote,destination_remote],"accessible":[source,destination]}),None).unwrap();db.connection.execute("UPDATE libraries SET synced=0",[]).unwrap();db.set_meta("detached",&json!({"server":"https://app.example.test","account":"account-one","libraries":[source,destination]})).unwrap();let file=db.editor("Source").unwrap();let items=db.batch_items(&file,&file.ids).unwrap();db.batch(source,Some(destination),&items).unwrap();let response=json!({"libraries":[source_remote,destination_remote],"accessible":[source,destination]});db.reconcile_detached(&response,"https://app.example.test",Some("account-one")).unwrap();let pending=db.pending().unwrap();assert_eq!(pending.len(),1);assert_eq!(pending[0].1["kind"],"batch");assert_eq!(pending[0].1["body"]["destination_library"],destination);db.apply(&response,None).unwrap();assert!(db.editor("Source").unwrap().entries.is_empty());assert_eq!(db.editor("Destination").unwrap().entries[0].trigger,"one");
+	}
     #[test]
     fn sync_metadata_does_not_interrupt_active_expansion_snapshots() {
         let fixture = Fixture::new(); let db = fixture.db();

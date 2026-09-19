@@ -96,10 +96,11 @@ export class Server {
 		const authLimit = rateLimit({ windowMs: 900000, limit: 30, message: { error: 'Too many sign-in attempts; try again later.' } });
 		Security.mount(app, authLimit);
 		await PublicApi.mount(app, authLimit);
-		app.post('/auth/login', authLimit, async (req, res) => { await Auth.login(req.body.email, null, { origin: req.boundAccount ? Server.requestOrigin(req) : Auth.origin, account: req.boundAccount }); res.json({ message: 'Check your email for a sign-in link.' }); });
+		app.post('/auth/login', authLimit, async (req, res) => { await Auth.login(req.body.email, null, { origin: req.boundAccount ? Server.requestOrigin(req) : Auth.origin, account: req.boundAccount, return_to: req.session.return_to?.startsWith('/oauth/authorize?') ? req.session.return_to : undefined }); res.json({ message: 'Check your email for a sign-in link.' }); });
 		app.get('/auth/callback', async (req, res) => {
-			const user = await Auth.consume(req.query.token);
-			const result = await Security.establish(req, user);
+			const login = await Auth.consume(req.query.token, true);
+			if (login.return_to) req.session.return_to = login.return_to;
+			const result = await Security.establish(req, login.user);
 			res.redirect(result.redirect);
 		});
 		app.post('/auth/logout', async (req, res) => { await new Promise(resolve => req.session.destroy(resolve)); res.json({ signed_out: true }); });

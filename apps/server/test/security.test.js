@@ -212,6 +212,23 @@ test('signup, generated password, password login, OAuth continuation and recover
 	await login.json('/auth/password', 'POST', { email, password }, 401);
 	await login.json('/auth/password', 'POST', { email, password: fresh });
 });
+test('Magic Link carries desktop authorization into another browser', async () => {
+	const email = randomUUID() + '@example.test'; const user = await User.create({ email, name: 'Cross-browser owner' }); const account = await Account.create({ name: 'Cross-browser' }); await Member.create({ user: user._id, account: account._id, role: 'owner' });
+	const requester = new Browser();
+	const verifier = Support.token();
+	const params = new URLSearchParams({ client_id: 'typerelay-desktop', redirect_uri: 'typerelay://oauth/callback', code_challenge_method: 'S256', code_challenge: createHash('sha256').update(verifier).digest('base64url'), state: randomUUID(), client_type: 'desktop', os: 'macos' });
+	await requester.page('/oauth/authorize?' + params);
+	await Auth.login(email, null, { return_to: '/oauth/authorize?' + params });
+	const link = Fixture.mailUrl(Fixture.mails.findLast(mail => mail.to === email));
+	const receiver = new Browser();
+	const callback = await receiver.call(link.pathname + link.search);
+	assert.equal(callback.status, 302);
+	assert.equal(callback.headers.get('location'), '/oauth/authorize?' + params);
+	const approval = await receiver.call(callback.headers.get('location'));
+	assert.equal(approval.status, 200);
+	assert.match(await approval.text(), /Connect device/);
+	await assert.rejects(Auth.login(email, null, { return_to: 'https://example.test/oauth/authorize' }), /Invalid sign-in continuation/);
+});
 test('profile name updates incrementally, email requires confirmation and cannot steal an existing address', async () => {
 	const { browser, email, user } = await Fixture.account();
 	const replacement = randomUUID() + '@example.test';

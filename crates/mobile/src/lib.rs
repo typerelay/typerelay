@@ -109,7 +109,7 @@ impl Mobile {
             }
             "sync" => {
                 let server = Self::text(request, "server")?;
-                let mut credentials = Credentials { server: server.into(), access_token: Self::text(request, "access_token")?.into(), refresh_token: String::new() };
+                let mut credentials = Credentials { server: server.into(), access_token: Self::text(request, "access_token")?.into(), refresh_token: String::new(), account:None, device:None };
                 let sync = Sync::new(directory.to_owned(), directory.to_owned())?;
                 let result = sync.cycle_authenticated(&mut credentials);
                 // A partially completed cycle may have removed access or applied acknowledged writes.
@@ -119,7 +119,7 @@ impl Mobile {
                 Self::state(&db)?
             }
             "asset_fetch" => {
-                let credentials = Credentials { server: Self::text(request,"server")?.into(), access_token: Self::text(request,"access_token")?.into(), refresh_token: String::new() };
+                let credentials = Credentials { server: Self::text(request,"server")?.into(), access_token: Self::text(request,"access_token")?.into(), refresh_token: String::new(), account:None, device:None };
                 Sync::new(directory.to_owned(), directory.to_owned())?.download_asset(&credentials, &db, &request["metadata"])?;
                 request["metadata"].clone()
             }

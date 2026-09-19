@@ -47,7 +47,8 @@ export class Auth {
 		const token = Support.token();
 		const origin = options.origin || Auth.origin;
 		if (options.account) { await AccountAccess.acquire(options.account); AccountAccess.assert(await Account.findById(options.account).lean()); }
-		const data = { ...(name ? { name: Support.text(name) } : {}), ...(options.account ? { account: String(options.account) } : {}), origin };
+		const continuation = options.return_to ? Auth.continuation(options.return_to) : undefined;
+		const data = { ...(name ? { name: Support.text(name) } : {}), ...(options.account ? { account: String(options.account) } : {}), ...(continuation ? { return_to: continuation } : {}), origin };
 		await mongoose.connection.transaction(async session => {
 			if (options.account) await AccountAccess.fence(options.account, session);
 			await User.updateOne({ email }, { $inc: { activity_sequence: 1 } }, { session });
@@ -55,13 +56,22 @@ export class Auth {
 		});
 		await AdminSettings.send(name ? 'signup' : 'login', email, { url: origin + '/auth/callback?token=' + token, name: data.name });
 	}
-	static async consume(token) {
+	static continuation(value) {
+		Support.assert(typeof value === 'string' && value.startsWith('/oauth/authorize?'), 'Invalid sign-in continuation');
+		const url = new URL(value, Auth.origin);
+		Support.assert(url.origin === new URL(Auth.origin).origin && url.pathname === '/oauth/authorize', 'Invalid sign-in continuation');
+		Auth.redirect(url.searchParams.get('redirect_uri'), url.searchParams.get('client_id'));
+		return url.pathname + url.search;
+	}
+	static async consume(token, details = false) {
 		let user;
 		let account;
 		let signupNotification;
+		let returnTo;
 		await mongoose.connection.transaction(async session => {
 			const ticket = await Ticket.findOneAndDelete({ hash: Support.hash(Support.text(token, 256)), kind: 'login', expires: { $gt: new Date() } }, { session }).lean();
 			Support.assert(ticket, 'Link expired or already used', 401);
+			returnTo = ticket.data?.return_to;
 			user = await User.findOne({ email: ticket.email }).session(session).lean();
 			if (ticket.data?.account) AccountAccess.assert(await Account.findById(ticket.data.account).session(session).lean());
 			if (ticket.data?.account) Support.assert(user && await Member.exists({ account: ticket.data.account, user: user._id }).session(session), 'Account access denied', 403);
@@ -75,7 +85,8 @@ export class Auth {
 		});
 		if (account) await Billing.initializeAccount(account, user).catch(error => console.error(`Stripe setup failed for new TypeRelay account: ${error.message}`));
 		if (signupNotification) { const sendMail = Auth.mail.sendMail; void SignupNotifications.deliver(signupNotification._id, message => sendMail(message)).catch(error => console.error(`Type Relay signup notification deferred: ${error.message}`)); }
-		return String(user._id);
+		const result = { user: String(user._id), return_to: returnTo ? Auth.continuation(returnTo) : undefined };
+		return details ? result : result.user;
 	}
 	static redirect(uri, client = 'typerelay-desktop') {
 		let url;

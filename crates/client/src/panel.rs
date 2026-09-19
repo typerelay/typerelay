@@ -13,6 +13,7 @@ pub struct PanelSettings { pub shortcut: String, pub launch_at_login: bool }
 impl Default for PanelSettings { fn default() -> Self { Self { shortcut: "Ctrl+Shift+Semicolon".into(), launch_at_login: true } } }
 pub struct Panel;
 impl Panel {
+	pub fn conflicts(directory:&Path)->Result<serde_json::Value>{let db=Database::open(directory)?;let rows=db.meta("conflicts")?.and_then(|value|value.as_array().cloned()).unwrap_or_default().into_iter().map(|mut conflict|{let name=conflict["library"].as_str().and_then(|id|db.library(id).ok()).and_then(|library|library["name"].as_str().map(str::to_owned)).unwrap_or_else(||"Library".into());conflict["library_name"]=serde_json::json!(name);conflict}).collect::<Vec<_>>();Ok(serde_json::json!(rows))}
     pub fn libraries(directory:&Path)->Result<serde_json::Value> {
         let db=Database::open(directory)?;let transaction=db.connection.unchecked_transaction()?;let mut rows=Vec::new();
         for library in db.libraries()?{if library["state"]!="active"{continue;}let id=library["_id"].as_str().context("Missing library ID")?;let snippets=db.records(id)?.iter().filter(|record|record["state"]=="active").count();rows.push(serde_json::json!({"id":id,"name":library["name"],"synced":db.synced(id)?,"snippets":snippets}));}
