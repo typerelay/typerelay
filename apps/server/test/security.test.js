@@ -332,7 +332,35 @@ test('login exposes all requested methods and native OAuth form remains unaffect
 	assert.ok(page.querySelector('#password-login-form input[type=password]'));
 	assert.ok(page.querySelector('a[href="/forgot-password"]'));
 	assert.ok(page.querySelector('a[href="/signup"]'));
+	assert.ok(page.querySelector('#magic-link-sent').classList.contains('d-none'));
+	assert.match(page.querySelector('#magic-link-sent').textContent, /Magic link sent.*Check your email for a sign-in link.*You can close this window/s);
 	dom.window.close();
+});
+
+test('magic-link request shows a persistent confirmation and preserves the form on failure', async () => {
+	const browser = new Browser();
+	const dom = new JSDOM(await (await browser.call('/')).text(), { url: Fixture.origin, runScripts: 'outside-only' });
+	try {
+		const document = dom.window.document;
+		dom.window.eval((await BrowserSource.script()).replace('export { client };', 'window.testClient = client;'));
+		const client = dom.window.testClient; const form = document.querySelector('#login'); const panel = form.closest('section'); const email = form.elements.email; const button = form.querySelector('button[type=submit]'); const href = dom.window.location.href; const calls = [];
+		email.value = 'person@example.test';
+		client.toast = () => assert.fail('Successful magic-link request must not show a toast');
+		client.request = async (...args) => { calls.push(args); return { message: 'Check your email for a sign-in link.' }; };
+		await client.onSubmit({ target: form, preventDefault() {}, submitter: button });
+		assert.equal(calls.length, 1); assert.equal(calls[0][0], '/auth/login'); assert.equal(calls[0][1], 'POST'); assert.equal(calls[0][2].email, 'person@example.test');
+		assert.ok(document.querySelector('#magic-link-form').classList.contains('d-none'));
+		assert.ok(!document.querySelector('#magic-link-sent').classList.contains('d-none'));
+		assert.equal(form.closest('section'), panel); assert.equal(dom.window.location.href, href);
+		document.querySelector('#magic-link-form').classList.remove('d-none'); document.querySelector('#magic-link-sent').classList.add('d-none');
+		let error;
+		client.toast = (message, icon) => { error = { message, icon }; };
+		client.request = async () => { throw new Error('Delivery failed'); };
+		await client.onSubmit({ target: form, preventDefault() {}, submitter: button });
+		assert.ok(!document.querySelector('#magic-link-form').classList.contains('d-none'));
+		assert.ok(document.querySelector('#magic-link-sent').classList.contains('d-none'));
+		assert.equal(email.value, 'person@example.test'); assert.equal(button.disabled, false); assert.deepEqual(error, { message: 'Delivery failed', icon: 'error' });
+	} finally { dom.window.close(); }
 });
 
 test('ENABLE_SIGNUP=false removes signup controls and blocks signup', async () => {
