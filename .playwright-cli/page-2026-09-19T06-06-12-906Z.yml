@@ -1,0 +1,8 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e3]: 9:41
+    - generic [ref=e4]:
+      - generic [ref=e5]: signal_cellular_alt
+      - generic [ref=e6]: wifi
+      - generic [ref=e7]: battery_full
+  - main [ref=e9]
