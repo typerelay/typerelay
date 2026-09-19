@@ -53,6 +53,8 @@ enum Commands {
     Import { #[command(subcommand)] format: ImportFormat },
     /// Export a library as YAML or a .typerelay.zip bundle.
     Export { name: String, destination: PathBuf },
+	/// Merge every active snippet into another library and move the source to Trash.
+	Merge { source: String, destination: String },
     #[command(hide = true)]
     Inspect,
     #[command(hide = true)]
@@ -108,6 +110,7 @@ impl Cli {
                 }
             },
             Commands::Export { name, destination } => { typerelay_client::database::Database::open(&root.join("snippets"))?.export(&name, &destination)?; println!("Exported {name} to {}.", destination.display()); },
+			Commands::Merge { source, destination } => { let db=typerelay_client::database::Database::open(&root.join("snippets"))?;let source_id=db.editor(&source)?.id;let destination_id=db.editor(&destination)?.id;let queued=db.merge(&source_id,&destination_id)?;if queued{typerelay_client::sync::Sync::trigger(&root)?;println!("Merge queued. Run typerelay sync to wait for completion.");}else{println!("Libraries merged. Source moved to Trash.");} },
             Commands::DatabaseEdit { name, trigger, text, trash } => { let db = typerelay_client::database::Database::open(&root.join("snippets"))?; let file = db.editor(&name)?; let index = file.entries.iter().position(|entry|entry.trigger == trigger); anyhow::ensure!(!trash || index.is_some(), "Snippet missing"); db.edit(&file, index, if trash { None } else { Some(config::Match { trigger, replace: text.ok_or_else(||anyhow::anyhow!("Text required"))?, ..index.map(|i|file.entries[i].clone()).unwrap_or_default() }) })?; },
             Commands::DatabaseBatch { source, destination, triggers } => {
                 let db = typerelay_client::database::Database::open(&root.join("snippets"))?;
