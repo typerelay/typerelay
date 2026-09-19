@@ -32,7 +32,7 @@ class Panel {
 		document.querySelector('#connect-form').onsubmit=event=>{event.preventDefault();void this.authenticate();};
 		document.querySelector('#disconnect').onclick=()=>this.action(async()=>{await this.invoke('disconnect');await this.notify('Disconnected');await this.settings(true);});
 		document.querySelector('#sync').onclick=()=>this.action(async()=>{await this.invoke('sync_now');});
-		document.querySelector('#enroll-form').onsubmit=event=>{event.preventDefault();this.action(async()=>{const names=[...document.querySelectorAll('#local-libraries input:checked')].map(input=>input.value);if(!names.length)throw Error('Select local libraries first');await this.invoke('enroll',{names});await this.refreshLibraries();await this.notify('Upload queued');});};
+		document.querySelector('#upload-selected').onclick=()=>this.action(async()=>{const names=[...document.querySelectorAll('#local-libraries input:checked')].map(input=>input.value);if(!names.length)throw Error('Select local libraries first');await this.invoke('enroll',{names});await this.refreshLibraries();await this.notify('Upload queued');});
 		window.__TAURI__.event.listen('panel-error',event=>this.notify(event.payload,true));
 		window.__TAURI__.event.listen('auth-state',event=>this.connection(event.payload.state,event.payload.message));
 		window.__TAURI__.event.listen('sync-notice',async event=>{const button=document.querySelector('#sync');button.disabled=event.payload.running;button.textContent=event.payload.running?'Syncing…':'Sync now';if(!event.payload.running){try{await Promise.all([this.refreshLibraries(),this.refreshConflicts()]);}catch(error){this.notify(error,true);}}});

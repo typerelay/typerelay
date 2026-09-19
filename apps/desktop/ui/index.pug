@@ -115,13 +115,13 @@ html(lang="en")
 									button#disconnect.secondary(type="button") Disconnect
 									button#authenticate.primary(type="submit") Authenticate
 							p#connection-status.settings-description(role="status" aria-live="polite") Not connected
-						form#enroll-form.setting-section
+						section#enroll-form.setting-section
 							h3 Libraries on this device
 							p Synced libraries are available offline. Select local-only libraries to upload.
 							div#local-libraries
 							.form-actions
 								span
-								button.primary(type="submit") Upload selected
+								button#upload-selected.primary(type="button") Upload selected
 						section#conflict-section.setting-section(hidden)
 							h3 Needs review
 							p#conflict-count.settings-description

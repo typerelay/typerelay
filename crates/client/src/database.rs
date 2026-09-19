@@ -374,6 +374,7 @@ impl Database {
     pub fn enroll(&self, name: &str) -> Result<()> {
         let transaction = self.connection.unchecked_transaction()?;
         let file = self.editor(name)?;
+		ensure!(!self.pending_merge(&file.id)?,"Library merge is pending");
         ensure!(!self.synced(&file.id)?, "Library already enrolled");
         let records: Vec<Value> = self.records(&file.id)?.into_iter().filter(|record| record["state"] == "active").collect();
         self.queue(&json!({"kind":"create","library":file.id,"body":{"operation_id":Uuid::new_v4().to_string(),"name":name,"snippets":records}}))?;
@@ -408,10 +409,8 @@ impl Database {
         for (seq, mut operation) in self.pending()? {
             let previous = operation.clone();
             if operation["library"] == old { operation["library"] = json!(new); }
-            for field in ["source_library","destination_library"] {
-                if operation["body"][field] == old { operation["body"][field] = json!(new); }
-            }
-            if operation["body"]["target"]["library"] == old { operation["body"]["target"]["library"] = json!(new); if operation["body"]["target"]["type"] == "library" { operation["body"]["target"]["id"] = json!(new); } }
+			for field in ["source","destination"]{if operation[field]==old{operation[field]=json!(new);}}
+			for parent in ["body","move_body","trash_body"]{for field in ["source_library","destination_library"]{if operation[parent][field]==old{operation[parent][field]=json!(new);}}if operation[parent]["target"]["library"]==old{operation[parent]["target"]["library"]=json!(new);if operation[parent]["target"]["type"]=="library"{operation[parent]["target"]["id"]=json!(new);}}}
             if previous != operation { self.connection.execute("UPDATE outbox SET operation=?2 WHERE seq=?1", params![seq,operation.to_string()])?; }
         }
         Ok(())
@@ -889,7 +888,11 @@ mod tests {
 	}
 	#[test]
 	fn local_to_synced_merge_waits_for_ack_then_trashes_source() {
-		let fixture=Fixture::new();let db=fixture.db();let destination="0123456789abcdef01234567";let remote=json!({"_id":destination,"name":"Synced","revision":2,"state":"active","permissions":{"read":true,"edit":true,"manage":true},"records":[{"id":"snippet-0000000001","trigger":"first","title":"","content":{"version":1,"type":"plain_text","text":"First"},"revision":1,"state":"active","position":0}]});db.apply(&json!({"libraries":[remote],"accessible":[destination]}),None).unwrap();let source=db.import("Recovered","matches: [{trigger: second, replace: Second}]").unwrap();assert!(db.merge(&source.id,destination).unwrap());assert_eq!(db.library(&source.id).unwrap()["state"],"active");assert_eq!(db.pending().unwrap()[0].1["kind"],"merge_local");assert!(db.editable(&source.id).is_err());let (seq,operation)=db.pending().unwrap().remove(0);let mut accepted=remote.clone();accepted["revision"]=json!(3);let mut records=accepted["records"].as_array().unwrap().clone();let mut moved=db.records(&source.id).unwrap()[0].clone();moved["revision"]=json!(1);moved["position"]=json!(1);records.push(moved);accepted["records"]=json!(records);db.apply(&json!({"library":accepted,"conflicts":[]}),Some((seq,&operation))).unwrap();assert_eq!(db.library(&source.id).unwrap()["state"],"trashed");assert_eq!(db.editor("Synced").unwrap().entries.len(),2);assert!(db.pending().unwrap().is_empty());
+		let fixture=Fixture::new();let db=fixture.db();let destination="0123456789abcdef01234567";let remote=json!({"_id":destination,"name":"Synced","revision":2,"state":"active","permissions":{"read":true,"edit":true,"manage":true},"records":[{"id":"snippet-0000000001","trigger":"first","title":"","content":{"version":1,"type":"plain_text","text":"First"},"revision":1,"state":"active","position":0}]});db.apply(&json!({"libraries":[remote],"accessible":[destination]}),None).unwrap();let source=db.import("Recovered","matches: [{trigger: second, replace: Second}]").unwrap();assert!(db.merge(&source.id,destination).unwrap());assert_eq!(db.library(&source.id).unwrap()["state"],"active");assert_eq!(db.pending().unwrap()[0].1["kind"],"merge_local");assert!(db.editable(&source.id).is_err());assert!(db.enroll("Recovered").is_err());let (seq,operation)=db.pending().unwrap().remove(0);let mut accepted=remote.clone();accepted["revision"]=json!(3);let mut records=accepted["records"].as_array().unwrap().clone();let mut moved=db.records(&source.id).unwrap()[0].clone();moved["revision"]=json!(1);moved["position"]=json!(1);records.push(moved);accepted["records"]=json!(records);db.apply(&json!({"library":accepted,"conflicts":[]}),Some((seq,&operation))).unwrap();assert_eq!(db.library(&source.id).unwrap()["state"],"trashed");assert_eq!(db.editor("Synced").unwrap().entries.len(),2);assert!(db.pending().unwrap().is_empty());
+	}
+	#[test]
+	fn enrollment_id_remap_updates_every_queued_merge_reference() {
+		let fixture=Fixture::new();let db=fixture.db();let destination="0123456789abcdef01234567";db.apply(&json!({"libraries":[{"_id":destination,"name":"Destination","revision":1,"state":"active","permissions":{"read":true,"edit":true,"manage":true},"records":[]}],"accessible":[destination]}),None).unwrap();let source=db.import("Source","matches: [{trigger: source, replace: Source}]").unwrap();db.enroll("Source").unwrap();assert!(db.merge(&source.id,destination).unwrap());let replacement="2123456789abcdef01234567";db.remap(&source.id,replacement).unwrap();let operation=&db.pending().unwrap()[1].1;assert_eq!(operation["library"],replacement);assert_eq!(operation["source"],replacement);assert_eq!(operation["move_body"]["source_library"],replacement);assert_eq!(operation["move_body"]["destination_library"],destination);
 	}
 	#[test]
 	fn synced_merge_queues_stable_move_and_blocks_synced_to_local() {
