@@ -3,6 +3,7 @@ import { TrialCountdown } from './trial-countdown.js';
 import { TemplateEditor, TemplateFill } from './template-editor.js';
 import { Abbreviation } from './abbreviation.js';
 import { RichTextRuntime } from './rich-text-runtime.js';
+import { PasswordField } from './password-field.js';
 class TypeRelay {
 	account = document.querySelector('#workspace')?.dataset.account;
 	libraries = new Map();
@@ -88,21 +89,13 @@ class TypeRelay {
 		button.tabIndex = visible ? 0 : -1;
 	}
 	toast(title, icon = 'success') { return Swal.fire({ toast: true, position: 'top-end', title, icon, timer: 3500, showConfirmButton: false }); }
-	generateTeamPassword() {
-		if (!window.crypto?.getRandomValues) throw new Error('Secure random generation is unavailable');
-		const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'; const values = new Uint8Array(32); window.crypto.getRandomValues(values);
-		return Array.from(values, value => alphabet[value & 63]).join('');
-	}
 	rotateTeamPassword(announce = true) {
 		const input = document.querySelector('#team-member-password'); const status = document.querySelector('#team-member-password-status'); const submit = document.querySelector('#team-member-form button[type="submit"]');
-		try { input.value = this.generateTeamPassword(); if (status) status.textContent = announce ? 'New password generated.' : ''; if (submit) submit.disabled = false; }
-		catch (error) { input.value = ''; if (status) status.textContent = 'Password generation failed. Reload this page and try again.'; if (submit) submit.disabled = true; }
+		PasswordField.fill(input, status, submit, announce);
 	}
 	async copyTeamPassword() {
 		const input = document.querySelector('#team-member-password'); const status = document.querySelector('#team-member-password-status');
-		if (!input.value) throw new Error('No password to copy');
-		if (navigator.clipboard?.writeText && window.isSecureContext) { await navigator.clipboard.writeText(input.value); if (status) status.textContent = ''; this.toast('Password copied'); return; }
-		input.focus({ preventScroll: true }); input.select(); input.setSelectionRange?.(0, input.value.length); if (status) status.textContent = 'Password selected. Press ' + (/Mac|iPhone|iPad|iPod/.test(navigator.platform) ? 'Cmd+C' : 'Ctrl+C') + ' to copy.';
+		await PasswordField.copy(input, status, () => this.toast('Password copied'));
 	}
 	async request(path, method = 'GET', body, raw = false) {
 		const response = await fetch(path.startsWith('/') ? path : '/api/v2/' + path, { method, headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': document.querySelector('meta[name=csrf-token]').content, 'X-Account-Id': this.account || '' }, body: body ? JSON.stringify({ operation_id: this.submitting ? this.formOperation : crypto.randomUUID(), ...body }) : undefined });

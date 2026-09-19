@@ -6,6 +6,7 @@ import { mkdtemp, mkdir, writeFile, rm, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { JSDOM } from 'jsdom';
+import bcrypt from 'bcryptjs';
 import * as M from '../model/index.js';
 import { Admin } from '../admin.js';
 import { AdminAccounts } from '../services/admin_accounts.js';
@@ -56,12 +57,17 @@ test('sysadmin credentials fail closed and admin auth requires platform host, CS
 });
 
 test('account creation, shared users, counts, search, CSV and revisions', async () => {
-	const created = await Fixture.json('/admin/api/accounts', 'POST', { name: 'Admin fixture', owner_name: 'Owner', owner_email: 'Owner@example.test' }, 201);
+	const password = 'A'.repeat(32); const emailCount = Fixture.emails.length;
+	const created = await Fixture.json('/admin/api/accounts', 'POST', { name: 'Admin fixture', owner_name: 'Owner', owner_email: 'Owner@example.test', password, plan: 'pro', send_signup_email: false }, 201);
 	const id = created.id;
+	assert.equal(created.account.effective_plan, 'pro'); assert.equal(created.account.override.plan, 'pro'); assert.equal(Fixture.emails.length, emailCount); assert.equal(JSON.stringify(created).includes(password), false);
+	const storedUser = await M.User.findOne({ email: 'owner@example.test' }).select('+password').lean(); assert.ok(await bcrypt.compare(password, storedUser.password)); assert.equal((await M.User.findById(storedUser._id).lean()).password, undefined);
 	assert.equal(created.account.usage.libraries, 1); assert.equal(created.account.usage.snippets, 6); assert.equal(created.account.usage.assets, 1); assert.ok(created.account.usage.bytes > 0);
 	assert.deepEqual((await M.Snippet.find({ account: id }).sort({ position: 1 }).select('trigger').lean()).map(snippet => snippet.trigger), ['welcome', 'jslog', 'rich', 'sig', 'status', 'support']);
-	const second = await Fixture.json('/admin/api/accounts', 'POST', { name: 'Second account', owner_name: 'Do not overwrite', owner_email: 'owner@example.test' }, 201);
-	assert.equal(second.account.owner.name, 'Owner'); assert.equal(await M.User.countDocuments({ email: 'owner@example.test' }), 1);
+	const beforeDuplicate = { accounts: await M.Account.countDocuments(), members: await M.Member.countDocuments(), libraries: await M.Library.countDocuments(), snippets: await M.Snippet.countDocuments() };
+	await Fixture.json('/admin/api/accounts', 'POST', { name: 'Rejected account', owner_name: 'Duplicate', owner_email: 'owner@example.test', password: 'B'.repeat(32), plan: 'free', send_signup_email: false }, 409);
+	assert.deepEqual({ accounts: await M.Account.countDocuments(), members: await M.Member.countDocuments(), libraries: await M.Library.countDocuments(), snippets: await M.Snippet.countDocuments() }, beforeDuplicate);
+	const secondAccount = await M.Account.create({ name: 'Second account' }); await M.Member.create({ account: secondAccount._id, user: storedUser._id, role: 'owner' }); const second = await AdminAccounts.get(String(secondAccount._id));
 	const active = await M.Library.create({ account: id, name: 'Active', state: 'active' }); const trashed = await M.Library.create({ account: id, name: 'Trash', state: 'trashed' });
 	await M.Snippet.create([{ account: id, library: active._id, id: 'one', state: 'active' }, { account: id, library: trashed._id, id: 'two', state: 'active' }, { account: id, library: active._id, id: 'three', state: 'trashed' }]);
 	const detail = await Fixture.json('/admin/api/accounts/' + id);
@@ -74,6 +80,25 @@ test('account creation, shared users, counts, search, CSV and revisions', async 
 	const csv = await (await Fixture.request('/admin/api/users.csv')).text(); assert.ok(csv.includes('"\'=Formula"'));
 	const page = await (await Fixture.request('/admin')).text(); assert.ok(page.includes('account-' + id)); assert.ok(page.includes('Snippets'));
 	const form = await Fixture.request('/admin/api/accounts/' + id + '/form'); assert.equal(form.status, 200); assert.match(await form.text(), /affects every account/);
+	const newForm = new JSDOM(await (await Fixture.request('/admin/api/accounts/new/form')).text()); const generated = newForm.window.document.querySelector('[name=password]');
+	assert.equal(generated.readOnly, true); assert.match(generated.value, /^[A-Za-z0-9_-]{32}$/); assert.equal(newForm.window.document.querySelector('[name=plan]').value, 'free'); assert.equal(newForm.window.document.querySelector('[name=send_signup_email]').checked, false); assert.equal(newForm.window.document.querySelector('[data-rotate-password]'), null); newForm.window.close();
+	const email = randomUUID() + '@example.test'; const mailed = await Fixture.json('/admin/api/accounts', 'POST', { name: 'Mailed team', owner_name: 'Mailed Owner', owner_email: email, password: 'C'.repeat(32), plan: 'team', send_signup_email: true }, 201);
+	assert.equal(mailed.account.effective_plan, 'team'); assert.ok(Fixture.emails.some(message => message.to === email && message.subject === 'Confirm your Type Relay account'));
+	const ticket = await M.Ticket.findOne({ email, kind: 'login' }).lean(); assert.equal(String(ticket.account), mailed.id); assert.equal(ticket.data.name, 'Mailed Owner');
+	const free = await Fixture.json('/admin/api/accounts', 'POST', { name: 'Free account', owner_name: 'Free Owner', owner_email: randomUUID() + '@example.test', password: 'D'.repeat(32), plan: 'free', send_signup_email: false }, 201); assert.equal(free.account.effective_plan, 'free');
+	const loginPage = await fetch(Fixture.origin + '/login'); const loginCookie = loginPage.headers.get('set-cookie').split(';')[0]; const loginDom = new JSDOM(await loginPage.text()); const loginCsrf = loginDom.window.document.querySelector('meta[name="csrf-token"]').content; loginDom.window.close();
+	const login = await fetch(Fixture.origin + '/auth/password', { method: 'POST', redirect: 'manual', headers: { Cookie: loginCookie, 'Content-Type': 'application/json', 'X-CSRF-Token': loginCsrf }, body: JSON.stringify({ email: 'owner@example.test', password }) }); assert.equal(login.status, 200); const authenticatedCookie = login.headers.get('set-cookie').split(';')[0];
+	const application = await fetch(Fixture.origin + '/', { headers: { Cookie: authenticatedCookie } }); assert.equal(application.status, 200); assert.match(await application.text(), new RegExp(id));
+});
+
+test('post-creation billing and signup email failures warn without breaking password login', async () => {
+	const initialize = Billing.initializeAccount; const sendMail = Auth.mail.sendMail; const email = randomUUID() + '@example.test'; const password = 'E'.repeat(32);
+	Billing.initializeAccount = async () => { throw new Error('billing unavailable'); }; Auth.mail.sendMail = async () => { throw new Error('mail unavailable'); };
+	try {
+		const result = await AdminAccounts.create({ name: 'Warning account', owner_name: 'Warning Owner', owner_email: email, password, plan: 'pro', send_signup_email: true });
+		assert.deepEqual(result.warnings, ['Billing initialization failed; account created.', 'Signup confirmation email failed; owner can sign in with the generated password.']);
+		const user = await M.User.findOne({ email }).select('+password').lean(); assert.ok(await bcrypt.compare(password, user.password)); assert.equal((await Support.context(String(user._id), result.account.id)).account, result.account.id);
+	} finally { Billing.initializeAccount = initialize; Auth.mail.sendMail = sendMail; }
 });
 
 test('suspension and deletion block web context, desktop and integration credentials', async () => {

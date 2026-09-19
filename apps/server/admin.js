@@ -49,7 +49,7 @@ export class Admin {
 		router.post('/logout', async (req, res) => { await new Promise((resolve, reject) => req.session.destroy(error => error ? reject(error) : resolve())); res.json({ redirect: '/admin/login' }); });
 		router.get('/', async (req, res) => res.render('admin/accounts', await AdminAccounts.list(req.query)));
 		router.get('/api/accounts', async (req, res) => res.json(await AdminAccounts.list(req.query)));
-		router.get('/api/accounts/new/form', (req, res) => res.render('ajax/admin-account-form', { account: null }));
+		router.get('/api/accounts/new/form', (req, res) => res.render('ajax/admin-account-form', { account: null, password: Security.generatedPassword() }));
 		router.get('/api/accounts/:id/form', async (req, res) => res.render('ajax/admin-account-form', { account: await AdminAccounts.get(req.params.id) }));
 		router.get('/api/accounts/:id', async (req, res) => res.json(Admin.fragment(await AdminAccounts.get(req.params.id))));
 		router.get('/api/users.csv', async (req, res) => { await AdminSettings.audit(res.locals.adminEmail, 'users.export'); res.type('text/csv').attachment('type-relay-users.csv').send(await AdminAccounts.csv()); });

@@ -29,6 +29,26 @@ form(data-admin-account=(account && account.id) || '')
 					select#account-active.form-select.form-select-sm(name="is_active")
 						option(value="true" selected=account.status === 'active') Active
 						option(value="false" selected=account.status !== 'active') Suspended
+			else
+				.col-md-6.mb-3
+					label.form-label(for="account-password") Password
+					.input-group.input-group-sm
+						input#account-password.form-control.form-control-sm(type="text" name="password" value=password readonly required autocomplete="off" spellcheck="false" aria-describedby="account-password-status")
+						button.btn.btn-outline-secondary.btn-sm(type="button" data-copy-password aria-label="Copy password" title="Copy password")
+							svg(width="0.875rem" height="0.875rem" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true")
+								rect(x="9" y="9" width="13" height="13" rx="2")
+								path(d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1")
+							span.ms-1 Copy
+					p#account-password-status.small.text-muted.mt-2.mb-0(data-password-status aria-live="polite")
+				.col-md-6.mb-3
+					label.form-label(for="account-plan") Plan level
+					select#account-plan.form-select.form-select-sm(name="plan" required)
+						each value in ['free','pro','team']
+							option(value=value selected=value === 'free')= value
+				.col-12.mb-3
+					.form-check
+						input#send-signup-email.form-check-input.h-20px.w-30px(type="checkbox" name="send_signup_email")
+						label.form-check-label(for="send-signup-email") Send signup confirmation email
 		if account
 			h3.h5.mt-3 Admin overrides
 			p.text-muted Overrides do not change Stripe charges. Blank inherits; zero means unlimited. Lower limits preserve existing data.

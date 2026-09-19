@@ -10,7 +10,7 @@ Use the left sidebar to switch account statuses. Email Templates and Settings al
 
 Search by name, account ID, or owner email. Filter by billing plan or active, suspended, deleting, and failed state. Results contain 50 accounts per page. User counts represent memberships; active snippet counts exclude snippets inside trashed libraries. Details include trash, groups, invitations, credentials, assets, storage bytes, members, and custom-domain state.
 
-Create accounts with an owner name/email. Existing users are reused without changing their credentials or name. Billing initialization and the owner sign-in email run after database provisioning; delivery/setup failures appear as warnings. Editing a shared owner's identity affects every account they belong to. Email changes invalidate existing browser authentication and pending verification links.
+Create accounts with an owner name/email, a generated read-only password, and a required complimentary Free, Pro, or Team plan. Copy the password before closing the form; only its bcrypt hash is stored. Existing user emails are rejected without creating partial account data or resetting credentials. The optional signup confirmation email is off by default and uses the normal 15-minute, single-use signup template to sign the owner into the already-active account. Billing initialization and optional email delivery run after database provisioning; failures appear as warnings while password login remains available. Editing a shared owner's identity affects every account they belong to. Email changes invalidate existing browser authentication and pending verification links.
 
 Suspension blocks account access from web, desktop, API, and MCP without canceling subscriptions. Reactivation restores access.
 
@@ -48,7 +48,7 @@ These endpoints use the admin session cookie, not public API authentication. Mut
 | --- | --- | --- |
 | POST | `/admin/login`, `/admin/logout` | Establish/end admin session |
 | GET | `/admin/api/accounts` | `q`, `plan`, `status`, `page`; paginated accounts and counts |
-| POST | `/admin/api/accounts` | `name`, `owner_name`, `owner_email`; create account |
+| POST | `/admin/api/accounts` | `name`, `owner_name`, `owner_email`, generated `password`, `plan`, boolean `send_signup_email`; create account |
 | GET / PUT | `/admin/api/accounts/:id` | Detail/update; PUT accepts `revision`, names/email, `is_active`, `override` |
 | DELETE | `/admin/api/accounts/:id` | `{ confirmation: accountId }`; queue purge, HTTP 202 |
 | GET | `/admin/api/accounts/:id/deletion` | Current row/progress or `{ deleted: accountId }` |
