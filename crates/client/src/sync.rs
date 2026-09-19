@@ -207,18 +207,17 @@ impl Sync {
         db.apply(&response, None)?;
         db.set_meta("sync_protocol", &json!(6))?;
 		self.upload_assets(credentials,&db)?;
-        while let Some((seq, operation)) = db.pending()?.into_iter().next() {
+        while let Some((seq, mut operation)) = db.pending()?.into_iter().next() {
             let id = operation["library"].as_str().context("Missing library")?;
-            let path = match operation["kind"].as_str() { Some("create") => "libraries".to_owned(), Some("edit") => format!("libraries/{id}/snippets"), Some("trash") => "trash/action".into(), Some("batch") => "snippets/batch".into(), Some("resolve") => format!("conflicts/{}", operation["conflict"].as_str().context("Missing conflict")?), _ => anyhow::bail!("Unknown pending operation") };
-            let result = self.request(credentials, reqwest::Method::POST, &path, Some(&operation["body"]));
+			let result=if operation["kind"]=="merge_synced"{(||->Result<Value>{if operation.get("trash_body").is_none(){let moved=self.request(credentials,reqwest::Method::POST,"snippets/batch",Some(&operation["move_body"]))?;db.apply(&moved,None)?;let source=operation["source"].as_str().context("Missing merge source")?;let library=moved["libraries"].as_array().and_then(|rows|rows.iter().find(|library|library["_id"]==source)).context("Merge response omitted source library")?;operation["trash_body"]=json!({"operation_id":operation["trash_operation_id"],"target":{"type":"library","id":source,"library":source,"revision":library["revision"]},"action":"trash"});db.connection.execute("UPDATE outbox SET operation=?2 WHERE seq=?1",rusqlite::params![seq,operation.to_string()])?;}self.request(credentials,reqwest::Method::POST,"trash/action",Some(&operation["trash_body"]))})()}else{let path=match operation["kind"].as_str(){Some("create")=>"libraries".to_owned(),Some("edit"|"merge_local")=>format!("libraries/{id}/snippets"),Some("trash")=>"trash/action".into(),Some("batch")=>"snippets/batch".into(),Some("resolve")=>format!("conflicts/{}",operation["conflict"].as_str().context("Missing conflict")?),_=>anyhow::bail!("Unknown pending operation")};self.request(credentials,reqwest::Method::POST,&path,Some(&operation["body"]))};
             match result {
                 Ok(result) => db.apply(&result, Some((seq, &operation)))?,
                 Err(error) => {
                     let message = error.to_string();
                     let status = error.downcast_ref::<ServerError>().map(|error|error.status);
-                    if ServerError::rejected(&error, operation["kind"] == "batch") {
+                    if ServerError::rejected(&error, matches!(operation["kind"].as_str(),Some("batch"|"merge_local"|"merge_synced"))) {
                         let transaction = db.connection.unchecked_transaction()?;
-                        if status != Some(410) { db.recover_operation(&operation)?; }
+						if status != Some(410) && !matches!(operation["kind"].as_str(),Some("merge_local"|"merge_synced")) { db.recover_operation(&operation)?; }
                         db.connection.execute("DELETE FROM outbox WHERE seq=?1", [seq])?;
                         db.set_meta("last_failure", &json!(message))?;
                         transaction.commit()?;
@@ -243,7 +242,7 @@ impl Sync {
         let transaction = db.connection.unchecked_transaction()?;
         let libraries:Vec<String>=db.libraries()?.into_iter().filter_map(|library|library["_id"].as_str().map(str::to_owned)).filter(|id|db.synced(id).unwrap_or(false)).collect();
         db.connection.execute("UPDATE libraries SET synced=0", [])?;
-        for (seq, operation) in db.pending()? { db.recover_operation(&operation)?; db.connection.execute("DELETE FROM outbox WHERE seq=?1", [seq])?; }
+        for (seq, operation) in db.pending()? { if !matches!(operation["kind"].as_str(),Some("merge_local"|"merge_synced")){db.recover_operation(&operation)?;}db.connection.execute("DELETE FROM outbox WHERE seq=?1", [seq])?; }
         db.set_meta("cursor", &json!(0))?;
 		if !libraries.is_empty(){db.set_meta("detached",&json!({"server":credentials.as_ref().map(|value|value.server.as_str()),"account":credentials.as_ref().and_then(|value|value.account.as_deref()),"libraries":libraries}))?;}
         transaction.commit()?;
@@ -251,7 +250,7 @@ impl Sync {
         Ok(())
     }
     pub fn editable(_root: &Path, directory: &Path, name: &str) -> Result<()> { let db = Database::open(directory)?; db.editable(&db.editor(name)?.id) }
-    pub fn label(_root: &Path, _directory: &Path, name: &str) -> String { name.into() }
+    pub fn label(_root: &Path, directory: &Path, name: &str) -> String { Database::open(directory).ok().and_then(|db|db.editor(name).ok().and_then(|file|db.pending_merge(&file.id).ok()).map(|pending|if pending{format!("{name} · Merge pending")}else{name.into()})).unwrap_or_else(||name.into()) }
     pub fn trigger(root: &Path) -> Result<()> {
         ensure!(root.join("sync/credentials.json").exists(), "Connect first: typerelay connect --server URL");
         Paths::atomic_write(&root.join("sync/request"), Uuid::new_v4().to_string().as_bytes(), false)
@@ -302,6 +301,10 @@ mod tests {
         sync.disconnect().unwrap();
 		assert_eq!(Database::open(&directory).unwrap().meta("detached").unwrap().unwrap()["account"],"account-one");
     }
+	#[test]
+	fn disconnect_cancels_pending_local_merge_without_removing_source() {
+		let root=tempfile::tempdir().unwrap();let directory=root.path().join("snippets");let sync=Sync::new(root.path().into(),directory.clone()).unwrap();sync.secret(&Credentials{server:"http://127.0.0.1:9".into(),access_token:"offline".into(),refresh_token:"offline".into(),account:Some("account".into()),device:Some("device".into())}).unwrap();let db=Database::open(&directory).unwrap();let destination="0123456789abcdef01234567";db.apply(&json!({"libraries":[{"_id":destination,"name":"Destination","revision":1,"state":"active","permissions":{"read":true,"edit":true,"manage":true},"records":[]}],"accessible":[destination]}),None).unwrap();let source=db.import("Recovered","matches: [{trigger: recovered, replace: Recovered}]").unwrap();assert!(db.merge(&source.id,destination).unwrap());assert!(db.pending_merge(&source.id).unwrap());sync.disconnect().unwrap();let db=Database::open(&directory).unwrap();assert_eq!(db.library(&source.id).unwrap()["state"],"active");assert_eq!(db.records(&source.id).unwrap().len(),1);assert!(!db.pending_merge(&source.id).unwrap());assert_eq!(db.connection.query_row("SELECT count(*) FROM recovery",[],|row|row.get::<_,i64>(0)).unwrap(),0);
+	}
     #[test]
     fn idle_browser_connection_does_not_cancel_callback_listener() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -319,6 +322,10 @@ mod tests {
 	#[test]
 	fn desktop_authentication_can_cancel_and_ignores_a_late_callback() {
 		let root=tempfile::tempdir().unwrap();let path=root.path().to_path_buf();let sync=Sync::new(path.clone(),path.join("snippets")).unwrap();let cancelled=std::sync::Arc::new(AtomicBool::new(false));let signal=cancelled.clone();let worker=std::thread::spawn(move||sync.connect_cancellable("http://127.0.0.1:3040",false,true,&signal));std::thread::sleep(Duration::from_millis(50));Sync::receive_callback(&path,"typerelay://oauth/callback?code=late&state=old-state").unwrap();std::thread::sleep(Duration::from_millis(50));cancelled.store(true,Ordering::SeqCst);assert_eq!(worker.join().unwrap().unwrap_err().to_string(),"Authentication cancelled");assert!(!path.join("sync/credentials.json").exists());
+	}
+	#[test]
+	fn synced_library_merge_moves_then_trashes_with_stable_operations() {
+		let root=tempfile::tempdir().unwrap();let directory=root.path().join("snippets");let db=Database::open(&directory).unwrap();let source="0123456789abcdef01234567";let destination="1123456789abcdef01234567";let source_record=json!({"id":"snippet-source-000000","trigger":"source","title":"","content":{"version":1,"type":"plain_text","text":"Source"},"revision":1,"state":"active","position":0});let destination_record=json!({"id":"snippet-destination-0","trigger":"destination","title":"","content":{"version":1,"type":"plain_text","text":"Destination"},"revision":1,"state":"active","position":0});let active_source=json!({"_id":source,"name":"Source","revision":1,"state":"active","permissions":{"read":true,"edit":true,"manage":true},"records":[source_record]});let active_destination=json!({"_id":destination,"name":"Destination","revision":1,"state":"active","permissions":{"read":true,"edit":true,"manage":true},"records":[destination_record]});db.apply(&json!({"protocol":6,"cursor":1,"libraries":[active_source,active_destination],"accessible":[source,destination],"assets":[],"conflicts":[]}),None).unwrap();assert!(db.merge(source,destination).unwrap());let operation=db.pending().unwrap()[0].1.clone();let move_id=operation["move_body"]["operation_id"].clone();let trash_id=operation["trash_operation_id"].clone();let mut moved_source=active_source.clone();moved_source["revision"]=json!(2);moved_source["records"]=json!([]);let mut moved_destination=active_destination.clone();moved_destination["revision"]=json!(2);let mut records=moved_destination["records"].as_array().unwrap().clone();let mut moved=source_record.clone();moved["library"]=json!(destination);moved["revision"]=json!(2);moved["position"]=json!(1);records.push(moved);moved_destination["records"]=json!(records);let mut trashed_source=moved_source.clone();trashed_source["revision"]=json!(3);trashed_source["state"]=json!("trashed");trashed_source["expires_at"]=json!((chrono::Utc::now()+chrono::Duration::days(30)).to_rfc3339());let listener=TcpListener::bind("127.0.0.1:0").unwrap();let server=format!("http://{}",listener.local_addr().unwrap());let worker=std::thread::spawn(move||{let mut paths=Vec::new();for request_index in 0..4{let(mut stream,_)=listener.accept().unwrap();let mut bytes=Vec::new();let mut byte=[0];while !bytes.ends_with(b"\r\n\r\n"){stream.read_exact(&mut byte).unwrap();bytes.push(byte[0]);}let headers=String::from_utf8(bytes).unwrap();let first=headers.lines().next().unwrap().to_owned();let length=headers.lines().find_map(|line|line.to_ascii_lowercase().strip_prefix("content-length: ").and_then(|value|value.parse::<usize>().ok())).unwrap_or(0);let mut body=vec![0;length];stream.read_exact(&mut body).unwrap();paths.push(first.clone());let response=if first.starts_with("POST /api/v2/snippets/batch "){let body:Value=serde_json::from_slice(&body).unwrap();assert_eq!(body["operation_id"],move_id);json!({"libraries":[moved_source,moved_destination],"moved":["snippet-source-000000"]})}else if first.starts_with("POST /api/v2/trash/action "){let body:Value=serde_json::from_slice(&body).unwrap();assert_eq!(body["operation_id"],trash_id);assert_eq!(body["target"]["revision"],2);json!({"library":trashed_source})}else if request_index==0{json!({"protocol":6,"cursor":1,"libraries":[active_source,active_destination],"accessible":[source,destination],"assets":[],"conflicts":[]})}else{json!({"protocol":6,"cursor":2,"libraries":[trashed_source,moved_destination],"accessible":[source,destination],"assets":[],"conflicts":[]})};let text=response.to_string();write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",text.len(),text).unwrap();}paths});let sync=Sync::new(root.path().into(),directory.clone()).unwrap();sync.secret(&Credentials{server,access_token:"access".into(),refresh_token:"refresh".into(),account:Some("account".into()),device:Some("device".into())}).unwrap();sync.cycle().unwrap();let paths=worker.join().unwrap();assert!(paths[1].contains("snippets/batch"));assert!(paths[2].contains("trash/action"));let db=Database::open(&directory).unwrap();assert!(db.pending().unwrap().is_empty());assert_eq!(db.library(source).unwrap()["state"],"trashed");assert_eq!(db.records(destination).unwrap().iter().filter(|record|record["state"]=="active").count(),2);
 	}
     #[cfg(target_os="linux")]
     #[test]

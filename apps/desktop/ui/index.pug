@@ -5,6 +5,8 @@ html(lang="en")
 		meta(name="viewport" content="width=device-width, initial-scale=1")
 		title TypeRelay
 		link(rel="stylesheet" href="panel.css")
+		link(rel="stylesheet" href="sweetalert2.min.css")
+		script(src="sweetalert2.all.min.js" defer)
 		script(src="panel.js" defer)
 	body
 		main
@@ -132,10 +134,20 @@ html(lang="en")
 				code.result-abbreviation
 				pre.result-preview
 		template#library-template
-			label.check
-				input(type="checkbox")
-				span.library-name
-				span.library-sync-state.status-pill
+			div.library-row
+				label.check
+					input(type="checkbox")
+					span.library-name
+					span.library-sync-state.status-pill
+				button.library-merge.secondary(type="button") Merge…
+				div.library-merge-form(hidden)
+					label Destination
+					select.library-merge-destination.form-select-sm
+					.form-actions
+						button.library-merge-cancel.secondary(type="button") Cancel
+						button.library-merge-submit.primary(type="button") Merge library
+		template#merge-option-template
+			option
 		template#conflict-template
 			article.sync-conflict
 				button.conflict-open.secondary(type="button")

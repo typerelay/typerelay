@@ -13,6 +13,7 @@
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",
     "jsdom": "^30.1.0",
-    "pug": "^3.0.4"
+    "pug": "^3.0.4",
+    "sweetalert2": "^11.26.25"
   }
 }

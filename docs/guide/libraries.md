@@ -25,6 +25,12 @@ Select snippets with their checkboxes, then choose **Move** or **Trash**. Shift-
 
 Use **Copy** on ordinary Text or Code snippets. Text and Rich text snippets with variables use **Fill and copy** so prompted values remain local. Search with `/`, Ctrl+K or Cmd+K to find library names, titles, abbreviations and expansion text across every library you can read.
 
+## Merge libraries
+
+Use **Merge…** under Desktop Settings → Sync, or press **M** on a library in the TUI library picker. Choose a destination and confirm once. Every active source snippet is appended to the destination in its existing order; the destination keeps its name, sharing, permissions and sync status. Destination sharing applies immediately after synchronization.
+
+After a successful merge, the source library moves to Trash for 30 days. Local-only libraries can merge into local-only or synchronized destinations. Synchronized libraries can merge only into another synchronized library; upload a local-only destination first. A queued merge locks source edits until it succeeds or fails, and network retries never discard the source.
+
 ## Rename, unshare or remove
 
 The creator and account owners/admins can rename or move a shared library to Trash. Disabling sharing removes member and group access on the next sync. When Team features are unavailable after a plan change, saving a previously shared library removes its stored sharing grants.

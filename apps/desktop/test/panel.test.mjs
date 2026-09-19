@@ -10,6 +10,7 @@ class Fixture {
   const calls=[];const callbacks={};const pending=[];
   const style=dom.window.document.createElement('style');style.textContent=await readFile('ui/panel.css','utf8');dom.window.document.head.append(style);
   dom.window.HTMLElement.prototype.scrollIntoView=()=>{};
+	  dom.window.Swal={fire:async()=>({isConfirmed:true})};
   dom.window.__TAURI__={core:{invoke:async(name,args)=>{calls.push({name,args});if(name==='initialize')return{config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},theme:{os:'linux'},settings:false,accessibility:false,input_monitoring:false,empty:false};if(name==='search')return new Promise(resolve=>pending.push({query:args.query,resolve}));if(name==='libraries'||name==='conflicts')return[];if(name==='prepare_template')return{fields:[],steps:[{kind:'text',text:'Literal'}],text:'Literal',enter_actions:0,template:{text:'Literal',variables:{}}};return null;}},event:{listen:(name,callback)=>{callbacks[name]=callback;}}};
   dom.window.eval((await readFile('ui/panel.js','utf8')).replace('new Panel();','window.panel = new Panel();'));
   await new Promise(resolve=>setTimeout(resolve,0));
@@ -215,6 +216,18 @@ test('Sync settings retain synced libraries and reconcile only changed rows afte
   const stale=f.panel.refreshLibraries();const fresh=f.panel.refreshLibraries();pending[1]([rows[1]]);await fresh;pending[0](rows);await stale;
   assert.equal(container.children.length,1);assert.equal(container.children[0],local);
  }finally{f.dom.window.close();}
+});
+
+for(const os of ['macos','windows','linux'])test(`${os} library merge uses a Pug selector and updates only affected rows`,async()=>{
+ const f=await Fixture.create();try{
+	 f.dom.window.document.body.dataset.os=os;let rows=[{id:'source',name:'Recovered',synced:false,snippets:5,can_merge:true,merge_pending:false},{id:'destination',name:'My snippets',synced:true,snippets:77,can_merge:true,merge_pending:false}];const original=f.panel.invoke;f.panel.invoke=async(name,args)=>{if(name==='libraries')return structuredClone(rows);if(name==='merge_destinations')return[{id:'destination',name:'My snippets',synced:true,snippets:77}];if(name==='merge_library'){f.calls.push({name,args});rows=[{...rows[1],snippets:82}];return{queued:true};}return original(name,args);};let confirmation;f.dom.window.Swal.fire=async options=>{confirmation=options;return{isConfirmed:true};};
+	 await f.panel.refreshLibraries();const container=f.dom.window.document.querySelector('#local-libraries');const source=container.querySelector('[data-id="source"]');const destination=container.querySelector('[data-id="destination"]');source.querySelector('.library-merge').click();await new Promise(resolve=>setTimeout(resolve,0));assert.equal(source.querySelector('.library-merge-form').hidden,false);assert.match(source.querySelector('option').textContent,/My snippets · 77 snippets · Synced/);
+	 await f.panel.mergeLibrary(source,source.querySelector('.library-merge-submit'));const call=f.calls.findLast(call=>call.name==='merge_library');assert.deepEqual(JSON.parse(JSON.stringify(call.args)),{source:'source',destination:'destination'});assert.match(confirmation.text,/Destination sharing applies/);assert.equal(container.querySelector('[data-id="source"]'),null);assert.equal(container.querySelector('[data-id="destination"]'),destination);assert.match(destination.querySelector('.library-name').textContent,/82/);assert.ok(!f.calls.some(call=>call.name==='dismiss'));
+ }finally{f.dom.window.close();}
+});
+
+test('merge pending disables source mutation and remains visible',async()=>{
+ const f=await Fixture.create();try{const original=f.panel.invoke;f.panel.invoke=async(name,args)=>name==='libraries'?[{id:'source',name:'Recovered',synced:false,snippets:5,can_merge:false,merge_pending:true}]:original(name,args);await f.panel.refreshLibraries();const row=f.dom.window.document.querySelector('[data-id="source"]');assert.equal(row.querySelector('.library-sync-state').textContent,'Merge pending');assert.equal(row.querySelector('input').disabled,true);assert.equal(row.querySelector('.library-merge').hidden,true);}finally{f.dom.window.close();}
 });
 
 for(const os of ['macos','windows','linux'])test(`${os} search gear opens native settings focus mode`,async()=>{

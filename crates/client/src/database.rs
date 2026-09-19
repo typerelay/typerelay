@@ -60,6 +60,7 @@ impl Database {
     pub fn synced(&self, id: &str) -> Result<bool> { Ok(self.connection.query_row("SELECT synced FROM libraries WHERE id=?1", [id], |row| row.get(0))?) }
 	fn sync_value(record:&Value)->Option<Value>{(record["state"]=="active").then(||json!({"trigger":record["trigger"],"title":record.get("title").cloned().unwrap_or(Value::Null),"content":record["content"]}))}
 	fn preserve_collision(&self,id:&str)->Result<()> {let replacement=Uuid::new_v4().to_string();self.remap(id,&replacement)?;let mut library=self.library(&replacement)?;library["_id"]=json!(replacement);self.connection.execute("UPDATE libraries SET data=?2,synced=0,version=version+1 WHERE id=?1",params![replacement,library.to_string()])?;Ok(())}
+	fn finish_local_merge(&self,id:&str)->Result<()> {let mut library=self.library(id)?;if library["state"]!="active"{return Ok(());}Self::mark_trash(&mut library,true);library["revision"]=json!(library["revision"].as_i64().unwrap_or(0)+1);self.connection.execute("UPDATE libraries SET data=?2,version=version+1 WHERE id=?1",params![id,library.to_string()])?;Ok(())}
 	pub fn reconcile_detached(&self,response:&Value,server:&str,account:Option<&str>)->Result<()> {
 		let Some(mut detached)=self.meta("detached")? else{return Ok(());};
 		let provenance=detached["server"]==server&&!detached["account"].as_str().is_some_and(|stored|account!=Some(stored));
@@ -143,7 +144,9 @@ impl Database {
         transaction.commit()?;
         self.editor(&name)
     }
-    pub fn editable(&self, id: &str) -> Result<()> { ensure!(self.library(id)?["permissions"]["edit"] == true, "Library is read-only"); Ok(()) }
+	pub fn pending_merges(&self)->Result<std::collections::BTreeSet<String>>{Ok(self.pending()?.into_iter().filter(|(_,operation)|matches!(operation["kind"].as_str(),Some("merge_local"|"merge_synced"))).filter_map(|(_,operation)|operation["source"].as_str().map(str::to_owned)).collect())}
+	pub fn pending_merge(&self,id:&str)->Result<bool>{Ok(self.pending_merges()?.contains(id))}
+    pub fn editable(&self, id: &str) -> Result<()> { ensure!(!self.pending_merge(id)?,"Library merge is pending");ensure!(self.library(id)?["permissions"]["edit"] == true, "Library is read-only"); Ok(()) }
     pub fn queue(&self, operation: &Value) -> Result<()> { self.connection.execute("INSERT INTO outbox(operation) VALUES(?1)", [operation.to_string()])?; Ok(()) }
     pub fn pending(&self) -> Result<Vec<(i64, Value)>> {
         let mut statement = self.connection.prepare("SELECT seq,operation FROM outbox ORDER BY seq")?;
@@ -198,6 +201,8 @@ impl Database {
         transaction.commit()?;
         Ok(())
     }
+	pub fn merge_destinations(&self,source:&str)->Result<Vec<Value>>{let library=self.library(source)?;ensure!(library["state"]=="active","Source library is unavailable");ensure!(library["permissions"]["manage"]==true,"Manage permission required to merge this library");let merging=self.pending_merges()?;ensure!(!merging.contains(source),"Library merge is pending");let synced=self.synced(source)?;let rows=self.libraries()?.into_iter().filter(|destination|{let id=destination["_id"].as_str().unwrap_or("");id!=source&&destination["state"]=="active"&&destination["permissions"]["edit"]==true&&!merging.contains(id)&&!(synced&&!self.synced(id).unwrap_or(false))}).collect();Ok(rows)}
+	pub fn merge(&self,source:&str,destination:&str)->Result<bool>{let transaction=self.connection.unchecked_transaction()?;ensure!(source!=destination,"Choose another library");let mut source_library=self.library(source)?;let destination_library=self.library(destination)?;ensure!(source_library["state"]=="active"&&destination_library["state"]=="active","Library is unavailable");ensure!(source_library["permissions"]["manage"]==true,"Manage permission required to merge this library");ensure!(destination_library["permissions"]["edit"]==true,"Destination library is read-only");ensure!(!self.pending_merge(source)?&&!self.pending_merge(destination)?,"A library merge is already pending");let records:Vec<Value>=self.records(source)?.into_iter().filter(|record|record["state"]=="active").collect();ensure!(!records.is_empty(),"Source library has no active snippets");ensure!(records.len()<=10000,"Library merge exceeds 10,000 snippets");let source_synced=self.synced(source)?;let destination_synced=self.synced(destination)?;ensure!(!source_synced||destination_synced,"Upload the destination before merging a synced library into it");let queued=source_synced||destination_synced;if !queued{let items=records.iter().map(|record|json!({"id":record["id"],"base_revision":record["revision"]})).collect::<Vec<_>>();self.batch_inner(source,Some(destination),&items,false)?;source_library=self.library(source)?;Self::mark_trash(&mut source_library,true);source_library["revision"]=json!(source_library["revision"].as_i64().unwrap_or(0)+1);self.connection.execute("UPDATE libraries SET data=?2,version=version+1 WHERE id=?1",params![source,source_library.to_string()])?;}else if !source_synced{let changes=records.iter().map(|record|json!({"id":record["id"],"base_revision":Value::Null,"base":Value::Null,"value":Self::sync_value(record)})).collect::<Vec<_>>();self.queue(&json!({"kind":"merge_local","library":destination,"source":source,"records":records,"body":{"operation_id":Uuid::new_v4().to_string(),"base_revision":destination_library["revision"],"changes":changes}}))?;}else{let items=records.iter().map(|record|json!({"id":record["id"],"base_revision":record["revision"]})).collect::<Vec<_>>();self.queue(&json!({"kind":"merge_synced","library":source,"source":source,"destination":destination,"records":records,"move_body":{"operation_id":Uuid::new_v4().to_string(),"action":"move","source_library":source,"destination_library":destination,"items":items},"trash_operation_id":Uuid::new_v4().to_string()}))?;}self.set_meta("last_failure",&json!(""))?;self.validate_transaction()?;transaction.commit()?;Ok(queued)}
     pub fn edit_move(&self, file: &OpenFile, index: usize, entry: Match, destination: &str) -> Result<OpenFile> {
         let transaction = self.connection.unchecked_transaction()?;
         let id = file.ids.get(index).context("Snippet missing")?;
@@ -307,6 +312,7 @@ impl Database {
     fn trash_action_inner(&self, target: &Value, action: &str) -> Result<()> {
         ensure!(matches!(action, "trash" | "restore" | "purge"), "Unknown Trash action");
         let id = target["library"].as_str().context("Missing library")?;
+		ensure!(!self.pending_merge(id)?,"Library merge is pending");
         let mut library = self.library(id)?;
         let whole = target["type"] == "library";
         ensure!(library["permissions"][if whole || action == "purge" { "manage" } else { "edit" }] == true, "Trash permission denied");
@@ -464,6 +470,7 @@ impl Database {
             for record in records { self.put_record(&id, &serde_json::from_str(&record)?)?; }
         }
         for (seq, operation) in self.pending()? {
+			if matches!(operation["kind"].as_str(),Some("merge_local"|"merge_synced")){continue;}
             let id = operation["library"].as_str().context("Missing operation library")?;
             let Ok(mut library) = self.library(id) else { continue; };
             if library["state"] == "purged" {
@@ -530,14 +537,17 @@ impl Database {
     pub fn apply(&self, response: &Value, ack: Option<(i64, &Value)>) -> Result<()> {
         self.set_meta("staged", response)?;
         let transaction = self.connection.unchecked_transaction()?;
+		let mut merged_source=None;
         if let Some((seq, operation)) = ack {
             if response["conflicts"].as_array().is_some_and(|rows| !rows.is_empty())
                 && let Some(changes) = operation["body"]["changes"].as_array() { for change in changes { self.recover(operation["library"].as_str().unwrap_or(""), change["id"].as_str(), &change["value"])?; } }
             if operation["kind"] == "create" { self.remap(operation["library"].as_str().unwrap(), response["library"]["_id"].as_str().context("Missing created library")?)?; }
+			if operation["kind"]=="merge_local"&&!response["conflicts"].as_array().is_some_and(|rows|!rows.is_empty()){merged_source=operation["source"].as_str().map(str::to_owned);}
             self.connection.execute("DELETE FROM outbox WHERE seq=?1", [seq])?;
         }
         if let Some(remote) = response.get("library") { self.accept_library(remote)?; }
         if let Some(remotes) = response["libraries"].as_array() { for remote in remotes { self.accept_library(remote)?; } }
+		if let Some(source)=merged_source{self.finish_local_merge(&source)?;}
         if let Some(accessible) = response["accessible"].as_array() {
             for mut library in self.libraries()? {
                 let id = library["_id"].as_str().unwrap().to_owned();
@@ -872,6 +882,18 @@ mod tests {
 	#[test]
 	fn detached_reconnect_replays_a_local_move_as_one_revisioned_batch() {
 		let fixture=Fixture::new();let db=fixture.db();let source="0123456789abcdef01234567";let destination="1123456789abcdef01234567";let record=json!({"id":"snippet-0000000001","trigger":"one","title":"","content":{"version":1,"type":"plain_text","text":"One"},"revision":1,"state":"active","position":0});let source_remote=json!({"_id":source,"name":"Source","revision":1,"state":"active","permissions":{"read":true,"edit":true,"manage":true},"records":[record]});let destination_remote=json!({"_id":destination,"name":"Destination","revision":1,"state":"active","permissions":{"read":true,"edit":true,"manage":true},"records":[]});db.apply(&json!({"libraries":[source_remote,destination_remote],"accessible":[source,destination]}),None).unwrap();db.connection.execute("UPDATE libraries SET synced=0",[]).unwrap();db.set_meta("detached",&json!({"server":"https://app.example.test","account":"account-one","libraries":[source,destination]})).unwrap();let file=db.editor("Source").unwrap();let items=db.batch_items(&file,&file.ids).unwrap();db.batch(source,Some(destination),&items).unwrap();let response=json!({"libraries":[source_remote,destination_remote],"accessible":[source,destination]});db.reconcile_detached(&response,"https://app.example.test",Some("account-one")).unwrap();let pending=db.pending().unwrap();assert_eq!(pending.len(),1);assert_eq!(pending[0].1["kind"],"batch");assert_eq!(pending[0].1["body"]["destination_library"],destination);db.apply(&response,None).unwrap();assert!(db.editor("Source").unwrap().entries.is_empty());assert_eq!(db.editor("Destination").unwrap().entries[0].trigger,"one");
+	}
+	#[test]
+	fn local_library_merge_moves_ordered_records_and_trashes_source() {
+		let fixture=Fixture::new();let db=fixture.db();let destination=db.import("Destination","matches: [{trigger: first, replace: First}]").unwrap();let source=db.import("Recovered","matches: [{trigger: second, replace: Second}, {trigger: third, replace: Third}]").unwrap();assert!(!db.merge(&source.id,&destination.id).unwrap());let merged=db.editor("Destination").unwrap();assert_eq!(merged.entries.iter().map(|entry|entry.trigger.as_str()).collect::<Vec<_>>(),vec!["first","second","third"]);assert_eq!(db.library(&source.id).unwrap()["state"],"trashed");assert!(db.pending().unwrap().is_empty());assert!(db.trash().unwrap().iter().any(|row|row["id"]==source.id));
+	}
+	#[test]
+	fn local_to_synced_merge_waits_for_ack_then_trashes_source() {
+		let fixture=Fixture::new();let db=fixture.db();let destination="0123456789abcdef01234567";let remote=json!({"_id":destination,"name":"Synced","revision":2,"state":"active","permissions":{"read":true,"edit":true,"manage":true},"records":[{"id":"snippet-0000000001","trigger":"first","title":"","content":{"version":1,"type":"plain_text","text":"First"},"revision":1,"state":"active","position":0}]});db.apply(&json!({"libraries":[remote],"accessible":[destination]}),None).unwrap();let source=db.import("Recovered","matches: [{trigger: second, replace: Second}]").unwrap();assert!(db.merge(&source.id,destination).unwrap());assert_eq!(db.library(&source.id).unwrap()["state"],"active");assert_eq!(db.pending().unwrap()[0].1["kind"],"merge_local");assert!(db.editable(&source.id).is_err());let (seq,operation)=db.pending().unwrap().remove(0);let mut accepted=remote.clone();accepted["revision"]=json!(3);let mut records=accepted["records"].as_array().unwrap().clone();let mut moved=db.records(&source.id).unwrap()[0].clone();moved["revision"]=json!(1);moved["position"]=json!(1);records.push(moved);accepted["records"]=json!(records);db.apply(&json!({"library":accepted,"conflicts":[]}),Some((seq,&operation))).unwrap();assert_eq!(db.library(&source.id).unwrap()["state"],"trashed");assert_eq!(db.editor("Synced").unwrap().entries.len(),2);assert!(db.pending().unwrap().is_empty());
+	}
+	#[test]
+	fn synced_merge_queues_stable_move_and_blocks_synced_to_local() {
+		let fixture=Fixture::new();let db=fixture.db();let source="0123456789abcdef01234567";let destination="1123456789abcdef01234567";let library=|id:&str,name:&str,trigger:&str|json!({"_id":id,"name":name,"revision":1,"state":"active","permissions":{"read":true,"edit":true,"manage":true},"records":[{"id":format!("snippet-{trigger}-000000"),"trigger":trigger,"title":"","content":{"version":1,"type":"plain_text","text":trigger},"revision":1,"state":"active","position":0}]});db.apply(&json!({"libraries":[library(source,"Source","source"),library(destination,"Destination","destination")],"accessible":[source,destination]}),None).unwrap();let local=db.import("Local","matches: [{trigger: local, replace: Local}]").unwrap();assert!(db.merge(source,&local.id).is_err());assert!(db.merge(source,destination).unwrap());let operation=&db.pending().unwrap()[0].1;assert_eq!(operation["kind"],"merge_synced");assert!(operation["move_body"]["operation_id"].as_str().is_some());assert!(operation["trash_operation_id"].as_str().is_some());assert!(db.editable(source).is_err());assert!(db.merge_destinations(source).is_err());
 	}
     #[test]
     fn sync_metadata_does_not_interrupt_active_expansion_snapshots() {
