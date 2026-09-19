@@ -62,6 +62,8 @@ test('real authenticated routes enforce CSRF, persist monotonic seen state and r
 	assert.equal(versionedModule.status, 200);
 	assert.match(await versionedModule.text(), /bootstrap\.Offcanvas/);
 	assert.equal((await Fixture.request('/assets/previous-release/product-updates.js')).status, 404);
+	assert.equal((await Fixture.request('/assets/typerelay-logo.svg')).status, 200);
+	assert.equal((await Fixture.request('/assets/favicon.ico')).status, 200);
 	assert.equal(dom.window.document.querySelectorAll('[data-product-update-id]').length, 7);
 	assert.equal(dom.window.document.querySelector('#workspace-content').hidden, false);
 	assert.ok(dom.window.document.querySelector('#product-updates-drawer #product-updates-news'));

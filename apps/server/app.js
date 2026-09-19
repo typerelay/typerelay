@@ -65,7 +65,7 @@ export class Server {
 		app.use(express.json({ limit: '12mb' }), express.urlencoded({ extended: false, limit: '32kb' }));
 		const publicAssets = express.static('public');
 		app.use('/assets/generated', express.static('/data/editor'));
-		app.use('/assets/:assetVersion', (req, res, next) => req.params.assetVersion === assetVersion ? publicAssets(req, res, next) : res.sendStatus(404));
+		app.use('/assets/:assetVersion', (req, res, next) => req.path === '/' ? next() : req.params.assetVersion === assetVersion ? publicAssets(req, res, next) : res.sendStatus(404));
 		app.use('/assets', publicAssets);
 		app.use('/vendor/webauthn', express.static('node_modules/@simplewebauthn/browser/dist/bundle'));
 		app.use('/vendor/bootstrap', express.static('node_modules/bootstrap/dist'));
