@@ -57,6 +57,7 @@ pub struct App {
     move_from: Screen,
     move_items: Vec<serde_json::Value>,
     pending_batch: Option<(String, Option<String>, Vec<serde_json::Value>)>,
+	pending_merge:Option<(String,String,usize)>,
     bulk_buttons: Vec<Rect>,
     pending_trash: Option<(String, Vec<serde_json::Value>)>,
     trash_rows: Vec<serde_json::Value>,
@@ -72,6 +73,7 @@ pub struct App {
     save_area: Rect,
     cancel_area: Rect,
     confirm_buttons: Vec<Rect>,
+	merge_button:Rect,
 }
 
 impl App {
@@ -79,7 +81,7 @@ impl App {
         let files = store.files()?;
         let mut file_state = ListState::default();
         file_state.select(Some(0));
-        Ok(Self { store, settings, screen: Screen::Files, files, file_state, snippets_state: ListState::default(), file: None, search: TextArea::default(), search_focused: false, trigger: TextArea::default(), title: TextArea::default(), language: "plain_text".into(), code: false, template:false, rich:false, rich_preview:false,rich_image:None,image_source:TextArea::default(),image_alt:TextArea::default(),image_title:TextArea::default(),image_width:Self::text("640"),image_focus:0, variables:Default::default(), template_dialog:None, fill_base:None, rich_fill:None, preview_x: 0, expansion: TextArea::default(), name: TextArea::default(), url: TextArea::default(), editor_focus: 0, editing: None, original_entry: None, original_url: String::new(), prefix: TextArea::default(), original_prefix: String::new(), pending: None, pending_delete: None, selected_ids: std::collections::BTreeSet::new(), selection_anchor: None, move_destination: None, move_choices: Vec::new(), move_state: ListState::default(), move_from: Screen::Browse, move_items: Vec::new(), pending_batch: None, bulk_buttons: Vec::new(), pending_trash: None, trash_rows: Vec::new(), trash_state: ListState::default(), trash_buttons: Vec::new(), confirm_from: Screen::Files, status: "Choose a file, or create a new one".into(), error: false, quit: false, toolbar: Vec::new(), list_area: Rect::default(), field_areas: Vec::new(), save_area: Rect::default(), cancel_area: Rect::default(), confirm_buttons: Vec::new() })
+        Ok(Self { store, settings, screen: Screen::Files, files, file_state, snippets_state: ListState::default(), file: None, search: TextArea::default(), search_focused: false, trigger: TextArea::default(), title: TextArea::default(), language: "plain_text".into(), code: false, template:false, rich:false, rich_preview:false,rich_image:None,image_source:TextArea::default(),image_alt:TextArea::default(),image_title:TextArea::default(),image_width:Self::text("640"),image_focus:0, variables:Default::default(), template_dialog:None, fill_base:None, rich_fill:None, preview_x: 0, expansion: TextArea::default(), name: TextArea::default(), url: TextArea::default(), editor_focus: 0, editing: None, original_entry: None, original_url: String::new(), prefix: TextArea::default(), original_prefix: String::new(), pending: None, pending_delete: None, selected_ids: std::collections::BTreeSet::new(), selection_anchor: None, move_destination: None, move_choices: Vec::new(), move_state: ListState::default(), move_from: Screen::Browse, move_items: Vec::new(), pending_batch: None,pending_merge:None, bulk_buttons: Vec::new(), pending_trash: None, trash_rows: Vec::new(), trash_state: ListState::default(), trash_buttons: Vec::new(), confirm_from: Screen::Files, status: "Choose a file, or create a new one".into(), error: false, quit: false, toolbar: Vec::new(), list_area: Rect::default(), field_areas: Vec::new(), save_area: Rect::default(), cancel_area: Rect::default(), confirm_buttons: Vec::new(),merge_button:Rect::default() })
     }
     fn text(value: &str) -> TextArea<'static> { TextArea::new(value.split('\n').map(str::to_owned).collect()) }
     fn value(field: &TextArea<'_>) -> String { field.lines().join("\n") }
@@ -259,13 +261,15 @@ impl App {
         self.screen = Screen::Move;
         Ok(())
     }
+	fn request_merge(&mut self)->Result<()>{anyhow::ensure!(self.screen==Screen::Files,"Open the library picker first");let index=self.file_state.selected().unwrap_or(0);anyhow::ensure!(index>0,"Choose a library to merge");let name=self.files.get(index-1).context("Choose a source library")?;let db=typerelay_client::database::Database::open(&self.store.directory)?;let source=db.editor(name)?;let mut choices=db.merge_destinations(&source.id)?;for library in &mut choices{let id=library["_id"].as_str().context("Missing destination ID")?.to_owned();library["merge_sync"]=serde_json::json!(if db.synced(&id)?{"Synced"}else{"Local only"});library["merge_count"]=serde_json::json!(db.records(&id)?.iter().filter(|record|record["state"]=="active").count());}anyhow::ensure!(!choices.is_empty(),"No eligible destination. Upload a local destination before merging a synced library into it.");self.move_choices=choices;self.move_items=vec![serde_json::json!({"source":source.id,"name":source.name,"count":source.entries.len()})];self.move_state.select(Some(0));self.move_from=Screen::Files;self.screen=Screen::Move;Ok(())}
     fn choose_move(&mut self) -> Result<()> {
         let destination = self.move_choices.get(self.move_state.selected().unwrap_or(0)).context("Choose a destination")?["_id"].as_str().context("Missing destination")?.to_owned();
-        let source = self.file.as_ref().context("Choose a source")?.id.clone();
+		let source=if self.move_from==Screen::Files{self.move_items.first().and_then(|item|item["source"].as_str()).context("Missing merge source")?.to_owned()}else{self.file.as_ref().context("Choose a source")?.id.clone()};
         if self.move_from == Screen::Edit {
             self.move_destination = if destination == source { None } else { Some(destination) };
             self.screen = Screen::Edit;
-        } else {
+		}else if self.move_from==Screen::Files{let count=self.move_items.first().and_then(|item|item["count"].as_u64()).unwrap_or(0)as usize;self.pending_merge=Some((source,destination,count));self.confirm_from=Screen::Move;self.screen=Screen::Confirm;
+		}else {
             self.pending_batch = Some((source, Some(destination), self.move_items.clone()));
             self.confirm_from = Screen::Move;
             self.screen = Screen::Confirm;
@@ -287,6 +291,7 @@ impl App {
         Ok(())
     }
     fn confirm(&mut self, choice: usize) -> Result<()> {
+		if let Some((source,destination,_))=self.pending_merge.clone(){if choice==0{let queued=typerelay_client::database::Database::open(&self.store.directory)?.merge(&source,&destination)?;if queued{let _=typerelay_client::sync::Sync::trigger(self.settings.config_dir());}self.files=self.store.files()?;self.file_state.select(Some(0));self.screen=Screen::Files;self.message(if queued{"Merge queued"}else{"Libraries merged"},false);}else{self.screen=Screen::Files;}self.pending_merge=None;return Ok(());}
         if let Some((source, destination, items)) = self.pending_batch.clone() {
             if choice == 0 {
                 typerelay_client::database::Database::open(&self.store.directory)?.batch(&source, destination.as_deref(), &items)?;
@@ -392,6 +397,7 @@ impl App {
                 return Ok(());
             }
             if self.screen == Screen::Confirm {
+				if self.pending_merge.is_some(){return if key.code==KeyCode::Char('m'){self.confirm(0)}else if matches!(key.code,KeyCode::Esc|KeyCode::Enter){self.confirm(1)}else{Ok(())};}
                 if let Some((_, destination, _)) = &self.pending_batch {
                     return if key.code == KeyCode::Char(if destination.is_some() { 'm' } else { 'd' }) { self.confirm(0) } else if matches!(key.code, KeyCode::Esc | KeyCode::Enter) { self.confirm(1) } else { Ok(()) };
                 }
@@ -451,6 +457,7 @@ impl App {
                     KeyCode::Down | KeyCode::Char('j') => self.move_selection(true),
                     KeyCode::Up | KeyCode::Char('k') => self.move_selection(false),
                     KeyCode::Enter => self.open_selected_file()?,
+					KeyCode::Char('m')=>self.request_merge()?,
                     KeyCode::Esc => self.leave(Destination::Quit)?,
                     _ => (),
                 },
@@ -520,6 +527,7 @@ impl App {
                     }
                     return Ok(());
                 }
+				if self.screen==Screen::Files&&self.merge_button.contains(position){return self.request_merge();}
                 if self.screen == Screen::Browse && let Some(index) = self.bulk_buttons.iter().position(|area|area.contains(position)) {
                     return if index == 0 { self.request_move() } else { self.request_delete() };
                 }
@@ -594,14 +602,13 @@ impl App {
                 Self::button(frame, self.trash_buttons[1], &format!("E Empty ({})", self.trash_rows.iter().filter(|row|row["can_purge"] == true).count()), self.trash_rows.iter().any(|row|row["can_purge"] == true));
             }
             Screen::Files => {
+				let parts=Layout::vertical([Constraint::Min(3),Constraint::Length(3)]).split(body);
                 let items = std::iter::once(ListItem::new("+ New library")).chain(self.files.iter().map(|name| ListItem::new(typerelay_client::sync::Sync::label(self.settings.config_dir(), &self.store.directory, name)))).collect::<Vec<_>>();
-                self.list_area = body;
-                frame.render_stateful_widget(List::new(items).block(Self::border("Choose a library", true)).highlight_style(Style::default().bg(Color::DarkGray)).highlight_symbol("› "), body, &mut self.file_state);
+				self.list_area=parts[0];frame.render_stateful_widget(List::new(items).block(Self::border("Choose a library",true)).highlight_style(Style::default().bg(Color::DarkGray)).highlight_symbol("› "),parts[0],&mut self.file_state);self.merge_button=parts[1];Self::button(frame,parts[1],"M Merge selected library",self.file_state.selected().unwrap_or(0)>0);
             }
             Screen::Move => {
                 self.list_area = body;
-                let items = self.move_choices.iter().map(|library| ListItem::new(format!("{} · {}", if library["shared"] == true { "Shared" } else { "Personal" }, library["name"].as_str().unwrap_or("Library")))).collect::<Vec<_>>();
-                frame.render_stateful_widget(List::new(items).block(Self::border("Destination · Enter selects · Esc cancels", true)).highlight_style(Style::default().bg(Color::DarkGray)).highlight_symbol("› "), body, &mut self.move_state);
+				let items=self.move_choices.iter().map(|library|ListItem::new(if self.move_from==Screen::Files{format!("{} · {} snippets · {}",library["merge_sync"].as_str().unwrap_or("Local only"),library["merge_count"].as_u64().unwrap_or(0),library["name"].as_str().unwrap_or("Library"))}else{format!("{} · {}",if library["shared"]==true{"Shared"}else{"Personal"},library["name"].as_str().unwrap_or("Library"))})).collect::<Vec<_>>();let title=if self.move_from==Screen::Files{"Merge destination · Enter selects · Esc cancels"}else{"Destination · Enter selects · Esc cancels"};frame.render_stateful_widget(List::new(items).block(Self::border(title,true)).highlight_style(Style::default().bg(Color::DarkGray)).highlight_symbol("› "),body,&mut self.move_state);
             }
             Screen::Browse => {
                 let parts = Layout::vertical([Constraint::Length(3), Constraint::Length(3), Constraint::Min(3)]).split(body);
@@ -661,7 +668,7 @@ impl App {
         if self.screen == Screen::Confirm {
             let dialog = Rect::new(area.x + (area.width - 56) / 2, area.y + (area.height - 7) / 2, 56, 7);
             frame.render_widget(Clear, dialog);
-            let prompt = if let Some((_, destination, items)) = &self.pending_batch {
+			let prompt=if let Some((source,destination,count))=&self.pending_merge{let db=typerelay_client::database::Database::open(&self.store.directory);let source_name=db.as_ref().ok().and_then(|db|db.library(source).ok()).and_then(|library|library["name"].as_str().map(str::to_owned)).unwrap_or_else(||"source".into());let destination_name=db.as_ref().ok().and_then(|db|db.library(destination).ok()).and_then(|library|library["name"].as_str().map(str::to_owned)).unwrap_or_else(||"destination".into());format!("Merge {count} snippets from {source_name} into {destination_name}?\nDestination sharing applies. Source moves to Trash.")}else if let Some((_, destination, items)) = &self.pending_batch {
                 if let Some(id) = destination {
                     let name = self.move_choices.iter().find(|library|library["_id"] == *id).and_then(|library|library["name"].as_str()).unwrap_or("destination");
                     format!("Move {} snippets to {name}?\nDestination sharing permissions apply.", items.len())
@@ -672,8 +679,8 @@ impl App {
             frame.render_widget(Paragraph::new(prompt).wrap(Wrap { trim: false }).block(Self::border("Confirm", true)), dialog);
             let buttons = Rect::new(dialog.x + 2, dialog.y + 3, dialog.width - 4, 3);
             self.confirm_buttons = Layout::horizontal([Constraint::Ratio(1, 3), Constraint::Ratio(1, 3), Constraint::Ratio(1, 3)]).split(buttons).to_vec();
-            if self.pending_delete.is_some() || self.pending_trash.is_some() || self.pending_batch.is_some() { self.confirm_buttons = vec![self.confirm_buttons[2], self.confirm_buttons[0]]; }
-            let titles: &[&str] = if let Some((_, destination, _)) = &self.pending_batch { if destination.is_some() { &["M Move", "Esc Cancel"] } else { &["D Trash", "Esc Cancel"] } } else if let Some((action, _)) = &self.pending_trash { if action == "restore" { &["R Restore", "Esc Cancel"] } else if action == "purge" { &["E Empty", "Esc Cancel"] } else { &["D Trash", "Esc Cancel"] } } else if self.pending_delete.is_some() { &["D Trash", "Esc Cancel"] } else { &["S Save", "D Discard", "Esc Cancel"] };
+			if self.pending_delete.is_some()||self.pending_trash.is_some()||self.pending_batch.is_some()||self.pending_merge.is_some(){self.confirm_buttons=vec![self.confirm_buttons[2],self.confirm_buttons[0]];}
+			let titles:&[&str]=if self.pending_merge.is_some(){&["M Merge","Esc Cancel"]}else if let Some((_,destination,_))=&self.pending_batch{if destination.is_some(){&["M Move","Esc Cancel"]}else{&["D Trash","Esc Cancel"]}}else if let Some((action,_))=&self.pending_trash{if action=="restore"{&["R Restore","Esc Cancel"]}else if action=="purge"{&["E Empty","Esc Cancel"]}else{&["D Trash","Esc Cancel"]}}else if self.pending_delete.is_some(){&["D Trash","Esc Cancel"]}else{&["S Save","D Discard","Esc Cancel"]};
             for (index, title) in titles.iter().enumerate() { Self::button(frame, self.confirm_buttons[index], title, true); }
         }
     }
@@ -959,6 +966,10 @@ mod tests {
         assert!(db.editor("Destination").unwrap().entries.iter().any(|entry|entry.trigger == "a" && entry.replace == "Edited in form"));
         assert_eq!(db.snapshot().unwrap().len(), 3);
     }
+	#[test]
+	fn library_picker_merges_selected_source_and_supports_confirmation_cancel() {
+		let temp=tempfile::tempdir().unwrap();let mut app=Fixture::app(temp.path());let db=typerelay_client::database::Database::open(&app.store.directory).unwrap();db.import("Destination","matches: [{trigger: first, replace: First}]").unwrap();let source=db.import("Recovered","matches: [{trigger: second, replace: Second}]").unwrap();app.refresh();let index=app.files.iter().position(|name|name=="Recovered").unwrap()+1;app.file_state.select(Some(index));Fixture::key(&mut app,KeyCode::Char('m'),KeyModifiers::NONE);assert_eq!(app.screen,Screen::Move);Fixture::key(&mut app,KeyCode::Enter,KeyModifiers::NONE);assert_eq!(app.screen,Screen::Confirm);Fixture::key(&mut app,KeyCode::Esc,KeyModifiers::NONE);assert_eq!(app.screen,Screen::Files);app.file_state.select(Some(index));let mut terminal=ratatui::Terminal::new(ratatui::backend::TestBackend::new(100,30)).unwrap();terminal.draw(|frame|app.draw(frame)).unwrap();app.handle(Event::Mouse(ratatui::crossterm::event::MouseEvent{kind:MouseEventKind::Down(MouseButton::Left),column:app.merge_button.x+1,row:app.merge_button.y+1,modifiers:KeyModifiers::NONE}));assert_eq!(app.screen,Screen::Move);Fixture::key(&mut app,KeyCode::Enter,KeyModifiers::NONE);Fixture::key(&mut app,KeyCode::Char('m'),KeyModifiers::NONE);assert_eq!(app.screen,Screen::Files);assert_eq!(app.status,"Libraries merged");assert_eq!(db.library(&source.id).unwrap()["state"],"trashed");assert_eq!(db.editor("Destination").unwrap().entries.len(),2);
+	}
     #[test]
     fn bulk_trash_uses_selection_and_readonly_cannot_select() {
         let temp = tempfile::tempdir().unwrap(); let mut app = Fixture::app(temp.path());

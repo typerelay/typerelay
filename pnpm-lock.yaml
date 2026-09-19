@@ -129,6 +129,9 @@ importers:
       pug:
         specifier: ^3.0.4
         version: 3.0.4
+      sweetalert2:
+        specifier: ^11.26.25
+        version: 11.26.25
 
   apps/mcp:
     dependencies:

@@ -1,0 +1,32 @@
+doctype html
+html(lang="en")
+	head
+		meta(charset="utf-8")
+		meta(name="viewport" content="width=device-width, initial-scale=1")
+		meta(name="csrf-token" content=csrf)
+		meta(name="style-nonce" content=styleNonce)
+		block head
+			title Type Relay
+		- const authWhiteLabel = typeof whiteLabel !== 'undefined' && whiteLabel
+		if authWhiteLabel && authWhiteLabel.favicon_url
+			link(rel="icon" href=authWhiteLabel.favicon_url)
+		else
+			link(rel="icon" href="/assets/favicon.ico")
+		link(rel="stylesheet" href="/vendor/bootstrap/css/bootstrap.min.css")
+		link(rel="stylesheet" href="/vendor/sweetalert2/sweetalert2.min.css")
+		link(rel="stylesheet" href='/assets/' + assetVersion + '/app.css')
+	- const authCoverStyle = authBackgroundUrl ? `--auth-cover-image: url("${authBackgroundUrl}");` : undefined
+	- const authBrandAsset = authWhiteLabel && (authWhiteLabel.login_logo_url || authWhiteLabel.logo_url)
+	body.auth-page.d-flex.flex-column(style=authCoverStyle)
+		.row.g-0.flex-fill.auth-shell
+			.col-12.col-lg-6.col-xl-4.border-top-wide.border-primary.d-flex.flex-column.justify-content-center.auth-panel
+				.container.auth-container.my-5.px-4.px-lg-5
+					.mb-5.auth-logo
+						a.navbar-brand.justify-content-center(href="/login" aria-label="Type Relay login")
+							img.auth-brand(src=authBrandAsset || '/assets/typerelay-logo.svg' alt=authBrandAsset ? 'Logo' : 'Type Relay')
+					block content
+			.col-12.col-lg-6.col-xl-8.d-none.d-lg-block.auth-cover-column
+				.auth-cover.h-100.min-vh-100
+		script(src="/vendor/bootstrap/js/bootstrap.bundle.min.js" defer)
+		script(src="/vendor/sweetalert2/sweetalert2.all.min.js" defer)
+		block scripts

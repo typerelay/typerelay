@@ -67,16 +67,26 @@ export class AdminAccounts {
 		const name = Support.text(body.name);
 		const email = Security.email(body.owner_email);
 		const ownerName = Support.text(body.owner_name);
+		Support.assert(typeof body.password === 'string' && /^[A-Za-z0-9_-]{32}$/.test(body.password), 'Invalid generated password');
+		Support.assert(['free', 'pro', 'team'].includes(body.plan), 'Choose a valid plan');
+		Support.assert(typeof body.send_signup_email === 'boolean', 'Choose whether to send a signup confirmation email');
+		const password = await Security.password(body.password);
 		let account; let user;
-		await Models.mongoose.connection.transaction(async session => {
-			user = await Models.User.findOneAndUpdate({ email }, { $setOnInsert: { name: ownerName, email }, $inc: { activity_sequence: 1 } }, { upsert: true, returnDocument: 'after', session }).lean();
-			[account] = await Models.Account.create([{ name }], { session });
-			await Models.Member.create([{ account: account._id, user: user._id, role: 'owner' }], { session });
-			await StarterContent.create(account, user, session);
-		});
+		try {
+			await Models.mongoose.connection.transaction(async session => {
+				Support.assert(!await Models.User.exists({ email }).session(session), 'A user with this email already exists', 409);
+				[user] = await Models.User.create([{ name: ownerName, email, password: password.hash }], { session });
+				[account] = await Models.Account.create([{ name, admin_override: { plan: body.plan, limits: { people: null, snippets: null, libraries: null, machines: null } } }], { session });
+				await Models.Member.create([{ account: account._id, user: user._id, role: 'owner' }], { session });
+				await StarterContent.create(account, user, session);
+			});
+		} catch (error) {
+			if (error?.code === 11000 && (error?.keyPattern?.email || error?.keyValue?.email)) Support.assert(false, 'A user with this email already exists', 409);
+			throw error;
+		}
 		const warnings = [];
 		try { await Billing.initializeAccount(account, user); } catch { warnings.push('Billing initialization failed; account created.'); }
-		try { await Auth.login(email, null, { account: String(account._id) }); } catch { warnings.push('Sign-in email failed; owner can request a new link.'); }
+		if (body.send_signup_email) try { await Auth.login(email, ownerName, { account: String(account._id) }); } catch { warnings.push('Signup confirmation email failed; owner can sign in with the generated password.'); }
 		return { account: await AdminAccounts.get(String(account._id)), warnings };
 	}
 	static async update(id, body) {

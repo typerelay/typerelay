@@ -1,3 +1,5 @@
+import { PasswordField } from './password-field.js';
+
 export class AdminUI {
 	static versions = new Map();
 	static deleted = new Set();
@@ -84,6 +86,7 @@ export class AdminUI {
 			if (form.hasAttribute('data-admin-account')) {
 				const id = form.dataset.adminAccount;
 				if (id) { body.revision = Number(body.revision); body.is_active = body.is_active === 'true'; body.override = { plan: body.override_plan || null, limits: Object.fromEntries(['people', 'snippets', 'libraries', 'machines'].map(key => [key, body['limit_' + key] === '' ? null : Number(body['limit_' + key])])) }; }
+				else body.send_signup_email = body.send_signup_email === 'on';
 				const result = await AdminUI.request('/admin/api/accounts' + (id ? '/' + id : ''), id ? 'PUT' : 'POST', body);
 				AdminUI.update(result); AdminUI.modal().hide();
 				if (!id && AdminUI.matches(result.account)) { const total = document.getElementById('account-total'); if (total) total.textContent = Number(total.textContent) + 1; }
@@ -106,6 +109,7 @@ export class AdminUI {
 	static async click(event) {
 		const button = event.target.closest('button'); if (!button) return;
 		if (button.dataset.adminPanel) AdminUI.selectPanel(button);
+		else if (button.hasAttribute('data-copy-password')) await AdminUI.busy(button, async () => PasswordField.copy(button.form.elements.password, button.form.querySelector('[data-password-status]'), () => AdminUI.toast('Password copied')));
 		else if (button.dataset.adminForm) await AdminUI.busy(button, async () => { document.getElementById('admin-modal-body').innerHTML = await AdminUI.request(button.dataset.adminForm); document.getElementById('admin-modal-title').textContent = button.dataset.adminForm.includes('email-templates') ? 'Email template' : button.dataset.adminForm.includes('/new/') ? 'Create account' : 'Account details'; AdminUI.modal().show(); });
 		else if (button.hasAttribute('data-admin-logout')) await AdminUI.busy(button, async () => { const result = await AdminUI.request('/admin/logout', 'POST', {}); location.assign(result.redirect); });
 		else if (button.dataset.adminDelete) await AdminUI.busy(button, async () => {

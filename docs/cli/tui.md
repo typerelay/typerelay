@@ -19,11 +19,12 @@ Run `typerelay-tui` to edit the same local SQLite libraries used by the engine a
 | F6 | Open prefix and server settings |
 | F7 | Open Trash |
 | F8 | Move selected snippets, or choose a destination while editing |
+| M | Merge the selected library from the library picker |
 | Ctrl+Q / Ctrl+C | Quit |
 
 Trash actions use R to restore and E to empty eligible items. Destructive actions require confirmation. Trash retains recoverable content for 30 days.
 
-D confirms a Trash action, M confirms a bulk move, and Enter/Escape cancels the confirmation. Left/Right scrolls a long preview. Narrow terminals wrap the toolbar without changing shortcuts.
+D confirms a Trash action, M confirms a bulk move or library merge, and Enter/Escape cancels the confirmation. Left/Right scrolls a long preview. Narrow terminals wrap the toolbar without changing shortcuts.
 
 ## Editing
 

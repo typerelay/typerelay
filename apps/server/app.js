@@ -7,7 +7,7 @@ import session from 'express-session';
 import MongoStore from 'connect-mongo';
 import helmet from 'helmet';
 import { rateLimit } from 'express-rate-limit';
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, readdir, rm } from 'node:fs/promises';
 import formidable from 'formidable';
 import { mongoose, User, Account, Member, Device, Conflict, Ticket, Operation } from './model/index.js';
 import { Auth } from './services/auth.js';
@@ -42,10 +42,11 @@ export class Server {
 		await StorageMigration.run();
 		const app = express();
 		const assetVersion = String(process.env.APP_VERSION || 'development').replace(/[^A-Za-z0-9._-]/g, '-');
+		const authBackgrounds = (await readdir(fileURLToPath(new URL('./public/auth/backgrounds/', import.meta.url)))).filter(name => /^[a-z0-9][a-z0-9_-]*\.webp$/i.test(name)).sort();
 		if (process.env.IS_DOCKER === 'true') app.set('trust proxy', 1);
 		app.set('view engine', 'pug');
 		app.set('views', './views');
-		app.use((req, res, next) => { res.locals.styleNonce = Support.token(); res.locals.assetVersion = assetVersion; next(); });
+		app.use((req, res, next) => { const authBackground = authBackgrounds[Math.floor(Math.random() * authBackgrounds.length)]; res.locals.styleNonce = Support.token(); res.locals.assetVersion = assetVersion; res.locals.authBackgroundUrl = authBackground ? `/assets/${assetVersion}/auth/backgrounds/${encodeURIComponent(authBackground)}` : ''; next(); });
 		const docsOptions = { extensions: ['html'], immutable: true, index: 'index.html', maxAge: '7d' };
 		const docsRoot = process.env.DOCS_ROOT_DIR || fileURLToPath(new URL('./docs-dist-root/', import.meta.url));
 		const docsHosts = (process.env.TYPERELAY_DOCS_VANITY_HOSTS || 'docs.typerelay.com').split(',').map(host => host.trim().toLowerCase()).filter(Boolean);
@@ -65,7 +66,7 @@ export class Server {
 		app.use(express.json({ limit: '12mb' }), express.urlencoded({ extended: false, limit: '32kb' }));
 		const publicAssets = express.static('public');
 		app.use('/assets/generated', express.static('/data/editor'));
-		app.use('/assets/:assetVersion', (req, res, next) => req.params.assetVersion === assetVersion ? publicAssets(req, res, next) : res.sendStatus(404));
+		app.use('/assets/:assetVersion', (req, res, next) => req.path === '/' ? next() : req.params.assetVersion === assetVersion ? publicAssets(req, res, next) : res.sendStatus(404));
 		app.use('/assets', publicAssets);
 		app.use('/vendor/webauthn', express.static('node_modules/@simplewebauthn/browser/dist/bundle'));
 		app.use('/vendor/bootstrap', express.static('node_modules/bootstrap/dist'));
@@ -96,10 +97,11 @@ export class Server {
 		const authLimit = rateLimit({ windowMs: 900000, limit: 30, message: { error: 'Too many sign-in attempts; try again later.' } });
 		Security.mount(app, authLimit);
 		await PublicApi.mount(app, authLimit);
-		app.post('/auth/login', authLimit, async (req, res) => { await Auth.login(req.body.email, null, { origin: req.boundAccount ? Server.requestOrigin(req) : Auth.origin, account: req.boundAccount }); res.json({ message: 'Check your email for a sign-in link.' }); });
+		app.post('/auth/login', authLimit, async (req, res) => { await Auth.login(req.body.email, null, { origin: req.boundAccount ? Server.requestOrigin(req) : Auth.origin, account: req.boundAccount, return_to: req.session.return_to?.startsWith('/oauth/authorize?') ? req.session.return_to : undefined }); res.json({ message: 'Check your email for a sign-in link.' }); });
 		app.get('/auth/callback', async (req, res) => {
-			const user = await Auth.consume(req.query.token);
-			const result = await Security.establish(req, user);
+			const login = await Auth.consume(req.query.token, true);
+			if (login.return_to) req.session.return_to = login.return_to;
+			const result = await Security.establish(req, login.user);
 			res.redirect(result.redirect);
 		});
 		app.post('/auth/logout', async (req, res) => { await new Promise(resolve => req.session.destroy(resolve)); res.json({ signed_out: true }); });

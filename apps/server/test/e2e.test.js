@@ -104,6 +104,7 @@ test('desktop scheme approval permits the browser redirect and exchanges its PKC
 	const page = await Fixture.request('/oauth/authorize?' + new URLSearchParams(request));
 	assert.equal(page.status, 200);
 	assert.match(page.headers.get('content-security-policy'), /(?:^|;)form-action 'self' typerelay:;/);
+	const pageDom = new JSDOM(await page.text()); assert.equal(pageDom.window.document.title, 'Connect Your Device — Type Relay'); assert.ok(pageDom.window.document.body.classList.contains('auth-page')); assert.ok(pageDom.window.document.querySelector('.auth-cover')); assert.ok(pageDom.window.document.querySelector('form[action="/oauth/authorize"]')); pageDom.window.close();
 	const approval = await Fixture.request('/oauth/authorize', 'POST', request);
 	assert.equal(approval.status, 302);
 	const callback = new URL(approval.headers.get('location'));
@@ -611,7 +612,7 @@ test('integration approval uses native form submission and allows its approved r
 	const request = { client_id: client.client_id, redirect_uri: client.redirect_uris[0], response_type: 'code', state: Support.token(), code_challenge_method: 'S256', code_challenge: createHash('sha256').update(verifier).digest('base64url'), resource: Auth.apiResource(), scope: 'content:read' };
 	const page = await Fixture.request('/integrations/authorize?' + new URLSearchParams(request)); assert.equal(page.status, 200);
 	assert.ok(page.headers.get('content-security-policy').includes("form-action 'self' https://example.test"));
-	const dom = new JSDOM(await page.text()); const form = dom.window.document.querySelector('form'); assert.equal(form.action, '/integrations/authorize'); dom.window.close();
+	const dom = new JSDOM(await page.text()); const form = dom.window.document.querySelector('form'); assert.equal(form.action, '/integrations/authorize'); assert.ok(dom.window.document.body.classList.contains('auth-page')); assert.ok(dom.window.document.querySelector('.integration-authorize-page')); assert.ok(dom.window.document.querySelector('.auth-cover')); dom.window.close();
 	const approval = await Fixture.request('/integrations/authorize', 'POST', { ...request, account: Fixture.account }); assert.equal(approval.status, 302);
 	const code = new URL(approval.headers.get('location')).searchParams.get('code');
 	const response = await Fixture.request('/integrations/token', 'POST', { grant_type: 'authorization_code', code, client_id: client.client_id, redirect_uri: request.redirect_uri, resource: request.resource, code_verifier: verifier }); assert.equal(response.status, 200);

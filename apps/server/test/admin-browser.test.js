@@ -8,8 +8,9 @@ class Fixture {
 	static async browser(page = 'accounts', locals = {}, hash = '') {
 		const dom = new JSDOM(pug.renderFile('./views/admin/' + page + '.pug', { csrf: 'csrf', adminEmail: 'admin@example.test', accounts: [], total: 0, page: 1, pages: 1, query: {}, ...locals }), { url: 'https://app.example.test/admin' + hash, runScripts: 'outside-only' });
 		dom.window.setInterval = () => 0; dom.window.Swal = { fire: async () => ({ isConfirmed: false }) }; dom.window.bootstrap = { Modal: { getOrCreateInstance: () => ({ hide() {}, show() {} }) } };
-		const source = (await readFile('./public/admin.js', 'utf8')).replace('export class AdminUI', 'class AdminUI');
-		dom.window.eval(source + '\nwindow.AdminUI = AdminUI;'); return dom;
+		const password = (await readFile('./public/password-field.js', 'utf8')).replace('export class PasswordField', 'class PasswordField');
+		const source = (await readFile('./public/admin.js', 'utf8')).replace(/^import .*;$/gm, '').replace('export class AdminUI', 'class AdminUI');
+		dom.window.eval(password + '\n' + source + '\nwindow.AdminUI = AdminUI;'); return dom;
 	}
 	static result(id, revision, name = 'Account', status = 'active') {
 		const account = { id, revision, name, status, plan: 'free', effective_plan: 'free', billing_status: 'incomplete', owner: { email: 'owner@example.test' }, usage: { users: 1, snippets: 2, libraries: 1, devices: 1 } };
@@ -96,5 +97,21 @@ test('failed account save preserves form and rows; success updates immediately w
 		await AdminUI.submit({ target: form, submitter, preventDefault() {} }); assert.equal(form.elements.name.value, 'Unsaved'); assert.equal(document.getElementById('account-' + result.id), row); assert.ok(errorShown); assert.equal(submitter.disabled, false);
 		const calls = []; dom.window.fetch = async (path, options) => { calls.push([path, options.method]); return { ok: true, headers: new Headers({ 'content-type': 'application/json' }), json: async () => Fixture.result(result.id, 2, 'Saved') }; };
 		await AdminUI.submit({ target: form, submitter, preventDefault() {} }); assert.match(document.getElementById('account-' + result.id).textContent, /Saved/); assert.deepEqual(calls, [['/admin/api/accounts/' + result.id, 'PUT']]);
+	} finally { dom.window.close(); }
+});
+
+test('new account form keeps generated password readonly, copies it and normalizes creation fields', async () => {
+	const dom = await Fixture.browser(); const { document, AdminUI } = dom.window;
+	try {
+		const password = 'A'.repeat(32);
+		document.getElementById('admin-modal-body').innerHTML = pug.renderFile('./views/ajax/admin-account-form.pug', { account: null, password });
+		const form = document.querySelector('[data-admin-account]'); const input = form.elements.password; const submitter = form.querySelector('[type=submit]');
+		assert.equal(input.readOnly, true); assert.equal(input.value, password); assert.equal(form.elements.plan.value, 'free'); assert.equal(form.elements.send_signup_email.checked, false); assert.equal(form.querySelector('[data-rotate-password]'), null);
+		await AdminUI.click({ target: form.querySelector('[data-copy-password]') }); assert.match(form.querySelector('[data-password-status]').textContent, /Ctrl\+C/);
+		form.elements.name.value = 'New account'; form.elements.owner_name.value = 'New owner'; form.elements.owner_email.value = 'new@example.test';
+		let requestBody; let errorShown = false; dom.window.Swal.fire = async options => { errorShown ||= options.icon === 'error'; return {}; };
+		dom.window.fetch = async (path, options) => { requestBody = JSON.parse(options.body); return { ok: false, json: async () => ({ error: 'Creation failed' }) }; };
+		await AdminUI.submit({ target: form, submitter, preventDefault() {} });
+		assert.equal(requestBody.password, password); assert.equal(requestBody.plan, 'free'); assert.equal(requestBody.send_signup_email, false); assert.equal(input.value, password); assert.equal(form.elements.owner_email.value, 'new@example.test'); assert.equal(errorShown, true);
 	} finally { dom.window.close(); }
 });

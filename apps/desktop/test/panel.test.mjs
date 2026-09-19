@@ -10,7 +10,8 @@ class Fixture {
   const calls=[];const callbacks={};const pending=[];
   const style=dom.window.document.createElement('style');style.textContent=await readFile('ui/panel.css','utf8');dom.window.document.head.append(style);
   dom.window.HTMLElement.prototype.scrollIntoView=()=>{};
-  dom.window.__TAURI__={core:{invoke:async(name,args)=>{calls.push({name,args});if(name==='initialize')return{config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},theme:{os:'linux'},settings:false,accessibility:false,input_monitoring:false,empty:false};if(name==='search')return new Promise(resolve=>pending.push({query:args.query,resolve}));if(name==='libraries')return[];if(name==='prepare_template')return{fields:[],steps:[{kind:'text',text:'Literal'}],text:'Literal',enter_actions:0,template:{text:'Literal',variables:{}}};return null;}},event:{listen:(name,callback)=>{callbacks[name]=callback;}}};
+	  dom.window.Swal={fire:async()=>({isConfirmed:true})};
+  dom.window.__TAURI__={core:{invoke:async(name,args)=>{calls.push({name,args});if(name==='initialize')return{config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},theme:{os:'linux'},settings:false,accessibility:false,input_monitoring:false,empty:false};if(name==='search')return new Promise(resolve=>pending.push({query:args.query,resolve}));if(name==='libraries'||name==='conflicts')return[];if(name==='prepare_template')return{fields:[],steps:[{kind:'text',text:'Literal'}],text:'Literal',enter_actions:0,template:{text:'Literal',variables:{}}};return null;}},event:{listen:(name,callback)=>{callbacks[name]=callback;}}};
   dom.window.eval((await readFile('ui/panel.js','utf8')).replace('new Panel();','window.panel = new Panel();'));
   await new Promise(resolve=>setTimeout(resolve,0));
   return {dom,panel:dom.window.panel,calls,pending,callbacks};
@@ -194,7 +195,7 @@ for(const os of ['macos','windows','linux'])test(`${os} native sync events updat
    f.callbacks['sync-notice']({payload:{message,running:false,visible:true}});
    assert.equal(button.disabled,false);assert.equal(button.textContent,'Sync now');
   }
-  assert.ok(f.calls.slice(before).every(call=>call.name==='libraries'));assert.equal(server.value,'https://example.test');assert.equal(f.dom.window.document.activeElement,server);
+  assert.ok(f.calls.slice(before).every(call=>['libraries','conflicts'].includes(call.name)));assert.equal(server.value,'https://example.test');assert.equal(f.dom.window.document.activeElement,server);
   f.callbacks['sync-notice']({payload:{message:'Sync successful',running:false,visible:false}});
  }finally{f.dom.window.close();}
 });
@@ -209,12 +210,24 @@ test('Sync settings retain synced libraries and reconcile only changed rows afte
   const checkbox=local.querySelector('input');checkbox.checked=true;checkbox.focus();
   const before=f.calls.length;rows[0].snippets=68;
   await f.callbacks['sync-notice']({payload:{running:false}});
-  assert.equal(container.children[0],remote);assert.equal(container.children[1],local);assert.equal(remote.querySelector('.library-name').textContent,'mysnippets.yml (68)');assert.equal(checkbox.checked,true);assert.equal(f.dom.window.document.activeElement,checkbox);assert.equal(f.calls.length,before);
+  assert.equal(container.children[0],remote);assert.equal(container.children[1],local);assert.equal(remote.querySelector('.library-name').textContent,'mysnippets.yml (68)');assert.equal(checkbox.checked,true);assert.equal(f.dom.window.document.activeElement,checkbox);assert.equal(f.calls.length,before+1);assert.equal(f.calls.at(-1).name,'conflicts');
   rows[1].synced=true;await f.panel.refreshLibraries();assert.equal(checkbox.checked,false);assert.equal(checkbox.disabled,true);assert.equal(local.querySelector('.library-sync-state').textContent,'Synced');
   const pending=[];f.panel.invoke=async()=>new Promise(resolve=>pending.push(resolve));
   const stale=f.panel.refreshLibraries();const fresh=f.panel.refreshLibraries();pending[1]([rows[1]]);await fresh;pending[0](rows);await stale;
   assert.equal(container.children.length,1);assert.equal(container.children[0],local);
  }finally{f.dom.window.close();}
+});
+
+for(const os of ['macos','windows','linux'])test(`${os} library merge uses a Pug selector and updates only affected rows`,async()=>{
+ const f=await Fixture.create();try{
+	 f.dom.window.document.body.dataset.os=os;let rows=[{id:'source',name:'Recovered',synced:false,snippets:5,can_merge:true,merge_pending:false},{id:'destination',name:'My snippets',synced:true,snippets:77,can_merge:true,merge_pending:false}];const original=f.panel.invoke;f.panel.invoke=async(name,args)=>{if(name==='libraries')return structuredClone(rows);if(name==='merge_destinations')return[{id:'destination',name:'My snippets',synced:true,snippets:77}];if(name==='merge_library'){f.calls.push({name,args});rows=[{...rows[1],snippets:82}];return{queued:true};}return original(name,args);};let confirmation;f.dom.window.Swal.fire=async options=>{confirmation=options;return{isConfirmed:true};};
+	 await f.panel.refreshLibraries();const container=f.dom.window.document.querySelector('#local-libraries');const source=container.querySelector('[data-id="source"]');const destination=container.querySelector('[data-id="destination"]');source.querySelector('.library-merge').click();await new Promise(resolve=>setTimeout(resolve,0));assert.equal(source.querySelector('.library-merge-form').hidden,false);assert.match(source.querySelector('option').textContent,/My snippets · 77 snippets · Synced/);const selector=source.querySelector('.library-merge-destination');assert.equal(selector.closest('form'),null);selector.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'Enter',bubbles:true}));assert.ok(!f.calls.some(call=>call.name==='enroll'));
+	 await f.panel.mergeLibrary(source,source.querySelector('.library-merge-submit'));const call=f.calls.findLast(call=>call.name==='merge_library');assert.deepEqual(JSON.parse(JSON.stringify(call.args)),{source:'source',destination:'destination'});assert.match(confirmation.text,/Destination sharing applies/);assert.equal(container.querySelector('[data-id="source"]'),null);assert.equal(container.querySelector('[data-id="destination"]'),destination);assert.match(destination.querySelector('.library-name').textContent,/82/);assert.ok(!f.calls.some(call=>call.name==='dismiss'));
+ }finally{f.dom.window.close();}
+});
+
+test('merge pending disables source mutation and remains visible',async()=>{
+ const f=await Fixture.create();try{const original=f.panel.invoke;f.panel.invoke=async(name,args)=>name==='libraries'?[{id:'source',name:'Recovered',synced:false,snippets:5,can_merge:false,merge_pending:true}]:original(name,args);await f.panel.refreshLibraries();const row=f.dom.window.document.querySelector('[data-id="source"]');assert.equal(row.querySelector('.library-sync-state').textContent,'Merge pending');assert.equal(row.querySelector('input').disabled,true);assert.equal(row.querySelector('.library-merge').hidden,true);}finally{f.dom.window.close();}
 });
 
 for(const os of ['macos','windows','linux'])test(`${os} search gear opens native settings focus mode`,async()=>{
@@ -231,7 +244,7 @@ for(const os of ['macos','windows','linux'])test(`${os} search gear opens native
 test('empty upload selection reports a native error without adding a footer or reloading settings',async()=>{
  const f=await Fixture.create();try{
   await f.panel.settings(true);f.panel.settingsPage('sync');const before=f.calls.length;
-  f.dom.window.document.querySelector('#enroll-form').requestSubmit();await new Promise(resolve=>setTimeout(resolve,0));
+	  f.dom.window.document.querySelector('#upload-selected').click();await new Promise(resolve=>setTimeout(resolve,0));
   const calls=f.calls.slice(before);assert.deepEqual(JSON.parse(JSON.stringify(calls)),[{name:'notify',args:{message:'Select local libraries first',error:true}}]);
   assert.equal(f.dom.window.document.querySelector('#status'),null);assert.equal(f.dom.window.document.querySelector('#settings-sync').hidden,false);
  }finally{f.dom.window.close();}
@@ -286,6 +299,26 @@ test('authentication handoff does not reopen settings over the browser',async()=
   assert.ok(f.calls.some(call=>call.name==='connect'));
   assert.equal(f.calls.filter(call=>call.name==='set_settings_view').length,before);
   assert.equal((f.panel.lastStatus||''),'Connected');
+ }finally{f.dom.window.close();}
+});
+
+for(const os of ['macos','windows','linux'])test(`${os} authentication stays visible and can be cancelled for retry`,async()=>{
+ const f=await Fixture.create();try{
+	  f.dom.window.document.body.dataset.os=os;await f.panel.settings(true);f.panel.settingsPage('sync');let fail;const original=f.panel.invoke;f.panel.invoke=async(name,args)=>name==='connect'?new Promise((_,reject)=>{fail=reject;}):original(name,args);
+  const form=f.dom.window.document.querySelector('#connect-form');form.requestSubmit();await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(f.dom.window.document.querySelector('#settings-view').hidden,false);assert.equal(f.dom.window.document.querySelector('#authenticate').textContent,'Cancel authentication');assert.match(f.dom.window.document.querySelector('#connection-status').textContent,/any browser/);
+	  form.requestSubmit();await new Promise(resolve=>setTimeout(resolve,0));assert.ok(f.calls.some(call=>call.name==='cancel_connect'));assert.match(f.dom.window.document.querySelector('#connection-status').textContent,/Cancelling/);assert.equal(f.dom.window.document.querySelector('#authenticate').disabled,true);
+	  fail(Error('Authentication cancelled'));await new Promise(resolve=>setTimeout(resolve,0));assert.equal(f.dom.window.document.querySelector('#authenticate').textContent,'Authenticate');assert.equal(f.dom.window.document.querySelector('#authenticate').disabled,false);
+ }finally{f.dom.window.close();}
+});
+
+test('desktop conflict review renders both records and submits an edited merge incrementally',async()=>{
+ const f=await Fixture.create();try{
+  let rows=[{_id:'conflict-one',library:'library-one',library_name:'My snippets',base:{trigger:'same',title:'Base',content:{version:1,type:'plain_text',text:'Base'}},local:{trigger:'same',title:'Local',content:{version:1,type:'plain_text',text:'Local'}},server:{trigger:'same',title:'Server',content:{version:1,type:'plain_text',text:'Server'}}}];
+  const original=f.panel.invoke;f.panel.invoke=async(name,args)=>{if(name==='conflicts')return structuredClone(rows);if(name==='resolve_conflict'){f.calls.push({name,args});rows=[];return null;}return original(name,args);};
+  await f.panel.refreshConflicts();const section=f.dom.window.document.querySelector('#conflict-section');assert.equal(section.hidden,false);const row=section.querySelector('[data-id="conflict-one"]');row.querySelector('.conflict-open').click();assert.match(row.querySelector('.conflict-local').textContent,/Local/);assert.match(row.querySelector('.conflict-server').textContent,/Server/);
+	  row.querySelector('.conflict-body').value='Merged';await f.panel.resolveConflict(row,row.querySelector('.conflict-form button[type="submit"]'));
+  const call=f.calls.findLast(call=>call.name==='resolve_conflict');assert.equal(call.args.choice,'merged');assert.equal(call.args.value.content.text,'Merged');assert.equal(section.querySelector('[data-id="conflict-one"]'),null);assert.equal(section.hidden,true);
  }finally{f.dom.window.close();}
 });
 

@@ -12,6 +12,7 @@ typerelay sync
 typerelay disconnect
 typerelay import yaml ./snippets.yml --name "Imported"
 typerelay export "Imported" ./export.yml
+typerelay merge "Recovered snippets" "My snippets"
 typerelay trash
 ```
 

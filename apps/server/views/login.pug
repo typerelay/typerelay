@@ -1,35 +1,59 @@
 //- Adapted from Streamient/Mailtwine auth/login.pug (AGPL-3.0).
-extends layout
+extends auth-layout
+block head
+	title Login — Type Relay
 block content
-	section.auth.card.p-4
-		h1.h2.mb-3.fw-bold Sign in to TypeRelay
-		if returnTo
-			p.text-muted.mb-3 Sign in to continue connecting your desktop.
-		#login-options
-			p.text-secondary.small.mb-2 Sign in with
-			.d-flex.gap-3.mb-3
-				button#magic-link-btn.btn.btn-primary.btn-sm.flex-fill(type="button") Magic Link
-				if passkeysAvailable
-					button#passkey-btn.btn.btn-primary.btn-sm.flex-fill(type="button") Passkey
-			p.text-secondary.small.mb-3 Or continue with email and password
-			form#password-login-form
+	if returnTo
+		.alert.alert-secondary.small.mb-3 Sign in to continue connecting your device.
+	#login-options
+		.text-secondary.small.mb-2 Sign in with
+		.auth-methods
+			button#magic-link-btn.btn.btn-primary.btn-sm.auth-method-btn(type="button")
+				svg.auth-method-icon(viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true")
+					path(d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z")
+					path(d="m22 6-10 7L2 6")
+				span.ms-2 Magic Link
+			if passkeysAvailable
+				button#passkey-btn.btn.btn-primary.btn-sm.auth-method-btn(type="button")
+					svg.auth-method-icon(viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true")
+						path(d="M12 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4z")
+						path(d="M6.5 10a5.5 5.5 0 0 1 11 0c0 5-2 8-2 8")
+						path(d="M9 15c.5 3 2 5 2 5")
+						path(d="M5 13c.5 4 2 7 4 9")
+						path(d="M19 13c0 3-.5 5-1.5 7")
+					span.ms-2 Passkey
+		.text-secondary.small.mb-3 Or continue with email and password
+		form#password-login-form
+			.mb-3
 				label.form-label(for="email") Email address
-				input#email.form-control.form-control-sm.mb-3(type="email" name="email" autocomplete="email" required autofocus)
-				.d-flex.justify-content-between
-					label.form-label(for="password") Password
-					a.small(href="/forgot-password") Forgot password?
-				input#password.form-control.form-control-sm.mb-3(type="password" name="password" autocomplete="current-password" required)
-				.d-flex.justify-content-end
-					button.btn.btn-primary.btn-sm(type="submit") Sign in
-			if !whiteLabel && signupEnabled
-				p.mt-3.mb-0
-					span No account yet?
-						a.ms-1(href="/signup") Create one
-		#magic-link-form.d-none
-			p.mb-3 Enter your email to receive a login link.
-			form#login
+				input#email.form-control.form-control-sm(type="email" name="email" autocomplete="email" required autofocus)
+			.mb-2
+				label.form-label.d-flex.justify-content-between(for="password")
+					span Password
+					a.fw-normal(href="/forgot-password") Forgot password?
+				input#password.form-control.form-control-sm(type="password" name="password" autocomplete="current-password" required)
+			.form-footer.mt-4
+				button.btn.btn-primary.btn-sm.w-100(type="submit") Sign in
+		if !whiteLabel && signupEnabled
+			.text-secondary.mt-3
+				span No account yet?
+				a.ms-1(href="/signup") Create one
+	#magic-link-form.d-none
+		.mb-4
+			.text-secondary.mb-0 Enter your email to receive a login link.
+		form#login
+			.mb-3
 				label.form-label(for="magic-email") Email address
-				input#magic-email.form-control.form-control-sm.mb-3(type="email" name="email" required autocomplete="email")
-				.d-flex.justify-content-between
-					button#magic-link-back.btn.btn-outline-secondary.btn-sm(type="button") Back to login
-					button.btn.btn-primary.btn-sm(type="submit") Send magic link
+				input#magic-email.form-control.form-control-sm(type="email" name="email" required autocomplete="email")
+			.form-footer
+				button.btn.btn-primary.btn-sm.w-100(type="submit") Send magic link
+		.mt-3
+			button#magic-link-back.btn.btn-link.btn-sm.ps-0(type="button") Back to login
+	#magic-link-sent.d-none
+		h1.h2.mb-2 Magic link sent
+		p.text-muted.mb-3 Check your email for a sign-in link.
+		p.mb-0 You can close this window.
+
+block scripts
+	script(src="/vendor/webauthn/index.umd.min.js" defer)
+	script(src='/assets/' + assetVersion + '/auth.js' type="module")

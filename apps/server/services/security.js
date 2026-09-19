@@ -12,9 +12,10 @@ export class Security {
 	static dummy = bcrypt.hashSync(Support.token(), 12);
 	static signupEnabled() { return process.env.ENABLE_SIGNUP === 'true'; }
 	static email(value) { const email = Support.text(value, 254).toLowerCase(); Support.assert(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email), 'Enter a valid email address'); return email; }
+	static generatedPassword(length = 32) { return Support.token().slice(0, length); }
 	static async password(value = '') {
 		Support.assert(typeof value === 'string' && value.length <= 256, 'Invalid password');
-		const password = value || Support.token().slice(0, 22);
+		const password = value || Security.generatedPassword(22);
 		Support.assert(password.length >= 8, 'Password must be at least 8 characters');
 		return { password, hash: await bcrypt.hash(password, 12) };
 	}
