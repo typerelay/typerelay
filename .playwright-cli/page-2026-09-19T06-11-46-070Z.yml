@@ -1,0 +1,16 @@
+- main [ref=e2]:
+  - generic [ref=e5]: TypeRelay
+  - heading "Less typing. More doing." [level=1] [ref=e7]:
+    - generic [ref=e8]: Less typing.
+    - generic [ref=e9]: More doing.
+  - paragraph [ref=e10]: Your favorite snippets, ready wherever you type.
+  - generic [ref=e11]:
+    - generic [ref=e12]:
+      - generic [ref=e13]: Your shortcut
+      - generic [ref=e14]: ;welcome
+    - generic [ref=e15]: ↵
+  - generic [ref=e16]: ↓
+  - generic [ref=e17]:
+    - paragraph [ref=e18]: Welcome aboard
+    - paragraph [ref=e19]: Hi there! Thanks for getting in touch. We’re happy to help.
+    - generic [ref=e20]: Ready to use
