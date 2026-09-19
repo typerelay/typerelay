@@ -107,7 +107,9 @@ test('new account form keeps generated password readonly, copies it and normaliz
 		document.getElementById('admin-modal-body').innerHTML = pug.renderFile('./views/ajax/admin-account-form.pug', { account: null, password });
 		const form = document.querySelector('[data-admin-account]'); const input = form.elements.password; const submitter = form.querySelector('[type=submit]');
 		assert.equal(input.readOnly, true); assert.equal(input.value, password); assert.equal(form.elements.plan.value, 'free'); assert.equal(form.elements.send_signup_email.checked, false); assert.equal(form.querySelector('[data-rotate-password]'), null);
-		await AdminUI.click({ target: form.querySelector('[data-copy-password]') }); assert.match(form.querySelector('[data-password-status]').textContent, /Ctrl\+C/);
+		Object.defineProperty(dom.window, 'isSecureContext', { value: true }); Object.defineProperty(dom.window.navigator, 'clipboard', { value: { writeText: async () => { throw new Error('denied'); } } });
+		document.execCommand = command => command === 'copy'; let copied = false; dom.window.Swal.fire = async options => { copied ||= options.title === 'Password copied'; return {}; };
+		await AdminUI.click({ target: form.querySelector('[data-copy-password]') }); assert.equal(copied, true); assert.equal(form.querySelector('[data-password-status]').textContent, '');
 		form.elements.name.value = 'New account'; form.elements.owner_name.value = 'New owner'; form.elements.owner_email.value = 'new@example.test';
 		let requestBody; let errorShown = false; dom.window.Swal.fire = async options => { errorShown ||= options.icon === 'error'; return {}; };
 		dom.window.fetch = async (path, options) => { requestBody = JSON.parse(options.body); return { ok: false, json: async () => ({ error: 'Creation failed' }) }; };

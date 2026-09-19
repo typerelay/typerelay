@@ -69,7 +69,8 @@ export class AdminAccounts {
 		const ownerName = Support.text(body.owner_name);
 		Support.assert(typeof body.password === 'string' && /^[A-Za-z0-9_-]{32}$/.test(body.password), 'Invalid generated password');
 		Support.assert(['free', 'pro', 'team'].includes(body.plan), 'Choose a valid plan');
-		Support.assert(typeof body.send_signup_email === 'boolean', 'Choose whether to send a signup confirmation email');
+		Support.assert(body.send_signup_email === undefined || [true, false, 'true', 'false', 'on'].includes(body.send_signup_email), 'Choose whether to send a signup confirmation email');
+		const sendSignupEmail = body.send_signup_email === true || body.send_signup_email === 'true' || body.send_signup_email === 'on';
 		const password = await Security.password(body.password);
 		let account; let user;
 		try {
@@ -86,7 +87,7 @@ export class AdminAccounts {
 		}
 		const warnings = [];
 		try { await Billing.initializeAccount(account, user); } catch { warnings.push('Billing initialization failed; account created.'); }
-		if (body.send_signup_email) try { await Auth.login(email, ownerName, { account: String(account._id) }); } catch { warnings.push('Signup confirmation email failed; owner can sign in with the generated password.'); }
+		if (sendSignupEmail) try { await Auth.login(email, ownerName, { account: String(account._id) }); } catch { warnings.push('Signup confirmation email failed; owner can sign in with the generated password.'); }
 		return { account: await AdminAccounts.get(String(account._id)), warnings };
 	}
 	static async update(id, body) {

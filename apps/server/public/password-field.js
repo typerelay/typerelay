@@ -10,7 +10,9 @@ export class PasswordField {
 	}
 	static async copy(input, status, copied) {
 		if (!input?.value) throw new Error('No password to copy');
-		if (navigator.clipboard?.writeText && window.isSecureContext) { await navigator.clipboard.writeText(input.value); if (status) status.textContent = ''; await copied(); return; }
-		input.focus({ preventScroll: true }); input.select(); input.setSelectionRange?.(0, input.value.length); if (status) status.textContent = 'Password selected. Press ' + (/Mac|iPhone|iPad|iPod/.test(navigator.platform) ? 'Cmd+C' : 'Ctrl+C') + ' to copy.';
+		if (navigator.clipboard?.writeText && window.isSecureContext) try { await navigator.clipboard.writeText(input.value); if (status) status.textContent = ''; await copied(); return; } catch { /* Fall back when browser clipboard permission is denied. */ }
+		input.focus({ preventScroll: true }); input.select(); input.setSelectionRange?.(0, input.value.length);
+		if (document.execCommand?.('copy')) { if (status) status.textContent = ''; await copied(); return; }
+		if (status) status.textContent = 'Password selected. Press ' + (/Mac|iPhone|iPad|iPod/.test(navigator.platform) ? 'Cmd+C' : 'Ctrl+C') + ' to copy.';
 	}
 }
