@@ -120,6 +120,10 @@ test('top navigation opens the public mobile apps modal with QR codes', async ()
 	const dom = new JSDOM(await (await Fixture.request('/')).text(), { url: Fixture.origin, runScripts: 'outside-only' });
 	try {
 		const document = dom.window.document;
+		const navbar = document.querySelector('.app-navbar');
+		assert.equal(navbar.classList.contains('d-flex') && navbar.classList.contains('align-items-center'), true);
+		assert.equal(navbar.children[0].classList.contains('brand-link'), true);
+		assert.equal(navbar.children[1].classList.contains('global-search'), true);
 		const trigger = document.querySelector('[data-bs-target="#mobile-apps-modal"]');
 		assert.equal(trigger.textContent.trim(), 'Get the mobile app');
 		assert.equal(trigger.classList.contains('btn-sm') && trigger.classList.contains('btn-link'), true);

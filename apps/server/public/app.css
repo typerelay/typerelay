@@ -136,8 +136,10 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .snippet .btn-sm { font-size: .7rem; padding: .1rem .35rem; line-height: 1.25; }
 .snippet:focus-visible { outline: .125rem solid #a15c40; outline-offset: .125rem; }
 
-.app-navbar { display: grid; grid-template-columns: minmax(12rem, 1fr) minmax(0, 32rem) minmax(12rem, 1fr); align-items: center; column-gap: 1rem; position: sticky; top: 0; z-index: 1020; background: #f8f5ee; }
+.app-navbar { gap: 1rem; position: sticky; top: 0; z-index: 1020; background: #f8f5ee; }
 .brand-link { flex-shrink: 0; }
+.app-navbar > .global-search { flex: 0 1 32rem; }
+.app-navbar > .d-flex { flex-shrink: 0; }
 .library-controls { flex-wrap: wrap; }
 .library-controls #account-switch { flex: 1; width: auto; min-width: 0; }
 .editor-actions { flex-wrap: wrap; justify-content: flex-end; }
@@ -145,9 +147,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .scroll-top.is-visible { opacity: 1; visibility: visible; pointer-events: auto; transform: translateY(0); }
 @media (prefers-reduced-motion: reduce) { .scroll-top { transition: none; } }
 
-.app-navbar > .brand-link { justify-self: start; }
-.app-navbar > .d-flex { justify-self: end; }
-@media (max-width: 40rem) { .app-navbar { grid-template-columns: 8rem minmax(0, 1fr) 2.5rem; column-gap: .75rem; } }
+@media (max-width: 40rem) { .app-navbar { gap: .75rem; } .app-navbar > .global-search { flex: 1 1 auto; } }
 
 /* Adapted from Mailtwine's mobile-app modal (AGPL-3.0); see docs/web/attribution.md. */
 .mobile-beta-card { border-color: #e7dfd2; border-radius: .75rem; background: #fffdf8; }
@@ -249,4 +249,3 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 	flex-shrink: 0;
 }
 .product-updates-nav-link, [data-product-updates-dismiss], [data-product-updates-read-more], [data-product-updates-load-more] { cursor: pointer; }
-@media (max-width: 40rem) { .app-navbar.has-product-updates { grid-template-columns: 8rem minmax(0, 1fr) max-content; } }
