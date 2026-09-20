@@ -1,7 +1,6 @@
 package com.typerelay.mobile
 
 import android.content.ClipDescription
-import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Typeface
@@ -16,7 +15,6 @@ import android.view.Gravity
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputContentInfo
-import android.view.inputmethod.InputMethodManager
 import android.widget.*
 import androidx.core.content.FileProvider
 import org.json.JSONArray
@@ -29,10 +27,10 @@ class SnippetKeyboard: InputMethodService() {
     private lateinit var search: EditText
     private lateinit var status: TextView
     private lateinit var keys: LinearLayout
+    private lateinit var resultScroll: ScrollView
     private var snapshot = JSONObject()
     private var selected: JSONObject? = null
     private var selectedLibrary = ""
-    private var library = ""
     private var values = JSONObject()
     private var activeField: EditText? = null
     private var shifted = false
@@ -40,17 +38,12 @@ class SnippetKeyboard: InputMethodService() {
     private var blocked = false
     override fun onCreateInputView(): View {
         root = column().apply { setBackgroundColor(keyboardColor()); clipChildren = true }
-        val toolbar = LinearLayout(this)
-        toolbar.addView(button("Next keyboard") { (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).showInputMethodPicker() }, LinearLayout.LayoutParams(0, dp(44), 1.4f))
-        toolbar.addView(button("Libraries") { libraries() }, LinearLayout.LayoutParams(0, dp(44), 1f))
-        toolbar.addView(button("Back") { refresh() }, LinearLayout.LayoutParams(0, dp(44), 0.8f))
-        root.addView(toolbar)
-        root.addView(TextView(this).apply { text = "Search snippets"; setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f); setPadding(dp(4), 0, dp(4), 0) }); search = input("Search snippets"); search.addTextChangedListener(object: android.text.TextWatcher {
+        search = input("Snippet search").apply { visibility = View.GONE }; search.addTextChangedListener(object: android.text.TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { if (::results.isInitialized && selected == null) list() }
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { search.visibility = if (s.isNullOrEmpty()) View.GONE else View.VISIBLE; if (::results.isInitialized && selected == null) list() }
             override fun afterTextChanged(s: android.text.Editable?) {}
         }); root.addView(search, LinearLayout.LayoutParams(-1, dp(42)))
-        val scroll = ScrollView(this).apply { isFillViewport = true }; results = column(); scroll.addView(results); root.addView(scroll, LinearLayout.LayoutParams(-1, dp(92)))
+        resultScroll = ScrollView(this).apply { isFillViewport = true; visibility = View.GONE }; results = column(); resultScroll.addView(results); root.addView(resultScroll, LinearLayout.LayoutParams(-1, dp(92)))
         status = TextView(this).apply { setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f); maxLines = 2; setPadding(dp(4), 0, dp(4), 0) }; root.addView(status)
         keys = column(); root.addView(keys); drawKeys()
         return root
@@ -62,7 +55,7 @@ class SnippetKeyboard: InputMethodService() {
         blocked = (type == InputType.TYPE_CLASS_TEXT && variation in listOf(InputType.TYPE_TEXT_VARIATION_PASSWORD, InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD, InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD)) || (type == InputType.TYPE_CLASS_NUMBER && variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD)
         refresh()
     }
-    override fun onFinishInputView(finishingInput: Boolean) { super.onFinishInputView(finishingInput); values = JSONObject(); selected = null; snapshot = JSONObject(); activeField = null; if (::results.isInitialized) results.removeAllViews() }
+    override fun onFinishInputView(finishingInput: Boolean) { super.onFinishInputView(finishingInput); values = JSONObject(); selected = null; snapshot = JSONObject(); activeField = null; if (::results.isInitialized) clearResults() }
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     private fun column() = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(4), dp(2), dp(4), dp(2)) }
     private fun button(label: String, action: () -> Unit) = Button(this).apply { text = label; isAllCaps = false; minWidth = 0; minimumWidth = 0; setPadding(dp(3), 0, dp(3), 0); setOnClickListener { action() } }
@@ -75,6 +68,7 @@ class SnippetKeyboard: InputMethodService() {
     private fun key(label: String, special: Boolean = false, action: () -> Unit) = button(label, action).apply { background = GradientDrawable().apply { cornerRadius = dp(6).toFloat(); setColor(if (special) specialKeyColor() else keyColor()) }; elevation = dp(1).toFloat(); gravity = Gravity.CENTER; setTextColor(keyTextColor()); setTextSize(TypedValue.COMPLEX_UNIT_SP, if (special) 17f else 24f); typeface = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL); setPadding(0, 0, 0, 0) }
     private fun keyParams(weight: Float = 1f) = LinearLayout.LayoutParams(0, dp(52), weight).apply { setMargins(dp(3), dp(3), dp(3), dp(3)) }
     private fun erase() { val field = activeField ?: search; val start = field.selectionStart.coerceAtLeast(0); if (start > 0) { val previous = Character.offsetByCodePoints(field.text, start, -1); field.text.delete(previous, start) } }
+    private fun clearResults() { results.removeAllViews(); resultScroll.visibility = View.GONE }
     private fun drawKeys() {
         keys.removeAllViews()
         val rows = if (numbers) listOf("1234567890", "@#%&*()-+=", ".,!?/:;_'\"") else listOf("qwertyuiop", "asdfghjkl", "zxcvbnm")
@@ -93,14 +87,13 @@ class SnippetKeyboard: InputMethodService() {
         keys.addView(controls)
     }
     private fun type(text: String) { val field = activeField ?: search; field.text.replace(field.selectionStart.coerceAtLeast(0), field.selectionEnd.coerceAtLeast(0), text) }
-    private fun refresh() { try { snapshot = NativeCore.execute(this, JSONObject().put("action", "keyboard"), true).getJSONObject("data"); selected = null; list() } catch (error: Exception) { status.text = "Open TypeRelay and sync. ${error.message}"; results.removeAllViews() } }
-    private fun libraries() { selected = null; results.removeAllViews(); results.addView(button("All libraries") { library = ""; list() }); val items = snapshot.optJSONArray("libraries") ?: JSONArray(); for (index in 0 until items.length()) { val item = items.getJSONObject(index); results.addView(button(item.getString("name")) { library = item.getString("_id"); list() }) } }
+    private fun refresh() { try { snapshot = NativeCore.execute(this, JSONObject().put("action", "keyboard"), true).getJSONObject("data"); selected = null; list() } catch (error: Exception) { status.text = "Open TypeRelay and sync. ${error.message}"; clearResults() } }
     private fun list() {
-        results.removeAllViews(); activeField = search
+        clearResults(); activeField = search
         if (blocked) { status.text = "Switch keyboards to enter a password."; return }
         val items = snapshot.optJSONArray("libraries") ?: JSONArray(); var count = 0
         for (index in 0 until items.length()) {
-            val item = items.getJSONObject(index); if (library.isNotEmpty() && item.getString("_id") != library) continue
+            val item = items.getJSONObject(index)
             val records = item.optJSONArray("records") ?: JSONArray()
             for (recordIndex in 0 until records.length()) {
                 val record = records.getJSONObject(recordIndex); val content = record.getJSONObject("content"); val title = record.optString("title").ifEmpty { record.optString("trigger").ifEmpty { "Untitled snippet" } }
@@ -109,14 +102,16 @@ class SnippetKeyboard: InputMethodService() {
                 results.addView(button(title) { selected = record; selectedLibrary = item.getString("_id"); values = JSONObject(); showSelection() })
             }
         }
+        if (count > 0) resultScroll.visibility = View.VISIBLE
         status.text = if (count == 0) "No snippets. Open TypeRelay to sync." else if (count > 60) "Showing 60 matches. Refine your search." else "Tap a snippet to preview."
     }
     private fun render(preview: Boolean): JSONObject {
         return NativeCore.execute(this, JSONObject().put("action", "keyboard_render").put("generation", snapshot.getString("generation")).put("library", selectedLibrary).put("id", selected!!.getString("id")).put("values", values).put("preview", preview), true).getJSONObject("data")
     }
     private fun showSelection() {
-        results.removeAllViews()
+        clearResults()
         try {
+            results.addView(button("Cancel") { selected = null; values = JSONObject(); list() })
             val rendered = render(true); val definitions = rendered.optJSONObject("variables") ?: rendered.optJSONObject("template")?.optJSONObject("variables") ?: JSONObject()
             val fields = rendered.optJSONArray("fields") ?: JSONArray()
             for (index in 0 until fields.length()) { val name = fields.getString(index); val definition = definitions.optJSONObject(name) ?: JSONObject(); val label = definition.optString("label").ifEmpty { name }; results.addView(TextView(this).apply { text = label }); val field = input(label); field.isSingleLine = !definition.optBoolean("multiline"); field.setText(values.optString(name, definition.optString("default"))); values.put(name, field.text.toString()); field.addTextChangedListener(object: android.text.TextWatcher { override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {} override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { values.put(name, s.toString()) } override fun afterTextChanged(s: android.text.Editable?) {} }); results.addView(field); if (index == 0) { field.requestFocus(); activeField = field } }
@@ -126,6 +121,7 @@ class SnippetKeyboard: InputMethodService() {
             if (rendered.has("html")) results.addView(button("Insert formatted text (app dependent)") { insert(true) }.apply { isEnabled = supported })
             val assets = rendered.optJSONArray("assets") ?: JSONArray()
             for (index in 0 until assets.length()) { val id = assets.getString(index); results.addView(button("Insert image ${index + 1}") { insertImage(id) }.apply { isEnabled = supported }) }
+            resultScroll.visibility = View.VISIBLE
             status.text = if (supported) "Formatting and images depend on the destination app." else "Desktop Enter actions cannot run on mobile."
         } catch (error: Exception) { status.text = error.message }
     }

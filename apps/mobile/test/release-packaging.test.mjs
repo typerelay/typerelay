@@ -52,4 +52,17 @@ describe('mobile release packaging', () => {
 		assert.match(ios, /key\("⌫", special: true\)/);
 		assert.match(ios, /view\.backgroundColor = color/);
 	});
+
+	it('keeps keyboard search chrome contextual and compact', () => {
+		const android = source('apps/mobile/android/app/src/main/java/com/typerelay/mobile/SnippetKeyboard.kt');
+		const ios = source('apps/mobile/ios/App/Keyboard/KeyboardViewController.swift');
+		for (const nativeKeyboard of [android, ios]) {
+			assert.doesNotMatch(nativeKeyboard, /button\("Libraries"\)/);
+			assert.doesNotMatch(nativeKeyboard, /button\("Back"\)/);
+		}
+		assert.match(android, /input\("Snippet search"\)\.apply \{ visibility = View\.GONE \}/);
+		assert.match(android, /resultScroll\.visibility = View\.GONE/);
+		assert.match(ios, /queryButton = button\(""\)/);
+		assert.match(ios, /heightConstraint\?\.constant = min\(360, base \+ queryHeight \+ resultHeight\)/);
+	});
 });
