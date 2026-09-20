@@ -39,4 +39,17 @@ describe('mobile release packaging', () => {
 		assert.match(gradle, /preReleaseBuild.*dependsOn\('verifyFreshWebAssets'\)/);
 		assert.match(gradle, /src\/main\/jniLibs\/\$\{abi\}\/libtyperelay_mobile\.so/);
 	});
+
+	it('keeps both native keyboards aligned to platform-sized keycaps', () => {
+		const android = source('apps/mobile/android/app/src/main/java/com/typerelay/mobile/SnippetKeyboard.kt');
+		const ios = source('apps/mobile/ios/App/Keyboard/KeyboardViewController.swift');
+		assert.match(android, /setBackgroundColor\(keyboardColor\(\)\)/);
+		assert.match(android, /setTextSize\(TypedValue\.COMPLEX_UNIT_SP, if \(special\) 17f else 24f\)/);
+		assert.match(android, /LinearLayout\.LayoutParams\(0, dp\(52\), weight\)/);
+		assert.match(android, /key\("⌫", true\)/);
+		assert.match(ios, /row\.heightAnchor\.constraint\(equalToConstant: 44\)/);
+		assert.match(ios, /systemFont\(ofSize: special \? 16 : 22/);
+		assert.match(ios, /key\("⌫", special: true\)/);
+		assert.match(ios, /view\.backgroundColor = color/);
+	});
 });

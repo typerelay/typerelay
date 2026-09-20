@@ -2,11 +2,17 @@ package com.typerelay.mobile
 
 import android.content.ClipDescription
 import android.content.Context
+import android.content.res.Configuration
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.inputmethodservice.InputMethodService
 import android.os.Build
 import android.text.Html
 import android.text.InputType
 import android.util.Base64
+import android.util.TypedValue
+import android.view.Gravity
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputContentInfo
@@ -33,19 +39,19 @@ class SnippetKeyboard: InputMethodService() {
     private var numbers = false
     private var blocked = false
     override fun onCreateInputView(): View {
-        root = column()
+        root = column().apply { setBackgroundColor(keyboardColor()); clipChildren = true }
         val toolbar = LinearLayout(this)
-        toolbar.addView(button("Next keyboard") { (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).showInputMethodPicker() })
-        toolbar.addView(button("Libraries") { libraries() })
-        toolbar.addView(button("Back") { refresh() })
+        toolbar.addView(button("Next keyboard") { (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).showInputMethodPicker() }, LinearLayout.LayoutParams(0, dp(44), 1.4f))
+        toolbar.addView(button("Libraries") { libraries() }, LinearLayout.LayoutParams(0, dp(44), 1f))
+        toolbar.addView(button("Back") { refresh() }, LinearLayout.LayoutParams(0, dp(44), 0.8f))
         root.addView(toolbar)
-        root.addView(TextView(this).apply { text = "Search snippets" }); search = input("Search snippets"); search.addTextChangedListener(object: android.text.TextWatcher {
+        root.addView(TextView(this).apply { text = "Search snippets"; setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f); setPadding(dp(4), 0, dp(4), 0) }); search = input("Search snippets"); search.addTextChangedListener(object: android.text.TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { if (::results.isInitialized && selected == null) list() }
             override fun afterTextChanged(s: android.text.Editable?) {}
-        }); root.addView(search)
-        val scroll = ScrollView(this); results = column(); scroll.addView(results); root.addView(scroll, LinearLayout.LayoutParams(-1, dp(140)))
-        status = TextView(this); root.addView(status)
+        }); root.addView(search, LinearLayout.LayoutParams(-1, dp(42)))
+        val scroll = ScrollView(this).apply { isFillViewport = true }; results = column(); scroll.addView(results); root.addView(scroll, LinearLayout.LayoutParams(-1, dp(92)))
+        status = TextView(this).apply { setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f); maxLines = 2; setPadding(dp(4), 0, dp(4), 0) }; root.addView(status)
         keys = column(); root.addView(keys); drawKeys()
         return root
     }
@@ -60,13 +66,30 @@ class SnippetKeyboard: InputMethodService() {
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     private fun column() = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(4), dp(2), dp(4), dp(2)) }
     private fun button(label: String, action: () -> Unit) = Button(this).apply { text = label; isAllCaps = false; minWidth = 0; minimumWidth = 0; setPadding(dp(3), 0, dp(3), 0); setOnClickListener { action() } }
-    private fun input(label: String) = EditText(this).apply { contentDescription = label; showSoftInputOnFocus = false; isSingleLine = true; setOnFocusChangeListener { _, focused -> if (focused) activeField = this }; setOnClickListener { activeField = this } }
+    private fun input(label: String) = EditText(this).apply { contentDescription = label; showSoftInputOnFocus = false; isSingleLine = true; setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f); setOnFocusChangeListener { _, focused -> if (focused) activeField = this }; setOnClickListener { activeField = this } }
+    private fun themedColor(light: Int, dark: Int) = if ((resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES) dark else light
+    private fun keyboardColor() = themedColor(Color.rgb(232, 234, 238), Color.rgb(40, 42, 46))
+    private fun keyColor() = themedColor(Color.WHITE, Color.rgb(92, 94, 98))
+    private fun specialKeyColor() = themedColor(Color.rgb(210, 214, 220), Color.rgb(66, 68, 72))
+    private fun keyTextColor() = themedColor(Color.rgb(38, 40, 42), Color.WHITE)
+    private fun key(label: String, special: Boolean = false, action: () -> Unit) = button(label, action).apply { background = GradientDrawable().apply { cornerRadius = dp(6).toFloat(); setColor(if (special) specialKeyColor() else keyColor()) }; elevation = dp(1).toFloat(); gravity = Gravity.CENTER; setTextColor(keyTextColor()); setTextSize(TypedValue.COMPLEX_UNIT_SP, if (special) 17f else 24f); typeface = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL); setPadding(0, 0, 0, 0) }
+    private fun keyParams(weight: Float = 1f) = LinearLayout.LayoutParams(0, dp(52), weight).apply { setMargins(dp(3), dp(3), dp(3), dp(3)) }
+    private fun erase() { val field = activeField ?: search; val start = field.selectionStart.coerceAtLeast(0); if (start > 0) { val previous = Character.offsetByCodePoints(field.text, start, -1); field.text.delete(previous, start) } }
     private fun drawKeys() {
         keys.removeAllViews()
         val rows = if (numbers) listOf("1234567890", "@#%&*()-+=", ".,!?/:;_'\"") else listOf("qwertyuiop", "asdfghjkl", "zxcvbnm")
-        for (text in rows) { val row = LinearLayout(this); for (character in text) { val key = if (shifted) character.uppercase() else character.toString(); row.addView(button(key) { type(key) }, LinearLayout.LayoutParams(0, dp(38), 1f)) }; keys.addView(row) }
+        for ((index, text) in rows.withIndex()) {
+            val row = LinearLayout(this).apply { gravity = Gravity.CENTER }
+            if (!numbers && index == 1) row.addView(View(this), LinearLayout.LayoutParams(0, 1, 0.5f))
+            if (!numbers && index == 2) row.addView(key("⇧", true) { shifted = !shifted; drawKeys() }, keyParams(1.35f))
+            for (character in text) { val label = if (shifted) character.uppercase() else character.toString(); row.addView(key(label) { type(label) }, keyParams()) }
+            if (!numbers && index == 2) row.addView(key("⌫", true) { erase() }, keyParams(1.35f))
+            if (!numbers && index == 1) row.addView(View(this), LinearLayout.LayoutParams(0, 1, 0.5f))
+            keys.addView(row)
+        }
         val controls = LinearLayout(this)
-        for ((label, action) in listOf<Pair<String, () -> Unit>>("Shift" to { shifted = !shifted; drawKeys() }, "123" to { numbers = !numbers; drawKeys() }, "Space" to { type(" ") }, "Delete" to { val field = activeField ?: search; val start = field.selectionStart.coerceAtLeast(0); if (start > 0) { val previous = Character.offsetByCodePoints(field.text, start, -1); field.text.delete(previous, start) } }, "Return" to { type("\n") })) controls.addView(button(label, action), LinearLayout.LayoutParams(0, dp(38), 1f))
+        val controlKeys = if (numbers) listOf<Pair<Pair<String, Float>, () -> Unit>>(Pair("ABC", 1.4f) to { numbers = false; drawKeys() }, Pair("Space", 4f) to { type(" ") }, Pair("Delete", 1.4f) to { erase() }, Pair("Return", 1.4f) to { type("\n") }) else listOf(Pair("?123", 1.4f) to { numbers = true; shifted = false; drawKeys() }, Pair(",", 1f) to { type(",") }, Pair("Space", 4f) to { type(" ") }, Pair(".", 1f) to { type(".") }, Pair("Return", 1.4f) to { type("\n") })
+        for ((definition, action) in controlKeys) controls.addView(key(definition.first, true, action), keyParams(definition.second))
         keys.addView(controls)
     }
     private fun type(text: String) { val field = activeField ?: search; field.text.replace(field.selectionStart.coerceAtLeast(0), field.selectionEnd.coerceAtLeast(0), text) }
