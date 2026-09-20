@@ -128,7 +128,9 @@ test('top navigation opens the public mobile apps modal with QR codes', async ()
 		const trigger = document.querySelector('[data-bs-target="#mobile-apps-modal"]');
 		assert.equal(trigger.textContent.trim(), 'Get the mobile app');
 		assert.equal(trigger.classList.contains('btn-sm') && trigger.classList.contains('btn-link'), true);
+		assert.equal(trigger.classList.contains('me-3'), true);
 		assert.equal(trigger.classList.contains('fw-bold') || trigger.classList.contains('mobile-beta-link'), false);
+		assert.equal(trigger.querySelector('svg[width="1.25rem"][aria-hidden="true"]') !== null, true);
 		assert.equal(document.querySelector('#mobile-apps-modal-title').textContent.trim(), 'Get the TypeRelay mobile app');
 		document.querySelector('#workspace').removeAttribute('data-account');
 		let mobileRequests = 0;

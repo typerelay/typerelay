@@ -34,7 +34,12 @@ html(lang="en")
 					span to search
 					kbd.ms-auto#search-shortcut Ctrl K
 				.d-flex.align-items-center.gap-3.ms-auto
-					button.btn.btn-sm.btn-link.d-none.d-md-inline-flex.align-items-center.text-nowrap(type="button" data-bs-toggle="modal" data-bs-target="#mobile-apps-modal" data-track="mobile_beta_open")
+					button.btn.btn-sm.btn-link.d-none.d-md-inline-flex.align-items-center.text-nowrap.me-3(type="button" data-bs-toggle="modal" data-bs-target="#mobile-apps-modal" data-track="mobile_beta_open")
+						//- Tabler device-mobile icon (MIT).
+						svg.me-1(width="1.25rem" height="1.25rem" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true")
+							path(d="M6 5a2 2 0 0 1 2 -2h8a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-8a2 2 0 0 1 -2 -2v-14")
+							path(d="M11 4h2")
+							path(d="M12 17v.01")
 						span Get the mobile app
 					if newsEnabled
 						a.btn.btn-sm.btn-link.d-inline-flex.align-items-center.text-nowrap.position-relative.me-2.product-updates-nav-link(href='/news?account=' + account._id title="What's new" aria-label="What's new" data-product-updates-nav)
