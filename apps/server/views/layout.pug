@@ -21,7 +21,7 @@ html(lang="en")
 		script(src='/assets/' + assetVersion + '/app.js' type="module")
 	body
 		header.app-navbar.container-fluid.py-3.mb-5.d-flex.align-items-center(class=newsEnabled ? 'has-product-updates' : '')
-			a.brand-link(href="/")
+			a.brand-link.pe-5(href="/")
 				- const brandAsset = whiteLabel && (profile ? whiteLabel.logo_url : (whiteLabel.login_logo_url || whiteLabel.logo_url))
 				img.brand(src=brandAsset || '/assets/typerelay-logo.svg' alt=brandAsset ? 'Logo' : 'TypeRelay')
 			if profile

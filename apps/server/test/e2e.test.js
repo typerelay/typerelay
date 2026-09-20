@@ -123,6 +123,7 @@ test('top navigation opens the public mobile apps modal with QR codes', async ()
 		const navbar = document.querySelector('.app-navbar');
 		assert.equal(navbar.classList.contains('d-flex') && navbar.classList.contains('align-items-center'), true);
 		assert.equal(navbar.children[0].classList.contains('brand-link'), true);
+		assert.equal(navbar.children[0].classList.contains('pe-5'), true);
 		assert.equal(navbar.children[1].classList.contains('global-search'), true);
 		const trigger = document.querySelector('[data-bs-target="#mobile-apps-modal"]');
 		assert.equal(trigger.textContent.trim(), 'Get the mobile app');
