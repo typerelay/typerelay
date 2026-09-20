@@ -260,6 +260,18 @@ block content
 						p Press F5 in the TUI to sync now. Conflicts appear here for review; local drafts are kept in your TypeRelay sync/recovery directory.
 						a(href="https://github.com/typerelay/typerelay/tree/main/docs" target="_blank" rel="noopener") Documentation
 
+		#mobile-apps-modal.modal.fade(tabindex="-1" aria-labelledby="mobile-apps-modal-title" aria-hidden="true" data-bs-backdrop="static" data-bs-keyboard="false")
+			.modal-dialog.modal-lg.modal-dialog-centered
+				.modal-content
+					.modal-header
+						h2#mobile-apps-modal-title.modal-title.h5.fw-bold Get the TypeRelay mobile app
+						button.btn-close(type="button" data-bs-dismiss="modal" aria-label="Close")
+					.modal-body#mobile-apps-modal-body
+						.mobile-beta-loading.text-center.py-5.text-muted
+							.spinner-border.spinner-border-sm.me-2
+							span Loading mobile beta details...
+						.alert.alert-danger.mb-0.d-none.mobile-beta-error Unable to load the mobile beta details. Please try again.
+
 		#search-modal.modal(tabindex="-1" aria-labelledby="search-title" data-bs-backdrop="static" data-bs-keyboard="false")
 			.modal-dialog.modal-lg.modal-dialog-scrollable
 				.modal-content

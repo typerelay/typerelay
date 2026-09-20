@@ -64,6 +64,7 @@ class TypeRelay {
 			if (this.returnSettings) { this.returnSettings = false; bootstrap.Modal.getOrCreateInstance(document.querySelector('#settings')).show(); }
 		});
 		document.querySelector('#trash')?.addEventListener('show.bs.modal', () => this.loadTrash().catch(error => this.toast(error.message, 'error')));
+		document.querySelector('#mobile-apps-modal')?.addEventListener('show.bs.modal', () => this.mobileApps());
 		window.addEventListener('scroll', () => this.updateScrollTop(), { passive: true });
 		window.addEventListener('resize', () => this.updateScrollTop());
 		this.updateScrollTop();
@@ -87,6 +88,17 @@ class TypeRelay {
 		button.classList.toggle('is-visible', visible);
 		button.setAttribute('aria-hidden', String(!visible));
 		button.tabIndex = visible ? 0 : -1;
+	}
+	async mobileApps() {
+		const body = document.querySelector('#mobile-apps-modal-body');
+		if (!body || body.dataset.loaded === 'true' || body.dataset.loading === 'true') return;
+		body.dataset.loading = 'true';
+		const loading = body.querySelector('.mobile-beta-loading');
+		const error = body.querySelector('.mobile-beta-error');
+		loading.classList.remove('d-none'); error.classList.add('d-none');
+		try { body.innerHTML = await this.request('mobile-apps', 'GET', null, true); body.dataset.loaded = 'true'; }
+		catch (failure) { loading.classList.add('d-none'); error.classList.remove('d-none'); }
+		finally { delete body.dataset.loading; }
 	}
 	toast(title, icon = 'success') { return Swal.fire({ toast: true, position: 'top-end', title, icon, timer: 3500, showConfirmButton: false }); }
 	rotateTeamPassword(announce = true) {

@@ -116,6 +116,35 @@ test('desktop scheme approval permits the browser redirect and exchanges its PKC
 	const home = await Fixture.request('/');
 	assert.match(home.headers.get('content-security-policy'), /(?:^|;)form-action 'self';/);
 });
+test('top navigation opens the public mobile apps modal with QR codes', async () => {
+	const dom = new JSDOM(await (await Fixture.request('/')).text(), { url: Fixture.origin, runScripts: 'outside-only' });
+	try {
+		const document = dom.window.document;
+		const trigger = document.querySelector('[data-bs-target="#mobile-apps-modal"]');
+		assert.equal(trigger.textContent.trim(), 'Get the mobile app');
+		assert.equal(document.querySelector('#mobile-apps-modal-title').textContent.trim(), 'Get the TypeRelay mobile app');
+		document.querySelector('#workspace').removeAttribute('data-account');
+		let mobileRequests = 0;
+		dom.window.fetch = async (path, options = {}) => {
+			if (String(path).includes('mobile-apps')) mobileRequests++;
+			return fetch(new URL(path, Fixture.origin), { ...options, headers: { ...options.headers, Cookie: Fixture.cookie } });
+		};
+		const source = (await BrowserSource.script()).replace('export { client };', 'window.testClient = client;');
+		dom.window.eval(source);
+		const client = dom.window.testClient; client.account = Fixture.account;
+		const body = document.querySelector('#mobile-apps-modal-body');
+		await client.mobileApps();
+		assert.equal(body.dataset.loaded, 'true');
+		assert.match(body.textContent, /TypeRelay for iOS and Android is available in public beta\./);
+		assert.match(body.textContent, /Scan a QR code or open the app for your device directly\./);
+		assert.equal(body.querySelector('[aria-label="QR code for Apple TestFlight"] svg') !== null, true);
+		assert.equal(body.querySelector('[aria-label="QR code for Google Play testing"] svg') !== null, true);
+		assert.equal(body.querySelector('[data-track="mobile_beta_ios_click"]').href, 'https://testflight.apple.com/join/Q4Tw4DMh');
+		assert.equal(body.querySelector('[data-track="mobile_beta_android_click"]').href, 'https://play.google.com/apps/testing/com.typerelay.mobile');
+		await client.mobileApps();
+		assert.equal(mobileRequests, 1, 'Loaded mobile details must be reused without a section or page reload');
+	} finally { dom.window.close(); }
+});
 test('SQLite two-device edits, conflict recovery and generated YAML isolation', async () => {
 	const yaml = '# original comments\nmatches:\n- trigger: alpha\n  replace: First\n- trigger: beta\n  replace: Second\n';
 	await writeFile(join(Fixture.one.snippets, 'mine.yml'), yaml);

@@ -149,6 +149,14 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .app-navbar > .d-flex { justify-self: end; }
 @media (max-width: 40rem) { .app-navbar { grid-template-columns: 8rem minmax(0, 1fr) 2.5rem; column-gap: .75rem; } }
 
+/* Adapted from Mailtwine's mobile-app modal (AGPL-3.0); see docs/web/attribution.md. */
+.mobile-beta-link { color: #71685e; font-weight: 700; text-decoration: underline; text-underline-offset: .18rem; cursor: pointer; }
+.mobile-beta-link:hover, .mobile-beta-link:focus { color: #a15c40; }
+.mobile-beta-card { border-color: #e7dfd2; border-radius: .75rem; background: #fffdf8; }
+.mobile-beta-platform-icon { display: grid; width: 3rem; height: 3rem; place-items: center; border-radius: 1rem; background: rgb(161 92 64 / 12%); color: #a15c40; }
+.mobile-beta-qr { display: grid; width: 11.25rem; height: 11.25rem; place-items: center; padding: .45rem; border: .0625rem solid #e7dfd2; border-radius: .75rem; background: #fff; }
+.mobile-beta-qr svg { display: block; width: 100%; height: 100%; }
+
 @media (max-width: 60rem) { #search-shortcut { display: none; } }
 
 .bulk-actions[hidden] { display: none !important; }
