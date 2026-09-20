@@ -40,6 +40,20 @@ describe('mobile release packaging', () => {
 		assert.match(gradle, /src\/main\/jniLibs\/\$\{abi\}\/libtyperelay_mobile\.so/);
 	});
 
+	it('keeps Android and iOS release versions aligned', () => {
+		const mobile = JSON.parse(source('apps/mobile/package.json'));
+		const gradle = source('apps/mobile/android/app/build.gradle');
+		const xcode = source('apps/mobile/ios/App/App.xcodeproj/project.pbxproj');
+		const androidVersion = gradle.match(/versionName "([^"]+)"/)?.[1];
+		const androidBuild = gradle.match(/versionCode (\d+)/)?.[1];
+		const iosVersions = [...xcode.matchAll(/MARKETING_VERSION = ([^;]+);/g)].map(match => match[1]);
+		const iosBuilds = [...xcode.matchAll(/CURRENT_PROJECT_VERSION = (\d+);/g)].map(match => match[1]);
+		assert.equal(androidVersion, mobile.version);
+		assert.ok(Number(androidBuild) > 1);
+		assert.deepEqual([...new Set(iosVersions)], [mobile.version]);
+		assert.deepEqual([...new Set(iosBuilds)], [androidBuild]);
+	});
+
 	it('keeps both native keyboards aligned to platform-sized keycaps', () => {
 		const android = source('apps/mobile/android/app/src/main/java/com/typerelay/mobile/SnippetKeyboard.kt');
 		const ios = source('apps/mobile/ios/App/Keyboard/KeyboardViewController.swift');

@@ -76,6 +76,6 @@ test('release tooling creates signed updater artifacts for every supported platf
 });
 
 test('desktop release version matches both native workspaces', async () => {
-	const config=JSON.parse(await fs.readFile(path.join(PanelRelease.root,'apps/desktop/src-tauri/tauri.conf.json'),'utf8'));const desktop=JSON.parse(await fs.readFile(path.join(PanelRelease.root,'apps/desktop/package.json'),'utf8'));const workspace=await fs.readFile(path.join(PanelRelease.root,'Cargo.toml'),'utf8');const panel=await fs.readFile(path.join(PanelRelease.root,'apps/desktop/src-tauri/Cargo.toml'),'utf8');
-	assert.equal(desktop.version,config.version);assert.match(workspace,new RegExp(`\\[workspace\\.package\\][\\s\\S]*?version = "${config.version}"`));assert.match(panel,new RegExp(`\\[package\\][\\s\\S]*?version = "${config.version}"`));
+	const config=JSON.parse(await fs.readFile(path.join(PanelRelease.root,'apps/desktop/src-tauri/tauri.conf.json'),'utf8'));const rootPackage=JSON.parse(await fs.readFile(path.join(PanelRelease.root,'package.json'),'utf8'));const desktop=JSON.parse(await fs.readFile(path.join(PanelRelease.root,'apps/desktop/package.json'),'utf8'));const workspace=await fs.readFile(path.join(PanelRelease.root,'Cargo.toml'),'utf8');const panel=await fs.readFile(path.join(PanelRelease.root,'apps/desktop/src-tauri/Cargo.toml'),'utf8');
+	assert.equal(rootPackage.version,config.version);assert.equal(desktop.version,config.version);assert.match(workspace,new RegExp(`\\[workspace\\.package\\][\\s\\S]*?version = "${config.version}"`));assert.match(panel,new RegExp(`\\[package\\][\\s\\S]*?version = "${config.version}"`));
 });
