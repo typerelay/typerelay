@@ -29,9 +29,10 @@ class AccountUI {
 			const fields = Object.fromEntries(new FormData(form));
 			if (routes[form.id]) {
 				const result = await client.request(routes[form.id], 'POST', fields);
-				if (form.id === 'signup-form') {
-					document.querySelector('#signup-content').classList.add('d-none');
-					document.querySelector('#signup-confirmation').classList.remove('d-none');
+				const persistent = { 'signup-form': ['#signup-content', '#signup-confirmation'], 'forgot-form': ['#forgot-content', '#forgot-confirmation'] }[form.id];
+				if (persistent) {
+					document.querySelector(persistent[0]).classList.add('d-none');
+					document.querySelector(persistent[1]).classList.remove('d-none');
 				} else if (result.password) {
 					document.querySelector('#new-password').value = result.password;
 					document.querySelector('#public-password-result').classList.remove('d-none');

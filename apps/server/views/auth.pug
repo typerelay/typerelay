@@ -20,21 +20,26 @@ block content
 					a(href="/login") Already have an account?
 			#signup-confirmation.d-none
 				h1.h2.mb-2 Check your email
-				p.text-muted.mb-3 We sent you a confirmation email. Click the link in that email to finish creating your Type Relay account.
+				p.text-muted.mb-3 We sent you a confirmation email. Click the link in that email to finish creating your Typerelay account.
 				p.mb-0 You can close this window.
 		else
 			h1.h2.mb-2 Sign up disabled
 			p.text-muted.mb-0 Sign up is currently disabled.
 	if kind === 'forgot'
-		h1.h2.mb-2 Reset password
-		p.text-muted.mb-5 Enter your email to reset your password.
-		form#forgot-form
-			.mb-3
-				label.form-label(for="email") Email address
-				input#email.form-control.form-control-sm(type="email" name="email" autocomplete="email" required autofocus)
-			button.btn.btn-primary.btn-sm.w-100 Send reset link
-		.mt-5
-			a(href="/login") Back to login
+		#forgot-content
+			h1.h2.mb-2 Reset password
+			p.text-muted.mb-5 Enter your email to reset your password.
+			form#forgot-form
+				.mb-3
+					label.form-label(for="email") Email address
+					input#email.form-control.form-control-sm(type="email" name="email" autocomplete="email" required autofocus)
+				button.btn.btn-primary.btn-sm.w-100 Send reset link
+			.mt-5
+				a(href="/login") Back to login
+		#forgot-confirmation.d-none
+			h1.h2.mb-2 Check your email
+			p.text-muted.mb-3 If an account exists for that email, we sent a password reset link. Click the link in that email to reset your Typerelay password.
+			p.mb-0 You can close this window.
 	if kind === 'factor'
 		h1.h2.mb-2 Two-factor authentication
 		p.text-muted.mb-5 Enter your six-digit code.

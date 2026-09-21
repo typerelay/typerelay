@@ -355,22 +355,27 @@ test('signed-in email confirmation uses the shared auth shell', async () => {
 	assert.equal(dom.window.document.title, 'Confirm Email — Type Relay'); assert.ok(dom.window.document.body.classList.contains('auth-page')); assert.ok(dom.window.document.querySelector('.auth-cover')); assert.ok(dom.window.document.querySelector('#confirm-email-form')); dom.window.close();
 });
 
-test('signup request replaces every control under the logo with a persistent email confirmation', async () => {
-	const browser = new Browser();
-	const dom = new JSDOM(await (await browser.call('/signup')).text(), { url: Fixture.origin, runScripts: 'outside-only' });
-	try {
-		const document = dom.window.document; const form = document.querySelector('#signup-form'); const panel = form.closest('.auth-panel'); const button = form.querySelector('button[type=submit]'); const href = dom.window.location.href; const calls = [];
-		dom.window.testClient = { request: async (...args) => { calls.push(args); return { message: 'Check your email to finish creating your account.' }; }, toast: () => assert.fail('Successful signup must not show a toast') };
-		const source = (await readFile(new URL('../public/auth.js', import.meta.url), 'utf8')).replace("import { client } from './app.js';", 'const client = window.testClient;').replace('new AccountUI();', 'window.testAccountUI = new AccountUI();');
-		dom.window.eval(source);
-		form.elements.name.value = 'New Person'; form.elements.email.value = 'person@example.test';
-		await dom.window.testAccountUI.submit({ target: form, preventDefault() {}, submitter: button });
-		assert.equal(calls.length, 1); assert.equal(calls[0][0], '/auth/signup'); assert.equal(calls[0][1], 'POST'); assert.equal(calls[0][2].name, 'New Person'); assert.equal(calls[0][2].email, 'person@example.test');
-		assert.ok(document.querySelector('#signup-content').classList.contains('d-none'));
-		assert.ok(!document.querySelector('#signup-confirmation').classList.contains('d-none'));
-		assert.match(document.querySelector('#signup-confirmation').textContent, /Check your email.*confirmation email.*Click the link.*finish creating your Type Relay account.*close this window/s);
-		assert.equal(form.closest('.auth-panel'), panel); assert.equal(dom.window.location.href, href);
-	} finally { dom.window.close(); }
+test('signup and forgot-password requests replace every control under the logo with persistent email instructions', async () => {
+	const source = (await readFile(new URL('../public/auth.js', import.meta.url), 'utf8')).replace("import { client } from './app.js';", 'const client = window.testClient;').replace('new AccountUI();', 'window.testAccountUI = new AccountUI();');
+	for (const flow of [
+		{ path: '/signup', form: '#signup-form', content: '#signup-content', confirmation: '#signup-confirmation', route: '/auth/signup', fields: { name: 'New Person', email: 'person@example.test' }, copy: /Check your email.*confirmation email.*Click the link.*finish creating your Typerelay account.*close this window/s },
+		{ path: '/forgot-password', form: '#forgot-form', content: '#forgot-content', confirmation: '#forgot-confirmation', route: '/auth/forgot-password', fields: { email: 'person@example.test' }, copy: /Check your email.*password reset link.*Click the link.*reset your Typerelay password.*close this window/s },
+	]) {
+		const browser = new Browser(); const dom = new JSDOM(await (await browser.call(flow.path)).text(), { url: Fixture.origin, runScripts: 'outside-only' });
+		try {
+			const document = dom.window.document; const form = document.querySelector(flow.form); const panel = form.closest('.auth-panel'); const button = form.querySelector('button[type=submit]'); const href = dom.window.location.href; const calls = [];
+			dom.window.testClient = { request: async (...args) => { calls.push(args); return { message: 'Check your email.' }; }, toast: () => assert.fail('Successful email request must not show a toast') };
+			dom.window.eval(source);
+			for (const [name, value] of Object.entries(flow.fields)) form.elements[name].value = value;
+			await dom.window.testAccountUI.submit({ target: form, preventDefault() {}, submitter: button });
+			assert.equal(calls.length, 1); assert.equal(calls[0][0], flow.route); assert.equal(calls[0][1], 'POST');
+			for (const [name, value] of Object.entries(flow.fields)) assert.equal(calls[0][2][name], value);
+			assert.ok(document.querySelector(flow.content).classList.contains('d-none'));
+			assert.ok(!document.querySelector(flow.confirmation).classList.contains('d-none'));
+			assert.match(document.querySelector(flow.confirmation).textContent, flow.copy);
+			assert.equal(form.closest('.auth-panel'), panel); assert.equal(dom.window.location.href, href);
+		} finally { dom.window.close(); }
+	}
 });
 
 test('magic-link request shows a persistent confirmation and preserves the form on failure', async () => {
