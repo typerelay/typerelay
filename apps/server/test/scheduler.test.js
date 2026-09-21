@@ -19,7 +19,7 @@ test('scheduler registers protected Trash, trial, Helpmonks, signup notification
 	let calls = 0;
 	let purges = 0;
 	const logs = [];
-	Scheduler.start({ CronClass: FakeCron, cleanup: async () => { calls++; await gate; return { libraries: 2, snippets: 3 }; }, expireTrials: async () => ({ expired: 2 }), enrollTrialUsers: async () => ({ checked: 1, enrolled: 1, retrying: 0, failed: 0 }), reconcileSignupNotifications: async () => ({ checked: 1, sent: 1, retrying: 0, failed: 0 }), reconcileWhiteLabel: async () => ({ checked: 1, updated: 1, failed: 0 }), purgeAccounts: async () => { purges++; }, logger: { log: message => logs.push(message), error: message => logs.push(message) } });
+	Scheduler.start({ CronClass: FakeCron, cleanup: async () => { calls++; await gate; return { libraries: 2, snippets: 3 }; }, expireTrials: async () => ({ expired: 2 }), enrollTrialUsers: async () => ({ checked: 1, enrolled: 1, retrying: 0, failed: 0 }), reconcileSignupNotifications: async () => ({ checked: 1, sent: 1, retrying: 0, failed: 0 }), reconcileWhiteLabel: async () => ({ checked: 1, updated: 1, failed: 0 }), purgeAccounts: async () => { purges++; }, productUpdatesEnabled: false, logger: { log: message => logs.push(message), error: message => logs.push(message) } });
 	assert.equal(FakeCron.instances.length, 6);
 	const job = FakeCron.instances[0];
 	assert.equal(job.pattern, '30 2 * * *');

@@ -190,7 +190,7 @@ test('SQLite two-device edits, conflict recovery and generated YAML isolation', 
 	// Remote collision is staged and does not replace the last working local snapshot.
 	const source = join(Fixture.two.root, 'collision.yml');
 	await writeFile(source, 'matches: [{trigger: collision, replace: Local}]');
-	await Fixture.cli(Fixture.two, 'import', source, '--name', 'Local collision');
+	await Fixture.cli(Fixture.two, 'import', 'yaml', source, '--name', 'Local collision');
 	await Fixture.json('libraries', 'POST', { name: 'Remote collision', snippets: [{ trigger: 'collision', content: { version: 1, type: 'plain_text', text: 'Remote' } }] });
 	await assert.rejects(Fixture.cli(Fixture.two, 'sync'), /[Dd]uplicate/);
 	two = await Fixture.state(Fixture.two);
@@ -264,8 +264,8 @@ test('offline moves with pending enrollment and later edits sync exactly once; r
 	const destinationFile = join(one.root, 'dest.yml');
 	await writeFile(sourceFile, 'matches: [{trigger: movingone, replace: One}, {trigger: movingtwo, replace: Two}]');
 	await writeFile(destinationFile, 'matches: []');
-	await Fixture.cli(one, 'import', sourceFile, '--name', 'Move source');
-	await Fixture.cli(one, 'import', destinationFile, '--name', 'Move destination');
+	await Fixture.cli(one, 'import', 'yaml', sourceFile, '--name', 'Move source');
+	await Fixture.cli(one, 'import', 'yaml', destinationFile, '--name', 'Move destination');
 	await Fixture.cli(one, 'enroll', 'Move source');
 	await Fixture.cli(one, 'enroll', 'Move destination');
 	await Fixture.cli(one, 'database-batch', 'Move source', '--destination', 'Move destination', '--triggers', 'movingone');
