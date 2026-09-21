@@ -5,18 +5,23 @@ block head
 block content
 	if kind === 'signup'
 		if signupEnabled
-			h1.h2.mb-2 Create your account
-			p.text-muted.mb-5 Start using Type Relay.
-			form#signup-form
-				.mb-3
-					label.form-label(for="name") Name
-					input#name.form-control.form-control-sm(name="name" autocomplete="name" required autofocus)
-				.mb-4
-					label.form-label(for="email") Email address
-					input#email.form-control.form-control-sm(type="email" name="email" autocomplete="email" required)
-				button.btn.btn-primary.btn-sm.w-100 Sign up
-			.mt-5.text-center
-				a(href="/login") Already have an account?
+			#signup-content
+				h1.h2.mb-2 Create your account
+				p.text-muted.mb-5 Start using Type Relay.
+				form#signup-form
+					.mb-3
+						label.form-label(for="name") Name
+						input#name.form-control.form-control-sm(name="name" autocomplete="name" required autofocus)
+					.mb-4
+						label.form-label(for="email") Email address
+						input#email.form-control.form-control-sm(type="email" name="email" autocomplete="email" required)
+					button.btn.btn-primary.btn-sm.w-100 Sign up
+				.mt-5.text-center
+					a(href="/login") Already have an account?
+			#signup-confirmation.d-none
+				h1.h2.mb-2 Check your email
+				p.text-muted.mb-3 We sent you a confirmation email. Click the link in that email to finish creating your Type Relay account.
+				p.mb-0 You can close this window.
 		else
 			h1.h2.mb-2 Sign up disabled
 			p.text-muted.mb-0 Sign up is currently disabled.
