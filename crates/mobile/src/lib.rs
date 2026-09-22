@@ -14,6 +14,11 @@ impl Mobile {
         let action = Self::text(request, "action")?;
         // Extensions use only these read-only operations, without opening the SQLite database.
         if action == "keyboard" { return Ok(serde_json::from_slice(&fs::read(shared.join("keyboard.json"))?)?); }
+        if action == "keyboard_matches" {
+            let snapshot: Value = serde_json::from_slice(&fs::read(shared.join("keyboard.json"))?)?;
+            ensure!(snapshot["generation"] == request["generation"], "Snippets changed; search again");
+            return Self::keyboard_matches(&snapshot, request);
+        }
         if action == "keyboard_render" {
             let snapshot: Value = serde_json::from_slice(&fs::read(shared.join("keyboard.json"))?)?;
             ensure!(snapshot["generation"] == request["generation"], "Snippets changed; select again");
@@ -149,6 +154,43 @@ impl Mobile {
         };
         if matches!(action, "state" | "save" | "delete" | "trash_action") { Self::publish(&db, shared)?; }
         Ok(result)
+    }
+    fn keyboard_matches(snapshot: &Value, request: &Value) -> Result<Value> {
+        let mode = Self::text(request, "mode")?;
+        ensure!(mode == "typing" || mode == "search", "Unknown keyboard match mode");
+        let input = Self::text(request, if mode == "typing" { "context" } else { "query" })?;
+        ensure!(input.len() <= 512, "Keyboard match input is too long");
+        let fragment = if mode == "typing" {
+            let start = input.char_indices().rev().take_while(|(_, character)| character.is_ascii_alphanumeric() || *character == '-').last().map(|(index, _)| index).unwrap_or(input.len());
+            let preceding = input[..start].chars().last();
+            if preceding.is_some_and(|character| character.is_alphanumeric() || character == '_') || input.len() - start > 63 { "" } else { &input[start..] }
+        } else { input.trim() };
+        let needle = fragment.to_lowercase();
+        let mut ranked = Vec::new();
+        if mode == "search" || !needle.is_empty() {
+            for library in snapshot["libraries"].as_array().context("Invalid keyboard snapshot")? {
+                for record in library["records"].as_array().context("Invalid keyboard records")? {
+                    let trigger = record["trigger"].as_str().unwrap_or("");
+                    let title = record["title"].as_str().filter(|title| !title.is_empty()).unwrap_or(trigger);
+                    let lower_trigger = trigger.to_lowercase();
+                    let rank = if mode == "typing" {
+                        if trigger.is_empty() || !lower_trigger.starts_with(&needle) { continue; }
+                        if lower_trigger == needle { 0 } else { 1 }
+                    } else if needle.is_empty() { 3 }
+                    else if lower_trigger == needle { 0 }
+                    else if lower_trigger.starts_with(&needle) { 1 }
+                    else if lower_trigger.contains(&needle) || title.to_lowercase().contains(&needle) { 2 }
+                    else if record["content"]["text"].as_str().unwrap_or("").to_lowercase().contains(&needle) { 3 }
+                    else { continue; };
+                    ranked.push((rank, lower_trigger, json!({"id":record["id"],"library":library["_id"],"title":title,"trigger":trigger})));
+                }
+            }
+        }
+        ranked.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)).then(left.2["library"].as_str().cmp(&right.2["library"].as_str())).then(left.2["id"].as_str().cmp(&right.2["id"].as_str())));
+        let exact = if mode == "typing" && ranked.len() == 1 && ranked[0].0 == 0 { ranked.first().map(|hit| hit.2.clone()) } else { None };
+        let limit = if mode == "typing" { 3 } else { 60 };
+        let truncated = ranked.len() > limit;
+        Ok(json!({"fragment":fragment,"matches":ranked.into_iter().take(limit).map(|hit| hit.2).collect::<Vec<_>>(),"exact":exact,"truncated":truncated}))
     }
     fn render(content: &Value, request: &Value, assets: BTreeMap<String, String>) -> Result<Value> {
         let values = serde_json::from_value(request.get("values").cloned().unwrap_or(json!({})))?;
