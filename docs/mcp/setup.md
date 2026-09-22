@@ -1,3 +1,8 @@
+---
+title: "Set up TypeRelay MCP"
+description: "Set up TypeRelay MCP with OAuth or personal access tokens, discovery metadata, exact API and MCP resources, and supported client configurations."
+---
+
 # Setup
 
 Configure the exact Streamable HTTP resource URL and use OAuth sign-in or a personal access token. Hosted MCP access requires an active Pro trial, Pro or Team account. Self-hosted installations are unrestricted.

@@ -1,3 +1,8 @@
+---
+title: "TypeRelay Desktop"
+description: "Use TypeRelay Desktop to search, expand, edit, and synchronize snippets from the menu bar or system tray on macOS, Windows, and Omarchy."
+---
+
 # Overview
 
 The TypeRelay desktop app provides a resident search panel, continuous abbreviation expansion, local SQLite storage, background sync and the TypeRelay TUI.

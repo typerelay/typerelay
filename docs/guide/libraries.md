@@ -1,3 +1,8 @@
+---
+title: "TypeRelay libraries and sharing"
+description: "Create private TypeRelay libraries, share them with members or groups, manage permissions, and move, merge, rename, unshare, or trash content."
+---
+
 # Libraries and sharing
 
 Libraries organize snippets and define their access. Create one with **New library**, import an export, or create it locally in the TUI. Imports and first-time desktop enrollment always create private libraries.

@@ -1,3 +1,8 @@
+---
+title: "TypeRelay terminal editor"
+description: "Use the keyboard-first TypeRelay TUI to browse libraries, search snippets, edit content and variables, sync changes, and handle concurrent edits."
+---
+
 # Terminal editor
 
 Run `typerelay-tui` to edit the same local SQLite libraries used by the engine and desktop panel. It works offline. Normal exit prompts before discarding a draft; closing the terminal does not save unsaved changes.

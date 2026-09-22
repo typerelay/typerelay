@@ -1,3 +1,8 @@
+---
+title: "TypeRelay sync and offline use"
+description: "Connect TypeRelay Desktop, enroll local libraries, synchronize offline changes, resolve conflicts, handle permission changes, and disconnect safely."
+---
+
 # Sync and offline use
 
 TypeRelay is local-first. The desktop reads and writes SQLite; the server is used to synchronize enrolled libraries, distribute accessible server libraries and coordinate team permissions. Exported YAML is a portable copy, not live storage.

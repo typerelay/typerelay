@@ -1,3 +1,8 @@
+---
+title: "TypeRelay MCP server"
+description: "Connect AI clients to the TypeRelay MCP server for authenticated snippet and library workflows over stateless Streamable HTTP."
+---
+
 # Overview
 
 TypeRelay MCP is an adapter over the public API. Content workflows never access the database directly; MongoDB is used only for distributed concurrency leases. It uses stateless Streamable HTTP; no WebSocket or SSE server is needed.

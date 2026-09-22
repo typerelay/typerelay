@@ -1,3 +1,8 @@
+---
+title: "TypeRelay command line"
+description: "Use the TypeRelay CLI to validate, connect, synchronize, import, export, merge, trash, and manage local snippet libraries."
+---
+
 # Command line
 
 The `typerelay` command manages local storage, synchronization and the Omarchy installation. Run `typerelay --help` for the exact commands in the installed version.

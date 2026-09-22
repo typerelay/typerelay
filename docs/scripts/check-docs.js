@@ -6,9 +6,25 @@ for (const methods of Object.values(spec.paths)) for (const operation of Object.
  if (ids.has(operation.operationId)) throw new Error('Duplicate operationId'); ids.add(operation.operationId);
  const path = '.vitepress/dist/api/operations/' + operation.operationId + '.html';
  if (!existsSync(path)) throw new Error('Missing operation page: ' + path);
- const html = readFileSync(path, 'utf8');
- if (!html.includes('<title>') || !html.includes('name="description"')) throw new Error('Missing metadata: ' + path);
 }
+
+const distRoot = resolve('.vitepress/dist');
+const htmlFiles = readdirSync(distRoot, { recursive: true }).filter(path => path.endsWith('.html') && path !== '404.html');
+const titles = new Map();
+const descriptions = new Map();
+const metadataErrors = [];
+for (const path of htmlFiles) {
+ const html = readFileSync(resolve(distRoot, path), 'utf8');
+ const titleMatches = [...html.matchAll(/<title>([^<]*)<\/title>/g)];
+ const descriptionMatches = [...html.matchAll(/<meta name="description" content="([^"]*)"/g)];
+ if (titleMatches.length !== 1 || !titleMatches[0]?.[1].trim()) metadataErrors.push(`${path}: expected one non-empty title`);
+ else { const title = titleMatches[0][1].trim(); titles.set(title, [...(titles.get(title) || []), path]); }
+ if (descriptionMatches.length !== 1 || !descriptionMatches[0]?.[1].trim()) metadataErrors.push(`${path}: expected one non-empty meta description`);
+ else { const description = descriptionMatches[0][1].trim(); descriptions.set(description, [...(descriptions.get(description) || []), path]); if (description === 'TypeRelay snippets, desktop clients, API and MCP') metadataErrors.push(`${path}: inherited the generic site description`); }
+}
+for (const [title, paths] of titles) if (paths.length > 1) metadataErrors.push(`duplicate title "${title}": ${paths.join(', ')}`);
+for (const [description, paths] of descriptions) if (paths.length > 1) metadataErrors.push(`duplicate description "${description}": ${paths.join(', ')}`);
+if (metadataErrors.length) throw new Error('Documentation metadata validation failed:\n' + metadataErrors.join('\n'));
 
 const docsRoot = resolve('.');
 const repoRoot = resolve('..');
@@ -36,4 +52,4 @@ for (const source of markdown) {
  }
 }
 if (broken.length) throw new Error('Broken local documentation links:\n' + broken.join('\n'));
-console.log('Verified ' + ids.size + ' generated API pages and ' + markdown.length + ' Markdown files');
+console.log('Verified ' + ids.size + ' generated API pages, unique metadata for ' + htmlFiles.length + ' pages, and links across ' + markdown.length + ' Markdown files');

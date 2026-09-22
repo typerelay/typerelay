@@ -1,3 +1,8 @@
+---
+title: "TypeRelay MCP tools"
+description: "Reference TypeRelay MCP tools for libraries, snippets, rich-text assets, imports, exports, search, teams, devices, conflicts, and account identity."
+---
+
 # Tools
 
 Tools call the public API and preserve its permissions and revisions.

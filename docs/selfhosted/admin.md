@@ -1,3 +1,8 @@
+---
+title: "TypeRelay backend administration"
+description: "Administer TypeRelay accounts, plans, limits, email templates, system settings, audit logs, and permanent deletion through the backend panel."
+---
+
 # Backend administration
 
 Open `/admin` on the origin configured by `APP_URL`. System administrators use a separate, eight-hour session. Account owners, desktop credentials, API tokens, and MCP grants cannot authorize admin endpoints. Custom domains cannot serve the admin panel.

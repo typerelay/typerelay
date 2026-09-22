@@ -1,3 +1,8 @@
+---
+title: "TypeRelay operating system notes"
+description: "Review TypeRelay Desktop behavior, permissions, safety limits, and compatibility notes for Omarchy, macOS, and Windows."
+---
+
 # Operating system notes
 
 TypeRelay verifies the original window before insertion. If focus cannot be restored safely, it reports an error and leaves the result available for Copy rather than typing into another application. Native focus APIs still have unavoidable races, so test your critical applications before a broad rollout.

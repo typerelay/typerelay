@@ -1,3 +1,8 @@
+---
+title: "TypeRelay template variables"
+description: "Add date, time, text-field, and Enter variables to TypeRelay snippets, fill reusable templates, and preserve literal braces when needed."
+---
+
 # Template variables
 
 <div v-pre>

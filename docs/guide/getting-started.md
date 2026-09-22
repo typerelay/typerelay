@@ -1,3 +1,8 @@
+---
+title: "Getting started with TypeRelay"
+description: "Get started with TypeRelay by signing in, installing and connecting Desktop, creating libraries, adding snippets, and confirming synchronization."
+---
+
 # Getting started
 
 ## 1. Sign in
