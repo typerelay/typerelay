@@ -13,7 +13,7 @@ impl ksni::Tray for Tray {
 }
 pub fn install(app:&tauri::AppHandle)->Result<()> {
     #[cfg(target_os="linux")]
-    {use ksni::blocking::TrayMethods;let handle=Tray(app.clone()).spawn()?;app.manage(handle);}
+    {use ksni::blocking::TrayMethods;let handle=Tray(app.clone()).assume_sni_available(true).spawn()?;app.manage(handle);}
     #[cfg(not(target_os="linux"))]
     {
 		use tauri::{menu::{MenuBuilder,MenuItem},tray::{TrayIconBuilder,TrayIconEvent,MouseButton,MouseButtonState}};
