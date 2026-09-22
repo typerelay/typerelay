@@ -57,14 +57,35 @@ describe('mobile release packaging', () => {
 	it('keeps both native keyboards aligned to platform-sized keycaps', () => {
 		const android = source('apps/mobile/android/app/src/main/java/com/typerelay/mobile/SnippetKeyboard.kt');
 		const ios = source('apps/mobile/ios/App/Keyboard/KeyboardViewController.swift');
-		assert.match(android, /setBackgroundColor\(keyboardColor\(\)\)/);
-		assert.match(android, /setTextSize\(TypedValue\.COMPLEX_UNIT_SP, if \(special\) 17f else 24f\)/);
+		assert.match(android, /setBackgroundColor\(palette\.surface\)/);
+		assert.match(android, /if \(label == "⇧"\) 26f else if \(special\) 17f else 24f/);
 		assert.match(android, /LinearLayout\.LayoutParams\(0, dp\(52\), weight\)/);
 		assert.match(android, /key\("⌫", true\)/);
 		assert.match(ios, /row\.heightAnchor\.constraint\(equalToConstant: 44\)/);
 		assert.match(ios, /systemFont\(ofSize: special \? 16 : 22/);
 		assert.match(ios, /key\("⌫", special: true\)/);
 		assert.match(ios, /view\.backgroundColor = color/);
+	});
+
+	it('keeps the Android suggestion strip and system palette visually aligned', () => {
+		const android = source('apps/mobile/android/app/src/main/java/com/typerelay/mobile/SnippetKeyboard.kt');
+		assert.match(android, /LinearLayout\.LayoutParams\(0, dp\(48\), 1f\)/);
+		assert.match(android, /LinearLayout\.LayoutParams\(dp\(82\), dp\(44\)\)/);
+		assert.match(android, /allButton\.text = "All"/);
+		assert.doesNotMatch(android, /All \(\$matchCount\)/);
+		assert.match(android, /"\$matchCount matches\. Tap to preview or browse All\."/);
+		assert.match(android, /allButton\.background = rounded\(palette\.surface\)/);
+		assert.match(android, /allButton\.elevation = 0f/);
+		assert.match(android, /allButton\.setTextColor\(palette\.muted\)/);
+		assert.match(android, /bars\.bottom \+ dp\(22\)/);
+		assert.match(android, /Build\.VERSION\.SDK_INT >= Build\.VERSION_CODES\.S/);
+		for (const color of ['system_neutral1_900', 'system_neutral1_100', 'system_accent2_700', 'system_accent2_100']) assert.match(android, new RegExp(`android\\.R\\.color\\.${color}`));
+		assert.match(android, /Color\.rgb\(232, 234, 238\)/);
+		assert.match(android, /Color\.rgb\(40, 42, 46\)/);
+		assert.match(android, /onConfigurationChanged\(newConfig: Configuration\).*palette = keyboardPalette\(\)/);
+		assert.match(android, /KeyboardMode\.FIELD_EDITING -> editingField\?\.let \{ showFieldEditing/);
+		assert.match(android, /setTextColor\(palette\.muted\)/);
+		assert.match(android, /overlayLayer = column\(\).*visibility = View\.GONE/);
 	});
 
 	it('keeps keyboard search contextual with inset-safe layered results', () => {
