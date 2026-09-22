@@ -1,3 +1,8 @@
+---
+title: "Install TypeRelay on Omarchy"
+description: "Install, update, preview, operate, or uninstall TypeRelay on Omarchy, including systemd services, keyd and uinput permissions, and local files."
+---
+
 # Omarchy installation and uninstall
 
 ## Install directly from GitHub

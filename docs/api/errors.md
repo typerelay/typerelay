@@ -1,3 +1,8 @@
+---
+title: "TypeRelay API errors and limits"
+description: "Handle TypeRelay API validation, authentication, authorization, plan, revision, rate-limit, import, and permanent-removal errors safely."
+---
+
 # Errors and limits
 
 Errors return `{ "error": "message" }` and may include stable `code` and `details` fields. `plan_required` is a 403 with the unavailable capability and upgrade URL. `plan_limit` is a 409 with resource, limit, usage, and upgrade URL. Other statuses: 400 invalid request; 401 invalid/expired authentication; 403 scope or permission; 404 unavailable resource; 409 revision or retry mismatch; 410 permanently removed/expired Trash; 422 validation; 429 rate limit.

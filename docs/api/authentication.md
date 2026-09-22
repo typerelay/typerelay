@@ -1,3 +1,8 @@
+---
+title: "TypeRelay API authentication"
+description: "Authenticate TypeRelay API requests with permanent personal access tokens or OAuth 2.0 PKCE clients, scoped resources, and discovery endpoints."
+---
+
 # Authentication
 
 Hosted API access requires an active Pro trial, Pro or Team account. Self-hosted installations are unrestricted. TypeRelay accepts personal access tokens and OAuth 2.0 access tokens in the `Authorization` header; query-string credentials are not accepted.

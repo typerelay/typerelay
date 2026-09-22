@@ -1,3 +1,8 @@
+---
+title: "TypeRelay teams and roles"
+description: "Manage TypeRelay team roles, invitations, groups, shared-library access, member changes, and plan limits without exposing private libraries."
+---
+
 # Teams and roles
 
 Team management and library sharing require the Team plan. Open the avatar menu, choose **Settings → My team**, and confirm the correct account is selected.

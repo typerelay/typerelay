@@ -1,3 +1,8 @@
+---
+title: "TypeRelay Cloud billing"
+description: "Understand TypeRelay Cloud plans, trials, billing, seat limits, cancellation, Stripe Tax, and custom-domain white-label settings."
+---
+
 # Billing
 
 Hosted TypeRelay accounts start on Free. Account owners and admins can open **Settings → Subscription** to start the one-time seven-day Pro trial, buy Pro or Team, change Team seat capacity, update payment details, view invoices, or cancel at the end of the billing period.

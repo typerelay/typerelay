@@ -1,3 +1,8 @@
+---
+title: "Sync TypeRelay Desktop"
+description: "Connect TypeRelay Desktop to an account, enroll local libraries, synchronize offline changes, merge content, and recover from conflicts."
+---
+
 # Desktop sync
 
 Open **Settings → Sync**, enter the server origin and choose **Authenticate**. The browser asks you to sign in, select an account and approve the device. The desktop stores credentials outside the webview in its private sync directory.

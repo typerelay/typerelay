@@ -1,3 +1,8 @@
+---
+title: "TypeRelay guide"
+description: "Learn how TypeRelay organizes reusable text and code in private or shared libraries across the web, Desktop, CLI, TUI, API, and MCP."
+---
+
 # Introduction
 
 TypeRelay stores text and code snippets in libraries. Use the web app, terminal editor or desktop search panel. Share selected libraries with your team; private libraries remain visible only to their creator.

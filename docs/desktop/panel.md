@@ -1,3 +1,8 @@
+---
+title: "TypeRelay Desktop search panel"
+description: "Search, filter, copy, edit, and expand TypeRelay snippets from the keyboard-first Desktop panel, including prompts for template variables."
+---
+
 # Search panel
 
 Press **Ctrl+Shift+;** or left-click the **T** tray/menu-bar icon. Search across accessible local libraries by abbreviation, title or content. Exact abbreviations rank first, followed by abbreviation prefixes, abbreviation substrings and content matches. Results identify their library and show a literal preview.

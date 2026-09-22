@@ -1,3 +1,8 @@
+---
+title: "TypeRelay settings"
+description: "Configure your TypeRelay profile, security, team, connected devices, access tokens, OAuth apps, subscription, branding, and Desktop preferences."
+---
+
 # Settings
 
 Use the avatar menu in the web app to open Settings. The available sections depend on your role, plan and whether hosted billing is enabled.

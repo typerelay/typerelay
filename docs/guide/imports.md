@@ -1,3 +1,8 @@
+---
+title: "Import and export TypeRelay snippets"
+description: "Import and export TypeRelay libraries with YAML, bundles, SnippetsLab, TextExpander, Text Blaze, and TypeIt4Me while preserving supported content."
+---
+
 # Import and export
 
 Choose **Import** below the web library list. Every import is previewed before it writes data. Select the entries to keep and correct or clear invalid abbreviations. The server reparses and validates the source when you save; a failed import does not leave partial libraries.

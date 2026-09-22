@@ -1,3 +1,8 @@
+---
+title: "TypeRelay API workflows"
+description: "Build reliable TypeRelay API workflows with cursor pagination, revision checks, idempotent operation IDs, imports, Trash, and conflict handling."
+---
+
 # Workflows
 
 List libraries, then list snippets by library ID. Lists return `items` and `next_cursor`; send that cursor with the next request and a limit from 1 to 100. Snippets include position for display ordering. Search matches abbreviation, title and content.

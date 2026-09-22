@@ -1,3 +1,8 @@
+---
+title: "Accounts and sign-in"
+description: "Create a TypeRelay account, sign in with passwords, Magic Links or passkeys, manage two-factor authentication, recover access, and switch accounts."
+---
+
 # Accounts and sign-in
 
 ## Create an account

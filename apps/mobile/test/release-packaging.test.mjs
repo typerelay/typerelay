@@ -67,7 +67,7 @@ describe('mobile release packaging', () => {
 		assert.match(ios, /view\.backgroundColor = color/);
 	});
 
-	it('keeps keyboard search chrome contextual and compact', () => {
+	it('keeps keyboard search contextual with inset-safe layered results', () => {
 		const android = source('apps/mobile/android/app/src/main/java/com/typerelay/mobile/SnippetKeyboard.kt');
 		const ios = source('apps/mobile/ios/App/Keyboard/KeyboardViewController.swift');
 		for (const nativeKeyboard of [android, ios]) {
@@ -75,8 +75,17 @@ describe('mobile release packaging', () => {
 			assert.doesNotMatch(nativeKeyboard, /button\("Back"\)/);
 		}
 		assert.match(android, /input\("Snippet search"\)\.apply \{ visibility = View\.GONE \}/);
-		assert.match(android, /resultScroll\.visibility = View\.GONE/);
+		assert.match(android, /WindowInsetsCompat\.Type\.navigationBars\(\) or WindowInsetsCompat\.Type\.mandatorySystemGestures\(\)/);
+		assert.match(android, /enum class KeyboardMode \{ TYPING, RESULTS, PREVIEW, FIELD_EDITING \}/);
+		assert.match(android, /resultListScroll = ScrollView/);
+		assert.match(android, /previewScroll = ScrollView/);
+		assert.doesNotMatch(android, /dp\(92\)/);
 		assert.match(ios, /queryButton = button\(""\)/);
-		assert.match(ios, /heightConstraint\?\.constant = min\(360, base \+ queryHeight \+ resultHeight\)/);
+		assert.match(ios, /enum KeyboardMode \{ case typing, results, preview, fieldEditing \}/);
+		assert.match(ios, /resultListScroll = UIScrollView\(\)/);
+		assert.match(ios, /previewScroll = UIScrollView\(\)/);
+		assert.match(ios, /case \.results, \.preview: target = 360/);
+		assert.doesNotMatch(ios, /resultHeight: CGFloat|resultHeight =|\? 0 : 80/);
+		for (const nativeKeyboard of [android, ios]) assert.match(nativeKeyboard, /overlayFooter/);
 	});
 });

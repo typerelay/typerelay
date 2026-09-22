@@ -1,3 +1,8 @@
+---
+title: "Text, rich-text and code snippets"
+description: "Create TypeRelay text, rich-text, code, and variable-powered snippets; set abbreviations; and safely copy, move, share, or trash them."
+---
+
 # Text, rich-text and code snippets
 
 Every snippet has an expansion and may have a title and abbreviation. Titles make browsing easier. Abbreviations activate continuous expansion; entries without one remain searchable and copyable.

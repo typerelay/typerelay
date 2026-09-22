@@ -1,3 +1,8 @@
+---
+title: "Configure self-hosted TypeRelay"
+description: "Configure TypeRelay development and production Compose services, security secrets, domains, signup, MongoDB, MCP, and outbound email."
+---
+
 # Configuration
 
 Use `compose.yml` only for development. Export `DEV_TYPERELAY_MONGODB_URI`, `MEMCACHED_SERVERS`, `SMTP_SERVERS`, `SMTP_FROM`, `SESSION_SECRET`, and `JWT_SECRET` in your Fish terminal; MongoDB, Memcached and SMTP come from dbh and are not duplicated in the development stack. Start it with `docker compose up -d --build`; the app, MCP adapter and scheduler start by default.

@@ -1,3 +1,8 @@
+---
+title: "Troubleshoot TypeRelay Desktop"
+description: "Troubleshoot TypeRelay Desktop panel, expansion, insertion, synchronization, and update problems on Omarchy, macOS, and Windows."
+---
+
 # Troubleshooting
 
 ## The panel does not open

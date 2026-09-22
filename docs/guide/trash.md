@@ -1,3 +1,8 @@
+---
+title: "TypeRelay Trash"
+description: "Restore or permanently delete TypeRelay libraries and snippets from 30-day Trash while respecting permissions, conflicts, and purge rules."
+---
+
 # Trash
 
 Moving a snippet or library to Trash removes it from normal browsing, search and expansion immediately. It can be restored for 30 days; after the deadline, cleanup permanently removes its content.
