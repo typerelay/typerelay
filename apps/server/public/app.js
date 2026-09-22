@@ -52,8 +52,8 @@ class TypeRelay {
 			if (event.target.id === 'trigger') Abbreviation.field(event.target);
 			if (['snippet-type', 'code-language', 'code-indent', 'code-width'].includes(event.target.id)) await this.codeEditor().catch(error => this.toast(error.message, 'error'));
 			if (event.target.id === 'shared') document.querySelectorAll('#members-select,#groups-select').forEach(field => { field.disabled = !event.target.checked; });
-			if (event.target.hasAttribute('data-import-key')) { const field = document.querySelector('[data-import-trigger="' + event.target.dataset.importKey + '"]'); if (field) field.disabled = !event.target.checked || field.dataset.review === 'true'; }
-			if (event.target.id === 'import-file') { this.importSource = null; document.querySelector('#import-preview').replaceChildren(); document.querySelector('#record-form button[type=submit]').disabled = true; }
+			if (event.target.hasAttribute('data-import-key')) { const field = document.querySelector('[data-import-trigger="' + event.target.dataset.importKey + '"]'); if (field) field.disabled = !event.target.checked || field.dataset.review === 'true'; this.syncImportButtons(); }
+			if (event.target.id === 'import-file') { this.importSource = null; document.querySelector('#import-preview').replaceChildren(); this.syncImportButtons(); }
 			if (event.target.id === 'yaml-file' && event.target.files[0]) document.querySelector('#yaml').value = await event.target.files[0].text();
 			if (event.target.hasAttribute('data-white-label-file') && event.target.files[0]) await this.whiteLabelUpload(event.target).catch(error => this.toast(error.message, 'error'));
 		});
@@ -371,6 +371,23 @@ class TypeRelay {
 		if (this.returnSettings) await new Promise(resolve => { settings.addEventListener('hidden.bs.modal', resolve, { once: true }); bootstrap.Modal.getInstance(settings).hide(); });
 		bootstrap.Modal.getOrCreateInstance(document.querySelector('#form-modal')).show();
 	}
+	renderImportPage(page) {
+		const entries = [...document.querySelectorAll('#import-preview [data-import-entry]')];
+		const pages = Math.max(1, Math.ceil(entries.length / 15));
+		const current = Math.max(0, Math.min(page, pages - 1));
+		entries.forEach((entry, index) => { entry.hidden = Math.floor(index / 15) !== current; });
+		const controls = document.querySelector('[data-import-pagination]');
+		if (!controls) return;
+		controls.dataset.page = String(current);
+		controls.hidden = pages <= 1;
+		controls.querySelector('[data-import-page-label]').textContent = 'Page ' + (current + 1) + ' of ' + pages;
+		controls.querySelector('[data-import-page="previous"]').disabled = current === 0;
+		controls.querySelector('[data-import-page="next"]').disabled = current === pages - 1;
+	}
+	syncImportButtons() {
+		const disabled = !document.querySelector('#import-preview [data-import-key]:checked');
+		for (const button of document.querySelectorAll('#record-form button[type="submit"]')) button.disabled = disabled;
+	}
 	async onSubmit(event) {
 		const form = event.target;
 		const groupForm = form.hasAttribute('data-group-form');
@@ -549,6 +566,7 @@ class TypeRelay {
 		const data = button.dataset;
 		const library = this.libraries.get(this.selected);
 		if (button.dataset.copySnippet) { const library = this.libraries.get(this.selected); const entry = library.snippets.find(item => item.id === button.dataset.copySnippet); if (['template', 'rich_text'].includes(entry.content.type)) return this.templateFill.open(entry.content, async () => { const current = await this.request('library-view/' + library._id); if (!current.library.snippets.some(item => item.id === entry.id && item.revision === entry.revision)) throw new Error('Snippet changed; reopen it before copying.'); }); await navigator.clipboard.writeText(entry.replace); return this.toast('Copied'); }
+		if (button.dataset.importPage) { const controls = button.closest('[data-import-pagination]'); this.renderImportPage(Number(controls.dataset.page) + (button.dataset.importPage === 'next' ? 1 : -1)); return; }
 		if (button.dataset.importFormat) { this.importSource = null; this.importFormat = button.dataset.importFormat; return this.form('import', { format: this.importFormat }, async () => {
 			const selected = [...document.querySelectorAll('[data-import-key]:checked')].map(input => ({ key: input.dataset.importKey, trigger: Abbreviation.normalize(document.querySelector('[data-import-trigger="' + input.dataset.importKey + '"]').value) }));
 			await this.applyBatch(await this.request('import/' + this.importFormat, 'POST', { source: this.importSource, filename: this.importFilename, selected }), false);
@@ -562,7 +580,8 @@ class TypeRelay {
 				this.importSource = await file.text(); this.importFilename = file.name;
 				const preview = await this.request('import/' + this.importFormat + '/preview', 'POST', { source: this.importSource, filename: this.importFilename });
 				document.querySelector('#import-preview').replaceChildren(this.fragment(preview.html));
-				document.querySelector('#record-form button[type="submit"]').disabled = !preview.entries.some(entry => !entry.error);
+				this.renderImportPage(0);
+				this.syncImportButtons();
 			} finally { button.disabled = false; }
 			return;
 		}
