@@ -1,6 +1,6 @@
 # TypeRelay desktop panel architecture
 
-Ctrl+Shift+Semicolon opens the panel. Left-click the T icon to search; right-click for Sync now, Settings and Quit TypeRelay. Closing the panel hides it; Quit stops only the panel, not Omarchy's expansion service. Settings controls the shortcut and launch at login, plus browser connection and explicitly selected local-library enrollment.
+Ctrl+Shift+Semicolon opens the panel. Left-click the T icon to search; right-click for Sync now, Settings, Check for updates and Quit. Closing the panel hides it; Quit stops only the panel, not Omarchy's expansion service. Settings controls the shortcut and launch at login, plus browser connection and explicitly selected local-library enrollment.
 
 The panel uses a shared local Pug/JavaScript UI in Tauri. Linux reads Omarchy theme colors; macOS and Windows use platform fonts and light/dark styles. Search uses the existing SQLite store, requires no network, includes active read-accessible libraries and snippets without abbreviations, and ranks exact abbreviations, abbreviation prefixes, abbreviation substrings and content matches. Results include the library and a literal preview. Enter revalidates the record ID/revision/access before insertion; Copy also revalidates.
 
@@ -39,7 +39,7 @@ Windows Notepad and PowerShell pass direct expansion plus keyboard and one-click
 ## macOS / Windows checklist
 
 1. Install and launch; confirm the native Accessibility prompt appears on macOS and opens the correct System Settings pane. Connect to your TypeRelay server using browser sign-in. Verify assigned libraries download and search still works offline.
-2. Click the T icon: panel opens directly. Right-click: Sync now, Settings, Quit. Quit must not affect another separately running expansion client.
+2. Click the T icon: panel opens directly. Right-click: Sync now, Settings, Check for updates, Quit. Quit must not affect another separately running expansion client.
 3. Press Ctrl+Shift+Semicolon from a browser field, text editor, notes app and terminal. Search, use arrows, press Enter: exactly one insertion into the originating window. Test multiline text, tabs, Unicode and snippets without abbreviations.
 4. Open from a window on each monitor, including different display scales. Confirm centering and original-window restoration.
 5. Test Escape, outside-click dismissal, closed target windows, permission denial and shortcut conflicts. No insertion into another app after a reported failure.

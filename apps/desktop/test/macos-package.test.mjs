@@ -64,7 +64,7 @@ test('macOS startup requests both permissions and offers settings and TUI launch
 	assert.match(smoke, /immediateFollow/);
 	assert.match(smoke, /releaseTimeout/);
 	assert.match(smoke, /Be right back\.x/);
-	assert.match(tray, /Open TypeRelay TUI/);
+	assert.doesNotMatch(tray, /Open TypeRelay TUI/);
 });
 
 test('local macOS build uses the configured Developer ID identity', async () => {
