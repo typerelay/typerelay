@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "repository": "typerelay/typerelay",
+  "selection": "single",
+  "targets": {
+    "typerelay": {
+      "name": "Typerelay",
+      "site_id": "6aa747394c5e348bfcbd8a02"
+    }
+  }
+}
