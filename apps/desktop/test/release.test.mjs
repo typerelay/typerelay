@@ -19,6 +19,10 @@ test('build children never receive the hardware PIN or publishing credentials', 
 	const env = PanelRelease.buildEnvironment({ PATH: '/bin', WINDOWS_SIGNING_PIN: 'fixture-pin', BUNNY_STORAGE_PASSWORD_TEST: 'fixture-storage', APPLE_PASSWORD: 'fixture-apple' });
 	assert.deepEqual(env, { PATH: '/bin' });
 });
+test('Tauri signing receives only one private key source', () => {
+	const env = PanelRelease.buildEnvironment({ TAURI_SIGNING_PRIVATE_KEY: 'fixture-key', TAURI_SIGNING_PRIVATE_KEY_PATH: '/private/key', TAURI_SIGNING_PRIVATE_KEY_PASSWORD: 'fixture-password' });
+	assert.deepEqual(env, { TAURI_SIGNING_PRIVATE_KEY: 'fixture-key', TAURI_SIGNING_PRIVATE_KEY_PASSWORD: 'fixture-password' });
+});
 test('Apple credential aliases match the existing Electron release environment', () => {
 	const env = PanelRelease.appleEnvironment({ APPLE_API_KEY: '/private/AuthKey.p8', APPLE_API_KEY_ID: 'KEYID', APPLE_API_ISSUER: 'ISSUER', WINDOWS_SIGNING_PIN: 'fixture-pin' });
 	assert.equal(env.APPLE_API_KEY, 'KEYID'); assert.equal(env.APPLE_API_KEY_PATH, '/private/AuthKey.p8'); assert.equal(env.WINDOWS_SIGNING_PIN, undefined);

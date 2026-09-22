@@ -85,6 +85,7 @@ export class PanelRelease {
 	static buildEnvironment(environment) {
 		const result = { ...environment };
 		for (const key of Object.keys(result)) if (key === 'WINDOWS_SIGNING_PIN' || key.startsWith('BUNNY_STORAGE_PASSWORD') || key.startsWith('APPLE_')) delete result[key];
+		if (result.TAURI_SIGNING_PRIVATE_KEY) delete result.TAURI_SIGNING_PRIVATE_KEY_PATH;
 		return result;
 	}
 	static appleEnvironment(environment) {
