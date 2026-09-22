@@ -64,7 +64,15 @@ class PrefixSmoke(desktop.Smoke):
                 self.type_keys(identity, ";efish" + "\x1c" * 4 + "\b" + "s" + "\x1d" * 4 + " ")
                 actual = output.read_text()
                 assert actual == "Be right back.Be right back.,brb Be right back.xCorrect fish.Correct fish.", repr(actual)
-                print("PASS: prefix reload, overlapping keys, caret correction and following input order", flush=True)
+                identity = self.focus("TypeRelay GTK Test")
+                self.type_keys(identity, ";efish" + "\x1c" * 4 + "\b" + "s" + "\x1d" * 5 + " ")
+                actual = output.read_text()
+                assert actual == "Be right back.Be right back.,brb Be right back.xCorrect fish.Correct fish.Correct fish.", repr(actual)
+                identity = self.focus("TypeRelay GTK Test")
+                self.type_keys(identity, "Z\x1c;efish" + "\x1c" * 4 + "\b" + "s" + "\x1d" * 5 + " ")
+                actual = output.read_text()
+                assert actual == "Be right back.Be right back.,brb Be right back.xCorrect fish.Correct fish.Correct fish.Correct fish.Z", repr(actual)
+                print("PASS: prefix reload, overlapping keys, caret correction with extra Right and following text", flush=True)
             finally:
                 if client and client.poll() is None:
                     client.send_signal(signal.SIGINT)

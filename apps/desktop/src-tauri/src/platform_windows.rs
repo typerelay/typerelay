@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, ensure};
 use std::{cell::RefCell,path::PathBuf,sync::{Arc,mpsc::{Receiver,SyncSender,sync_channel}},os::windows::io::{OwnedHandle,FromRawHandle},time::Duration};
 use typerelay_client::{database::DatabaseSnapshot,settings::SettingsStore};
-use typerelay_core::{Engine,Expansion,Input};
+use typerelay_core::{Engine,Expansion,Input,FeedResult};
 use windows::Win32::System::Threading::{OpenProcess,PROCESS_QUERY_LIMITED_INFORMATION};
 use windows::Win32::System::{Com::{DVASPECT_CONTENT,FORMATETC,IDataObject,STGMEDIUM,TYMED_HGLOBAL},Memory::{GlobalLock,GlobalSize,GlobalUnlock},Ole::{OleGetClipboard,OleInitialize,OleUninitialize,ReleaseStgMedium}};
 use windows::Win32::{Foundation::{HWND,LPARAM,LRESULT,RECT,WPARAM}, UI::{WindowsAndMessaging::{CallNextHookEx,DispatchMessageW,GetForegroundWindow,GetGUIThreadInfo,GetMessageW,GetSystemMetrics,GetWindowRect,GetWindowTextW,GetClassNameW,GetWindowThreadProcessId,IsWindow,KBDLLHOOKSTRUCT,KillTimer,MSG,SendMessageTimeoutW,SetForegroundWindow,SetTimer,SetWindowsHookExW,TranslateMessage,UnhookWindowsHookEx,WH_KEYBOARD_LL,WH_MOUSE_LL,WM_KEYDOWN,WM_KEYUP,WM_SYSKEYDOWN,WM_SYSKEYUP,WM_LBUTTONDOWN,WM_RBUTTONDOWN,WM_MBUTTONDOWN,WM_XBUTTONDOWN,WM_TIMER,GUITHREADINFO,HHOOK,SMTO_ABORTIFHUNG,SM_REMOTESESSION}, Input::KeyboardAndMouse::{GetAsyncKeyState,GetKeyboardLayout,GetKeyboardState,SendInput,ToUnicodeEx,INPUT,INPUT_0,INPUT_KEYBOARD,KEYBDINPUT,KEYEVENTF_KEYUP,VIRTUAL_KEY,VK_BACK,VK_CONTROL,VK_LWIN,VK_MENU,VK_RETURN,VK_RWIN,VK_SHIFT,VK_V}}};
@@ -36,22 +36,24 @@ pub fn open_url(url:&str)->Result<()> { std::process::Command::new("rundll32.exe
 pub fn open_tui()->Result<()> { let executable=std::env::current_exe()?.with_file_name("typerelay-tui.exe");ensure!(executable.is_file(),"TypeRelay TUI is missing from this installation");std::process::Command::new(executable).spawn().context("Could not open TypeRelay TUI")?;Ok(()) }
 
 pub struct ExpansionRequest { pub target:Target, pub expansion:Expansion, pub released:Receiver<()> }
-struct HookState { store:DatabaseSnapshot, settings:SettingsStore, engine:Engine, target:Option<Target>, sender:SyncSender<ExpansionRequest>, suppress_space:Option<SyncSender<()>> }
+struct HookState { store:DatabaseSnapshot, settings:SettingsStore, engine:Engine, target:Option<Target>, sender:SyncSender<ExpansionRequest>, suppress_space:Option<SyncSender<()>>, suppress_right:bool, right_forwarded:bool }
 thread_local! { static HOOK_STATE:RefCell<Option<HookState>>=const{RefCell::new(None)}; }
 impl HookState {
-    fn new(directory:PathBuf,settings_path:PathBuf,sender:SyncSender<ExpansionRequest>)->Result<Self>{let store=DatabaseSnapshot::open(&directory)?;let settings=SettingsStore::open(settings_path)?;let mut engine=Engine::new(store.snapshot.clone());engine.set_prefix(&settings.settings.trigger_prefix).map_err(anyhow::Error::msg)?;Ok(Self{store,settings,engine,target:None,sender,suppress_space:None})}
+    fn new(directory:PathBuf,settings_path:PathBuf,sender:SyncSender<ExpansionRequest>)->Result<Self>{let store=DatabaseSnapshot::open(&directory)?;let settings=SettingsStore::open(settings_path)?;let mut engine=Engine::new(store.snapshot.clone());engine.set_prefix(&settings.settings.trigger_prefix).map_err(anyhow::Error::msg)?;Ok(Self{store,settings,engine,target:None,sender,suppress_space:None,suppress_right:false,right_forwarded:false})}
     fn input(vk:u32,scan:u32)->Input {match vk{0x08=>Input::Backspace,0x2e=>Input::Delete,0x25=>Input::Left,0x27=>Input::Right,0x20=>Input::Space,_=>unsafe{let window=GetForegroundWindow();let thread=GetWindowThreadProcessId(window,None);let layout=GetKeyboardLayout(thread);let mut state=[0u8;256];if GetKeyboardState(&mut state).is_err(){return Input::Cancel;}
         if let Some(key)=state.get_mut(vk as usize){*key|=0x80;}let mut buffer=[0u16;8];let length=ToUnicodeEx(vk,scan,&state,&mut buffer,5,Some(layout));if length<=0{return Input::Cancel;}let Ok(value)=String::from_utf16(&buffer[..usize::try_from(length).unwrap_or_default().min(buffer.len())])else{return Input::Cancel;};let mut characters=value.chars();let Some(character)=characters.next()else{return Input::Cancel;};if characters.next().is_some(){Input::Cancel}else{Input::Character(character)}}}}
     fn modified()->bool {unsafe{let control=GetAsyncKeyState(VK_CONTROL.0 as i32)<0;let alt=GetAsyncKeyState(VK_MENU.0 as i32)<0;[VK_LWIN,VK_RWIN,VK_SHIFT].iter().any(|key|GetAsyncKeyState(key.0 as i32)<0)||control!=alt}}
     fn key(&mut self,vk:u32,scan:u32,down:bool)->bool {
-        if !down {if vk==0x20&&let Some(released)=self.suppress_space.take(){let _=released.try_send(());return true;}return false;}
+        if !down {if vk==0x27{if self.suppress_right{self.suppress_right=false;return true;}self.right_forwarded=false;}if vk==0x20&&let Some(released)=self.suppress_space.take(){let _=released.try_send(());return true;}return false;}
+        if vk==0x27{if self.suppress_right{return true;}if self.right_forwarded{self.engine.feed(Input::Cancel);self.target=None;return false;}self.right_forwarded=true;}
         if Self::modified(){self.engine.feed(Input::Cancel);self.target=None;return false;}
         if self.target.as_ref().is_some_and(|target|target.focused().ok()!=Some(true)){self.engine.feed(Input::Cancel);self.target=None;}
         let input=Self::input(vk,scan);
         if matches!(input,Input::Character(character)if character==self.engine.prefix()){self.target=Target::capture().ok();}
         if self.target.is_none(){self.engine.feed(Input::Cancel);return false;}
-        let expansion=self.engine.feed(input);
-        if let Some(expansion)=expansion&&let Some(target)=self.target.take()&&target.focused().ok()==Some(true){let (release,released)=sync_channel(1);if self.sender.try_send(ExpansionRequest{target,expansion,released}).is_ok(){self.suppress_space=Some(release);return true;}}
+        let result=self.engine.feed_event(input);
+        if matches!(result,FeedResult::Suppress){self.right_forwarded=false;self.suppress_right=true;return true;}
+        if let FeedResult::Expand(expansion)=result&&let Some(target)=self.target.take()&&target.focused().ok()==Some(true){let (release,released)=sync_channel(1);if self.sender.try_send(ExpansionRequest{target,expansion,released}).is_ok(){self.suppress_space=Some(release);return true;}}
         if matches!(input,Input::Cancel|Input::Space){self.target=None;}
         false
     }

@@ -5,7 +5,7 @@ use foreign_types::ForeignType;
 use objc2_app_kit::{NSWorkspace,NSRunningApplication,NSApplicationActivationOptions};
 use std::{ffi::{c_void,CString},mem,process::Command,sync::{Arc,Mutex,mpsc::{Receiver,SyncSender,sync_channel}},time::{Duration,Instant}};
 use typerelay_client::{database::DatabaseSnapshot,settings::SettingsStore};
-use typerelay_core::{Engine,Expansion,Input};
+use typerelay_core::{Engine,Expansion,Input,FeedResult};
 use objc2_foundation::NSObjectProtocol;
 use objc2_user_notifications::UNUserNotificationCenterDelegate;
 type Ref = *const c_void;
@@ -103,9 +103,9 @@ impl DeferredInput {
     }
 }
 pub struct ExpansionRequest { pub target:Target,pub expansion:Expansion,pub released:Receiver<()>,pub deferred:DeferredInput }
-struct ExpansionState { store:DatabaseSnapshot,settings:SettingsStore,engine:Engine,target:Option<Target>,sender:SyncSender<ExpansionRequest>,release:Option<SyncSender<()>>,deferred:Option<DeferredInput>,reloaded:Instant }
+struct ExpansionState { store:DatabaseSnapshot,settings:SettingsStore,engine:Engine,target:Option<Target>,sender:SyncSender<ExpansionRequest>,release:Option<SyncSender<()>>,deferred:Option<DeferredInput>,suppress_right_up:bool,reloaded:Instant }
 impl ExpansionState {
-    fn new(directory:&std::path::Path,settings_path:std::path::PathBuf,sender:SyncSender<ExpansionRequest>)->Result<Self>{let store=DatabaseSnapshot::open(directory)?;let settings=SettingsStore::open(settings_path)?;let mut engine=Engine::new(store.snapshot.clone());engine.set_prefix(&settings.settings.trigger_prefix).map_err(anyhow::Error::msg)?;Ok(Self{store,settings,engine,target:None,sender,release:None,deferred:None,reloaded:Instant::now()})}
+    fn new(directory:&std::path::Path,settings_path:std::path::PathBuf,sender:SyncSender<ExpansionRequest>)->Result<Self>{let store=DatabaseSnapshot::open(directory)?;let settings=SettingsStore::open(settings_path)?;let mut engine=Engine::new(store.snapshot.clone());engine.set_prefix(&settings.settings.trigger_prefix).map_err(anyhow::Error::msg)?;Ok(Self{store,settings,engine,target:None,sender,release:None,deferred:None,suppress_right_up:false,reloaded:Instant::now()})}
     fn reload(&mut self){
         if self.reloaded.elapsed()<Duration::from_millis(500){return;}
         self.reloaded=Instant::now();
@@ -119,19 +119,24 @@ impl ExpansionState {
         if self.deferred.as_ref().is_some_and(DeferredInput::finished){self.deferred=None;}
         let key=event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16;
         if matches!(event_type,CGEventType::KeyUp){
+            if key==124&&self.suppress_right_up{self.suppress_right_up=false;return true;}
             if key==KeyCode::SPACE&&let Some(release)=self.release.take(){let _=release.try_send(());return false;}
             if let Some(deferred)=&self.deferred{return deferred.capture(event_type,event);}
             return false;
         }
+        if key==124&&self.suppress_right_up{return true;}
         if let Some(deferred)=&self.deferred {if matches!(event_type,CGEventType::KeyDown){return deferred.capture(event_type,event);}deferred.cancel();}
         if !matches!(event_type,CGEventType::KeyDown){self.engine.feed(Input::Cancel);self.target=None;return false;}
         self.reload();
+        if key==124&&event.get_integer_value_field(EventField::KEYBOARD_EVENT_AUTOREPEAT)!=0{self.engine.feed(Input::Cancel);self.target=None;return false;}
         let modifiers=event.get_flags();
         if modifiers.intersects(CGEventFlags::CGEventFlagCommand|CGEventFlags::CGEventFlagControl|CGEventFlags::CGEventFlagAlternate|CGEventFlags::CGEventFlagShift|CGEventFlags::CGEventFlagAlphaShift){self.engine.feed(Input::Cancel);self.target=None;return false;}
         let input=Self::input(event,key);
         if matches!(input,Input::Character(character)if character==self.engine.prefix()){self.target=Target::capture().ok();}
         if self.target.is_none(){self.engine.feed(Input::Cancel);return false;}
-        if let Some(mut expansion)=self.engine.feed(input)&&let Some(target)=self.target.take()&&target.focused().ok()==Some(true){expansion.erase+=1;let (release,released)=sync_channel(1);let deferred=DeferredInput::new();if self.sender.try_send(ExpansionRequest{target,expansion,released,deferred:deferred.clone()}).is_ok(){self.release=Some(release);self.deferred=Some(deferred);}}
+        let result=self.engine.feed_event(input);
+        if matches!(result,FeedResult::Suppress){self.suppress_right_up=true;return true;}
+        if let FeedResult::Expand(mut expansion)=result&&let Some(target)=self.target.take()&&target.focused().ok()==Some(true){expansion.erase+=1;let (release,released)=sync_channel(1);let deferred=DeferredInput::new();if self.sender.try_send(ExpansionRequest{target,expansion,released,deferred:deferred.clone()}).is_ok(){self.release=Some(release);self.deferred=Some(deferred);}}
         if matches!(input,Input::Cancel|Input::Space){self.target=None;}
         false
     }

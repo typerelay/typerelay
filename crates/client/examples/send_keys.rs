@@ -50,7 +50,7 @@ impl Sender {
             if shifted{device.emit(&[InputEvent::new(EventType::KEY.0,KeyCode::KEY_LEFTSHIFT.0,1)])?;}
             for value in [1, 0] {
                 device.emit(&[InputEvent::new(EventType::KEY.0, key.0, value)])?;
-                thread::sleep(Duration::from_millis(5));
+                thread::sleep(Duration::from_millis(15));
             }
             if shifted{device.emit(&[InputEvent::new(EventType::KEY.0,KeyCode::KEY_LEFTSHIFT.0,0)])?;}
         }
