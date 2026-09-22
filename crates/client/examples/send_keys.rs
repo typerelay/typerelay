@@ -41,7 +41,7 @@ impl Sender {
         for character in text.chars() {
             focused()?;
             let name = match character {
-                '{' => "KEY_LEFTBRACE".into(), '}' => "KEY_RIGHTBRACE".into(), ':' => "KEY_SEMICOLON".into(), '\t' => "KEY_TAB".into(), ',' => "KEY_COMMA".into(), ';' => "KEY_SEMICOLON".into(), ' ' => "KEY_SPACE".into(), '-' => "KEY_MINUS".into(), '\u{8}' => "KEY_BACKSPACE".into(), '\n' => "KEY_ENTER".into(), '\u{1b}' => "KEY_ESC".into(),
+                '{' => "KEY_LEFTBRACE".into(), '}' => "KEY_RIGHTBRACE".into(), ':' => "KEY_SEMICOLON".into(), '\t' => "KEY_TAB".into(), ',' => "KEY_COMMA".into(), ';' => "KEY_SEMICOLON".into(), ' ' => "KEY_SPACE".into(), '-' => "KEY_MINUS".into(), '\u{8}' => "KEY_BACKSPACE".into(), '\u{7f}' => "KEY_DELETE".into(), '\u{1c}' => "KEY_LEFT".into(), '\u{1d}' => "KEY_RIGHT".into(), '\n' => "KEY_ENTER".into(), '\u{1b}' => "KEY_ESC".into(),
                 c if c.is_ascii_alphabetic() || c.is_ascii_digit() => format!("KEY_{}", c.to_ascii_uppercase()),
                 _ => anyhow::bail!("Unsupported test character"),
             };

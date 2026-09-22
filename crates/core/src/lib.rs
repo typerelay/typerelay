@@ -42,7 +42,7 @@ impl Snapshot {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum Input { Character(char), Backspace, Space, Cancel }
+pub enum Input { Character(char), Backspace, Delete, Left, Right, Space, Cancel }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Identity { pub id: String, pub library: String, pub revision: i64 }
@@ -62,12 +62,15 @@ impl Expansion {
 pub struct Engine {
     snapshot: Snapshot,
     pending: String,
+    cursor: usize,
     prefix: char,
 }
 
 impl Engine {
     pub const DEFAULT_PREFIX: char = ';';
-    pub fn new(snapshot: Snapshot) -> Self { Self { snapshot, pending: String::new(), prefix: Self::DEFAULT_PREFIX } }
+    pub fn new(snapshot: Snapshot) -> Self { Self { snapshot, pending: String::new(), cursor: 0, prefix: Self::DEFAULT_PREFIX } }
+
+    fn clear_pending(&mut self) { self.pending.clear(); self.cursor = 0; }
 
     pub fn validate_prefix(value: &str) -> Result<char, String> {
         let mut chars = value.chars();
@@ -78,32 +81,47 @@ impl Engine {
     pub fn prefix(&self) -> char { self.prefix }
     pub fn set_prefix(&mut self, prefix: &str) -> Result<(), String> {
         let prefix = Self::validate_prefix(prefix)?;
-        if prefix != self.prefix { self.prefix = prefix; self.pending.clear(); }
+        if prefix != self.prefix { self.prefix = prefix; self.clear_pending(); }
         Ok(())
     }
 
     /// Future sync publishes a complete validated snapshot through this same boundary.
     pub fn replace_snapshot(&mut self, snapshot: Snapshot) {
         self.snapshot = snapshot;
-        self.pending.clear();
+        self.clear_pending();
     }
 
     /// The adapter suppresses the confirming Space only when an expansion is returned.
     pub fn feed(&mut self, input: Input) -> Option<Expansion> {
         match input {
-            Input::Cancel => self.pending.clear(),
-            Input::Backspace => { self.pending.pop(); }
+            Input::Cancel => self.clear_pending(),
+            Input::Backspace if self.cursor > 0 => {
+                self.cursor -= 1;
+                self.pending.remove(self.cursor);
+                if self.cursor == 0 { self.clear_pending(); }
+            }
+            Input::Backspace => self.clear_pending(),
+            Input::Delete if self.cursor < self.pending.len() => {
+                self.pending.remove(self.cursor);
+                if self.cursor == 0 { self.clear_pending(); }
+            }
+            Input::Delete => self.clear_pending(),
+            Input::Left if self.cursor > 0 => self.cursor -= 1,
+            Input::Right if self.cursor < self.pending.len() => self.cursor += 1,
+            Input::Left | Input::Right => self.clear_pending(),
             Input::Space => {
-                let expansion = self.pending.strip_prefix(self.prefix).and_then(|abbreviation| self.snapshot.snippets.get(abbreviation)).map(|s| Expansion { template: self.snapshot.templates.get(&s.trigger).cloned(), erase: self.pending.len(), text: s.replacement.clone() });
-                self.pending.clear();
+                let abbreviation = if self.cursor == self.pending.len() { self.pending.strip_prefix(self.prefix) } else { None };
+                let expansion = abbreviation.and_then(|abbreviation| self.snapshot.snippets.get(abbreviation)).map(|s| Expansion { template: self.snapshot.templates.get(&s.trigger).cloned(), erase: self.pending.len(), text: s.replacement.clone() });
+                self.clear_pending();
                 return expansion;
             }
-            Input::Character(c) if c == self.prefix => self.pending = c.to_string(),
-            Input::Character(c) if !self.pending.is_empty() && (c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') => {
-                self.pending.push(c);
-                if self.pending.len() > 64 { self.pending.clear(); }
+            Input::Character(c) if c == self.prefix && self.cursor == self.pending.len() => { self.pending = c.to_string(); self.cursor = 1; }
+            Input::Character(c) if self.cursor > 0 && (c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') => {
+                self.pending.insert(self.cursor, c);
+                self.cursor += 1;
+                if self.pending.len() > 64 { self.clear_pending(); }
             }
-            Input::Character(_) => self.pending.clear(),
+            Input::Character(_) => self.clear_pending(),
         }
         None
     }
@@ -145,6 +163,63 @@ mod tests {
         engine.feed(Input::Backspace);
         engine.feed(Input::Character('b'));
         assert!(engine.feed(Input::Space).is_some());
+    }
+    #[test]
+    fn edits_inside_abbreviation_with_delete_and_backspace() {
+        let snapshot = Snapshot::new(vec![
+            Snippet { trigger: "efish".into(), replacement: "Original".into() },
+            Snippet { trigger: "sfish".into(), replacement: "Corrected".into() },
+        ]).unwrap();
+        for erase in [Input::Delete, Input::Backspace] {
+            let mut engine = Engine::new(snapshot.clone());
+            Fixture::type_text(&mut engine, ";efish");
+            let moves = if matches!(erase, Input::Delete) { 5 } else { 4 };
+            for _ in 0..moves { engine.feed(Input::Left); }
+            engine.feed(erase);
+            engine.feed(Input::Character('s'));
+            for _ in 0..4 { engine.feed(Input::Right); }
+            assert_eq!(engine.feed(Input::Space), Some(Expansion { template: None, erase: 6, text: "Corrected".into() }));
+        }
+    }
+    #[test]
+    fn navigation_only_expands_when_caret_is_at_known_end() {
+        let mut engine = Engine::new(Fixture::snapshot());
+        Fixture::type_text(&mut engine, ";brb");
+        engine.feed(Input::Left);
+        assert_eq!(engine.feed(Input::Space), None);
+        engine.feed(Input::Right);
+        assert_eq!(engine.feed(Input::Space), None);
+
+        Fixture::type_text(&mut engine, ";brb");
+        engine.feed(Input::Right);
+        assert_eq!(engine.feed(Input::Space), None);
+
+        Fixture::type_text(&mut engine, ";brb");
+        for _ in 0..4 { engine.feed(Input::Left); }
+        engine.feed(Input::Left);
+        for c in "brb".chars() { engine.feed(Input::Character(c)); }
+        assert_eq!(engine.feed(Input::Space), None);
+    }
+    #[test]
+    fn deletion_and_cancellation_do_not_reuse_stale_trigger() {
+        let mut engine = Engine::new(Fixture::snapshot());
+        Fixture::type_text(&mut engine, ";brb");
+        engine.feed(Input::Left);
+        engine.feed(Input::Left);
+        engine.feed(Input::Delete);
+        engine.feed(Input::Character('r'));
+        engine.feed(Input::Right);
+        assert_eq!(engine.feed(Input::Space).unwrap().erase, 4);
+
+        Fixture::type_text(&mut engine, ";brb");
+        for _ in 0..3 { engine.feed(Input::Left); }
+        engine.feed(Input::Backspace);
+        Fixture::type_text(&mut engine, "brb");
+        assert_eq!(engine.feed(Input::Space), None);
+
+        Fixture::type_text(&mut engine, ";brb");
+        engine.feed(Input::Cancel);
+        assert_eq!(engine.feed(Input::Space), None);
     }
     #[test]
     fn snapshot_swap_cancels_partial_trigger() {

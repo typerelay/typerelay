@@ -10,6 +10,7 @@ import http.server
 import json
 import os
 import pathlib
+import shutil
 import signal
 import subprocess
 import sys
@@ -141,19 +142,27 @@ class Smoke:
         if args.fixture:
             return getattr(self, args.fixture)(args.output)
         original = json.loads(self.command("hyprctl", "-j", "activewindow")).get("address")
-        espanso_status = subprocess.run(["espanso", "status"], capture_output=True, text=True)
-        espanso_running = espanso_status.returncode == 0 and "is running" in espanso_status.stdout
+        espanso_status = subprocess.run(["espanso", "status"], capture_output=True, text=True) if shutil.which("espanso") else None
+        espanso_running = espanso_status is not None and espanso_status.returncode == 0 and "is running" in espanso_status.stdout
+        service = subprocess.run(["systemctl", "--user", "is-active", "typerelay"], capture_output=True).returncode == 0
         clipboard = subprocess.run(["wl-paste", "--no-newline"], capture_output=True)
         before_clipboard = (clipboard.returncode, hashlib.sha256(clipboard.stdout).hexdigest())
         server = None
         client = None
         with tempfile.TemporaryDirectory(prefix="typerelay-smoke-") as temporary:
             directory = pathlib.Path(temporary)
+            config = directory / "config" / "typerelay"
+            snippets = config / "snippets"
+            snippets.mkdir(parents=True)
+            shutil.copyfile(self.root / "examples/matches.yml", snippets / "matches.yml")
+            (config / "settings.yml").write_text("trigger_prefix: ','\nsync_url: ''\n")
             try:
                 if espanso_running:
                     self.command("espanso", "stop")
+                if service:
+                    self.command("systemctl", "--user", "stop", "typerelay")
                 log = (directory / "client.log").open("w+")
-                client = self.start(str(self.root / "target/debug/typerelay"), "run", "--file", str(self.root / "examples/matches.yml"), stdout=log, stderr=log, env={**os.environ, "XDG_CONFIG_HOME": str(directory / "config")})
+                client = self.start(str(self.root / "target/debug/typerelay"), "run", "--dir", str(snippets), stdout=log, stderr=log, env={**os.environ, "XDG_CONFIG_HOME": str(directory / "config")})
                 time.sleep(0.6)
                 if client.poll() is not None:
                     raise RuntimeError((directory / "client.log").read_text())
@@ -194,6 +203,8 @@ class Smoke:
                     server.server_close()
                 if espanso_running:
                     self.command("espanso", "start")
+                if service:
+                    self.command("systemctl", "--user", "start", "typerelay")
                 if original:
                     self.command("hyprctl", "eval", 'hl.dispatch(hl.dsp.focus({window = ' + json.dumps("address:" + original) + '}))')
 

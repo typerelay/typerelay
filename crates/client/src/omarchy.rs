@@ -191,6 +191,9 @@ impl Session {
         match code {
             KeyCode::KEY_SPACE => Input::Space,
             KeyCode::KEY_BACKSPACE => Input::Backspace,
+            KeyCode::KEY_DELETE => Input::Delete,
+            KeyCode::KEY_LEFT => Input::Left,
+            KeyCode::KEY_RIGHT => Input::Right,
             KeyCode::KEY_COMMA => Input::Character(','),
             KeyCode::KEY_SEMICOLON => Input::Character(';'),
             KeyCode::KEY_DOT => Input::Character('.'),
