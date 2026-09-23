@@ -67,6 +67,9 @@ fn keyboard_search_ranks_abbreviations_before_content_and_rejects_stale_generati
     ]}]});
     let matches = Mobile::keyboard_matches(&ranked, &json!({"mode":"search","query":"hello"})).unwrap();
     assert_eq!(matches["matches"].as_array().unwrap().iter().map(|hit| hit["id"].as_str().unwrap()).collect::<Vec<_>>(), ["exact", "prefix", "title", "body"]);
+    assert_eq!(matches["matches"][3]["preview"], "hello body");
+    let multiline = json!({"libraries":[{"_id":"one","records":[{"id":"snippet","trigger":"hi","title":"hi","content":{"text":"First line\n  second line"}}]}]});
+    assert_eq!(Mobile::keyboard_matches(&multiline, &json!({"mode":"search","query":""})).unwrap()["matches"][0]["preview"], "First line second line");
     let fixture = Fixture::new();
     fixture.call(json!({"action":"state"})).unwrap();
     let snapshot = fixture.call(json!({"action":"keyboard"})).unwrap();

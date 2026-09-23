@@ -10,6 +10,7 @@ import android.inputmethodservice.InputMethodService
 import android.os.Build
 import android.text.Html
 import android.text.InputType
+import android.text.TextUtils
 import android.util.Base64
 import android.util.TypedValue
 import android.view.Gravity
@@ -29,7 +30,7 @@ import java.io.File
 
 class SnippetKeyboard: InputMethodService() {
 	private enum class KeyboardMode { TYPING, SEARCH, PREVIEW, FIELD_EDITING }
-	private data class SnippetMatch(val id: String, val library: String, val title: String, val trigger: String)
+	private data class SnippetMatch(val id: String, val library: String, val title: String, val trigger: String, val preview: String)
 	private data class KeyboardPalette(val surface: Int, val key: Int, val special: Int, val text: Int, val muted: Int, val specialText: Int)
 	private lateinit var palette: KeyboardPalette
 	private lateinit var root: FrameLayout
@@ -45,7 +46,6 @@ class SnippetKeyboard: InputMethodService() {
 	private lateinit var allButton: Button
 	private lateinit var searchPanel: LinearLayout
 	private lateinit var searchBackButton: Button
-	private lateinit var searchTitle: TextView
 	private lateinit var search: EditText
 	private lateinit var status: TextView
 	private lateinit var keys: LinearLayout
@@ -76,7 +76,7 @@ class SnippetKeyboard: InputMethodService() {
 		root = FrameLayout(this).apply { setBackgroundColor(palette.surface); clipChildren = true }
 		typingLayer = column(); root.addView(typingLayer, FrameLayout.LayoutParams(-1, -2))
 		stripRow = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-		searchButton = ImageButton(this).apply { setImageResource(R.drawable.ic_keyboard_search); contentDescription = "Search snippets"; setPadding(dp(10), dp(10), dp(10), dp(10)); setOnClickListener { showSearch(false) } }; styleSearchButton()
+		searchButton = ImageButton(this).apply { setImageResource(R.drawable.ic_keyboard_search); contentDescription = "Search snippets"; setPadding(dp(6), dp(6), dp(6), dp(6)); setOnClickListener { showSearch(false) } }; styleSearchButton()
 		stripRow.addView(searchButton, LinearLayout.LayoutParams(dp(44), dp(44)))
 		candidateScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; candidateStrip = LinearLayout(this@SnippetKeyboard).apply { gravity = Gravity.CENTER_VERTICAL }; addView(candidateStrip, ViewGroup.LayoutParams(-2, dp(48))) }
 		stripRow.addView(candidateScroll, LinearLayout.LayoutParams(0, dp(48), 1f))
@@ -84,11 +84,7 @@ class SnippetKeyboard: InputMethodService() {
 		allButton = button("All") { showSearch(true) }; styleAllButton(); stripRow.addView(allButton, LinearLayout.LayoutParams(dp(64), dp(44)))
 		typingLayer.addView(stripRow)
 		searchPanel = column().apply { visibility = View.GONE }
-		val searchHeader = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-		searchBackButton = button("← Back") { showTyping() }; searchHeader.addView(searchBackButton, LinearLayout.LayoutParams(dp(90), dp(44)))
-		searchTitle = TextView(this).apply { setTextColor(palette.text); setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f); gravity = Gravity.CENTER_VERTICAL }
-		searchHeader.addView(searchTitle, LinearLayout.LayoutParams(0, dp(44), 1f))
-		searchPanel.addView(searchHeader)
+		searchBackButton = button("Back") { showTyping() }; searchPanel.addView(searchBackButton, LinearLayout.LayoutParams(dp(90), dp(44)))
 		search = input("Snippet search")
 		search.addTextChangedListener(object: android.text.TextWatcher {
 			override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
@@ -126,13 +122,13 @@ class SnippetKeyboard: InputMethodService() {
 		lastSelectionStart = newSelStart; lastSelectionEnd = newSelEnd
 		if (mode == KeyboardMode.TYPING && ::root.isInitialized) updateMatches()
 	}
-	override fun onConfigurationChanged(newConfig: Configuration) { super.onConfigurationChanged(newConfig); palette = keyboardPalette(); if (::root.isInitialized) { root.setBackgroundColor(palette.surface); styleInput(search); styleAllButton(); styleSearchButton(); allDivider.setBackgroundColor(palette.muted); searchBackButton.background = rounded(palette.key); searchBackButton.setTextColor(palette.text); searchTitle.setTextColor(palette.text); styleNavigation(); status.setTextColor(palette.muted); drawKeys(); renderMode(); ViewCompat.requestApplyInsets(root) } }
+	override fun onConfigurationChanged(newConfig: Configuration) { super.onConfigurationChanged(newConfig); palette = keyboardPalette(); if (::root.isInitialized) { root.setBackgroundColor(palette.surface); styleInput(search); styleAllButton(); styleSearchButton(); allDivider.setBackgroundColor(palette.muted); searchBackButton.background = rounded(palette.key); searchBackButton.setTextColor(palette.text); styleNavigation(); status.setTextColor(palette.muted); drawKeys(); renderMode(); ViewCompat.requestApplyInsets(root) } }
 	private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 	private fun column() = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(4), dp(2), dp(4), dp(2)) }
 	private fun rounded(color: Int) = GradientDrawable().apply { cornerRadius = dp(6).toFloat(); setColor(color) }
 	private fun button(label: String, action: () -> Unit) = Button(this).apply { text = label; isAllCaps = false; minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0; background = rounded(palette.key); elevation = 0f; setTextColor(palette.text); setPadding(dp(6), 0, dp(6), 0); setOnClickListener { action() } }
 	private fun styleAllButton() { allButton.background = rounded(palette.surface); allButton.elevation = 0f; allButton.setTextColor(palette.muted) }
-	private fun styleSearchButton() { searchButton.background = rounded(palette.surface); searchButton.imageTintList = ColorStateList.valueOf(palette.text) }
+	private fun styleSearchButton() { searchButton.background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(palette.special) }; searchButton.imageTintList = ColorStateList.valueOf(palette.specialText) }
 	private fun styleInput(field: EditText) { field.background = rounded(palette.key); field.setTextColor(palette.text); field.setHintTextColor(palette.muted) }
 	private fun input(label: String) = EditText(this).apply { contentDescription = label; showSoftInputOnFocus = false; isSingleLine = true; setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f); styleInput(this); setOnFocusChangeListener { _, focused -> if (focused) activeField = this }; setOnClickListener { activeField = this } }
 	private fun keyboardPalette(): KeyboardPalette {
@@ -185,7 +181,15 @@ class SnippetKeyboard: InputMethodService() {
 		try { snapshot = NativeCore.execute(this, JSONObject().put("action", "keyboard"), true).getJSONObject("data"); selected = null; values = JSONObject(); showTyping() }
 		catch (error: Exception) { matches = emptyList(); candidateStrip.removeAllViews(); allButton.visibility = View.GONE; showTyping(false); status.text = "Open TypeRelay and sync. ${error.message}"; status.visibility = View.VISIBLE }
 	}
-	private fun parseMatch(value: JSONObject) = SnippetMatch(value.getString("id"), value.getString("library"), value.optString("title"), value.optString("trigger"))
+	private fun parseMatch(value: JSONObject) = SnippetMatch(value.getString("id"), value.getString("library"), value.optString("title"), value.optString("trigger"), value.optString("preview"))
+	private fun resultRow(match: SnippetMatch): View {
+		val label = match.trigger.ifEmpty { match.title }
+		val row = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; background = rounded(palette.key); setPadding(dp(12), 0, dp(12), 0); contentDescription = "$label, ${match.preview}"; setOnClickListener { select(match, KeyboardMode.SEARCH) } }
+		row.addView(TextView(this).apply { text = label; setTextColor(palette.text); setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f); typeface = Typeface.DEFAULT_BOLD; maxWidth = dp(120); maxLines = 1; ellipsize = TextUtils.TruncateAt.END; gravity = Gravity.CENTER_VERTICAL }, LinearLayout.LayoutParams(-2, -1))
+		row.addView(TextView(this).apply { text = "—"; setTextColor(palette.muted); setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f); gravity = Gravity.CENTER_VERTICAL }, LinearLayout.LayoutParams(-2, -1).apply { marginStart = dp(8); marginEnd = dp(8) })
+		row.addView(TextView(this).apply { text = match.preview; setTextColor(palette.text); setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f); maxLines = 1; ellipsize = TextUtils.TruncateAt.END; gravity = Gravity.CENTER_VERTICAL }, LinearLayout.LayoutParams(0, -1, 1f))
+		return row
+	}
 	private fun matchRequest(kind: String, input: String): JSONObject = NativeCore.execute(this, JSONObject().put("action", "keyboard_matches").put("generation", snapshot.getString("generation")).put("mode", kind).put(if (kind == "typing") "context" else "query", input), true).getJSONObject("data")
 	private fun hostContext() = currentInputConnection?.getTextBeforeCursor(128, 0)?.toString()
 	private fun hostAfter() = currentInputConnection?.getTextAfterCursor(128, 0)?.toString()
@@ -210,7 +214,7 @@ class SnippetKeyboard: InputMethodService() {
 	private fun showSearch(browse: Boolean, newSearch: Boolean = true) {
 		if (blocked) return
 		if (newSearch) { captureAnchor(fragment); browseAll = browse }
-		mode = KeyboardMode.SEARCH; selected = null; activeField = search; typingLayer.visibility = View.VISIBLE; overlayLayer.visibility = View.GONE; stripRow.visibility = View.GONE; searchPanel.visibility = View.VISIBLE; searchTitle.text = if (browseAll) "All snippets" else "Search snippets"; status.visibility = View.GONE
+		mode = KeyboardMode.SEARCH; selected = null; activeField = search; typingLayer.visibility = View.VISIBLE; overlayLayer.visibility = View.GONE; stripRow.visibility = View.GONE; searchPanel.visibility = View.VISIBLE; status.visibility = View.GONE
 		if (newSearch) search.setText("")
 		updateSearch()
 	}
@@ -219,7 +223,7 @@ class SnippetKeyboard: InputMethodService() {
 		try {
 			val list = column(); val query = search.text.toString()
 			if (query.isEmpty() && !browseAll) list.addView(TextView(this).apply { text = "Type to search snippets"; setTextColor(palette.muted); setPadding(dp(8), dp(12), dp(8), dp(12)) })
-			else { val result = matchRequest("search", query); val found = result.getJSONArray("matches"); for (index in 0 until found.length()) { val match = parseMatch(found.getJSONObject(index)); list.addView(button("${match.trigger}  ${match.title}") { select(match, KeyboardMode.SEARCH) }, LinearLayout.LayoutParams(-1, dp(44)).apply { bottomMargin = dp(3) }) }; if (result.optBoolean("truncated")) list.addView(TextView(this).apply { text = "Refine search to see more"; setTextColor(palette.muted) }) }
+			else { val result = matchRequest("search", query); val found = result.getJSONArray("matches"); for (index in 0 until found.length()) { val match = parseMatch(found.getJSONObject(index)); list.addView(resultRow(match), LinearLayout.LayoutParams(-1, dp(44)).apply { bottomMargin = dp(4) }) }; if (result.optBoolean("truncated")) list.addView(TextView(this).apply { text = "Refine search to see more"; setTextColor(palette.muted) }) }
 			resultListScroll.removeAllViews(); resultListScroll.addView(list)
 			status.visibility = View.GONE
 		} catch (error: Exception) { resultListScroll.removeAllViews(); status.text = error.message ?: "Search unavailable"; status.visibility = View.VISIBLE }

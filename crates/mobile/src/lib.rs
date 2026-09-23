@@ -172,6 +172,8 @@ impl Mobile {
                 for record in library["records"].as_array().context("Invalid keyboard records")? {
                     let trigger = record["trigger"].as_str().unwrap_or("");
                     let title = record["title"].as_str().filter(|title| !title.is_empty()).unwrap_or(trigger);
+                    let content = &record["content"];
+                    let replacement = content["text"].as_str().filter(|text| !text.trim().is_empty()).or_else(|| content["markdown"].as_str()).unwrap_or(title);
                     let lower_trigger = trigger.to_lowercase();
                     let rank = if mode == "typing" {
                         if trigger.is_empty() || !lower_trigger.starts_with(&needle) { continue; }
@@ -180,9 +182,10 @@ impl Mobile {
                     else if lower_trigger == needle { 0 }
                     else if lower_trigger.starts_with(&needle) { 1 }
                     else if lower_trigger.contains(&needle) || title.to_lowercase().contains(&needle) { 2 }
-                    else if record["content"]["text"].as_str().unwrap_or("").to_lowercase().contains(&needle) { 3 }
+                    else if replacement.to_lowercase().contains(&needle) { 3 }
                     else { continue; };
-                    ranked.push((rank, lower_trigger, json!({"id":record["id"],"library":library["_id"],"title":title,"trigger":trigger})));
+                    let preview = replacement.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(240).collect::<String>();
+                    ranked.push((rank, lower_trigger, json!({"id":record["id"],"library":library["_id"],"title":title,"trigger":trigger,"preview":preview})));
                 }
             }
         }

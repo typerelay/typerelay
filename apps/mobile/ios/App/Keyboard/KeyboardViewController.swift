@@ -2,7 +2,7 @@ import UIKit
 
 final class KeyboardViewController: UIInputViewController {
     private enum KeyboardMode { case typing, search, preview, fieldEditing }
-    private struct SnippetMatch { let id: String; let library: String; let title: String; let trigger: String }
+    private struct SnippetMatch { let id: String; let library: String; let title: String; let trigger: String; let preview: String }
     private var stack = UIStackView()
     private var typingStack = UIStackView()
     private var overlayStack = UIStackView()
@@ -17,7 +17,6 @@ final class KeyboardViewController: UIInputViewController {
     private var candidateRow = UIStackView()
     private var searchButton = UIButton(type: .system)
     private var allButton = UIButton(type: .system)
-    private var searchTitle = UILabel()
     private var queryButton = UIButton(type: .system)
     private var fieldButton = UIButton(type: .system)
     private var status = UILabel()
@@ -57,7 +56,7 @@ final class KeyboardViewController: UIInputViewController {
         queryButton.heightAnchor.constraint(equalToConstant: 34).isActive = true
         strip.axis = .horizontal; strip.spacing = 6; typingStack.addArrangedSubview(strip)
         strip.heightAnchor.constraint(equalToConstant: 42).isActive = true
-        searchButton.setImage(UIImage(systemName: "magnifyingglass"), for: .normal); searchButton.tintColor = .label; searchButton.accessibilityLabel = "Search snippets"; searchButton.widthAnchor.constraint(equalToConstant: 44).isActive = true; searchButton.addAction(UIAction { [weak self] _ in self?.showSearch(browse: false) }, for: .touchUpInside); strip.addArrangedSubview(searchButton)
+        searchButton.setImage(UIImage(systemName: "magnifyingglass"), for: .normal); searchButton.setPreferredSymbolConfiguration(UIImage.SymbolConfiguration(pointSize: 24, weight: .semibold), forImageIn: .normal); searchButton.tintColor = view.tintColor; searchButton.backgroundColor = view.tintColor.withAlphaComponent(0.18); searchButton.layer.cornerRadius = 21; searchButton.accessibilityLabel = "Search snippets"; searchButton.widthAnchor.constraint(equalToConstant: 44).isActive = true; searchButton.addAction(UIAction { [weak self] _ in self?.showSearch(browse: false) }, for: .touchUpInside); strip.addArrangedSubview(searchButton)
         candidateRow.axis = .horizontal; candidateRow.spacing = 4; candidateRow.translatesAutoresizingMaskIntoConstraints = false; candidateScroll.showsHorizontalScrollIndicator = false; candidateScroll.addSubview(candidateRow)
         NSLayoutConstraint.activate([candidateRow.leadingAnchor.constraint(equalTo: candidateScroll.contentLayoutGuide.leadingAnchor), candidateRow.trailingAnchor.constraint(equalTo: candidateScroll.contentLayoutGuide.trailingAnchor), candidateRow.topAnchor.constraint(equalTo: candidateScroll.contentLayoutGuide.topAnchor), candidateRow.bottomAnchor.constraint(equalTo: candidateScroll.contentLayoutGuide.bottomAnchor), candidateRow.heightAnchor.constraint(equalTo: candidateScroll.frameLayoutGuide.heightAnchor)])
         strip.addArrangedSubview(candidateScroll)
@@ -65,8 +64,7 @@ final class KeyboardViewController: UIInputViewController {
         allButton = UIButton(type: .system); allButton.widthAnchor.constraint(equalToConstant: 64).isActive = true; strip.addArrangedSubview(allButton)
         searchPanel.axis = .vertical; searchPanel.spacing = 4; searchPanel.isHidden = true; typingStack.addArrangedSubview(searchPanel)
         let searchHeader = UIStackView(); searchHeader.axis = .horizontal; searchHeader.spacing = 6; searchHeader.heightAnchor.constraint(equalToConstant: 44).isActive = true
-        let searchBack = button("← Back") { [weak self] in self?.showTyping() }; searchBack.widthAnchor.constraint(equalToConstant: 86).isActive = true; searchHeader.addArrangedSubview(searchBack)
-        searchTitle.font = .preferredFont(forTextStyle: .headline); searchTitle.textColor = .label; searchHeader.addArrangedSubview(searchTitle); searchPanel.addArrangedSubview(searchHeader)
+        let searchBack = button("Back") { [weak self] in self?.showTyping() }; searchBack.widthAnchor.constraint(equalToConstant: 86).isActive = true; searchHeader.addArrangedSubview(searchBack); searchHeader.addArrangedSubview(UIView()); searchPanel.addArrangedSubview(searchHeader)
         searchPanel.addArrangedSubview(queryButton)
         resultListScroll.heightAnchor.constraint(equalToConstant: 150).isActive = true; searchPanel.addArrangedSubview(resultListScroll)
         searchResultsStack.axis = .vertical; searchResultsStack.spacing = 4; searchResultsStack.translatesAutoresizingMaskIntoConstraints = false; resultListScroll.addSubview(searchResultsStack)
@@ -138,7 +136,17 @@ final class KeyboardViewController: UIInputViewController {
     private func captureAnchor(_ part: String) { anchorContext = context(); anchorAfter = afterContext(); anchorDocument = String(describing: textDocumentProxy.documentIdentifier); anchorFragment = part; anchorValid = anchorContext?.lowercased().hasSuffix(part.lowercased()) == true && (textDocumentProxy.selectedText?.isEmpty ?? true) }
     private func validAnchor() -> Bool { anchorValid && anchorDocument == String(describing: textDocumentProxy.documentIdentifier) && context() == anchorContext && afterContext() == anchorAfter && (textDocumentProxy.selectedText?.isEmpty ?? true) }
     private func matchRequest(_ kind: String, _ input: String) throws -> [String: Any] { var request: [String: Any] = ["action": "keyboard_matches", "generation": snapshot["generation"] ?? "", "mode": kind]; request[kind == "typing" ? "context" : "query"] = input; return try TypeRelayCore.execute(request, keyboard: true)["data"] as? [String: Any] ?? [:] }
-    private func parseMatch(_ value: [String: Any]) -> SnippetMatch { SnippetMatch(id: value["id"] as? String ?? "", library: value["library"] as? String ?? "", title: value["title"] as? String ?? "", trigger: value["trigger"] as? String ?? "") }
+    private func parseMatch(_ value: [String: Any]) -> SnippetMatch { SnippetMatch(id: value["id"] as? String ?? "", library: value["library"] as? String ?? "", title: value["title"] as? String ?? "", trigger: value["trigger"] as? String ?? "", preview: value["preview"] as? String ?? "") }
+    private func resultRow(_ match: SnippetMatch) -> UIButton {
+        let label = match.trigger.isEmpty ? match.title : match.trigger
+        let row = choiceButton("") { [weak self] in self?.select(match, returnMode: .search) }; row.isAccessibilityElement = true; row.accessibilityLabel = "\(label), \(match.preview)"
+        let content = UIStackView(); content.axis = .horizontal; content.alignment = .center; content.spacing = 8; content.isUserInteractionEnabled = false; content.translatesAutoresizingMaskIntoConstraints = false
+        let abbreviation = UILabel(); abbreviation.text = label; abbreviation.textColor = .label; abbreviation.font = .systemFont(ofSize: 16, weight: .semibold); abbreviation.numberOfLines = 1; abbreviation.lineBreakMode = .byTruncatingTail; abbreviation.widthAnchor.constraint(lessThanOrEqualToConstant: 120).isActive = true; abbreviation.setContentCompressionResistancePriority(.required, for: .horizontal); content.addArrangedSubview(abbreviation)
+        let dash = UILabel(); dash.text = "—"; dash.textColor = .secondaryLabel; dash.setContentCompressionResistancePriority(.required, for: .horizontal); content.addArrangedSubview(dash)
+        let preview = UILabel(); preview.text = match.preview; preview.textColor = .label; preview.font = .preferredFont(forTextStyle: .body); preview.numberOfLines = 1; preview.lineBreakMode = .byTruncatingTail; preview.setContentCompressionResistancePriority(.defaultLow, for: .horizontal); content.addArrangedSubview(preview)
+        row.addSubview(content); NSLayoutConstraint.activate([content.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 12), content.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -12), content.centerYAnchor.constraint(equalTo: row.centerYAnchor)])
+        return row
+    }
     private func recordFor(_ match: SnippetMatch) -> [String: Any]? { for library in snapshot["libraries"] as? [[String: Any]] ?? [] where library["_id"] as? String == match.library { return (library["records"] as? [[String: Any]] ?? []).first { $0["id"] as? String == match.id } }; return nil }
     private func updateMatches(autoExpand: Bool = false) {
         guard mode == .typing else { return }
@@ -157,7 +165,7 @@ final class KeyboardViewController: UIInputViewController {
     private func showSearch(browse: Bool, newSearch: Bool = true) {
         guard !textDocumentProxy.isSecureTextEntry else { return }
         if newSearch { captureAnchor(fragment); browseAll = browse; query = "" }
-        mode = .search; selection = nil; field = nil; typingStack.isHidden = false; overlayStack.isHidden = true; searchPanel.isHidden = false; strip.isHidden = true; searchTitle.text = browseAll ? "All snippets" : "Search snippets"
+        mode = .search; selection = nil; field = nil; typingStack.isHidden = false; overlayStack.isHidden = true; searchPanel.isHidden = false; strip.isHidden = true
         updateSearch(); updateLayout()
     }
     private func updateSearch() {
@@ -166,7 +174,7 @@ final class KeyboardViewController: UIInputViewController {
         do {
             if query.isEmpty && !browseAll { let prompt = UILabel(); prompt.text = "Type to search snippets"; prompt.textColor = .secondaryLabel; prompt.font = .preferredFont(forTextStyle: .body); searchResultsStack.addArrangedSubview(prompt); status.isHidden = true; return }
             let result = try matchRequest("search", query)
-            for value in result["matches"] as? [[String: Any]] ?? [] { let match = parseMatch(value); let item = choiceButton("\(match.trigger)  \(match.title)") { [weak self] in self?.select(match, returnMode: .search) }; item.heightAnchor.constraint(equalToConstant: 44).isActive = true; searchResultsStack.addArrangedSubview(item) }
+            for value in result["matches"] as? [[String: Any]] ?? [] { let item = resultRow(parseMatch(value)); item.heightAnchor.constraint(equalToConstant: 44).isActive = true; searchResultsStack.addArrangedSubview(item) }
             if result["truncated"] as? Bool == true { let note = UILabel(); note.text = "Refine search to see more"; note.font = .preferredFont(forTextStyle: .caption1); searchResultsStack.addArrangedSubview(note) }
             status.isHidden = true
         } catch { status.text = error.localizedDescription; status.isHidden = false }
