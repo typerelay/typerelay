@@ -150,7 +150,7 @@ final class KeyboardViewController: UIInputViewController {
     private func recordFor(_ match: SnippetMatch) -> [String: Any]? { for library in snapshot["libraries"] as? [[String: Any]] ?? [] where library["_id"] as? String == match.library { return (library["records"] as? [[String: Any]] ?? []).first { $0["id"] as? String == match.id } }; return nil }
     private func updateMatches(autoExpand: Bool = false) {
         guard mode == .typing else { return }
-        if textDocumentProxy.isSecureTextEntry { matches = []; fragment = ""; strip.isHidden = true; status.isHidden = true; updateLayout(); return }
+        if textDocumentProxy.isSecureTextEntry == true { matches = []; fragment = ""; strip.isHidden = true; status.isHidden = true; updateLayout(); return }
         removeArrangedSubviews(candidateRow); status.isHidden = true; strip.isHidden = false; candidateScroll.isHidden = false
         setAllAction("All") { [weak self] in self?.showSearch(browse: true) }
         do {
@@ -163,7 +163,7 @@ final class KeyboardViewController: UIInputViewController {
     }
     private func showTyping(update: Bool = true) { mode = .typing; selection = nil; field = nil; anchorValid = false; browseAll = false; query = ""; typingStack.isHidden = false; overlayStack.isHidden = true; searchPanel.isHidden = true; if update { updateMatches() } else { updateLayout() } }
     private func showSearch(browse: Bool, newSearch: Bool = true) {
-        guard !textDocumentProxy.isSecureTextEntry else { return }
+        guard textDocumentProxy.isSecureTextEntry != true else { return }
         if newSearch { captureAnchor(fragment); browseAll = browse; query = "" }
         mode = .search; selection = nil; field = nil; typingStack.isHidden = false; overlayStack.isHidden = true; searchPanel.isHidden = false; strip.isHidden = true
         updateSearch(); updateLayout()
@@ -194,7 +194,7 @@ final class KeyboardViewController: UIInputViewController {
         overlayStack.addArrangedSubview(scroll)
     }
     private func select(_ match: SnippetMatch, returnMode: KeyboardMode) {
-        guard !textDocumentProxy.isSecureTextEntry else { return }
+        guard textDocumentProxy.isSecureTextEntry != true else { return }
         if returnMode == .typing { captureAnchor(fragment) }
         guard validAnchor() else { if mode == .search { showTyping() }; status.text = "Text changed. Select the snippet again."; status.isHidden = false; return }
         guard let record = recordFor(match) else { return }
@@ -234,7 +234,7 @@ final class KeyboardViewController: UIInputViewController {
     private func insert() {
         do {
             let rendered = try render(preview: false)
-            guard (rendered["enter_actions"] as? Int ?? 0) == 0, !textDocumentProxy.isSecureTextEntry else { return }
+            guard (rendered["enter_actions"] as? Int ?? 0) == 0, textDocumentProxy.isSecureTextEntry != true else { return }
             guard validAnchor() else { throw NSError(domain: "TypeRelay", code: 1, userInfo: [NSLocalizedDescriptionKey: "Text changed. Select the snippet again."]) }
             changingHost = true
             for _ in anchorFragment { textDocumentProxy.deleteBackward() }
