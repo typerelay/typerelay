@@ -91,7 +91,23 @@ describe('mobile release packaging', () => {
 	it('types into host fields and keeps searchable results beside the keys', () => {
 		const android = source('apps/mobile/android/app/src/main/java/com/typerelay/mobile/SnippetKeyboard.kt');
 		const ios = source('apps/mobile/ios/App/Keyboard/KeyboardViewController.swift');
+		const searchIcon = source('apps/mobile/android/app/src/main/res/drawable/ic_keyboard_search.xml');
 		for (const nativeKeyboard of [android, ios]) assert.match(nativeKeyboard, /keyboard_matches/);
+		assert.match(searchIcon, /<vector/);
+		assert.match(android, /contentDescription = "Search snippets"/);
+		assert.match(android, /showSearch\(false\)/);
+		assert.match(android, /showSearch\(true\)/);
+		assert.match(android, /query\.isEmpty\(\) && !browseAll/);
+		assert.match(android, /stripRow\.visibility = View\.GONE; searchPanel\.visibility = View\.VISIBLE/);
+		assert.match(android, /if \(blocked\).*stripRow\.visibility = View\.GONE/);
+		assert.match(android, /searchHeader\.addView\(searchTitle/);
+		assert.match(ios, /UIImage\(systemName: "magnifyingglass"\)/);
+		assert.match(ios, /showSearch\(browse: false\)/);
+		assert.match(ios, /showSearch\(browse: true\)/);
+		assert.match(ios, /query\.isEmpty && !browseAll/);
+		assert.match(ios, /searchPanel\.isHidden = false; strip\.isHidden = true/);
+		assert.match(ios, /if textDocumentProxy\.isSecureTextEntry.*strip\.isHidden = true/);
+		assert.match(ios, /searchHeader\.addArrangedSubview\(searchBack\)/);
 		assert.match(android, /connection\.commitText\(text, 1\)/);
 		assert.match(android, /connection\.deleteSurroundingText\(anchorFragment\.length, 0\)/);
 		assert.match(android, /WindowInsetsCompat\.Type\.navigationBars\(\) or WindowInsetsCompat\.Type\.mandatorySystemGestures\(\)/);

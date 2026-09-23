@@ -15,7 +15,9 @@ final class KeyboardViewController: UIInputViewController {
     private var searchPanel = UIStackView()
     private var candidateScroll = UIScrollView()
     private var candidateRow = UIStackView()
+    private var searchButton = UIButton(type: .system)
     private var allButton = UIButton(type: .system)
+    private var searchTitle = UILabel()
     private var queryButton = UIButton(type: .system)
     private var fieldButton = UIButton(type: .system)
     private var status = UILabel()
@@ -38,6 +40,7 @@ final class KeyboardViewController: UIInputViewController {
     private var anchorValid = false
     private var changingHost = false
     private var mode = KeyboardMode.typing
+    private var browseAll = false
     private var previewReturnMode = KeyboardMode.typing
     private var shifted = false
     private var numbers = false
@@ -54,12 +57,16 @@ final class KeyboardViewController: UIInputViewController {
         queryButton.heightAnchor.constraint(equalToConstant: 34).isActive = true
         strip.axis = .horizontal; strip.spacing = 6; typingStack.addArrangedSubview(strip)
         strip.heightAnchor.constraint(equalToConstant: 42).isActive = true
+        searchButton.setImage(UIImage(systemName: "magnifyingglass"), for: .normal); searchButton.tintColor = .label; searchButton.accessibilityLabel = "Search snippets"; searchButton.widthAnchor.constraint(equalToConstant: 44).isActive = true; searchButton.addAction(UIAction { [weak self] _ in self?.showSearch(browse: false) }, for: .touchUpInside); strip.addArrangedSubview(searchButton)
         candidateRow.axis = .horizontal; candidateRow.spacing = 4; candidateRow.translatesAutoresizingMaskIntoConstraints = false; candidateScroll.showsHorizontalScrollIndicator = false; candidateScroll.addSubview(candidateRow)
         NSLayoutConstraint.activate([candidateRow.leadingAnchor.constraint(equalTo: candidateScroll.contentLayoutGuide.leadingAnchor), candidateRow.trailingAnchor.constraint(equalTo: candidateScroll.contentLayoutGuide.trailingAnchor), candidateRow.topAnchor.constraint(equalTo: candidateScroll.contentLayoutGuide.topAnchor), candidateRow.bottomAnchor.constraint(equalTo: candidateScroll.contentLayoutGuide.bottomAnchor), candidateRow.heightAnchor.constraint(equalTo: candidateScroll.frameLayoutGuide.heightAnchor)])
         strip.addArrangedSubview(candidateScroll)
         let divider = UIView(); divider.backgroundColor = color(light: .systemGray3, dark: .systemGray); divider.widthAnchor.constraint(equalToConstant: 1).isActive = true; strip.addArrangedSubview(divider)
         allButton = UIButton(type: .system); allButton.widthAnchor.constraint(equalToConstant: 64).isActive = true; strip.addArrangedSubview(allButton)
         searchPanel.axis = .vertical; searchPanel.spacing = 4; searchPanel.isHidden = true; typingStack.addArrangedSubview(searchPanel)
+        let searchHeader = UIStackView(); searchHeader.axis = .horizontal; searchHeader.spacing = 6; searchHeader.heightAnchor.constraint(equalToConstant: 44).isActive = true
+        let searchBack = button("← Back") { [weak self] in self?.showTyping() }; searchBack.widthAnchor.constraint(equalToConstant: 86).isActive = true; searchHeader.addArrangedSubview(searchBack)
+        searchTitle.font = .preferredFont(forTextStyle: .headline); searchTitle.textColor = .label; searchHeader.addArrangedSubview(searchTitle); searchPanel.addArrangedSubview(searchHeader)
         searchPanel.addArrangedSubview(queryButton)
         resultListScroll.heightAnchor.constraint(equalToConstant: 150).isActive = true; searchPanel.addArrangedSubview(resultListScroll)
         searchResultsStack.axis = .vertical; searchResultsStack.spacing = 4; searchResultsStack.translatesAutoresizingMaskIntoConstraints = false; resultListScroll.addSubview(searchResultsStack)
@@ -137,7 +144,7 @@ final class KeyboardViewController: UIInputViewController {
         guard mode == .typing else { return }
         if textDocumentProxy.isSecureTextEntry { matches = []; fragment = ""; strip.isHidden = true; status.isHidden = true; updateLayout(); return }
         removeArrangedSubviews(candidateRow); status.isHidden = true; strip.isHidden = false; candidateScroll.isHidden = false
-        setAllAction("All") { [weak self] in self?.showSearch() }
+        setAllAction("All") { [weak self] in self?.showSearch(browse: true) }
         do {
             let result = try matchRequest("typing", context() ?? ""); fragment = result["fragment"] as? String ?? ""
             matches = (result["matches"] as? [[String: Any]] ?? []).map(parseMatch)
@@ -146,20 +153,22 @@ final class KeyboardViewController: UIInputViewController {
         } catch { status.text = error.localizedDescription; status.isHidden = false }
         updateLayout()
     }
-    private func showTyping(update: Bool = true) { mode = .typing; selection = nil; field = nil; anchorValid = false; typingStack.isHidden = false; overlayStack.isHidden = true; searchPanel.isHidden = true; if update { updateMatches() } else { updateLayout() } }
-    private func showSearch(newSearch: Bool = true) {
+    private func showTyping(update: Bool = true) { mode = .typing; selection = nil; field = nil; anchorValid = false; browseAll = false; query = ""; typingStack.isHidden = false; overlayStack.isHidden = true; searchPanel.isHidden = true; if update { updateMatches() } else { updateLayout() } }
+    private func showSearch(browse: Bool, newSearch: Bool = true) {
         guard !textDocumentProxy.isSecureTextEntry else { return }
-        if newSearch { captureAnchor(fragment); query = fragment }
-        mode = .search; selection = nil; field = nil; typingStack.isHidden = false; overlayStack.isHidden = true; searchPanel.isHidden = false; strip.isHidden = false; candidateScroll.isHidden = true
-        setAllAction("Back") { [weak self] in self?.showTyping() }; updateSearch(); updateLayout()
+        if newSearch { captureAnchor(fragment); browseAll = browse; query = "" }
+        mode = .search; selection = nil; field = nil; typingStack.isHidden = false; overlayStack.isHidden = true; searchPanel.isHidden = false; strip.isHidden = true; searchTitle.text = browseAll ? "All snippets" : "Search snippets"
+        updateSearch(); updateLayout()
     }
     private func updateSearch() {
         guard mode == .search else { return }
         queryButton.setTitle("Search: \(query)", for: .normal); removeArrangedSubviews(searchResultsStack)
         do {
+            if query.isEmpty && !browseAll { let prompt = UILabel(); prompt.text = "Type to search snippets"; prompt.textColor = .secondaryLabel; prompt.font = .preferredFont(forTextStyle: .body); searchResultsStack.addArrangedSubview(prompt); status.isHidden = true; return }
             let result = try matchRequest("search", query)
             for value in result["matches"] as? [[String: Any]] ?? [] { let match = parseMatch(value); let item = choiceButton("\(match.trigger)  \(match.title)") { [weak self] in self?.select(match, returnMode: .search) }; item.heightAnchor.constraint(equalToConstant: 44).isActive = true; searchResultsStack.addArrangedSubview(item) }
             if result["truncated"] as? Bool == true { let note = UILabel(); note.text = "Refine search to see more"; note.font = .preferredFont(forTextStyle: .caption1); searchResultsStack.addArrangedSubview(note) }
+            status.isHidden = true
         } catch { status.text = error.localizedDescription; status.isHidden = false }
     }
     private func prepareOverlay(title: String, back: @escaping () -> Void) {
@@ -190,7 +199,7 @@ final class KeyboardViewController: UIInputViewController {
         guard let selection else { return showTyping() }
         mode = .preview; field = nil
         let title = (selection["title"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? selection["trigger"] as? String ?? "Snippet preview"
-        prepareOverlay(title: title) { [weak self] in guard let self else { return }; if self.previewReturnMode == .search { self.showSearch(newSearch: false) } else { self.showTyping() } }
+        prepareOverlay(title: title) { [weak self] in guard let self else { return }; if self.previewReturnMode == .search { self.showSearch(browse: self.browseAll, newSearch: false) } else { self.showTyping() } }
         previewScroll = UIScrollView(); attach(previewScroll)
         do {
             let rendered = try render(preview: true)
