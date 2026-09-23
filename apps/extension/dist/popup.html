@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TypeRelay</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main>
+      <header><img src="icon.png" alt="" width="32" height="32">
+        <h1>TypeRelay</h1>
+      </header>
+      <p id="status" role="status"></p>
+      <section id="signed-out" hidden>
+        <p>Sign in to expand your snippets in Chrome and on Chromebooks.</p>
+        <button id="connect" type="button">Sign in</button>
+      </section>
+      <section id="signed-in" hidden>
+        <label for="search">Search snippets</label>
+        <input id="search" type="search" autocomplete="off">
+        <ul id="results"></ul>
+        <div class="actions">
+          <button id="sync" type="button">Sync now</button><a id="edit" target="_blank" rel="noopener noreferrer">Edit snippets</a>
+        </div>
+        <div class="settings">
+          <label for="prefix">Trigger prefix</label>
+          <select id="prefix">
+            <option value=";">;</option>
+            <option value=",">,</option>
+            <option value=".">.</option>
+            <option value="/">/</option>
+            <option value="'">'</option>
+            <option value="[">[</option>
+            <option value="]">]</option>
+            <option value="\">\</option>
+            <option value="`">`</option>
+            <option value="=">=</option>
+          </select>
+        </div>
+        <button id="disconnect" type="button">Sign out</button>
+      </section>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

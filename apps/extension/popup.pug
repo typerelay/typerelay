@@ -1,0 +1,38 @@
+doctype html
+html(lang="en")
+	head
+		meta(charset="utf-8")
+		meta(name="viewport" content="width=device-width, initial-scale=1")
+		title TypeRelay
+		link(rel="stylesheet" href="popup.css")
+	body
+		main
+			header
+				img(src="icon.png" alt="" width="32" height="32")
+				h1 TypeRelay
+			p#status(role="status")
+			section#signed-out(hidden)
+				p Sign in to expand your snippets in Chrome and on Chromebooks.
+				button#connect(type="button") Sign in
+			section#signed-in(hidden)
+				label(for="search") Search snippets
+				input#search(type="search" autocomplete="off")
+				ul#results
+				div.actions
+					button#sync(type="button") Sync now
+					a#edit(target="_blank" rel="noopener noreferrer") Edit snippets
+				div.settings
+					label(for="prefix") Trigger prefix
+					select#prefix
+						option(value=";") ;
+						option(value=",") ,
+						option(value=".") .
+						option(value="/") /
+						option(value="'") '
+						option(value="[") [
+						option(value="]") ]
+						option(value="\\") \
+						option(value="`") `
+						option(value="=") =
+				button#disconnect(type="button") Sign out
+		script(type="module" src="popup.js")

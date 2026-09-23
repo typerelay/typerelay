@@ -1,0 +1,13 @@
+{
+  "name": "@typerelay/extension",
+  "private": true,
+  "version": "1.1.1",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test test/*.test.js"
+  },
+  "devDependencies": {
+    "pug": "^3.0.4"
+  }
+}

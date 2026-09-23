@@ -93,7 +93,9 @@ export class Auth {
 		try { url = new URL(uri); } catch { Support.assert(false, client === 'typerelay-mobile' ? 'Invalid mobile callback URL' : 'Invalid desktop callback URL'); }
 		const loopback = url.protocol === 'http:' && url.hostname === '127.0.0.1' && url.port && url.pathname === '/callback';
 		const mobile = client === 'typerelay-mobile';
-		Support.assert(['typerelay-desktop', 'typerelay-mobile'].includes(client), 'Invalid client');
+		const browser = client === 'typerelay-browser';
+		Support.assert(['typerelay-desktop', 'typerelay-mobile', 'typerelay-browser'].includes(client), 'Invalid client');
+		if (browser) { Support.assert(url.protocol === 'https:' && /^[a-p]{32}\.chromiumapp\.org$/.test(url.hostname) && url.pathname === '/callback' && !url.port && !url.username && !url.password && !url.search && !url.hash, 'Invalid browser callback URL'); return url.href; }
 		const preview = mobile && process.env.NODE_ENV === 'development' && process.env.TYPERELAY_MOBILE_PREVIEW_URL && url.href === process.env.TYPERELAY_MOBILE_PREVIEW_URL + '/oauth/callback';
 		const app = url.protocol === (mobile ? 'com.typerelay.mobile:' : 'typerelay:') && url.hostname === 'oauth' && url.pathname === '/callback' && !url.port;
 		Support.assert(((!mobile && loopback) || app || preview) && !url.username && !url.password && !url.search && !url.hash, mobile ? 'Invalid mobile callback URL' : 'Invalid desktop callback URL');
@@ -101,13 +103,13 @@ export class Auth {
 	}
 	static async authorize(user, body) {
 		const ctx = await Support.context(user, body.account);
-		await Billing.assertDeviceEnrollment(ctx);
+		await Billing.assertDeviceEnrollment(ctx, null, body.client_id);
 		const redirect = Auth.redirect(body.redirect_uri, body.client_id);
-		Support.assert(['typerelay-desktop', 'typerelay-mobile'].includes(body.client_id) && body.code_challenge_method === 'S256' && /^[A-Za-z0-9_-]{43}$/.test(body.code_challenge), 'Invalid PKCE request');
+		Support.assert(['typerelay-desktop', 'typerelay-mobile', 'typerelay-browser'].includes(body.client_id) && body.code_challenge_method === 'S256' && /^[A-Za-z0-9_-]{43}$/.test(body.code_challenge), 'Invalid PKCE request');
 		Support.assert(typeof body.state === 'string' && body.state.length >= 20 && body.state.length <= 256, 'Invalid state');
 		const code = Support.token();
-		Support.assert((body.client_id !== 'typerelay-mobile' && body.client_type === undefined) || (body.client_id === 'typerelay-mobile' ? ['mobile'] : ['desktop', 'cli']).includes(body.client_type), 'Invalid client type');
-		Support.assert((body.client_id !== 'typerelay-mobile' && body.os === undefined) || (body.client_id === 'typerelay-mobile' ? (redirect.startsWith('https:') || redirect.startsWith('http:') ? ['web'] : ['ios', 'android']) : ['macos', 'windows', 'linux']).includes(body.os), 'Invalid operating system');
+		Support.assert((body.client_id !== 'typerelay-mobile' && body.client_id !== 'typerelay-browser' && body.client_type === undefined) || (body.client_id === 'typerelay-mobile' ? ['mobile'] : body.client_id === 'typerelay-browser' ? ['browser'] : ['desktop', 'cli']).includes(body.client_type), 'Invalid client type');
+		Support.assert((body.client_id !== 'typerelay-mobile' && body.client_id !== 'typerelay-browser' && body.os === undefined) || (body.client_id === 'typerelay-mobile' ? (redirect.startsWith('https:') || redirect.startsWith('http:') ? ['web'] : ['ios', 'android']) : body.client_id === 'typerelay-browser' ? ['web'] : ['macos', 'windows', 'linux']).includes(body.os), 'Invalid operating system');
 		await Ticket.create({ hash: Support.hash(code), kind: 'oauth', account: ctx.account, data: { user, client: body.client_id, redirect, challenge: body.code_challenge, name: Support.text(body.device_name || (body.client_id === 'typerelay-mobile' ? 'TypeRelay mobile' : 'Desktop')), client_type: body.client_type, os: body.os }, expires: new Date(Date.now() + 300000) });
 		const url = new URL(redirect);
 		url.searchParams.set('code', code);
@@ -120,18 +122,18 @@ export class Auth {
 		let device;
 		await mongoose.connection.transaction(async session => {
 			if (body.grant_type === 'authorization_code') {
-				Support.assert(['typerelay-desktop', 'typerelay-mobile'].includes(body.client_id) && /^[A-Za-z0-9._~-]{43,128}$/.test(body.code_verifier), 'Invalid client or verifier');
+				Support.assert(['typerelay-desktop', 'typerelay-mobile', 'typerelay-browser'].includes(body.client_id) && /^[A-Za-z0-9._~-]{43,128}$/.test(body.code_verifier), 'Invalid client or verifier');
 				const ticket = await Ticket.findOne({ hash: Support.hash(Support.text(body.code, 256)), kind: 'oauth', expires: { $gt: new Date() } }).session(session).lean();
 				Support.assert(ticket && (ticket.data.client || 'typerelay-desktop') === body.client_id && ticket.data.redirect === Auth.redirect(body.redirect_uri, body.client_id) && ticket.data.challenge === createHash('sha256').update(body.code_verifier).digest('base64url'), 'Invalid authorization code', 401);
 				const ctx = await Support.context(ticket.data.user, String(ticket.account), session);
-				await Billing.assertDeviceEnrollment(ctx, session);
+				await Billing.assertDeviceEnrollment(ctx, session, body.client_id);
 				await Ticket.deleteOne({ _id: ticket._id }, { session });
 				[device] = await Device.create([{ account: ticket.account, user: ticket.data.user, name: ticket.data.name, client_type: ticket.data.client_type, os: ticket.data.os, oauth_client: ticket.data.client || 'typerelay-desktop' }], { session });
 			} else {
 				Support.assert(body.grant_type === 'refresh_token', 'Unsupported grant');
 				device = await Device.findOne({ refresh: Support.hash(Support.text(body.refresh_token, 256)), refresh_expires: { $gt: new Date() }, revoked: false }).session(session).lean();
 				Support.assert(device, 'Invalid refresh token', 401);
-				Support.assert(device.oauth_client === 'typerelay-mobile' ? body.client_id === 'typerelay-mobile' : (!body.client_id || body.client_id === (device.oauth_client || 'typerelay-desktop')), 'Invalid refresh client', 401);
+				Support.assert(['typerelay-mobile', 'typerelay-browser'].includes(device.oauth_client) ? body.client_id === device.oauth_client : (!body.client_id || body.client_id === (device.oauth_client || 'typerelay-desktop')), 'Invalid refresh client', 401);
 				const ctx = await Support.context(String(device.user), String(device.account), session);
 				await Billing.assertDevice(ctx, device, session);
 			}
