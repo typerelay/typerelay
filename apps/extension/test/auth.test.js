@@ -14,8 +14,10 @@ test('browser sign-in captures the Magic Link callback and syncs images using HT
 	const assetId = 'a'.repeat(64);
 	let messageListener;
 	let updateListener;
+	let installedListener;
+	let optionsOpened = 0;
 	const origin = 'https://app.typerelay.com';
-	globalThis.chrome = { storage: { local, session }, runtime: { onMessage: { addListener: listener => { messageListener = listener; } }, onInstalled: { addListener: () => {} }, onStartup: { addListener: () => {} }, getPlatformInfo: async () => ({ os: 'cros' }) }, tabs: { create: async details => { tabs.push({ id: 10, ...details }); return tabs[0]; }, query: async () => tabs.filter(tab => tab.url.startsWith(`${origin}/oauth/browser-callback`)), remove: async id => { removed.push(id); tabs.splice(tabs.findIndex(tab => tab.id === id), 1); }, onUpdated: { addListener: listener => { updateListener = listener; } } }, alarms: { create: () => {}, onAlarm: { addListener: () => {} } } };
+	globalThis.chrome = { storage: { local, session }, runtime: { onMessage: { addListener: listener => { messageListener = listener; } }, onInstalled: { addListener: listener => { installedListener = listener; } }, onStartup: { addListener: () => {} }, openOptionsPage: async () => { optionsOpened++; }, getPlatformInfo: async () => ({ os: 'cros' }) }, tabs: { create: async details => { tabs.push({ id: 10, ...details }); return tabs[0]; }, query: async () => tabs.filter(tab => tab.url.startsWith(`${origin}/oauth/browser-callback`)), remove: async id => { removed.push(id); tabs.splice(tabs.findIndex(tab => tab.id === id), 1); }, onUpdated: { addListener: listener => { updateListener = listener; } } }, alarms: { create: () => {}, onAlarm: { addListener: () => {} } } };
 	globalThis.caches = { open: async () => ({ match: async key => cached.get(key), put: async (key, value) => { assert.match(new URL(key).protocol, /^https?:$/); cached.set(key, value); }, keys: async () => [...cached.keys()].map(url => ({ url })), delete: async key => cached.delete(key) }), delete: async () => true };
 	globalThis.fetch = async url => {
 		if (url === `${origin}/oauth/token`) return Response.json({ access_token: 'access', refresh_token: 'refresh', expires_in: 900, account: 'account' });
@@ -25,6 +27,10 @@ test('browser sign-in captures the Magic Link callback and syncs images using HT
 	};
 	await import(`../worker.js?auth-test=${Date.now()}`);
 	const send = type => new Promise(resolve => messageListener({ type }, {}, resolve));
+	await installedListener({ reason: 'install' });
+	assert.equal(optionsOpened, 1);
+	await installedListener({ reason: 'update' });
+	assert.equal(optionsOpened, 2);
 	assert.deepEqual((await send('connect')).value, { pending: true });
 	assert.equal(tabs.length, 1);
 	const authorize = new URL(tabs[0].url);
@@ -49,4 +55,6 @@ test('browser sign-in captures the Magic Link callback and syncs images using HT
 	assert.equal((await session.get('browserAuthError')).browserAuthError, undefined);
 	assert.deepEqual(removed, [11]);
 	assert.equal((await session.get('browserAuth')).browserAuth, undefined);
+	await installedListener({ reason: 'update' });
+	assert.equal(optionsOpened, 2);
 });

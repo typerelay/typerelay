@@ -168,7 +168,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
 	return true;
 });
 
-chrome.runtime.onInstalled.addListener(() => chrome.alarms.create('sync', { periodInMinutes: 2 }));
+chrome.runtime.onInstalled.addListener(async details => { chrome.alarms.create('sync', { periodInMinutes: 2 }); if (['install', 'update'].includes(details.reason) && !(await chrome.storage.local.get('tokens')).tokens) await chrome.runtime.openOptionsPage(); });
 chrome.runtime.onStartup.addListener(() => chrome.alarms.create('sync', { periodInMinutes: 2 }));
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => { if (changeInfo.url?.startsWith(`${origin}${callbackPath}`)) void finishPending(tabId, changeInfo.url); });
 chrome.alarms.onAlarm.addListener(alarm => { if (alarm.name === 'sync') void chrome.storage.local.get('tokens').then(data => data.tokens && sync()).catch(() => undefined); });

@@ -5,11 +5,13 @@ description: "Build, load, sign in to, and test the Type Relay Chrome extension 
 
 # TypeRelay Chrome extension
 
-The Chrome extension expands synced snippets in editable web fields. It keeps a local snapshot for offline use. The toolbar searches snippets and opens the existing web app for edits. Internal browser pages, the address bar, and native apps are outside its reach.
+The Chrome extension expands synced snippets in editable web fields. It keeps a local snapshot for offline use. The toolbar searches snippets on demand; account, sync, prefix, and web app links are in extension settings. Internal browser pages, the address bar, and native apps are outside its reach.
 
 ## Build and load
 
 For development testing on NadaMini, run `dbh-run urls` first and build for its reported app origin, for example `pnpm --filter @typerelay/extension exec node build.mjs --origin=https://tr.n.lan`. Open `chrome://extensions`, enable Developer mode, and load `apps/extension/dist` unpacked. After changing the build origin, reload the extension there and accept the new site permission if Chrome asks. The default `pnpm --filter @typerelay/extension build` targets `https://app.typerelay.com` and requires the browser OAuth server changes to be deployed there.
+
+A fresh install opens the options page for sign-in. The toolbar opens settings when signed out, and its Settings button opens them after sign-in. Settings has Sync now and the trigger prefix. The popup starts with an empty focused search field, shows up to 20 matches only after typing, and supports Up/Down and Enter to insert the selected snippet.
 
 Sign in in the Chrome tab opened by the extension, then select an account and click **Connect device**. Magic Link sign-in can open another tab in the same browser profile; continue there. The extension recognizes its own callback on the Type Relay app origin, exchanges the code, and closes that callback tab. Account sign-in alone does not connect the extension.
 

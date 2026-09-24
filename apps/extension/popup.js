@@ -1,45 +1,71 @@
-const $ = selector => document.querySelector(selector);
-const send = async message => { const response = await chrome.runtime.sendMessage(message); if (!response?.ok) throw new Error(response?.error || 'TypeRelay is unavailable'); return response.value; };
-let items = [];
+import { send } from './messages.js';
 
-function status(message) { $('#status').textContent = message; }
+const $ = selector => document.querySelector(selector);
+let items = [];
+let matches = [];
+let selectedIndex = -1;
+let openingOptions = false;
+
+function status(message) { $('#status').textContent = message; $('#status').hidden = !message; }
+
+async function openSettings() {
+	if (openingOptions) return;
+	openingOptions = true;
+	try { await chrome.runtime.openOptionsPage(); window.close(); }
+	catch (error) { openingOptions = false; status(error.message); }
+}
+
+async function insert(item) {
+	try { await send({ type: 'insert', id: item.id }); window.close(); }
+	catch (error) { status(error.message); }
+}
+
+function select(index, scroll = false) {
+	selectedIndex = matches.length ? (index + matches.length) % matches.length : -1;
+	for (const [position, row] of [...$('#results').children].entries()) row.setAttribute('aria-selected', String(position === selectedIndex));
+	const selected = $('#results').children[selectedIndex];
+	if (selected) { $('#search').setAttribute('aria-activedescendant', selected.id); if (scroll) selected.scrollIntoView?.({ block: 'nearest' }); }
+	else $('#search').removeAttribute('aria-activedescendant');
+}
 
 function results() {
 	const query = $('#search').value.trim().toLowerCase();
-	const matches = items.filter(item => !query || [item.trigger, item.title, item.library].some(value => value?.toLowerCase().includes(query))).slice(0, 50);
 	const list = $('#results');
-	list.replaceChildren();
+	if (!query) { matches = []; list.replaceChildren(); list.hidden = true; $('#search').setAttribute('aria-expanded', 'false'); $('#search-message').hidden = false; $('#search-message').textContent = 'Type to search snippets.'; select(-1); return; }
+	matches = items.filter(item => [item.trigger, item.title, item.library].some(value => value?.toLowerCase().includes(query))).slice(0, 20);
+	const fragment = document.createDocumentFragment();
 	for (const item of matches) {
-		const row = $('#result-template').content.cloneNode(true);
-		const button = row.querySelector('button');
-		const title = row.querySelector('strong');
-		const detail = row.querySelector('small');
-		title.textContent = item.title || item.trigger || 'Untitled snippet';
-		detail.textContent = `${item.library} · ${item.trigger || 'Search only'}`;
-		button.addEventListener('click', async () => {
-			try { await send({ type: 'insert', id: item.id }); window.close(); }
-			catch (error) { status(error.message); }
-		});
-		list.append(row);
+		const row = $('#result-template').content.firstElementChild.cloneNode(true);
+		row.id = 'result-' + item.id;
+		row.querySelector('strong').textContent = item.title || item.trigger || 'Untitled snippet';
+		row.querySelector('small').textContent = item.library + ' · ' + (item.trigger || 'Search only');
+		row.addEventListener('click', () => void insert(item));
+		fragment.append(row);
 	}
+	list.replaceChildren(fragment);
+	list.hidden = !matches.length;
+	$('#search').setAttribute('aria-expanded', String(!!matches.length));
+	$('#search-message').hidden = !!matches.length;
+	$('#search-message').textContent = matches.length ? '' : 'No snippets found.';
+	select(0);
 }
 
 async function refresh() {
 	const state = await send({ type: 'status' });
-	$('#signed-out').hidden = state.connected;
-	$('#signed-in').hidden = !state.connected;
-	$('#connect').hidden = !!state.authPending;
-	$('#restart-connect').hidden = !state.authPending;
-	$('#edit').href = `${state.origin}/`;
-	$('#prefix').value = state.prefix;
-	status(state.authError || (!state.connected ? state.authPending ? 'Finish sign-in in the Chrome tab' : 'Signed out' : !state.bridgeVerified ? 'Desktop update needed' : `${state.count} snippets`));
-	if (state.connected) { items = (await send({ type: 'snapshot' })).items; results(); }
+	if (!state.connected) { $('#signed-out').hidden = false; $('#signed-in').hidden = true; status(state.authError || 'Sign in from settings.'); await openSettings(); return; }
+	$('#signed-out').hidden = true;
+	$('#signed-in').hidden = false;
+	status(state.authError || (state.bridgeVerified ? '' : 'Desktop update needed'));
+	items = (await send({ type: 'snapshot' })).items;
+	results();
+	$('#search').focus();
 }
 
-$('#connect').addEventListener('click', async () => { try { status('Opening sign-in tab…'); await send({ type: 'connect' }); await refresh(); } catch (error) { status(error.message); } });
-$('#restart-connect').addEventListener('click', async () => { try { await send({ type: 'cancel-connect' }); await send({ type: 'connect' }); await refresh(); } catch (error) { status(error.message); } });
-$('#disconnect').addEventListener('click', async () => { try { await send({ type: 'disconnect' }); await refresh(); } catch (error) { status(error.message); } });
-$('#sync').addEventListener('click', async () => { try { status('Syncing…'); await send({ type: 'sync' }); await refresh(); } catch (error) { status(error.message); } });
+$('#settings').addEventListener('click', () => void openSettings());
 $('#search').addEventListener('input', results);
-$('#prefix').addEventListener('change', async event => { try { await send({ type: 'prefix', value: event.target.value }); status('Prefix saved'); } catch (error) { status(error.message); } });
+$('#search').addEventListener('keydown', event => {
+	if (event.key === 'ArrowDown' && matches.length) { event.preventDefault(); select(selectedIndex + 1, true); }
+	if (event.key === 'ArrowUp' && matches.length) { event.preventDefault(); select(selectedIndex - 1, true); }
+	if (event.key === 'Enter' && selectedIndex >= 0) { event.preventDefault(); void insert(matches[selectedIndex]); }
+});
 void refresh().catch(error => status(error.message));

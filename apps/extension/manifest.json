@@ -8,6 +8,7 @@
   "host_permissions": ["https://app.typerelay.com/*"],
   "background": { "service_worker": "worker.js", "type": "module" },
   "action": { "default_popup": "popup.html", "default_title": "Type Relay", "default_icon": "icon.png" },
+  "options_page": "options.html",
   "icons": { "16": "icon.png", "48": "icon.png", "128": "icon.png" },
   "content_scripts": [{ "matches": ["http://*/*", "https://*/*"], "js": ["content.js"], "all_frames": true, "match_about_blank": true, "run_at": "document_idle" }],
   "web_accessible_resources": [{ "resources": ["prompt.html", "prompt.css", "notice.html", "notice.css"], "matches": ["http://*/*", "https://*/*"] }]
