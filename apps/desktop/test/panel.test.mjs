@@ -46,6 +46,43 @@ test('late responses are ignored; keyboard selection, Copy and Escape use explic
  }finally{f.dom.window.close();}
 });
 
+test('Ctrl+C and Super+C copy the highlighted result while search has focus',async()=>{
+ const f=await Fixture.create();try{
+  const search=f.panel.search(f.panel.sequence);f.pending[0].resolve([Fixture.hit('one'),Fixture.hit('two')]);await search;
+  f.panel.query.focus();
+  f.dom.window.document.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'ArrowDown'}));
+  for(const modifier of [{ctrlKey:true},{metaKey:true}]){
+   const event=new f.dom.window.KeyboardEvent('keydown',{key:'c',bubbles:true,cancelable:true,...modifier});
+   f.panel.query.dispatchEvent(event);await new Promise(resolve=>setTimeout(resolve,0));
+   assert.equal(event.defaultPrevented,true);
+  }
+  assert.deepEqual(f.calls.filter(call=>call.name==='copy_snippet').map(call=>call.args.hit.id),['two','two']);
+  assert.equal(f.panel.index,1);
+  assert.equal(f.panel.query,f.dom.window.document.activeElement);
+  assert.ok(!f.calls.some(call=>call.name==='insert'));
+ }finally{f.dom.window.close();}
+});
+
+test('copy waits for the current search and ignores empty or stale results',async()=>{
+ const f=await Fixture.create();try{
+  f.panel.query.value='old';const old=f.panel.search(f.panel.sequence);
+  f.panel.query.value='new';f.panel.query.dispatchEvent(new f.dom.window.Event('input'));
+  const copy=new f.dom.window.KeyboardEvent('keydown',{key:'c',ctrlKey:true,bubbles:true,cancelable:true});
+  f.panel.query.dispatchEvent(copy);
+  assert.equal(copy.defaultPrevented,true);
+  const current=f.pending.find(item=>item.query==='new');
+  assert.ok(current);
+  current.resolve([Fixture.hit('new')]);await new Promise(resolve=>setTimeout(resolve,0));
+  f.pending.find(item=>item.query==='old').resolve([Fixture.hit('old')]);await old;
+  assert.deepEqual(f.calls.filter(call=>call.name==='copy_snippet').map(call=>call.args.hit.id),['new']);
+  f.panel.query.value='missing';f.panel.query.dispatchEvent(new f.dom.window.Event('input'));
+  f.panel.query.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'c',metaKey:true,bubbles:true,cancelable:true}));
+  f.pending.find(item=>item.query==='missing').resolve([]);await new Promise(resolve=>setTimeout(resolve,0));
+  assert.deepEqual(f.calls.filter(call=>call.name==='copy_snippet').map(call=>call.args.hit.id),['new']);
+  assert.equal(f.panel.rows.length,0);
+ }finally{f.dom.window.close();}
+});
+
 test('one result click inserts the clicked snippet',async()=>{
  const f=await Fixture.create();try{
   const search=f.panel.search(f.panel.sequence);f.pending[0].resolve([Fixture.hit('one'),Fixture.hit('two')]);await search;

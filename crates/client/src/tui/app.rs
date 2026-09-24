@@ -432,6 +432,14 @@ impl App {
         }
         Ok(())
     }
+    fn can_copy(&self) -> bool {
+        match self.screen {
+            Screen::Files => self.selected_global().is_some(),
+            Screen::Browse => self.selected().is_some(),
+            Screen::Edit => true,
+            _ => false,
+        }
+    }
     fn toolbar_action(&mut self, index: usize) -> Result<()> {
         match index {
             0 => self.leave(Destination::Files),
@@ -441,6 +449,7 @@ impl App {
             3 => self.leave(Destination::Settings),
             4 => self.request_delete(),
             5 => self.leave(Destination::Trash),
+            6 if self.can_copy() => self.copy_current(),
             _ => Ok(()),
         }
     }
@@ -502,6 +511,9 @@ impl App {
                 if self.pending_delete.is_some() { return match key.code { KeyCode::Char('d') => self.confirm(0), KeyCode::Esc | KeyCode::Enter | KeyCode::Char('c') => self.confirm(1), _ => Ok(()) }; }
                 return match key.code { KeyCode::Char('s') => self.confirm(0), KeyCode::Char('d') => self.confirm(1), KeyCode::Char('c') | KeyCode::Esc | KeyCode::Enter => self.confirm(2), _ => Ok(()) };
             }
+            if matches!(key.code, KeyCode::Char('c' | 'C')) && key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER | KeyModifiers::META) {
+                return if self.can_copy() { self.copy_current() } else { Ok(()) };
+            }
             if key.modifiers.contains(KeyModifiers::CONTROL) {
                 match key.code {
 					KeyCode::Char('s') if self.screen==Screen::Image=>return self.image(),
@@ -512,7 +524,7 @@ impl App {
                     }
                     KeyCode::Char('d') if self.screen == Screen::Browse && !self.search_focused => { self.selected_ids.clear(); self.selection_anchor = None; return Ok(()); }
                     KeyCode::Char('m') if self.screen == Screen::Edit => return self.request_move(),
-                    KeyCode::Char('q' | 'c') => return self.leave(Destination::Quit),
+                    KeyCode::Char('q') => return self.leave(Destination::Quit),
                     KeyCode::Char('s') => return self.save(),
                     KeyCode::Char('t') if self.screen == Screen::Edit && self.editor_focus == 1 => { self.expansion.insert_str("\t"); return Ok(()); }
                     _ => (),
@@ -688,15 +700,19 @@ impl App {
         let area = frame.area();
         if let Some(dialog)=&mut self.template_dialog {dialog.draw(frame,area);return;}
         if area.width < 60 || area.height < 20 { frame.render_widget(Paragraph::new("TypeRelay — resize terminal to at least 60 × 20. Ctrl+Q exits."), area); return; }
-        let rows = Layout::vertical([Constraint::Length(2), Constraint::Length(if area.width < 75 { 6 } else { 3 }), Constraint::Min(8), Constraint::Length(3)]).split(area);
+        let rows = Layout::vertical([Constraint::Length(2), Constraint::Length(if area.width < 88 { 6 } else { 3 }), Constraint::Min(8), Constraint::Length(3)]).split(area);
         let title = if self.effective_screen() == Screen::Files { "TypeRelay  /  Snippet editor".into() } else { self.file.as_ref().map(|file| format!("TypeRelay  /  {}", file.name)).unwrap_or("TypeRelay  /  Snippet editor".into()) };
         frame.render_widget(Paragraph::new(title).style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)), rows[0]);
-        let widths = [14, 9, 9, 13, 20, 10];
-        self.toolbar = if area.width < 75 {
+        let widths = [14, 9, 9, 13, 20, 10, 13];
+        self.toolbar = if area.width < 88 {
             let bands = Layout::vertical([Constraint::Length(3), Constraint::Length(3)]).split(rows[1]);
-            bands.iter().enumerate().flat_map(|(row, area)| Layout::horizontal(widths[row * 3..row * 3 + 3].iter().map(|width| Constraint::Length(*width)).chain(std::iter::once(Constraint::Min(0)))).split(*area)[..3].to_vec()).collect()
-        } else { Layout::horizontal(widths.map(Constraint::Length).into_iter().chain(std::iter::once(Constraint::Min(0)))).split(rows[1])[..6].to_vec() };
-        for (index, title) in ["F1 Libraries", "F2 Add", "F5 Sync", "F6 Settings", "F3 Move to Trash", "F7 Trash"].iter().enumerate() { Self::button(frame, self.toolbar[index], title, !matches!(index, 1 | 4) || (self.screen == Screen::Browse && (index != 4 || self.selected().is_some()))); }
+            bands.iter().enumerate().flat_map(|(row, area)| {
+                let range = if row == 0 { 0..4 } else { 4..7 };
+                let count = range.len();
+                Layout::horizontal(widths[range].iter().map(|width| Constraint::Length(*width)).chain(std::iter::once(Constraint::Min(0)))).split(*area)[..count].to_vec()
+            }).collect()
+        } else { Layout::horizontal(widths.map(Constraint::Length).into_iter().chain(std::iter::once(Constraint::Min(0)))).split(rows[1])[..7].to_vec() };
+        for (index, title) in ["F1 Libraries", "F2 Add", "F5 Sync", "F6 Settings", "F3 Move to Trash", "F7 Trash", "Ctrl+C Copy"].iter().enumerate() { Self::button(frame, self.toolbar[index], title, if index == 6 { self.can_copy() } else { !matches!(index, 1 | 4) || (self.screen == Screen::Browse && (index != 4 || self.selected().is_some())) }); }
         let body = rows[2];
         match self.effective_screen() {
             Screen::Trash => {
@@ -721,7 +737,7 @@ impl App {
                     }).collect::<Vec<_>>();
                     frame.render_stateful_widget(List::new(items).block(Self::border(format!("{} snippets — Enter to edit", self.global_hits.len()), !self.global_search_focused)).highlight_style(Style::default().bg(Color::DarkGray)).highlight_symbol("› "), columns[0], &mut self.global_state);
                     let preview = self.selected_global().map(|hit| self.files[hit.file_index].entries[hit.entry_index].replace.clone()).unwrap_or("No matching snippets.".into());
-                    frame.render_widget(Paragraph::new(preview).scroll((0, self.preview_x)).block(Self::border("Preview · ←/→ scroll · F10 Fill/Copy", false)), columns[1]);
+                    frame.render_widget(Paragraph::new(preview).scroll((0, self.preview_x)).block(Self::border("Preview · ←/→ scroll · Ctrl+C Copy", false)), columns[1]);
                 } else {
                     let rows = Layout::vertical([Constraint::Min(3), Constraint::Length(3)]).split(parts[1]);
                     let items = std::iter::once(ListItem::new("+ New library")).chain(self.files.iter().map(|file| ListItem::new(self.library_label(file)))).collect::<Vec<_>>();
@@ -753,7 +769,7 @@ impl App {
                 let items = filtered.iter().map(|index| ListItem::new(format!("[{}] {}", if self.selected_ids.contains(&self.file.as_ref().unwrap().ids[*index]) { "x" } else { " " }, entries[*index].label()))).collect::<Vec<_>>();
                 frame.render_stateful_widget(List::new(items).block(Self::border(format!("{} snippets — Enter to edit", filtered.len()), !self.search_focused)).highlight_style(Style::default().bg(Color::DarkGray)).highlight_symbol("› "), columns[0], &mut self.snippets_state);
                 let preview = self.selected().map(|index| self.file.as_ref().unwrap().entries[index].replace.clone()).unwrap_or("No matching snippets. F2 adds a snippet.".into());
-                frame.render_widget(Paragraph::new(preview).scroll((0, self.preview_x)).block(Self::border("Preview · ←/→ scroll · F10 Fill/Copy · F11 Variables", false)), columns[1]);
+                frame.render_widget(Paragraph::new(preview).scroll((0, self.preview_x)).block(Self::border("Preview · ←/→ scroll · Ctrl+C Copy", false)), columns[1]);
             }
 			Screen::Image=>{let parts=Layout::vertical([Constraint::Length(3),Constraint::Length(3),Constraint::Length(3),Constraint::Length(3),Constraint::Min(2),Constraint::Length(3)]).split(body);self.image_source.set_block(Self::border("Local path or HTTP/HTTPS URL",self.image_focus==0));self.image_alt.set_block(Self::border("Alt text",self.image_focus==1));self.image_title.set_block(Self::border("Title",self.image_focus==2));self.image_width.set_block(Self::border("Display width (32–2048)",self.image_focus==3));frame.render_widget(&self.image_source,parts[0]);frame.render_widget(&self.image_alt,parts[1]);frame.render_widget(&self.image_title,parts[2]);frame.render_widget(&self.image_width,parts[3]);frame.render_widget(Paragraph::new("PNG, JPEG, WebP, and GIF · 5 MiB input · remote images are cached for offline insertion"),parts[4]);self.field_areas.extend([parts[0],parts[1],parts[2],parts[3]]);self.form_buttons(frame,parts[5]);}
             Screen::Edit => {
@@ -770,7 +786,7 @@ impl App {
 				frame.render_widget(&self.trigger, trigger_row[2]);if self.rich&&self.rich_preview{if let Some(image)=&self.rich_image{let preview=Layout::horizontal([Constraint::Percentage(65),Constraint::Percentage(35)]).split(parts[2]);frame.render_widget(Paragraph::new(tui_markdown::from_str(&Self::value(&self.expansion))).wrap(Wrap{trim:false}).block(Self::border("Rich preview · F12 source",false)),preview[0]);frame.render_widget(ratatui_image::Image::new(image),preview[1]);}else{frame.render_widget(Paragraph::new(tui_markdown::from_str(&Self::value(&self.expansion))).wrap(Wrap{trim:false}).block(Self::border("Rich preview · F12 source",false)),parts[2]);}}else{frame.render_widget(&self.expansion, parts[2]);}
                 self.field_areas.extend([trigger_row[2], parts[2], title_area]);
                 let destination = self.move_destination.as_ref().and_then(|id| self.move_choices.iter().find(|library|library["_id"] == *id)).and_then(|library|library["name"].as_str()).unwrap_or("Current library");
-                frame.render_widget(Paragraph::new(format!("Library: {destination} · Ctrl+M / F8 destination · F9 Type · F10 Fill/Copy · F11 Variables · F12 Preview")), parts[4]);
+                frame.render_widget(Paragraph::new(format!("Library: {destination} · Ctrl+M / F8 destination · F9 Type · Ctrl+C Copy · F11 Variables · F12 Preview")), parts[4]);
                 self.form_buttons(frame, parts[5]);
             }
             Screen::NewFile => {
@@ -1026,6 +1042,71 @@ mod tests {
         assert!(app.template_dialog.is_some());
         assert_eq!(app.fill_base.as_ref().unwrap().0, "Templates");
         assert_eq!(app.screen, Screen::Files);
+    }
+    #[test]
+    fn copy_shortcuts_use_highlighted_global_result_while_search_has_focus() {
+        let temp = tempfile::tempdir().unwrap(); let mut app = Fixture::app(temp.path());
+        let alpha = app.store.create("Alpha").unwrap();
+        app.store.save(&alpha, None, Match { trigger: "shared-alpha".into(), replace: "Alpha {{name}}".into(), kind: "template".into(), ..Match::default() }).unwrap();
+        let beta = app.store.create("Beta").unwrap();
+        app.store.save(&beta, None, Match { trigger: "shared-beta".into(), replace: "Beta {{name}}".into(), kind: "template".into(), ..Match::default() }).unwrap();
+        app.refresh();
+        Fixture::key(&mut app, KeyCode::Char('/'), KeyModifiers::NONE);
+        app.handle(Event::Paste("shared".into()));
+        Fixture::key(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        assert!(app.global_search_focused);
+        for modifiers in [KeyModifiers::CONTROL, KeyModifiers::SUPER, KeyModifiers::META] {
+            Fixture::key(&mut app, KeyCode::Char('c'), modifiers);
+            assert!(app.template_dialog.is_some());
+            assert_eq!(app.fill_base.as_ref().unwrap().0, "Beta");
+            assert_eq!(app.screen, Screen::Files);
+            assert_eq!(app.global_state.selected(), Some(1));
+            assert_eq!(App::value(&app.global_search), "shared");
+            assert!(!app.quit);
+            Fixture::key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        }
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let screen = terminal.backend().buffer().content().iter().map(|cell| cell.symbol()).collect::<String>();
+        assert!(screen.contains("Ctrl+C Copy"));
+        let button = app.toolbar[6];
+        app.handle(Event::Mouse(ratatui::crossterm::event::MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: button.x + 1, row: button.y + 1, modifiers: KeyModifiers::NONE }));
+        assert_eq!(app.fill_base.as_ref().unwrap().0, "Beta");
+    }
+    #[test]
+    fn copy_uses_highlighted_filtered_row_not_checked_rows() {
+        let temp = tempfile::tempdir().unwrap(); let mut app = Fixture::app(temp.path());
+        let file = app.store.create("Mine").unwrap();
+        let file = app.store.save(&file, None, Match { trigger: "first".into(), replace: "First {{name}}".into(), kind: "template".into(), ..Match::default() }).unwrap();
+        let first_id = file.ids[0].clone();
+        app.file = Some(app.store.save(&file, None, Match { trigger: "second".into(), replace: "Second {{name}}".into(), kind: "template".into(), ..Match::default() }).unwrap());
+        app.screen = Screen::Browse;
+        app.selected_ids.insert(first_id.clone());
+        app.search = App::text("second"); app.search_focused = true; app.snippets_state.select(Some(0));
+        Fixture::key(&mut app, KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert!(app.template_dialog.is_some());
+        assert!(app.selected_ids.contains(&first_id));
+        assert_eq!(App::value(&app.search), "second");
+        assert!(app.search_focused);
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let screen = terminal.backend().buffer().content().iter().map(|cell| cell.symbol()).collect::<String>();
+        assert!(screen.contains("Second"));
+        assert!(!screen.contains("First {{name}}"));
+    }
+    #[test]
+    fn copy_without_a_result_does_not_quit_and_ctrl_q_does() {
+        let temp = tempfile::tempdir().unwrap(); let mut app = Fixture::app(temp.path());
+        app.global_search = App::text("missing"); app.rebuild_global_hits(); app.global_search_focused = true;
+        Fixture::key(&mut app, KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert!(!app.quit);
+        assert_eq!(App::value(&app.global_search), "missing");
+        let file = app.store.create("Empty").unwrap();
+        app.file = Some(file); app.screen = Screen::Browse;
+        Fixture::key(&mut app, KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert!(!app.quit);
+        Fixture::key(&mut app, KeyCode::Char('q'), KeyModifiers::CONTROL);
+        assert!(app.quit);
     }
     #[test]
     fn delete_selected_filtered_snippet_requires_confirmation_and_keeps_file() {

@@ -9,10 +9,11 @@ class Panel {
 			if(event.key==='Escape'){event.preventDefault();this.cancel();return;}
 			if(this.filling){if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)){event.preventDefault();document.querySelector('#fill-form').requestSubmit();}return;}
 			if(!document.querySelector('#settings-view').hidden)return;
+			if(event.key.toLowerCase()==='c'&&(event.ctrlKey||event.metaKey)&&!event.altKey){if(this.rows.length||this.query.value){event.preventDefault();this.copy();}return;}
 			if(['ArrowDown','ArrowUp'].includes(event.key)){event.preventDefault();this.select(this.index+(event.key==='ArrowDown'?1:-1));}
 			if(event.key==='Enter'){event.preventDefault();this.insert();}
 		});
-		document.querySelector('#copy').onclick=()=>this.action(()=>this.start(this.rows[this.index],'copy'));
+		document.querySelector('#copy').onclick=()=>this.copy();
 		document.querySelector('#close').onclick=()=>this.cancel();
 		document.querySelector('#open-settings').onclick=()=>this.action(()=>this.settings(true));
 		document.querySelector('#fill-cancel').onclick=()=>this.cancel();
@@ -62,7 +63,9 @@ class Panel {
 	render(){this.list.replaceChildren();document.querySelector('#empty-state').hidden=!this.empty;document.querySelector('#hint').hidden=this.empty||!!this.rows.length;document.querySelector('#hint').textContent=this.query.value?'No matching snippets.':'Type an abbreviation or part of a snippet.';for(const [index,row] of this.rows.entries()){const node=document.querySelector('#result-template').content.firstElementChild.cloneNode(true);node.querySelector('.result-title').textContent=row.title||row.abbreviation||'Untitled snippet';node.querySelector('.result-library').textContent=row.library_name;node.querySelector('.result-abbreviation').textContent=row.abbreviation;node.querySelector('.result-preview').textContent=row.preview;node.onclick=()=>{this.select(index);this.insert();};this.list.append(node);}this.select(0);}
 	select(index){this.index=Math.max(0,Math.min(index,this.rows.length-1));[...this.list.children].forEach((node,i)=>{node.setAttribute('aria-selected',String(i===this.index));if(i===this.index)node.scrollIntoView({block:'nearest'});});document.querySelector('#copy').disabled=!this.rows.length;}
 	async action(action){if(this.busy)return;this.busy=true;try{await action();}catch(error){await this.notify(error,true);}finally{this.busy=false;}}
-	insert(){this.action(async()=>{const sequence=this.sequence;if(!this.rows.length&&this.query.value){clearTimeout(this.timer);await this.search(sequence);}if(sequence===this.sequence&&this.rows.length)await this.start(this.rows[this.index],'insert');});}
+	activate(mode){this.action(async()=>{const sequence=this.sequence;if(!this.rows.length&&this.query.value){clearTimeout(this.timer);await this.search(sequence);}if(sequence===this.sequence&&this.rows.length)await this.start(this.rows[this.index],mode);});}
+	insert(){this.activate('insert');}
+	copy(){this.activate('copy');}
 	cancel(){this.filling=null;document.querySelector('#fill-fields').replaceChildren();document.querySelector('#fill-preview').textContent='';this.invoke('dismiss');}
 	answers(){return Object.fromEntries([...document.querySelectorAll('[data-answer]')].map(field=>[field.dataset.answer,field.value]));}
 	async start(hit,mode){
