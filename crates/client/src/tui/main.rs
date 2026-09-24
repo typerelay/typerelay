@@ -8,7 +8,7 @@ use std::{io::IsTerminal, path::PathBuf, sync::{Arc, atomic::{AtomicBool, Orderi
 use typerelay_client::{editor::{EditorStore, Paths}, settings::SettingsStore};
 
 #[derive(Parser)]
-#[command(name = "typerelay-tui", version, about = "Edit TypeRelay snippet files")]
+#[command(name = "typerelay-tui", version = env!("TYPERELAY_VERSION"), about = "Edit TypeRelay snippet files")]
 struct Cli { #[arg(long)] dir: Option<PathBuf> }
 
 impl Cli {

@@ -310,7 +310,7 @@ fn main() {
     let arguments = std::env::args().collect::<Vec<_>>();
     if arguments.get(1).is_some_and(|value| value.starts_with("chrome-extension://")) { if let Err(error) = browser_bridge::BrowserBridge::serve() { eprintln!("TypeRelay browser bridge: {error:#}"); } return; }
     if arguments.get(1).is_some_and(|value| value == "--register-chrome-extension") { let result = arguments.get(2).context("Chrome extension ID required").and_then(|id| browser_bridge::BrowserBridge::register(id)); if let Err(error) = result { eprintln!("TypeRelay browser registration: {error:#}"); std::process::exit(1); } return; }
-    if std::env::args().any(|a|a=="--version"){println!("typerelay-panel {}",env!("CARGO_PKG_VERSION"));return;}
+    if std::env::args().any(|a|a=="--version"){println!("typerelay-panel {}",env!("TYPERELAY_VERSION"));return;}
 	if Runtime::receive_callback(&arguments){return;}
     #[cfg(target_os="macos")]
     if std::env::args().any(|a|a=="--accessibility-status"){println!("{}",if platform::accessibility(false){"allowed"}else{"required"});return;}

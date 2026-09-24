@@ -7,7 +7,7 @@
   "scripts": {
     "build": "node build.mjs",
     "build:macos:local": "node scripts/build-macos-local.mjs",
-    "tauri": "node ../../scripts/sync-desktop-version.mjs && tauri",
+    "tauri": "tauri",
     "test": "node --test test/*.test.mjs"
   },
   "devDependencies": {

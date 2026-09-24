@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { DesktopVersion } from '../../../scripts/sync-desktop-version.mjs';
+import { DesktopVersion } from '../../../scripts/desktop-version.mjs';
 
 export class LocalMacBuild {
 	static root = fileURLToPath(new URL('../../../', import.meta.url));
@@ -15,7 +15,6 @@ export class LocalMacBuild {
 	static async signingIdentity(environment = process.env) { const output = await LocalMacBuild.output('security', ['find-identity', '-v', '-p', 'codesigning']); const identities = [...output.matchAll(/"(Developer ID Application:[^"]+)"/g)].map(match => match[1]); const requested = environment.APPLE_SIGNING_IDENTITY; if (requested && identities.includes(requested)) return requested; if (identities.length === 1) return identities[0]; throw new Error('Set APPLE_SIGNING_IDENTITY to one installed Developer ID Application identity'); }
 	static async main(platform = process.platform) {
 		if (platform !== 'darwin') throw new Error('Run the local macOS build on a Mac');
-		await DesktopVersion.sync();
 		const target = LocalMacBuild.target(); const config = await DesktopVersion.config(); const identity = await LocalMacBuild.signingIdentity();
 		await LocalMacBuild.run('pnpm', ['tauri', 'build', '--target', target.triple, '--bundles', 'app', '--no-sign', '--', '--locked'], LocalMacBuild.working);
 		const release = path.join(LocalMacBuild.working, 'src-tauri/target', target.triple, 'release/bundle'); const app = path.join(release, 'macos/TypeRelay.app'); const tui = path.join(app, 'Contents/MacOS/typerelay-tui');
