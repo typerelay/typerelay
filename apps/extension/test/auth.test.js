@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-test('browser sign-in opens a regular tab and captures a matching callback after Magic Link', async () => {
+test('browser sign-in captures the Magic Link callback and syncs images using HTTPS cache keys', async () => {
 	const values = () => {
 		const data = {};
 		return { get: async keys => Object.fromEntries((typeof keys === 'string' ? [keys] : keys).map(key => [key, data[key]])), set: async entries => Object.assign(data, entries), remove: async keys => { for (const key of typeof keys === 'string' ? [keys] : keys) delete data[key]; } };
@@ -10,14 +10,17 @@ test('browser sign-in opens a regular tab and captures a matching callback after
 	const session = values();
 	const tabs = [];
 	const removed = [];
+	const cached = new Map();
+	const assetId = 'a'.repeat(64);
 	let messageListener;
 	let updateListener;
 	const origin = 'https://app.typerelay.com';
 	globalThis.chrome = { storage: { local, session }, runtime: { onMessage: { addListener: listener => { messageListener = listener; } }, onInstalled: { addListener: () => {} }, onStartup: { addListener: () => {} }, getPlatformInfo: async () => ({ os: 'cros' }) }, tabs: { create: async details => { tabs.push({ id: 10, ...details }); return tabs[0]; }, query: async () => tabs.filter(tab => tab.url.startsWith(`${origin}/oauth/browser-callback`)), remove: async id => { removed.push(id); tabs.splice(tabs.findIndex(tab => tab.id === id), 1); }, onUpdated: { addListener: listener => { updateListener = listener; } } }, alarms: { create: () => {}, onAlarm: { addListener: () => {} } } };
-	globalThis.caches = { open: async () => ({ keys: async () => [] }), delete: async () => true };
+	globalThis.caches = { open: async () => ({ match: async key => cached.get(key), put: async (key, value) => { assert.match(new URL(key).protocol, /^https?:$/); cached.set(key, value); }, keys: async () => [...cached.keys()].map(url => ({ url })), delete: async key => cached.delete(key) }), delete: async () => true };
 	globalThis.fetch = async url => {
 		if (url === `${origin}/oauth/token`) return Response.json({ access_token: 'access', refresh_token: 'refresh', expires_in: 900, account: 'account' });
-		if (url === `${origin}/api/v2/sync?cursor=0`) return Response.json({ protocol: 6, cursor: 'snapshot', libraries: [] });
+		if (url === `${origin}/api/v2/sync?cursor=0`) return Response.json({ protocol: 6, cursor: 'snapshot', libraries: [{ name: 'Test', state: 'active', snippets: [{ id: 'snippet', state: 'active', trigger: 'tr', title: 'Test result', content: { type: 'rich_text', markdown: 'Image', assets: [assetId] } }] }] });
+		if (url === `${origin}/api/v2/assets/${assetId}`) return new Response(new Uint8Array([1, 2, 3]), { headers: { 'Content-Type': 'image/png' } });
 		throw new Error(`Unexpected request: ${url}`);
 	};
 	await import(`../worker.js?auth-test=${Date.now()}`);
@@ -31,13 +34,19 @@ test('browser sign-in opens a regular tab and captures a matching callback after
 	assert.equal(authorize.searchParams.get('code_challenge_method'), 'S256');
 	const state = authorize.searchParams.get('state');
 	const callback = `${origin}/oauth/browser-callback?code=one-time-code&state=${state}`;
+	await session.set({ browserAuthError: 'Earlier sync failed' });
 	updateListener(11, { url: `${origin}/oauth/browser-callback?code=wrong&state=wrong` });
 	await new Promise(resolve => setImmediate(resolve));
 	assert.equal((await local.get('tokens')).tokens, undefined);
 	tabs.push({ id: 11, url: callback });
 	updateListener(11, { url: callback });
-	assert.equal((await send('status')).value.connected, true);
+	const status = await send('status');
+	assert.equal(status.value.connected, true);
+	assert.equal(status.value.count, 1);
 	assert.equal((await local.get('tokens')).tokens.access_token, 'access');
+	assert.equal((await send('snapshot')).value.items[0].title, 'Test result');
+	assert.ok(cached.has(`${origin}/api/v2/assets/${assetId}`));
+	assert.equal((await session.get('browserAuthError')).browserAuthError, undefined);
 	assert.deepEqual(removed, [11]);
 	assert.equal((await session.get('browserAuth')).browserAuth, undefined);
 });

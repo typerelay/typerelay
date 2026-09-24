@@ -3,6 +3,7 @@ import { Runtime } from './runtime.js';
 const origin = 'https://app.typerelay.com';
 const client = 'typerelay-browser';
 const callbackPath = '/oauth/browser-callback';
+const assetPath = id => `/api/v2/assets/${id}`;
 let refreshJob;
 let completionJob;
 let bridge;
@@ -85,17 +86,18 @@ async function sync() {
 	const ids = new Set(snapshot.libraries.filter(library => library.state === 'active').flatMap(library => library.snippets.flatMap(snippet => snippet.content?.assets || [])));
 	for (const id of ids) {
 		if (!/^[a-f0-9]{64}$/.test(id)) throw new Error('Invalid asset ID');
-		const key = chrome.runtime.getURL(`assets/${id}`);
-		if (!await cache.match(key)) await cache.put(key, await request(`/api/v2/assets/${id}`));
+		const key = `${origin}${assetPath(id)}`;
+		if (!await cache.match(key)) await cache.put(key, await request(assetPath(id)));
 	}
 	const items = snapshot.libraries.filter(library => library.state === 'active').flatMap(library => library.snippets.filter(snippet => snippet.state === 'active').map(snippet => ({ id: snippet.id, trigger: snippet.trigger, title: snippet.title, library: library.name, content: snippet.content })));
 	await chrome.storage.local.set({ items, cursor: snapshot.cursor, lastSync: Date.now() });
 	for (const key of await cache.keys()) if (!ids.has(key.url.split('/').at(-1))) await cache.delete(key);
+	await chrome.storage.session.remove('browserAuthError');
 	return { count: items.length, cursor: snapshot.cursor };
 }
 
 async function assetUrl(id) {
-	const response = await (await caches.open('typerelay-assets-v1')).match(chrome.runtime.getURL(`assets/${id}`));
+	const response = await (await caches.open('typerelay-assets-v1')).match(`${origin}${assetPath(id)}`);
 	if (!response) throw new Error('Image unavailable offline; sync TypeRelay');
 	const bytes = new Uint8Array(await response.arrayBuffer());
 	let encoded = '';
