@@ -10,12 +10,20 @@ pub enum Screen { Files, Browse, Edit, Image, NewFile, Settings, Trash, Move, Co
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Destination { Files, Browse, Settings, Trash, Quit }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct GlobalHit { library_id: String, snippet_id: String, file_index: usize, entry_index: usize }
+
 pub struct App {
     store: EditorStore,
     settings: SettingsStore,
     pub screen: Screen,
-    files: Vec<String>,
+    files: Vec<OpenFile>,
     file_state: ListState,
+    global_search: TextArea<'static>,
+    global_search_focused: bool,
+    global_hits: Vec<GlobalHit>,
+    global_state: ListState,
+    global_edit: bool,
     snippets_state: ListState,
     file: Option<OpenFile>,
     search: TextArea<'static>,
@@ -78,13 +86,39 @@ pub struct App {
 
 impl App {
     pub fn new(store: EditorStore, settings: SettingsStore) -> Result<Self> {
-        let files = store.files()?;
+        let files = Self::load_files(&store)?;
         let mut file_state = ListState::default();
         file_state.select(Some(0));
-        Ok(Self { store, settings, screen: Screen::Files, files, file_state, snippets_state: ListState::default(), file: None, search: TextArea::default(), search_focused: false, trigger: TextArea::default(), title: TextArea::default(), language: "plain_text".into(), code: false, template:false, rich:false, rich_preview:false,rich_image:None,image_source:TextArea::default(),image_alt:TextArea::default(),image_title:TextArea::default(),image_width:Self::text("640"),image_focus:0, variables:Default::default(), template_dialog:None, fill_base:None, rich_fill:None, preview_x: 0, expansion: TextArea::default(), name: TextArea::default(), url: TextArea::default(), editor_focus: 0, editing: None, original_entry: None, original_url: String::new(), prefix: TextArea::default(), original_prefix: String::new(), pending: None, pending_delete: None, selected_ids: std::collections::BTreeSet::new(), selection_anchor: None, move_destination: None, move_choices: Vec::new(), move_state: ListState::default(), move_from: Screen::Browse, move_items: Vec::new(), pending_batch: None,pending_merge:None, bulk_buttons: Vec::new(), pending_trash: None, trash_rows: Vec::new(), trash_state: ListState::default(), trash_buttons: Vec::new(), confirm_from: Screen::Files, status: "Choose a file, or create a new one".into(), error: false, quit: false, toolbar: Vec::new(), list_area: Rect::default(), field_areas: Vec::new(), save_area: Rect::default(), cancel_area: Rect::default(), confirm_buttons: Vec::new(),merge_button:Rect::default() })
+        Ok(Self { store, settings, screen: Screen::Files, files, file_state, global_search: TextArea::default(), global_search_focused: false, global_hits: Vec::new(), global_state: ListState::default(), global_edit: false, snippets_state: ListState::default(), file: None, search: TextArea::default(), search_focused: false, trigger: TextArea::default(), title: TextArea::default(), language: "plain_text".into(), code: false, template:false, rich:false, rich_preview:false,rich_image:None,image_source:TextArea::default(),image_alt:TextArea::default(),image_title:TextArea::default(),image_width:Self::text("640"),image_focus:0, variables:Default::default(), template_dialog:None, fill_base:None, rich_fill:None, preview_x: 0, expansion: TextArea::default(), name: TextArea::default(), url: TextArea::default(), editor_focus: 0, editing: None, original_entry: None, original_url: String::new(), prefix: TextArea::default(), original_prefix: String::new(), pending: None, pending_delete: None, selected_ids: std::collections::BTreeSet::new(), selection_anchor: None, move_destination: None, move_choices: Vec::new(), move_state: ListState::default(), move_from: Screen::Browse, move_items: Vec::new(), pending_batch: None,pending_merge:None, bulk_buttons: Vec::new(), pending_trash: None, trash_rows: Vec::new(), trash_state: ListState::default(), trash_buttons: Vec::new(), confirm_from: Screen::Files, status: "Choose a file, or create a new one".into(), error: false, quit: false, toolbar: Vec::new(), list_area: Rect::default(), field_areas: Vec::new(), save_area: Rect::default(), cancel_area: Rect::default(), confirm_buttons: Vec::new(),merge_button:Rect::default() })
     }
+    fn load_files(store: &EditorStore) -> Result<Vec<OpenFile>> { store.files()?.iter().map(|name| store.open(name)).collect() }
     fn text(value: &str) -> TextArea<'static> { TextArea::new(value.split('\n').map(str::to_owned).collect()) }
     fn value(field: &TextArea<'_>) -> String { field.lines().join("\n") }
+    fn global_active(&self) -> bool { !Self::value(&self.global_search).is_empty() }
+    fn selected_global(&self) -> Option<&GlobalHit> { self.global_hits.get(self.global_state.selected()?) }
+    fn rebuild_global_hits(&mut self) {
+        let selected = self.selected_global().map(|hit| (hit.library_id.clone(), hit.snippet_id.clone()));
+        let query = Self::value(&self.global_search);
+        self.global_hits = if query.is_empty() { Vec::new() } else {
+            self.files.iter().enumerate().flat_map(|(file_index, file)| {
+                file.search(&query).into_iter().map(move |entry_index| GlobalHit {
+                    library_id: file.id.clone(), snippet_id: file.ids[entry_index].clone(), file_index, entry_index,
+                })
+            }).collect()
+        };
+        let index = selected.and_then(|(library_id, snippet_id)| self.global_hits.iter().position(|hit| hit.library_id == library_id && hit.snippet_id == snippet_id)).unwrap_or(0);
+        self.global_state.select((!self.global_hits.is_empty()).then_some(index));
+    }
+    fn reload_files(&mut self) -> Result<()> {
+        self.files = Self::load_files(&self.store)?;
+        if self.file_state.selected().is_some_and(|index| index > self.files.len()) { self.file_state.select(Some(self.files.len())); }
+        self.rebuild_global_hits();
+        Ok(())
+    }
+    fn library_label(&self, file: &OpenFile) -> String {
+        let label = typerelay_client::sync::Sync::label(self.settings.config_dir(), &self.store.directory, &file.name);
+        format!("{} ({}){}", file.name, file.entries.len(), label.strip_prefix(&file.name).unwrap_or(""))
+    }
     fn draft(&self) -> Match { let replacement=Self::value(&self.expansion);let dynamic=self.template||(!self.code&&!self.rich&&(!self.variables.is_empty()||replacement.contains("{{")));Match { variables: self.variables.clone(), trigger: Self::value(&self.trigger), replace: replacement, title: Self::value(&self.title), kind: if self.rich { "rich_text" } else if self.code { "code" } else if dynamic { "template" } else { "plain_text" }.into(), language: self.language.clone() } }
     fn next_editor_field(&mut self, backwards: bool) {
         let order = [2, 0, 1];
@@ -111,7 +145,7 @@ impl App {
         match destination {
             Destination::Trash => { self.load_trash()?; self.screen = Screen::Trash; }
             Destination::Quit => self.quit = true,
-            Destination::Files => { self.files = self.store.files()?; self.file_state.select(Some(0)); self.screen = Screen::Files; }
+            Destination::Files => { self.reload_files()?; self.file_state.select(Some(0)); self.global_edit = false; self.screen = Screen::Files; }
             Destination::Browse => self.screen = if self.file.is_some() { Screen::Browse } else { Screen::Files },
             Destination::Settings => {
                 self.settings.reload()?;
@@ -136,16 +170,32 @@ impl App {
     fn open_selected_file(&mut self) -> Result<()> {
         let index = self.file_state.selected().unwrap_or(0);
         if index == 0 { self.name = TextArea::default(); self.screen = Screen::NewFile; return Ok(()); }
-        let name = self.files.get(index - 1).context("Select a file")?;
+        let name = &self.files.get(index - 1).context("Select a file")?.name;
         let next = self.store.open(name)?;
         if self.file.as_ref().is_none_or(|file| file.id != next.id) { self.selected_ids.clear(); self.selection_anchor = None; }
         self.file = Some(next);
         self.search = TextArea::default();
         self.search_focused = false;
+        self.global_edit = false;
         self.snippets_state.select(Some(0));
         self.screen = Screen::Browse;
         self.message("Enter: edit · /: search · F4: trash library · F7: Trash", false);
         Ok(())
+    }
+    fn open_global_hit(&mut self) -> Result<()> {
+        let hit = self.selected_global().cloned().context("Select a snippet")?;
+        let name = self.files.get(hit.file_index).context("Library is no longer available")?.name.clone();
+        let current = self.store.open(&name)?;
+        anyhow::ensure!(current.id == hit.library_id, "Library changed; search again");
+        let index = current.ids.iter().position(|id| id == &hit.snippet_id).context("Snippet moved or was removed; search again")?;
+        let previous_file = self.file.replace(current);
+        let previous_search = std::mem::take(&mut self.search);
+        let previous_state = std::mem::take(&mut self.snippets_state);
+        self.snippets_state.select(Some(index));
+        match self.edit(false) {
+            Ok(()) => { self.global_edit = true; Ok(()) }
+            Err(error) => { self.file = previous_file; self.search = previous_search; self.snippets_state = previous_state; Err(error) }
+        }
     }
     fn edit(&mut self, new: bool) -> Result<()> {
         self.settings.reload()?;
@@ -176,7 +226,9 @@ impl App {
                 self.original_entry = Some(entry);
                 self.move_destination = None; self.selected_ids.retain(|id| self.file.as_ref().unwrap().ids.contains(id));
                 if self.selection_anchor.as_ref().is_some_and(|id| !self.file.as_ref().unwrap().ids.contains(id)) { self.selection_anchor = None; }
-                self.screen = Screen::Browse;
+                let global_edit = std::mem::take(&mut self.global_edit);
+                self.screen = if global_edit { Screen::Files } else { Screen::Browse };
+                if global_edit { self.reload_files()?; }
                 let count = self.filtered().len();
                 self.snippets_state.select(if count == 0 { None } else { Some(0) });
                 self.message("Saved. The running engine reloads automatically.", false);
@@ -190,7 +242,7 @@ impl App {
             }
             Screen::NewFile => {
                 self.file = Some(self.store.create(Self::value(&self.name).trim())?);
-                self.files = self.store.files()?;
+                self.reload_files()?;
                 self.search = TextArea::default();
                 self.snippets_state.select(None);
                 self.screen = Screen::Browse;
@@ -261,7 +313,7 @@ impl App {
         self.screen = Screen::Move;
         Ok(())
     }
-	fn request_merge(&mut self)->Result<()>{anyhow::ensure!(self.screen==Screen::Files,"Open the library picker first");let index=self.file_state.selected().unwrap_or(0);anyhow::ensure!(index>0,"Choose a library to merge");let name=self.files.get(index-1).context("Choose a source library")?;let db=typerelay_client::database::Database::open(&self.store.directory)?;let source=db.editor(name)?;let mut choices=db.merge_destinations(&source.id)?;for library in &mut choices{let id=library["_id"].as_str().context("Missing destination ID")?.to_owned();library["merge_sync"]=serde_json::json!(if db.synced(&id)?{"Synced"}else{"Local only"});library["merge_count"]=serde_json::json!(db.records(&id)?.iter().filter(|record|record["state"]=="active").count());}anyhow::ensure!(!choices.is_empty(),"No eligible destination. Upload a local destination before merging a synced library into it.");self.move_choices=choices;self.move_items=vec![serde_json::json!({"source":source.id,"name":source.name,"count":source.entries.len()})];self.move_state.select(Some(0));self.move_from=Screen::Files;self.screen=Screen::Move;Ok(())}
+	fn request_merge(&mut self)->Result<()>{anyhow::ensure!(self.screen==Screen::Files,"Open the library picker first");anyhow::ensure!(!self.global_active(),"Clear search before merging a library");let index=self.file_state.selected().unwrap_or(0);anyhow::ensure!(index>0,"Choose a library to merge");let name=&self.files.get(index-1).context("Choose a source library")?.name;let db=typerelay_client::database::Database::open(&self.store.directory)?;let source=db.editor(name)?;let mut choices=db.merge_destinations(&source.id)?;for library in &mut choices{let id=library["_id"].as_str().context("Missing destination ID")?.to_owned();library["merge_sync"]=serde_json::json!(if db.synced(&id)?{"Synced"}else{"Local only"});library["merge_count"]=serde_json::json!(db.records(&id)?.iter().filter(|record|record["state"]=="active").count());}anyhow::ensure!(!choices.is_empty(),"No eligible destination. Upload a local destination before merging a synced library into it.");self.move_choices=choices;self.move_items=vec![serde_json::json!({"source":source.id,"name":source.name,"count":source.entries.len()})];self.move_state.select(Some(0));self.move_from=Screen::Files;self.screen=Screen::Move;Ok(())}
     fn choose_move(&mut self) -> Result<()> {
         let destination = self.move_choices.get(self.move_state.selected().unwrap_or(0)).context("Choose a destination")?["_id"].as_str().context("Missing destination")?.to_owned();
 		let source=if self.move_from==Screen::Files{self.move_items.first().and_then(|item|item["source"].as_str()).context("Missing merge source")?.to_owned()}else{self.file.as_ref().context("Choose a source")?.id.clone()};
@@ -291,7 +343,7 @@ impl App {
         Ok(())
     }
     fn confirm(&mut self, choice: usize) -> Result<()> {
-		if let Some((source,destination,_))=self.pending_merge.clone(){if choice==0{let queued=typerelay_client::database::Database::open(&self.store.directory)?.merge(&source,&destination)?;if queued{let _=typerelay_client::sync::Sync::trigger(self.settings.config_dir());}self.files=self.store.files()?;self.file_state.select(Some(0));self.screen=Screen::Files;self.message(if queued{"Merge queued"}else{"Libraries merged"},false);}else{self.screen=Screen::Files;}self.pending_merge=None;return Ok(());}
+		if let Some((source,destination,_))=self.pending_merge.clone(){if choice==0{let queued=typerelay_client::database::Database::open(&self.store.directory)?.merge(&source,&destination)?;if queued{let _=typerelay_client::sync::Sync::trigger(self.settings.config_dir());}self.reload_files()?;self.file_state.select(Some(0));self.screen=Screen::Files;self.message(if queued{"Merge queued"}else{"Libraries merged"},false);}else{self.screen=Screen::Files;}self.pending_merge=None;return Ok(());}
         if let Some((source, destination, items)) = self.pending_batch.clone() {
             if choice == 0 {
                 typerelay_client::database::Database::open(&self.store.directory)?.batch(&source, destination.as_deref(), &items)?;
@@ -338,6 +390,48 @@ impl App {
             _ => { self.pending = None; Ok(()) },
         }
     }
+    fn copy_current(&mut self) -> Result<()> {
+        let (entry, base) = match self.screen {
+            Screen::Edit => (self.draft(), self.file.as_ref().map(|file| (file.name.clone(), file.revision))),
+            Screen::Browse => {
+                let file = self.file.as_ref().context("Choose a library")?;
+                (file.entries[self.selected().context("Select a snippet")?].clone(), Some((file.name.clone(), file.revision)))
+            }
+            Screen::Files => {
+                let hit = self.selected_global().context("Select a snippet")?;
+                let file = &self.files[hit.file_index];
+                (file.entries[hit.entry_index].clone(), Some((file.name.clone(), file.revision)))
+            }
+            _ => return Ok(()),
+        };
+        if entry.kind == "rich_text" {
+            let content = entry.value()["content"].clone();
+            let (result, _) = typerelay_client::panel::Panel::rich_payload(&self.store.directory, &content, Default::default(), true)?;
+            if result.fields.is_empty() {
+                let (result, payload) = typerelay_client::panel::Panel::rich_payload(&self.store.directory, &content, Default::default(), false)?;
+                typerelay_client::clipboard::PasteJob::copy_payload(payload)?;
+                self.message(if result.enter_actions > 0 { "Copied rich text; Enter key actions omitted" } else { "Copied rich text" }, false);
+            } else {
+                self.fill_base = base;
+                self.rich_fill = Some(content);
+                self.template_dialog = Some(crate::template_dialog::Dialog::fill(typerelay_core::template::Template { text: entry.replace, variables: entry.variables })?);
+            }
+        } else if entry.kind == "template" {
+            let template = typerelay_core::template::Template { text: entry.replace.clone(), variables: entry.variables.clone() };
+            if template.fields().map_err(anyhow::Error::msg)?.is_empty() {
+                let rendered = typerelay_client::templates::Templates::render(&entry.value()["content"], Default::default(), false)?;
+                typerelay_client::clipboard::PasteJob::copy_text(rendered.text)?;
+                self.message(if rendered.enter_actions > 0 { "Copied text; Enter key actions omitted" } else { "Copied" }, false);
+            } else {
+                self.fill_base = base;
+                self.template_dialog = Some(crate::template_dialog::Dialog::fill(template)?);
+            }
+        } else {
+            typerelay_client::clipboard::PasteJob::copy_text(entry.replace)?;
+            self.message("Copied", false);
+        }
+        Ok(())
+    }
     fn toolbar_action(&mut self, index: usize) -> Result<()> {
         match index {
             0 => self.leave(Destination::Files),
@@ -351,8 +445,8 @@ impl App {
         }
     }
     fn move_selection(&mut self, down: bool) {
-        let count = if self.screen == Screen::Files { self.files.len() + 1 } else { self.filtered().len() };
-        let state = if self.screen == Screen::Files { &mut self.file_state } else { &mut self.snippets_state };
+        let count = if self.screen == Screen::Files { if self.global_active() { self.global_hits.len() } else { self.files.len() + 1 } } else { self.filtered().len() };
+        let state = if self.screen == Screen::Files { if self.global_active() { &mut self.global_state } else { &mut self.file_state } } else { &mut self.snippets_state };
         if count == 0 { state.select(None); return; }
         let current = state.selected().unwrap_or(0);
         state.select(Some(if down { (current + 1).min(count - 1) } else { current.saturating_sub(1) }));
@@ -430,10 +524,7 @@ impl App {
                 KeyCode::F(9) if self.screen == Screen::Edit => { if self.rich{self.rich=false;self.code=false;}else if self.code{self.code=false;self.rich=true;}else{self.code=true;self.rich=false;}self.template=false;self.rich_preview=false;self.message(if self.rich{"Type: Rich text · F12 source/preview · F11 variables"}else if self.code { "Type: Code · Tab indents; F2 moves to the next field" } else { "Type: Text · F11 variables" }, false); return Ok(()); }
 				KeyCode::F(12) if self.screen==Screen::Edit&&self.rich=>{self.rich_preview = !self.rich_preview;self.rich_image=if self.rich_preview{self.preview_image()?}else{None};self.message(if self.rich_preview{"Rich-text preview · F12 source"}else{"Rich-text Markdown source · F12 preview"},false);return Ok(());}
 				KeyCode::F(11) if self.screen == Screen::Edit && !self.code => { self.template_dialog=Some(crate::template_dialog::Dialog::variables(typerelay_core::template::Template{text:Self::value(&self.expansion),variables:self.variables.clone()})?);return Ok(()); }
-                KeyCode::F(10) if matches!(self.screen, Screen::Edit | Screen::Browse) => {
-                    let entry=if self.screen==Screen::Edit {self.draft()}else{self.selected().map(|i|self.file.as_ref().unwrap().entries[i].clone()).unwrap_or_default()};
-					if entry.kind=="rich_text"{let content=entry.value()["content"].clone();let(result,_)=typerelay_client::panel::Panel::rich_payload(&self.store.directory,&content,Default::default(),true)?;if result.fields.is_empty(){let(result,payload)=typerelay_client::panel::Panel::rich_payload(&self.store.directory,&content,Default::default(),false)?;typerelay_client::clipboard::PasteJob::copy_payload(payload)?;self.message(if result.enter_actions>0{"Copied rich text; Enter key actions omitted"}else{"Copied rich text"},false);}else{self.fill_base=self.file.as_ref().map(|file|(file.name.clone(),file.revision));self.rich_fill=Some(content);self.template_dialog=Some(crate::template_dialog::Dialog::fill(typerelay_core::template::Template{text:entry.replace.clone(),variables:entry.variables.clone()})?);}}else if entry.kind=="template"{let template=typerelay_core::template::Template{text:entry.replace.clone(),variables:entry.variables.clone()};if template.fields().map_err(anyhow::Error::msg)?.is_empty(){let rendered=typerelay_client::templates::Templates::render(&entry.value()["content"],Default::default(),false)?;typerelay_client::clipboard::PasteJob::copy_text(rendered.text)?;self.message(if rendered.enter_actions>0{"Copied text; Enter key actions omitted"}else{"Copied"},false);}else{self.fill_base=self.file.as_ref().map(|file|(file.name.clone(),file.revision));self.template_dialog=Some(crate::template_dialog::Dialog::fill(template)?);}}else{typerelay_client::clipboard::PasteJob::copy_text(entry.replace)?;self.message("Copied",false);}return Ok(());
-                }
+                KeyCode::F(10) if matches!(self.screen, Screen::Edit | Screen::Browse) || (self.screen == Screen::Files && self.global_active()) => return self.copy_current(),
                 KeyCode::F(2) => return self.toolbar_action(1),
                 KeyCode::F(5) => return self.toolbar_action(2),
                 KeyCode::F(6) => return self.toolbar_action(3),
@@ -454,11 +545,21 @@ impl App {
                     _ => (),
                 },
                 Screen::Files => match key.code {
-                    KeyCode::Down | KeyCode::Char('j') => self.move_selection(true),
-                    KeyCode::Up | KeyCode::Char('k') => self.move_selection(false),
-                    KeyCode::Enter => self.open_selected_file()?,
-					KeyCode::Char('m')=>self.request_merge()?,
+                    KeyCode::Right if self.global_active() && !self.global_search_focused => self.preview_x = self.preview_x.saturating_add(4),
+                    KeyCode::Left if self.global_active() && !self.global_search_focused => self.preview_x = self.preview_x.saturating_sub(4),
+                    KeyCode::Down => self.move_selection(true),
+                    KeyCode::Up => self.move_selection(false),
+                    KeyCode::Esc if self.global_search_focused => self.global_search_focused = false,
                     KeyCode::Esc => self.leave(Destination::Quit)?,
+                    KeyCode::Enter if self.global_search_focused => self.global_search_focused = false,
+                    KeyCode::Enter if self.global_active() => self.open_global_hit()?,
+                    KeyCode::Enter => self.open_selected_file()?,
+                    KeyCode::Char('/') if !self.global_search_focused => self.global_search_focused = true,
+                    KeyCode::Tab => self.global_search_focused = !self.global_search_focused,
+                    _ if self.global_search_focused => { Self::single_input(&mut self.global_search, Event::Key(key)); self.rebuild_global_hits(); }
+                    KeyCode::Char('j') => self.move_selection(true),
+                    KeyCode::Char('k') => self.move_selection(false),
+					KeyCode::Char('m') if !self.global_active() => self.request_merge()?,
                     _ => (),
                 },
                 Screen::Browse => match key.code {
@@ -481,7 +582,7 @@ impl App {
                     _ => (),
                 },
                 Screen::Edit => match key.code {
-                    KeyCode::Esc => self.leave(Destination::Browse)?,
+                    KeyCode::Esc => self.leave(if self.global_edit { Destination::Files } else { Destination::Browse })?,
                     KeyCode::Tab if self.editor_focus == 1 && self.code && key.modifiers.is_empty() => { self.expansion.insert_str("\t"); }
                     KeyCode::Tab | KeyCode::BackTab => self.next_editor_field(key.code == KeyCode::BackTab || key.modifiers.contains(KeyModifiers::SHIFT)),
                     KeyCode::Enter if self.editor_focus == 1 && self.code => {
@@ -510,6 +611,7 @@ impl App {
                 Screen::Settings if self.editor_focus == 0 => Self::single_input(&mut self.url, Event::Paste(text)),
                 Screen::Settings => Self::single_input(&mut self.prefix, Event::Paste(text)),
                 Screen::NewFile => Self::single_input(&mut self.name, Event::Paste(text)),
+                Screen::Files if self.global_search_focused => { Self::single_input(&mut self.global_search, Event::Paste(text)); self.rebuild_global_hits(); }
                 Screen::Browse if self.search_focused => { Self::single_input(&mut self.search, Event::Paste(text)); self.snippets_state.select(Some(0)); }
                 _ => (),
             }
@@ -527,7 +629,7 @@ impl App {
                     }
                     return Ok(());
                 }
-				if self.screen==Screen::Files&&self.merge_button.contains(position){return self.request_merge();}
+				if self.screen==Screen::Files&&!self.global_active()&&self.merge_button.contains(position){return self.request_merge();}
                 if self.screen == Screen::Browse && let Some(index) = self.bulk_buttons.iter().position(|area|area.contains(position)) {
                     return if index == 0 { self.request_move() } else { self.request_delete() };
                 }
@@ -537,15 +639,20 @@ impl App {
                 }
                 if let Some(index) = self.toolbar.iter().position(|area| area.contains(position)) { return self.toolbar_action(index); }
 				if self.save_area.contains(position) { return if self.screen==Screen::Image{self.image()}else{self.save()}; }
-				if self.cancel_area.contains(position) {if self.screen==Screen::Image{self.screen=Screen::Edit;return Ok(());}return self.leave(if self.screen == Screen::NewFile { Destination::Files } else { Destination::Browse }); }
+				if self.cancel_area.contains(position) {if self.screen==Screen::Image{self.screen=Screen::Edit;return Ok(());}return self.leave(if self.screen == Screen::NewFile || self.screen == Screen::Edit && self.global_edit { Destination::Files } else { Destination::Browse }); }
                 if let Some(index) = self.field_areas.iter().position(|area| area.contains(position)) {
-					if self.screen == Screen::Browse { self.search_focused = true; }else if self.screen==Screen::Image{self.image_focus=index;} else { self.editor_focus = index; }
+					if self.screen == Screen::Browse { self.search_focused = true; }else if self.screen == Screen::Files { self.global_search_focused = true; }else if self.screen==Screen::Image{self.image_focus=index;} else { self.editor_focus = index; }
                 }
                 if self.list_area.contains(position) {
                     let row = usize::from(mouse.row.saturating_sub(self.list_area.y + 1));
                     if self.screen == Screen::Files {
-                        let index = row + self.file_state.offset();
-                        if index <= self.files.len() { self.file_state.select(Some(index)); self.open_selected_file()?; }
+                        if self.global_active() {
+                            let index = row + self.global_state.offset();
+                            if index < self.global_hits.len() { self.global_state.select(Some(index)); self.global_search_focused = false; }
+                        } else {
+                            let index = row + self.file_state.offset();
+                            if index <= self.files.len() { self.file_state.select(Some(index)); self.open_selected_file()?; }
+                        }
                     } else if self.screen == Screen::Browse {
                         let index = row + self.snippets_state.offset();
                         if index < self.filtered().len() { self.snippets_state.select(Some(index)); self.search_focused = false; self.select_row(mouse.modifiers.contains(KeyModifiers::SHIFT))?; }
@@ -565,7 +672,7 @@ impl App {
     }
     pub fn refresh(&mut self) {
         if self.screen == Screen::Trash { let _ = self.load_trash(); }
-        else if self.screen == Screen::Files { if let Ok(files) = self.store.files() { self.files = files; } }
+        else if self.screen == Screen::Files { let _ = self.reload_files(); }
         else if self.screen == Screen::Browse && let Some(file) = &self.file {
             match self.store.open(&file.name) {
                 Ok(current) => { if typerelay_client::database::Database::open(&self.store.directory).and_then(|db|db.editable(&current.id)).is_err() { self.selected_ids.clear(); self.selection_anchor = None; } self.selected_ids.retain(|id|current.ids.contains(id)); if self.selection_anchor.as_ref().is_some_and(|id|!current.ids.contains(id)) { self.selection_anchor = None; } self.file = Some(current); }
@@ -577,12 +684,12 @@ impl App {
         std::fs::read_to_string(self.settings.config_dir().join("sync/status")).unwrap_or_default()
     }
     pub fn draw(&mut self, frame: &mut Frame) {
-        self.toolbar.clear(); self.trash_buttons.clear(); self.bulk_buttons.clear(); self.field_areas.clear(); self.list_area = Rect::default(); self.save_area = Rect::default(); self.cancel_area = Rect::default();
+        self.toolbar.clear(); self.trash_buttons.clear(); self.bulk_buttons.clear(); self.field_areas.clear(); self.list_area = Rect::default(); self.save_area = Rect::default(); self.cancel_area = Rect::default(); self.merge_button = Rect::default();
         let area = frame.area();
         if let Some(dialog)=&mut self.template_dialog {dialog.draw(frame,area);return;}
         if area.width < 60 || area.height < 20 { frame.render_widget(Paragraph::new("TypeRelay — resize terminal to at least 60 × 20. Ctrl+Q exits."), area); return; }
         let rows = Layout::vertical([Constraint::Length(2), Constraint::Length(if area.width < 75 { 6 } else { 3 }), Constraint::Min(8), Constraint::Length(3)]).split(area);
-        let title = self.file.as_ref().map(|file| format!("TypeRelay  /  {}", file.name)).unwrap_or("TypeRelay  /  Snippet editor".into());
+        let title = if self.effective_screen() == Screen::Files { "TypeRelay  /  Snippet editor".into() } else { self.file.as_ref().map(|file| format!("TypeRelay  /  {}", file.name)).unwrap_or("TypeRelay  /  Snippet editor".into()) };
         frame.render_widget(Paragraph::new(title).style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)), rows[0]);
         let widths = [14, 9, 9, 13, 20, 10];
         self.toolbar = if area.width < 75 {
@@ -602,9 +709,27 @@ impl App {
                 Self::button(frame, self.trash_buttons[1], &format!("E Empty ({})", self.trash_rows.iter().filter(|row|row["can_purge"] == true).count()), self.trash_rows.iter().any(|row|row["can_purge"] == true));
             }
             Screen::Files => {
-				let parts=Layout::vertical([Constraint::Min(3),Constraint::Length(3)]).split(body);
-                let items = std::iter::once(ListItem::new("+ New library")).chain(self.files.iter().map(|name| ListItem::new(typerelay_client::sync::Sync::label(self.settings.config_dir(), &self.store.directory, name)))).collect::<Vec<_>>();
-				self.list_area=parts[0];frame.render_stateful_widget(List::new(items).block(Self::border("Choose a library",true)).highlight_style(Style::default().bg(Color::DarkGray)).highlight_symbol("› "),parts[0],&mut self.file_state);self.merge_button=parts[1];Self::button(frame,parts[1],"M Merge selected library",self.file_state.selected().unwrap_or(0)>0);
+                let parts = Layout::vertical([Constraint::Length(3), Constraint::Min(3)]).split(body);
+                self.global_search.set_block(Self::border("Search trigger or expansion  /", self.global_search_focused));
+                frame.render_widget(&self.global_search, parts[0]); self.field_areas.push(parts[0]);
+                if self.global_active() {
+                    let columns = Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)]).split(parts[1]);
+                    self.list_area = columns[0];
+                    let items = self.global_hits.iter().map(|hit| {
+                        let file = &self.files[hit.file_index];
+                        ListItem::new(format!("{} · {}", file.name, file.entries[hit.entry_index].label()))
+                    }).collect::<Vec<_>>();
+                    frame.render_stateful_widget(List::new(items).block(Self::border(format!("{} snippets — Enter to edit", self.global_hits.len()), !self.global_search_focused)).highlight_style(Style::default().bg(Color::DarkGray)).highlight_symbol("› "), columns[0], &mut self.global_state);
+                    let preview = self.selected_global().map(|hit| self.files[hit.file_index].entries[hit.entry_index].replace.clone()).unwrap_or("No matching snippets.".into());
+                    frame.render_widget(Paragraph::new(preview).scroll((0, self.preview_x)).block(Self::border("Preview · ←/→ scroll · F10 Fill/Copy", false)), columns[1]);
+                } else {
+                    let rows = Layout::vertical([Constraint::Min(3), Constraint::Length(3)]).split(parts[1]);
+                    let items = std::iter::once(ListItem::new("+ New library")).chain(self.files.iter().map(|file| ListItem::new(self.library_label(file)))).collect::<Vec<_>>();
+                    self.list_area = rows[0];
+                    frame.render_stateful_widget(List::new(items).block(Self::border("Choose a library", !self.global_search_focused)).highlight_style(Style::default().bg(Color::DarkGray)).highlight_symbol("› "), rows[0], &mut self.file_state);
+                    self.merge_button = rows[1];
+                    Self::button(frame, rows[1], "M Merge selected library", self.file_state.selected().unwrap_or(0) > 0);
+                }
             }
             Screen::Move => {
                 self.list_area = body;
@@ -788,6 +913,121 @@ mod tests {
         fn key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) { app.handle(Event::Key(KeyEvent::new(code, modifiers))); }
     }
     #[test]
+    fn global_search_renders_counts_results_preview_and_returns_after_save() {
+        let temp = tempfile::tempdir().unwrap(); let mut app = Fixture::app(temp.path());
+        let alpha = app.store.create("Alpha").unwrap();
+        let alpha = app.store.save(&alpha, None, Match { trigger: "shared-alpha".into(), replace: "Alpha preview".into(), ..Match::default() }).unwrap();
+        app.store.save(&alpha, None, Match { trigger: "other".into(), replace: "Other text".into(), ..Match::default() }).unwrap();
+        let beta = app.store.create("Beta").unwrap();
+        app.store.save(&beta, None, Match { trigger: "shared-beta".into(), replace: "Beta preview".into(), ..Match::default() }).unwrap();
+        app.store.create("Empty").unwrap();
+        app.refresh();
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let screen = terminal.backend().buffer().content().iter().map(|cell| cell.symbol()).collect::<String>();
+        assert!(screen.contains("Search trigger or expansion"));
+        assert!(screen.contains("+ New library"));
+        assert!(screen.contains("Alpha (2)")); assert!(screen.contains("Beta (1)")); assert!(screen.contains("Empty (0)"));
+        Fixture::key(&mut app, KeyCode::Char('/'), KeyModifiers::NONE);
+        app.handle(Event::Paste("shared".into()));
+        assert_eq!(app.global_hits.len(), 2);
+        Fixture::key(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let screen = terminal.backend().buffer().content().iter().map(|cell| cell.symbol()).collect::<String>();
+        assert!(screen.contains("Alpha · shared-alpha")); assert!(screen.contains("Beta · shared-beta")); assert!(screen.contains("Beta preview"));
+        Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(app.screen, Screen::Files);
+        Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(app.screen, Screen::Edit);
+        assert_eq!(app.file.as_ref().unwrap().name, "Beta");
+        app.expansion = App::text("Beta updated");
+        Fixture::key(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL);
+        assert_eq!(app.screen, Screen::Files);
+        assert_eq!(App::value(&app.global_search), "shared");
+        assert_eq!(app.selected_global().unwrap().library_id, beta.id);
+        assert_eq!(app.store.open("Beta").unwrap().entries[0].replace, "Beta updated");
+    }
+    #[test]
+    fn global_search_refreshes_stable_selection_and_active_counts() {
+        let temp = tempfile::tempdir().unwrap(); let mut app = Fixture::app(temp.path());
+        let first = app.store.create("First").unwrap();
+        app.store.save(&first, None, Match { trigger: "find-first".into(), replace: "One".into(), ..Match::default() }).unwrap();
+        let second = app.store.create("Second").unwrap();
+        app.store.save(&second, None, Match { trigger: "find-second".into(), replace: "Two".into(), ..Match::default() }).unwrap();
+        app.refresh();
+        Fixture::key(&mut app, KeyCode::Char('/'), KeyModifiers::NONE);
+        app.handle(Event::Paste("find".into()));
+        Fixture::key(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        let selected = app.selected_global().unwrap().snippet_id.clone();
+        let latest_first = app.store.open("First").unwrap();
+        app.store.delete(&latest_first, 0).unwrap();
+        app.refresh();
+        assert_eq!(app.global_hits.len(), 1);
+        assert_eq!(app.selected_global().unwrap().snippet_id, selected);
+        assert_eq!(app.library_label(&app.files[0]), "First (0)");
+        let latest_second = app.store.open("Second").unwrap();
+        app.store.delete(&latest_second, 0).unwrap();
+        Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(app.screen, Screen::Files);
+        assert!(app.error);
+        assert!(app.status.contains("removed"));
+        app.refresh();
+        assert!(app.global_hits.is_empty()); assert_eq!(app.global_state.selected(), None);
+        assert_eq!(app.library_label(&app.files[1]), "Second (0)");
+        let db = typerelay_client::database::Database::open(&app.store.directory).unwrap();
+        db.queue(&serde_json::json!({"kind":"merge_local","source":first.id})).unwrap();
+        assert_eq!(app.library_label(&app.files[0]), "First (0) · Merge pending");
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let screen = terminal.backend().buffer().content().iter().map(|cell| cell.symbol()).collect::<String>();
+        assert!(screen.contains("No matching snippets."));
+    }
+    #[test]
+    fn global_search_mouse_focus_and_escape_preserve_library_search() {
+        let temp = tempfile::tempdir().unwrap(); let mut app = Fixture::app(temp.path());
+        let file = app.store.create("Mine").unwrap();
+        app.store.save(&file, None, Match { trigger: "needle".into(), replace: "Preview".into(), ..Match::default() }).unwrap();
+        app.refresh();
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let field = app.field_areas[0];
+        app.handle(Event::Mouse(ratatui::crossterm::event::MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: field.x + 1, row: field.y + 1, modifiers: KeyModifiers::NONE }));
+        assert!(app.global_search_focused);
+        app.handle(Event::Paste("needle".into()));
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let list = app.list_area;
+        app.handle(Event::Mouse(ratatui::crossterm::event::MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: list.x + 2, row: list.y + 1, modifiers: KeyModifiers::NONE }));
+        assert_eq!(app.global_state.selected(), Some(0)); assert!(!app.global_search_focused);
+        Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(app.screen, Screen::Edit);
+        Fixture::key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(app.screen, Screen::Files);
+        assert_eq!(App::value(&app.global_search), "needle");
+        app.global_search = App::text(""); app.rebuild_global_hits();
+        app.file_state.select(Some(1));
+        Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(app.screen, Screen::Browse);
+        assert_eq!(App::value(&app.search), "");
+        Fixture::key(&mut app, KeyCode::Char('/'), KeyModifiers::NONE);
+        app.handle(Event::Paste("needle".into()));
+        assert_eq!(App::value(&app.search), "needle");
+        assert_eq!(App::value(&app.global_search), "");
+    }
+    #[test]
+    fn global_search_f10_opens_the_existing_fill_dialog() {
+        let temp = tempfile::tempdir().unwrap(); let mut app = Fixture::app(temp.path());
+        let file = app.store.create("Templates").unwrap();
+        app.store.save(&file, None, Match { trigger: "welcome".into(), replace: "Hello {{name}}".into(), kind: "template".into(), ..Match::default() }).unwrap();
+        app.refresh();
+        Fixture::key(&mut app, KeyCode::Char('/'), KeyModifiers::NONE);
+        app.handle(Event::Paste("welcome".into()));
+        Fixture::key(&mut app, KeyCode::F(10), KeyModifiers::NONE);
+        assert!(app.template_dialog.is_some());
+        assert_eq!(app.fill_base.as_ref().unwrap().0, "Templates");
+        assert_eq!(app.screen, Screen::Files);
+    }
+    #[test]
     fn delete_selected_filtered_snippet_requires_confirmation_and_keeps_file() {
         let temp = tempfile::tempdir().unwrap(); let mut app = Fixture::app(temp.path());
         let file = app.store.create("mine").unwrap();
@@ -968,7 +1208,7 @@ mod tests {
     }
 	#[test]
 	fn library_picker_merges_selected_source_and_supports_confirmation_cancel() {
-		let temp=tempfile::tempdir().unwrap();let mut app=Fixture::app(temp.path());let db=typerelay_client::database::Database::open(&app.store.directory).unwrap();db.import("Destination","matches: [{trigger: first, replace: First}]").unwrap();let source=db.import("Recovered","matches: [{trigger: second, replace: Second}]").unwrap();app.refresh();let index=app.files.iter().position(|name|name=="Recovered").unwrap()+1;app.file_state.select(Some(index));Fixture::key(&mut app,KeyCode::Char('m'),KeyModifiers::NONE);assert_eq!(app.screen,Screen::Move);Fixture::key(&mut app,KeyCode::Enter,KeyModifiers::NONE);assert_eq!(app.screen,Screen::Confirm);Fixture::key(&mut app,KeyCode::Esc,KeyModifiers::NONE);assert_eq!(app.screen,Screen::Files);app.file_state.select(Some(index));let mut terminal=ratatui::Terminal::new(ratatui::backend::TestBackend::new(100,30)).unwrap();terminal.draw(|frame|app.draw(frame)).unwrap();app.handle(Event::Mouse(ratatui::crossterm::event::MouseEvent{kind:MouseEventKind::Down(MouseButton::Left),column:app.merge_button.x+1,row:app.merge_button.y+1,modifiers:KeyModifiers::NONE}));assert_eq!(app.screen,Screen::Move);Fixture::key(&mut app,KeyCode::Enter,KeyModifiers::NONE);Fixture::key(&mut app,KeyCode::Char('m'),KeyModifiers::NONE);assert_eq!(app.screen,Screen::Files);assert_eq!(app.status,"Libraries merged");assert_eq!(db.library(&source.id).unwrap()["state"],"trashed");assert_eq!(db.editor("Destination").unwrap().entries.len(),2);
+		let temp=tempfile::tempdir().unwrap();let mut app=Fixture::app(temp.path());let db=typerelay_client::database::Database::open(&app.store.directory).unwrap();db.import("Destination","matches: [{trigger: first, replace: First}]").unwrap();let source=db.import("Recovered","matches: [{trigger: second, replace: Second}]").unwrap();app.refresh();let index=app.files.iter().position(|file|file.name=="Recovered").unwrap()+1;app.file_state.select(Some(index));Fixture::key(&mut app,KeyCode::Char('m'),KeyModifiers::NONE);assert_eq!(app.screen,Screen::Move);Fixture::key(&mut app,KeyCode::Enter,KeyModifiers::NONE);assert_eq!(app.screen,Screen::Confirm);Fixture::key(&mut app,KeyCode::Esc,KeyModifiers::NONE);assert_eq!(app.screen,Screen::Files);app.file_state.select(Some(index));let mut terminal=ratatui::Terminal::new(ratatui::backend::TestBackend::new(100,30)).unwrap();terminal.draw(|frame|app.draw(frame)).unwrap();app.handle(Event::Mouse(ratatui::crossterm::event::MouseEvent{kind:MouseEventKind::Down(MouseButton::Left),column:app.merge_button.x+1,row:app.merge_button.y+1,modifiers:KeyModifiers::NONE}));assert_eq!(app.screen,Screen::Move);Fixture::key(&mut app,KeyCode::Enter,KeyModifiers::NONE);Fixture::key(&mut app,KeyCode::Char('m'),KeyModifiers::NONE);assert_eq!(app.screen,Screen::Files);assert_eq!(app.status,"Libraries merged");assert_eq!(db.library(&source.id).unwrap()["state"],"trashed");assert_eq!(db.editor("Destination").unwrap().entries.len(),2);
 	}
     #[test]
     fn bulk_trash_uses_selection_and_readonly_cannot_select() {

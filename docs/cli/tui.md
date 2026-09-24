@@ -7,6 +7,8 @@ description: "Use the keyboard-first TypeRelay TUI to browse libraries, search s
 
 Run `typerelay-tui` to edit the same local SQLite libraries used by the engine and desktop panel. It works offline. Normal exit prompts before discarding a draft; closing the terminal does not save unsaved changes.
 
+The library picker shows each library's active snippet count, such as `mysnippets (6)`. Its search field finds snippets across all active local libraries by title, abbreviation, or expansion. Results show the source library and a preview. Select a result and press Enter to edit it, or F10 to fill and copy it. Returning from the editor keeps the global query. Search inside an opened library stays limited to that library.
+
 ## Library and list controls
 
 | Key | Action |
@@ -14,7 +16,7 @@ Run `typerelay-tui` to edit the same local SQLite libraries used by the engine a
 | F1 | Open the library picker |
 | F2 | Add a snippet, or move to the next editor field |
 | Enter | Open the selected library or snippet |
-| `/` | Search abbreviations and expansion text |
+| `/` | Focus search in the library picker or current library |
 | Space | Select the current snippet |
 | Shift+Up/Down | Extend selection from its anchor |
 | Ctrl+A / Ctrl+D | Select visible matches / clear selection |
