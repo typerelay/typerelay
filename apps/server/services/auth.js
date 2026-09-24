@@ -95,7 +95,7 @@ export class Auth {
 		const mobile = client === 'typerelay-mobile';
 		const browser = client === 'typerelay-browser';
 		Support.assert(['typerelay-desktop', 'typerelay-mobile', 'typerelay-browser'].includes(client), 'Invalid client');
-		if (browser) { Support.assert(url.href === 'https://kkmbockjkhkdjpgbdnonfbgljpgofbpl.chromiumapp.org/callback', 'Invalid browser callback URL'); return url.href; }
+		if (browser) { Support.assert(url.href === new URL('/oauth/browser-callback', Auth.origin).href, 'Invalid browser callback URL'); return url.href; }
 		const preview = mobile && process.env.NODE_ENV === 'development' && process.env.TYPERELAY_MOBILE_PREVIEW_URL && url.href === process.env.TYPERELAY_MOBILE_PREVIEW_URL + '/oauth/callback';
 		const app = url.protocol === (mobile ? 'com.typerelay.mobile:' : 'typerelay:') && url.hostname === 'oauth' && url.pathname === '/callback' && !url.port;
 		Support.assert(((!mobile && loopback) || app || preview) && !url.username && !url.password && !url.search && !url.hash, mobile ? 'Invalid mobile callback URL' : 'Invalid desktop callback URL');

@@ -66,7 +66,7 @@ test('Free resource gates reject a second library and second machine', async () 
 
 test('Free permits unlimited browser connections without consuming its machine slot', async () => {
 	const ctx = await Fixture.context();
-	const redirect_uri = 'https://kkmbockjkhkdjpgbdnonfbgljpgofbpl.chromiumapp.org/callback';
+	const redirect_uri = new URL('/oauth/browser-callback', Auth.origin).href;
 	await assert.rejects(Promise.resolve().then(() => Auth.redirect('https://example.com/callback', 'typerelay-browser')), /Invalid browser callback/);
 	const tokens = [];
 	for (let index = 0; index < 3; index++) {

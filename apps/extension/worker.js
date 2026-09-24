@@ -2,7 +2,9 @@ import { Runtime } from './runtime.js';
 
 const origin = 'https://app.typerelay.com';
 const client = 'typerelay-browser';
+const callbackPath = '/oauth/browser-callback';
 let refreshJob;
+let completionJob;
 let bridge;
 let bridgeVerified = false;
 let bridgeSequence = 0;
@@ -38,20 +40,41 @@ async function request(path, options = {}) {
 }
 
 async function connect() {
+	const { browserAuth } = await chrome.storage.session.get('browserAuth');
+	if (browserAuth?.startedAt > Date.now() - 900000) return { pending: true };
 	const verifier = base64(crypto.getRandomValues(new Uint8Array(48)));
 	const state = base64(crypto.getRandomValues(new Uint8Array(48)));
 	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
-	const redirect = chrome.identity.getRedirectURL('callback');
+	const redirect = `${origin}${callbackPath}`;
 	const params = new URLSearchParams({ client_id: client, redirect_uri: redirect, response_type: 'code', code_challenge_method: 'S256', code_challenge: base64(new Uint8Array(digest)), state, client_type: 'browser', os: 'web', device_name: 'Type Relay Chrome' });
-	const callback = new URL(await chrome.identity.launchWebAuthFlow({ url: `${origin}/oauth/authorize?${params}`, interactive: true }));
-	if (callback.origin !== new URL(redirect).origin || callback.pathname !== new URL(redirect).pathname || callback.searchParams.getAll('state').length !== 1 || callback.searchParams.get('state') !== state || callback.searchParams.getAll('code').length !== 1) throw new Error('Invalid TypeRelay sign-in response');
-	const response = await fetch(`${origin}/oauth/token`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ grant_type: 'authorization_code', client_id: client, redirect_uri: redirect, code_verifier: verifier, code: callback.searchParams.get('code') }), redirect: 'error' });
-	if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || 'Sign-in failed');
-	const tokens = { ...await response.json(), obtained_at: Date.now() };
-	await clear();
-	await chrome.storage.local.set({ tokens, account: tokens.account });
-	await sync();
-	return { account: tokens.account };
+	await chrome.storage.session.set({ browserAuth: { verifier, state, redirect, startedAt: Date.now() } });
+	await chrome.storage.session.remove('browserAuthError');
+	try { await chrome.tabs.create({ url: `${origin}/oauth/authorize?${params}` }); }
+	catch (error) { await chrome.storage.session.remove('browserAuth'); throw error; }
+	return { pending: true };
+}
+
+async function finishConnect(tabId, url) {
+	const { browserAuth } = await chrome.storage.session.get('browserAuth');
+	if (!browserAuth || browserAuth.startedAt <= Date.now() - 900000) return;
+	const callback = new URL(url);
+	if (callback.origin !== origin || callback.pathname !== callbackPath || callback.searchParams.getAll('state').length !== 1 || callback.searchParams.get('state') !== browserAuth.state) return;
+	await chrome.storage.session.remove('browserAuth');
+	try {
+		if (callback.searchParams.getAll('code').length !== 1) throw new Error('Invalid Type Relay sign-in response');
+		const response = await fetch(`${origin}/oauth/token`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ grant_type: 'authorization_code', client_id: client, redirect_uri: browserAuth.redirect, code_verifier: browserAuth.verifier, code: callback.searchParams.get('code') }), redirect: 'error' });
+		if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || 'Sign-in failed');
+		const tokens = { ...await response.json(), obtained_at: Date.now() };
+		await clear();
+		await chrome.storage.local.set({ tokens, account: tokens.account });
+		await chrome.tabs.remove(tabId).catch(() => undefined);
+		await sync();
+	} catch (error) { await chrome.storage.session.set({ browserAuthError: error.message || String(error) }); }
+}
+
+function finishPending(tabId, url) {
+	completionJob ||= finishConnect(tabId, url).catch(error => chrome.storage.session.set({ browserAuthError: error.message || String(error) })).finally(() => { completionJob = null; });
+	return completionJob;
 }
 
 async function sync() {
@@ -116,9 +139,20 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
 	(async () => {
 		switch (message.type) {
 			case 'connect': return connect();
-			case 'disconnect': { await request('/api/v2/connection', { method: 'DELETE' }).catch(() => undefined); await clear(); return { disconnected: true }; }
+			case 'disconnect': { await request('/api/v2/connection', { method: 'DELETE' }).catch(() => undefined); await clear(); await chrome.storage.session.remove(['browserAuth', 'browserAuthError']); return { disconnected: true }; }
 			case 'sync': return sync();
-			case 'status': { const data = await chrome.storage.local.get(['tokens', 'items', 'lastSync', 'prefix']); const platform = await chrome.runtime.getPlatformInfo(); return { connected: !!data.tokens, count: data.items?.length || 0, lastSync: data.lastSync, bridgeVerified: platform.os === 'cros' || await claim(false), prefix: data.prefix || ';', origin, platform: platform.os }; }
+			case 'status': {
+				let auth = await chrome.storage.session.get(['browserAuth', 'browserAuthError']);
+				if (auth.browserAuth) {
+					const callbacks = await chrome.tabs.query({ url: `${origin}/*` });
+					for (const tab of callbacks) if (tab.url?.startsWith(`${origin}${callbackPath}`)) await finishPending(tab.id, tab.url);
+					auth = await chrome.storage.session.get(['browserAuth', 'browserAuthError']);
+				}
+				const data = await chrome.storage.local.get(['tokens', 'items', 'lastSync', 'prefix']);
+				const platform = await chrome.runtime.getPlatformInfo();
+				return { connected: !!data.tokens, count: data.items?.length || 0, lastSync: data.lastSync, bridgeVerified: platform.os === 'cros' || await claim(false), prefix: data.prefix || ';', origin, platform: platform.os, authPending: auth.browserAuth?.startedAt > Date.now() - 900000, authError: auth.browserAuthError };
+			}
+			case 'cancel-connect': { await chrome.storage.session.remove(['browserAuth', 'browserAuthError']); return { cancelled: true }; }
 			case 'snapshot': { const data = await chrome.storage.local.get(['items', 'prefix']); return { items: data.items || [], prefix: data.prefix || ';' }; }
 			case 'focus': { if (sender.tab?.id == null || sender.frameId == null) return {}; await chrome.storage.session.set({ [`frame-${sender.tab.id}`]: sender.frameId }); return {}; }
 			case 'insert': { const [tab] = await chrome.tabs.query({ active: true, currentWindow: true }); if (!tab?.id) throw new Error('No active Chrome tab'); const state = await chrome.storage.session.get(`frame-${tab.id}`); const response = await chrome.tabs.sendMessage(tab.id, { type: 'insert', id: message.id }, { frameId: state[`frame-${tab.id}`] ?? 0 }); if (!response?.ok) throw new Error(response?.error || 'Focus an editable field first'); return {}; }
@@ -134,4 +168,5 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
 
 chrome.runtime.onInstalled.addListener(() => chrome.alarms.create('sync', { periodInMinutes: 2 }));
 chrome.runtime.onStartup.addListener(() => chrome.alarms.create('sync', { periodInMinutes: 2 }));
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => { if (changeInfo.url?.startsWith(`${origin}${callbackPath}`)) void finishPending(tabId, changeInfo.url); });
 chrome.alarms.onAlarm.addListener(alarm => { if (alarm.name === 'sync') void chrome.storage.local.get('tokens').then(data => data.tokens && sync()).catch(() => undefined); });

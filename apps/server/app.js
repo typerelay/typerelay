@@ -110,6 +110,7 @@ export class Server {
 		});
 		app.post('/auth/logout', async (req, res) => { await new Promise(resolve => req.session.destroy(resolve)); res.json({ signed_out: true }); });
 		app.post('/oauth/token', authLimit, async (req, res) => res.json(await Auth.exchange(req.body)));
+		app.get('/oauth/browser-callback', (req, res) => { res.setHeader('Cache-Control', 'no-store'); res.setHeader('Referrer-Policy', 'no-referrer'); res.render('browser-callback'); });
 		app.get('/oauth/authorize', async (req, res) => {
 			if (!req.session.user) { req.session.return_to = req.originalUrl; return res.render('login', { returnTo: req.originalUrl }); }
 			const redirect = new URL(Auth.redirect(req.query.redirect_uri, req.query.client_id));

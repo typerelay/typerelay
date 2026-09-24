@@ -28,13 +28,16 @@ async function refresh() {
 	const state = await send({ type: 'status' });
 	$('#signed-out').hidden = state.connected;
 	$('#signed-in').hidden = !state.connected;
+	$('#connect').hidden = !!state.authPending;
+	$('#restart-connect').hidden = !state.authPending;
 	$('#edit').href = `${state.origin}/`;
 	$('#prefix').value = state.prefix;
-	status(!state.connected ? 'Signed out' : !state.bridgeVerified ? 'Desktop update needed' : `${state.count} snippets`);
+	status(state.authError || (!state.connected ? state.authPending ? 'Finish sign-in in the Chrome tab' : 'Signed out' : !state.bridgeVerified ? 'Desktop update needed' : `${state.count} snippets`));
 	if (state.connected) { items = (await send({ type: 'snapshot' })).items; results(); }
 }
 
-$('#connect').addEventListener('click', async () => { try { status('Signing in…'); await send({ type: 'connect' }); await refresh(); } catch (error) { status(error.message); } });
+$('#connect').addEventListener('click', async () => { try { status('Opening sign-in tab…'); await send({ type: 'connect' }); await refresh(); } catch (error) { status(error.message); } });
+$('#restart-connect').addEventListener('click', async () => { try { await send({ type: 'cancel-connect' }); await send({ type: 'connect' }); await refresh(); } catch (error) { status(error.message); } });
 $('#disconnect').addEventListener('click', async () => { try { await send({ type: 'disconnect' }); await refresh(); } catch (error) { status(error.message); } });
 $('#sync').addEventListener('click', async () => { try { status('Syncing…'); await send({ type: 'sync' }); await refresh(); } catch (error) { status(error.message); } });
 $('#search').addEventListener('input', results);

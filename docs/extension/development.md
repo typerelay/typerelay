@@ -11,9 +11,9 @@ The Chrome extension expands synced snippets in editable web fields. It keeps a 
 
 For development testing on NadaMini, run `dbh-run urls` first and build for its reported app origin, for example `pnpm --filter @typerelay/extension exec node build.mjs --origin=https://tr.n.lan`. Open `chrome://extensions`, enable Developer mode, and load `apps/extension/dist` unpacked. After changing the build origin, reload the extension there and accept the new site permission if Chrome asks. The default `pnpm --filter @typerelay/extension build` targets `https://app.typerelay.com` and requires the browser OAuth server changes to be deployed there.
 
-Sign in inside Chrome's authorization window, then select an account and click **Connect device**. Account sign-in alone does not connect the extension. The extension popup shows **Signed out** until Chrome receives the callback and the token exchange succeeds.
+Sign in in the Chrome tab opened by the extension, then select an account and click **Connect device**. Magic Link sign-in can open another tab in the same browser profile; continue there. The extension recognizes its own callback on the Type Relay app origin, exchanges the code, and closes that callback tab. Account sign-in alone does not connect the extension.
 
-The extension uses the first-party device OAuth flow with PKCE and a `chromiumapp.org` callback. Browser connections appear in device management and do not count against Free's machine limit. Snippets and short-lived and refresh tokens stay in Chrome's extension storage. Images are cached in Cache Storage for offline insertion. The extension sends only OAuth and sync requests to the selected TypeRelay app origin. It does not send field contents to TypeRelay. The native host receives only a short-lived ownership signal; it never receives snippets or field text.
+The extension uses the first-party device OAuth flow with PKCE and an exact callback path on the selected app origin. Browser connections appear in device management and do not count against Free's machine limit. Snippets and short-lived and refresh tokens stay in Chrome's extension storage. Images are cached in Cache Storage for offline insertion. The extension sends only OAuth and sync requests to the selected Type Relay app origin. It does not send field contents to Type Relay. The native host receives only a short-lived ownership signal; it never receives snippets or field text.
 
 ## Desktop coexistence
 
@@ -25,7 +25,7 @@ typerelay-panel --register-chrome-extension EXTENSION_ID
 
 On macOS, use the executable inside `TypeRelay.app/Contents/MacOS` if it is not on `PATH`. Restart Chrome after registration. The app remembers the ID and refreshes the native host manifest after a desktop update. ChromeOS does not need the native host. The desktop app yields while a supported web field is focused and the extension's claim is live. Claims expire in under one second.
 
-The Chrome Web Store assigns the final extension ID when the package is uploaded. Pin that ID in the server callback allowlist and desktop registration before public rollout. The current unpacked ID is for development only.
+The Chrome Web Store assigns the final extension ID when the package is uploaded. Register that ID with the desktop native messaging host before public rollout. The current unpacked ID is for development only.
 
 ## Release gate
 

@@ -230,6 +230,32 @@ test('Magic Link carries desktop authorization into another browser', async () =
 	assert.match(await approval.text(), /Connect device/);
 	await assert.rejects(Auth.login(email, null, { return_to: 'https://example.test/oauth/authorize' }), /Invalid sign-in continuation/);
 });
+test('Magic Link browser authorization finishes on the app origin in a normal tab', async () => {
+	const email = randomUUID() + '@example.test'; const user = await User.create({ email, name: 'Browser owner' }); const account = await Account.create({ name: 'Browser account' }); await Member.create({ user: user._id, account: account._id, role: 'owner' });
+	const requester = new Browser();
+	const verifier = Support.token();
+	const redirect_uri = new URL('/oauth/browser-callback', Auth.origin).href;
+	const params = new URLSearchParams({ client_id: 'typerelay-browser', redirect_uri, code_challenge_method: 'S256', code_challenge: createHash('sha256').update(verifier).digest('base64url'), state: randomUUID(), client_type: 'browser', os: 'web' });
+	await requester.page('/oauth/authorize?' + params);
+	await Auth.login(email, null, { return_to: '/oauth/authorize?' + params });
+	const link = Fixture.mailUrl(Fixture.mails.findLast(mail => mail.to === email));
+	const receiver = new Browser();
+	const login = await receiver.call(link.pathname + link.search);
+	assert.equal(login.headers.get('location'), '/oauth/authorize?' + params);
+	await receiver.page(login.headers.get('location'));
+	const approval = await receiver.call('/oauth/authorize', 'POST', { ...Object.fromEntries(params), account: String(account._id) });
+	assert.equal(approval.status, 302);
+	const callback = new URL(approval.headers.get('location'));
+	assert.equal(callback.origin, new URL(Auth.origin).origin);
+	assert.equal(callback.pathname, '/oauth/browser-callback');
+	assert.equal(callback.searchParams.get('state'), params.get('state'));
+	const page = await receiver.call(callback.pathname + callback.search);
+	assert.equal(page.status, 200);
+	assert.equal(page.headers.get('referrer-policy'), 'no-referrer');
+	assert.match(await page.text(), /The extension is finishing sign-in/);
+	const tokens = await Auth.exchange({ grant_type: 'authorization_code', client_id: 'typerelay-browser', redirect_uri, code_verifier: verifier, code: callback.searchParams.get('code') });
+	assert.equal((await Auth.bearer(tokens.access_token)).account, String(account._id));
+});
 test('profile name updates incrementally, email requires confirmation and cannot steal an existing address', async () => {
 	const { browser, email, user } = await Fixture.account();
 	const replacement = randomUUID() + '@example.test';
