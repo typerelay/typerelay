@@ -11,6 +11,7 @@ node_modules/
 /apps/server/public/generated/
 
 /apps/desktop/dist/
+/apps/extension/dist/
 /apps/desktop/src-tauri/target/
 
 /apps/desktop/src-tauri/gen/

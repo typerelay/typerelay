@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod platform;
+mod browser_bridge;
 mod tray;
 mod update;
 use anyhow::Result;
@@ -308,8 +309,11 @@ fn open_tui()->std::result::Result<(),String>{platform::open_tui().map_err(|e|e.
 #[tauri::command]
 fn open_web_app()->std::result::Result<(),String>{platform::open_web_app().map_err(|e|e.to_string())}
 fn main() {
+    let arguments = std::env::args().collect::<Vec<_>>();
+    if arguments.get(1).is_some_and(|value| value.starts_with("chrome-extension://")) { if let Err(error) = browser_bridge::BrowserBridge::serve() { eprintln!("TypeRelay browser bridge: {error:#}"); } return; }
+    if arguments.get(1).is_some_and(|value| value == "--register-chrome-extension") { let result = arguments.get(2).context("Chrome extension ID required").and_then(|id| browser_bridge::BrowserBridge::register(id)); if let Err(error) = result { eprintln!("TypeRelay browser registration: {error:#}"); std::process::exit(1); } return; }
     if std::env::args().any(|a|a=="--version"){println!("typerelay-panel {}",env!("CARGO_PKG_VERSION"));return;}
-	let arguments=std::env::args().collect::<Vec<_>>();if Runtime::receive_callback(&arguments){return;}
+	if Runtime::receive_callback(&arguments){return;}
     #[cfg(target_os="macos")]
     if std::env::args().any(|a|a=="--accessibility-status"){println!("{}",if platform::accessibility(false){"allowed"}else{"required"});return;}
     #[cfg(target_os="macos")]
@@ -325,6 +329,7 @@ fn main() {
     #[cfg(not(target_os="linux"))]
     let builder=builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());
     let result=builder.setup(|app| {
+        browser_bridge::BrowserBridge::refresh_registration();
         #[cfg(target_os="macos")]
         app.set_activation_policy(tauri::ActivationPolicy::Accessory);
         let root=Paths::config_dir()?; Database::open(&root.join("snippets"))?;

@@ -6,6 +6,7 @@ use objc2_app_kit::{NSWorkspace,NSRunningApplication,NSApplicationActivationOpti
 use std::{ffi::{c_void,CString},mem,process::Command,sync::{Arc,Mutex,mpsc::{Receiver,SyncSender,sync_channel}},time::{Duration,Instant}};
 use typerelay_client::{database::DatabaseSnapshot,settings::SettingsStore};
 use typerelay_core::{Engine,Expansion,Input,FeedResult};
+use typerelay_client::browser_lease::BrowserLease;
 use objc2_foundation::NSObjectProtocol;
 use objc2_user_notifications::UNUserNotificationCenterDelegate;
 type Ref = *const c_void;
@@ -127,6 +128,7 @@ impl ExpansionState {
         if key==124&&self.suppress_right_up{return true;}
         if let Some(deferred)=&self.deferred {if matches!(event_type,CGEventType::KeyDown){return deferred.capture(event_type,event);}deferred.cancel();}
         if !matches!(event_type,CGEventType::KeyDown){self.engine.feed(Input::Cancel);self.target=None;return false;}
+		if BrowserLease::active(){self.engine.feed(Input::Cancel);self.target=None;return false;}
         self.reload();
         if key==124&&event.get_integer_value_field(EventField::KEYBOARD_EVENT_AUTOREPEAT)!=0{self.engine.feed(Input::Cancel);self.target=None;return false;}
         let modifiers=event.get_flags();

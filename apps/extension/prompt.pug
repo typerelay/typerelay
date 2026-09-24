@@ -1,10 +1,14 @@
-form(role="dialog" aria-label="Fill TypeRelay snippet")
+form(role="dialog" aria-label="Fill Type Relay snippet")
 	h2 Fill snippet
 	div(data-fields)
 	div.actions
 		button(type="button" data-cancel) Cancel
 		button(type="submit") Insert
-	template
+	template(data-single)
 		div.field
 			label
 			input(type="text" autocomplete="off")
+	template(data-multiline)
+		div.field
+			label
+			textarea(rows="3")

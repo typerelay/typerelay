@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
-    "test": "node --test test/*.test.js"
+    "test": "node build.mjs && node --test test/*.test.js"
   },
   "devDependencies": {
     "pug": "^3.0.4"

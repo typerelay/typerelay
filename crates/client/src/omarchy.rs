@@ -5,7 +5,7 @@ use evdev::{Device, EventType, InputEvent, KeyCode, InputId, BusType, uinput::Vi
 use fs2::FileExt;
 use std::{collections::{BTreeSet, VecDeque}, fs, io::Read, os::unix::net::UnixStream, path::PathBuf, process::Command, sync::{Arc, atomic::{AtomicBool, Ordering}}, thread, time::{Duration, Instant}};
 use typerelay_core::{Engine, Input, Expansion, FeedResult};
-use typerelay_client::{settings::SettingsStore, editor::Paths};
+use typerelay_client::{settings::SettingsStore, editor::Paths, browser_lease::BrowserLease};
 
 pub struct Session;
 
@@ -436,6 +436,7 @@ impl Session {
                 }
                 if event.value() != 0 {
                     last_input = Instant::now();
+					if BrowserLease::active() { engine.feed(Input::Cancel); target = None; output.emit(&[event])?; continue; }
                     if code == KeyCode::KEY_CAPSLOCK && event.value() == 1 { caps = !caps; }
                     if caps || Self::MODIFIERS.iter().any(|key| pressed.contains(&key.0)) {
                         engine.feed(Input::Cancel);

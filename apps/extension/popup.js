@@ -10,19 +10,16 @@ function results() {
 	const list = $('#results');
 	list.replaceChildren();
 	for (const item of matches) {
-		const row = document.createElement('li');
-		const button = document.createElement('button');
-		const title = document.createElement('strong');
-		const detail = document.createElement('small');
-		button.type = 'button';
+		const row = $('#result-template').content.cloneNode(true);
+		const button = row.querySelector('button');
+		const title = row.querySelector('strong');
+		const detail = row.querySelector('small');
 		title.textContent = item.title || item.trigger || 'Untitled snippet';
 		detail.textContent = `${item.library} · ${item.trigger || 'Search only'}`;
-		button.append(title, detail);
 		button.addEventListener('click', async () => {
-			try { const [tab] = await chrome.tabs.query({ active: true, currentWindow: true }); const response = await chrome.tabs.sendMessage(tab.id, { type: 'insert', id: item.id }); if (!response?.ok) throw new Error(response?.error || 'Focus an editable field first'); window.close(); }
+			try { await send({ type: 'insert', id: item.id }); window.close(); }
 			catch (error) { status(error.message); }
 		});
-		row.append(button);
 		list.append(row);
 	}
 }
@@ -33,7 +30,7 @@ async function refresh() {
 	$('#signed-in').hidden = !state.connected;
 	$('#edit').href = `${state.origin}/`;
 	$('#prefix').value = state.prefix;
-	status(state.connected ? `${state.count} snippets` : 'Signed out');
+	status(!state.connected ? 'Signed out' : !state.bridgeVerified ? 'Desktop update needed' : `${state.count} snippets`);
 	if (state.connected) { items = (await send({ type: 'snapshot' })).items; results(); }
 }
 

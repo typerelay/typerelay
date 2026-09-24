@@ -4,6 +4,6 @@ form { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); w
 h2 { margin: 0 0 1rem; font-size: 1.25rem; }
 .field { margin-bottom: 0.75rem; }
 label { display: block; margin-bottom: 0.25rem; }
-input { width: 100%; padding: 0.4rem; border: 0.0625rem solid #a9b4c5; border-radius: 0.25rem; font: inherit; }
+input, textarea { width: 100%; padding: 0.4rem; border: 0.0625rem solid #a9b4c5; border-radius: 0.25rem; font: inherit; }
 .actions { display: flex; justify-content: space-between; margin-top: 1rem; }
 button { padding: 0.4rem 0.75rem; border: 0.0625rem solid #54627b; border-radius: 0.25rem; background: #fff; font: inherit; cursor: pointer; }

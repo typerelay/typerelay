@@ -3,6 +3,7 @@ pub mod editor;
 pub mod settings;
 pub mod migration;
 pub mod bridge;
+pub mod browser_lease;
 #[cfg(all(feature = "desktop", target_os = "linux"))]
 pub mod desktop;
 pub mod sync;

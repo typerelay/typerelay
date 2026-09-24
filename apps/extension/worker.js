@@ -42,7 +42,7 @@ async function connect() {
 	const state = base64(crypto.getRandomValues(new Uint8Array(48)));
 	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
 	const redirect = chrome.identity.getRedirectURL('callback');
-	const params = new URLSearchParams({ client_id: client, redirect_uri: redirect, response_type: 'code', code_challenge_method: 'S256', code_challenge: base64(new Uint8Array(digest)), state, client_type: 'browser', os: 'web', device_name: 'TypeRelay Chrome' });
+	const params = new URLSearchParams({ client_id: client, redirect_uri: redirect, response_type: 'code', code_challenge_method: 'S256', code_challenge: base64(new Uint8Array(digest)), state, client_type: 'browser', os: 'web', device_name: 'Type Relay Chrome' });
 	const callback = new URL(await chrome.identity.launchWebAuthFlow({ url: `${origin}/oauth/authorize?${params}`, interactive: true }));
 	if (callback.origin !== new URL(redirect).origin || callback.pathname !== new URL(redirect).pathname || callback.searchParams.getAll('state').length !== 1 || callback.searchParams.get('state') !== state || callback.searchParams.getAll('code').length !== 1) throw new Error('Invalid TypeRelay sign-in response');
 	const response = await fetch(`${origin}/oauth/token`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ grant_type: 'authorization_code', client_id: client, redirect_uri: redirect, code_verifier: verifier, code: callback.searchParams.get('code') }), redirect: 'error' });
@@ -98,7 +98,7 @@ async function prepared(id, values, preview) {
 	return { item, rendered: await render(item, values, preview) };
 }
 
-async function claim() {
+async function claim(active = true) {
 	const platform = await chrome.runtime.getPlatformInfo();
 	if (platform.os === 'cros') return true;
 	if (!bridge) {
@@ -109,7 +109,7 @@ async function claim() {
 		} catch { return false; }
 	}
 	const sequence = ++bridgeSequence;
-	return new Promise(resolve => { bridgeReplies.set(sequence, resolve); bridge.postMessage({ sequence, active: true }); setTimeout(() => { if (bridgeReplies.has(sequence)) { bridgeReplies.delete(sequence); resolve(false); } }, 600); });
+	return new Promise(resolve => { bridgeReplies.set(sequence, resolve); bridge.postMessage({ sequence, active }); setTimeout(() => { if (bridgeReplies.has(sequence)) { bridgeReplies.delete(sequence); resolve(false); } }, 600); });
 }
 
 chrome.runtime.onMessage.addListener((message, sender, reply) => {
@@ -118,8 +118,10 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
 			case 'connect': return connect();
 			case 'disconnect': { await request('/api/v2/connection', { method: 'DELETE' }).catch(() => undefined); await clear(); return { disconnected: true }; }
 			case 'sync': return sync();
-			case 'status': { const data = await chrome.storage.local.get(['tokens', 'items', 'lastSync', 'prefix']); return { connected: !!data.tokens, count: data.items?.length || 0, lastSync: data.lastSync, bridgeVerified, prefix: data.prefix || ';', origin }; }
+			case 'status': { const data = await chrome.storage.local.get(['tokens', 'items', 'lastSync', 'prefix']); const platform = await chrome.runtime.getPlatformInfo(); return { connected: !!data.tokens, count: data.items?.length || 0, lastSync: data.lastSync, bridgeVerified: platform.os === 'cros' || await claim(false), prefix: data.prefix || ';', origin, platform: platform.os }; }
 			case 'snapshot': { const data = await chrome.storage.local.get(['items', 'prefix']); return { items: data.items || [], prefix: data.prefix || ';' }; }
+			case 'focus': { if (sender.tab?.id == null || sender.frameId == null) return {}; await chrome.storage.session.set({ [`frame-${sender.tab.id}`]: sender.frameId }); return {}; }
+			case 'insert': { const [tab] = await chrome.tabs.query({ active: true, currentWindow: true }); if (!tab?.id) throw new Error('No active Chrome tab'); const state = await chrome.storage.session.get(`frame-${tab.id}`); const response = await chrome.tabs.sendMessage(tab.id, { type: 'insert', id: message.id }, { frameId: state[`frame-${tab.id}`] ?? 0 }); if (!response?.ok) throw new Error(response?.error || 'Focus an editable field first'); return {}; }
 			case 'prefix': { if (!",;./'[]\\`=".includes(message.value) || message.value.length !== 1) throw new Error('Invalid prefix'); await chrome.storage.local.set({ prefix: message.value }); return { prefix: message.value }; }
 			case 'match': return Runtime.match(message.before, message.prefix, message.triggers);
 			case 'prepare': return prepared(message.id, message.values || {}, !!message.preview);

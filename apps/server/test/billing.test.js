@@ -64,6 +64,27 @@ test('Free resource gates reject a second library and second machine', async () 
 	assert.throws(() => Billing.assertLimit(Fixture.ctx, 'snippets', 250, 1), error => error.code === 'plan_limit');
 });
 
+test('Free permits unlimited browser connections without consuming its machine slot', async () => {
+	const ctx = await Fixture.context();
+	const redirect_uri = 'https://kkmbockjkhkdjpgbdnonfbgljpgofbpl.chromiumapp.org/callback';
+	await assert.rejects(Promise.resolve().then(() => Auth.redirect('https://example.com/callback', 'typerelay-browser')), /Invalid browser callback/);
+	const tokens = [];
+	for (let index = 0; index < 3; index++) {
+		const verifier = Support.token();
+		const request = { client_id: 'typerelay-browser', client_type: 'browser', os: 'web', account: String(Fixture.account._id), redirect_uri, code_challenge_method: 'S256', code_challenge: createHash('sha256').update(verifier).digest('base64url'), state: Support.token() };
+		const url = new URL(await Auth.authorize(String(Fixture.owner._id), request));
+		const connected = await Auth.exchange({ grant_type: 'authorization_code', client_id: request.client_id, code: url.searchParams.get('code'), redirect_uri, code_verifier: verifier });
+		tokens.push(connected);
+		assert.equal((await Auth.bearer(connected.access_token)).device, connected.device);
+	}
+	assert.equal((await Billing.usage(Fixture.account._id)).machines, 1);
+	await assert.rejects(Billing.assertDeviceEnrollment(ctx), error => error.code === 'plan_limit');
+	const refreshed = await Auth.exchange({ grant_type: 'refresh_token', client_id: 'typerelay-browser', refresh_token: tokens[0].refresh_token });
+	await assert.rejects(Auth.exchange({ grant_type: 'refresh_token', client_id: 'typerelay-mobile', refresh_token: refreshed.refresh_token }), /Invalid refresh client/);
+	await Device.updateOne({ _id: tokens[0].device }, { $set: { revoked: true } });
+	await assert.rejects(Auth.bearer(refreshed.access_token), /revoked/);
+});
+
 test('one-time Pro trial unlocks API and machines, then expires to Free', async () => {
 	const startedAt = new Date();
 	const account = await Billing.startTrial(Fixture.account._id, startedAt);

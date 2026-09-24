@@ -1,0 +1,27 @@
+# TypeRelay Chrome extension
+
+The Chrome extension expands synced snippets in editable web fields. It keeps a local snapshot for offline use. The toolbar searches snippets and opens the existing web app for edits. Internal browser pages, the address bar, and native apps are outside its reach.
+
+## Build and load
+
+Build the production extension with `pnpm --filter @typerelay/extension build`. For the NadaMini development app, run `dbh-run urls` first and use the reported app origin, for example `pnpm --filter @typerelay/extension exec node build.mjs --origin=https://tr.n.lan`. Open `chrome://extensions`, enable Developer mode, and load `apps/extension/dist` unpacked.
+
+The extension uses the first-party device OAuth flow with PKCE and a `chromiumapp.org` callback. Browser connections appear in device management and do not count against Free's machine limit. Snippets and short-lived and refresh tokens stay in Chrome's extension storage. Images are cached in Cache Storage for offline insertion. The extension sends only OAuth and sync requests to the selected TypeRelay app origin. It does not send field contents to TypeRelay. The native host receives only a short-lived ownership signal; it never receives snippets or field text.
+
+## Desktop coexistence
+
+On macOS, Windows, and Linux, expansion waits for the native messaging bridge. The updated desktop app registers the current development extension ID automatically. If Chrome reports a different ID at `chrome://extensions`, register it manually:
+
+```fish
+typerelay-panel --register-chrome-extension EXTENSION_ID
+```
+
+On macOS, use the executable inside `TypeRelay.app/Contents/MacOS` if it is not on `PATH`. Restart Chrome after registration. The app remembers the ID and refreshes the native host manifest after a desktop update. ChromeOS does not need the native host. The desktop app yields while a supported web field is focused and the extension's claim is live. Claims expire in under one second.
+
+The Chrome Web Store assigns the final extension ID when the package is uploaded. Pin that ID in the server callback allowlist and desktop registration before public rollout. The current unpacked ID is for development only.
+
+## Release gate
+
+Google Docs is intentionally excluded from automatic insertion until its editor adapter is verified for typing, toolbar search insertion, formatting, and images without debugger permission. A content script cannot assume the hidden Google Docs input represents document contents. Do not submit the Chrome Web Store listing until the Google Docs tests pass. If they fail, report the specific editor behavior and keep the listing staged.
+
+The Web Store listing must disclose broad site access, local snippet and image caching, sign-in tokens, and native messaging. Package only the `dist` directory. Keep all executable code in the package.
