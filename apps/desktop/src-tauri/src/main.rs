@@ -3,9 +3,7 @@ mod platform;
 mod browser_bridge;
 mod tray;
 mod update;
-use anyhow::Result;
-#[cfg(not(target_os="linux"))]
-use anyhow::Context;
+use anyhow::{Context, Result};
 use serde_json::{json,Value};
 use std::{sync::{Mutex,atomic::{AtomicBool,Ordering}},path::PathBuf};
 use tauri::{Manager,Emitter};
