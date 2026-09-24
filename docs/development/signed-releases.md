@@ -4,6 +4,8 @@ TypeRelay uses a Tauri adapter in the shared desktop release toolkit. The Window
 
 Normal GitHub builds remain unsigned test candidates. These maintainer commands require a clean `develop` checkout, pull it with `git pull --ff-only`, use frozen/locked dependencies, and never publish. Merge reviewed changes before running a release.
 
+For a desktop version change, edit only `apps/desktop/package.json`, then run `pnpm desktop:version` from the repository root and commit the generated manifest and lockfile changes. Tauri reads the desktop package version directly; the sync command keeps the panel and native sidecar versions aligned. The release command checks that synchronization before building.
+
 For credentialed local macOS testing without notarization, use `pnpm build:macos:local` in `apps/desktop`. It builds the app and TUI with the installed Developer ID Application identity, verifies the bundle, and creates a local DMG. Set `APPLE_SIGNING_IDENTITY` only when more than one matching identity is installed. The stable identity keeps Accessibility and Input Monitoring approvals valid across rebuilds; ad-hoc signing is unsuitable because macOS treats each build as new code.
 
 ## Windows on Omarchy

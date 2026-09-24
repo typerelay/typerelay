@@ -1,6 +1,6 @@
 {
   "name": "typerelay",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "private": true,
   "description": "Cross-platform text expansion with shared snippets and native keyboards",
   "license": "AGPL-3.0",
@@ -26,6 +26,7 @@
     "android:release": "pnpm --filter @typerelay/mobile android:release",
     "android:test": "pnpm --filter @typerelay/mobile test:release",
     "desktop:build": "pnpm --filter typerelay-desktop build",
+    "desktop:version": "node scripts/sync-desktop-version.mjs",
     "desktop:test": "pnpm --filter typerelay-desktop test"
   }
 }

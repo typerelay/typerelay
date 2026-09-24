@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { PanelRelease, SigningBridge } from '../../../scripts/release-panel.mjs';
+import { DesktopVersion } from '../../../scripts/sync-desktop-version.mjs';
 
 test('release mode requires the right host and rejects publishing/unsupported targets', () => {
 	assert.equal(PanelRelease.options(['windows', '--dry-run'], 'darwin').target, 'x86_64-pc-windows-msvc');
@@ -81,5 +82,19 @@ test('release tooling creates signed updater artifacts for every supported platf
 
 test('desktop release version matches both native workspaces', async () => {
 	const config=JSON.parse(await fs.readFile(path.join(PanelRelease.root,'apps/desktop/src-tauri/tauri.conf.json'),'utf8'));const rootPackage=JSON.parse(await fs.readFile(path.join(PanelRelease.root,'package.json'),'utf8'));const desktop=JSON.parse(await fs.readFile(path.join(PanelRelease.root,'apps/desktop/package.json'),'utf8'));const workspace=await fs.readFile(path.join(PanelRelease.root,'Cargo.toml'),'utf8');const panel=await fs.readFile(path.join(PanelRelease.root,'apps/desktop/src-tauri/Cargo.toml'),'utf8');
-	assert.equal(rootPackage.version,config.version);assert.equal(desktop.version,config.version);assert.match(workspace,new RegExp(`\\[workspace\\.package\\][\\s\\S]*?version = "${config.version}"`));assert.match(panel,new RegExp(`\\[package\\][\\s\\S]*?version = "${config.version}"`));
+	assert.equal(config.version,'../package.json');assert.equal(rootPackage.version,desktop.version);assert.match(workspace,new RegExp(`\\[workspace\\.package\\][\\s\\S]*?version = "${desktop.version}"`));assert.match(panel,new RegExp(`\\[package\\][\\s\\S]*?version = "${desktop.version}"`));await DesktopVersion.sync(true);
+});
+
+test('changing only the desktop package version syncs native manifests and lockfiles', async () => {
+	const root=await fs.mkdtemp(path.join(os.tmpdir(),'typerelay-version-test-'));const originalRoot=DesktopVersion.root;
+	try {
+		for(const name of ['package.json','Cargo.toml','Cargo.lock','apps/desktop/package.json','apps/desktop/src-tauri/Cargo.toml','apps/desktop/src-tauri/Cargo.lock','apps/desktop/src-tauri/tauri.conf.json']) {const destination=path.join(root,name);await fs.mkdir(path.dirname(destination),{recursive:true});await fs.copyFile(path.join(originalRoot,name),destination);}
+		const desktopPath=path.join(root,'apps/desktop/package.json');const desktop=JSON.parse(await fs.readFile(desktopPath,'utf8'));desktop.version='9.8.7';await fs.writeFile(desktopPath,JSON.stringify(desktop,null,2)+'\n');
+		DesktopVersion.root=root;
+		await assert.rejects(DesktopVersion.sync(true),/Run pnpm desktop:version/);
+		const result=await DesktopVersion.sync();assert.equal(result.version,'9.8.7');assert.equal(result.stale.length,5);
+		await DesktopVersion.sync(true);
+		for(const name of ['package.json','Cargo.toml','apps/desktop/src-tauri/Cargo.toml'])assert.match(await fs.readFile(path.join(root,name),'utf8'),/version[^\n]*9\.8\.7/);
+		for(const name of ['Cargo.lock','apps/desktop/src-tauri/Cargo.lock'])assert.match(await fs.readFile(path.join(root,name),'utf8'),/name = "typerelay-panel"\nversion = "9\.8\.7"|name = "typerelay-core"\nversion = "9\.8\.7"/);
+	}finally{DesktopVersion.root=originalRoot;await fs.rm(root,{recursive:true,force:true});}
 });

@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { NativeTools } from '../apps/desktop/scripts/stage-native-tools.mjs';
+import { DesktopVersion } from './sync-desktop-version.mjs';
 
 export class SigningBridge {
 	constructor(socketPath, roots, sign) { this.path = socketPath; this.roots = roots; this.sign = sign; this.queue = Promise.resolve(); this.signed = new Set(); this.connections = new Set(); }
@@ -106,6 +107,7 @@ export class PanelRelease {
 	}
 	static async requireCommands(names) { for (const name of names) await PanelRelease.run('which', [name], { capture: true }); }
 	static async repository() {
+		await DesktopVersion.sync(true);
 		if (await PanelRelease.run('git', ['status', '--porcelain'], { capture: true })) throw new Error('Release requires a clean checkout');
 		if (await PanelRelease.run('git', ['branch', '--show-current'], { capture: true }) !== 'develop') throw new Error('Release requires the develop branch; merge the reviewed feature first');
 		await PanelRelease.run('git', ['pull', '--ff-only']);
@@ -128,7 +130,7 @@ export class PanelRelease {
 		await PanelRelease.requireCommands(['git', 'pnpm', 'cargo', 'rustup', 'tar', 'file', ...(options.mode === 'windows' ? ['cargo-xwin', 'clang', 'lld-link', 'llvm-rc', 'makensis', 'wine'] : options.mode === 'macos' ? ['security', 'codesign', 'spctl', 'xcrun', 'lipo'] : [])]);
 		if (!process.env.TAURI_SIGNING_PRIVATE_KEY) throw new Error('TAURI_SIGNING_PRIVATE_KEY is required');
 		const commit = await PanelRelease.repository();
-		const config = JSON.parse(await fs.readFile(path.join(working, 'src-tauri/tauri.conf.json'), 'utf8'));
+		const config = await DesktopVersion.config();
 		const targets = options.target === 'universal-apple-darwin' ? ['aarch64-apple-darwin', 'x86_64-apple-darwin'] : [options.target];
 		const installed = await PanelRelease.run('rustup', ['target', 'list', '--installed'], { capture: true });
 		if (targets.some(value => !installed.split('\n').includes(value))) throw new Error('Install Rust targets first: rustup target add ' + targets.join(' '));
