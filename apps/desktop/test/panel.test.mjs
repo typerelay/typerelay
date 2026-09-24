@@ -11,7 +11,7 @@ class Fixture {
   const style=dom.window.document.createElement('style');style.textContent=await readFile('ui/panel.css','utf8');dom.window.document.head.append(style);
   dom.window.HTMLElement.prototype.scrollIntoView=()=>{};
 	  dom.window.Swal={fire:async()=>({isConfirmed:true})};
-  dom.window.__TAURI__={core:{invoke:async(name,args)=>{calls.push({name,args});if(name==='initialize')return{config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},theme:{os:'linux'},settings:false,accessibility:false,input_monitoring:false,empty:false};if(name==='search')return new Promise(resolve=>pending.push({query:args.query,resolve}));if(name==='libraries'||name==='conflicts')return[];if(name==='prepare_template')return{fields:[],steps:[{kind:'text',text:'Literal'}],text:'Literal',enter_actions:0,template:{text:'Literal',variables:{}}};return null;}},event:{listen:(name,callback)=>{callbacks[name]=callback;}}};
+  dom.window.__TAURI__={core:{invoke:async(name,args)=>{calls.push({name,args});if(name==='initialize')return{config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},theme:{os:'linux'},settings:false,accessibility:false,input_monitoring:false,empty:false,version:'1.2.0'};if(name==='search')return new Promise(resolve=>pending.push({query:args.query,resolve}));if(name==='libraries'||name==='conflicts')return[];if(name==='prepare_template')return{fields:[],steps:[{kind:'text',text:'Literal'}],text:'Literal',enter_actions:0,template:{text:'Literal',variables:{}}};return null;}},event:{listen:(name,callback)=>{callbacks[name]=callback;}}};
   dom.window.eval((await readFile('ui/panel.js','utf8')).replace('new Panel();','window.panel = new Panel();'));
   await new Promise(resolve=>setTimeout(resolve,0));
   return {dom,panel:dom.window.panel,calls,pending,callbacks};
@@ -100,6 +100,22 @@ test('settings mode reaches native focus policy from tray and Back',async()=>{
   assert.equal(f.calls.filter(call=>call.name==='set_settings_view').at(-1).args.enabled,false);
   await f.panel.open({settings:true,theme:{os:'linux'}});
   assert.equal(f.calls.filter(call=>call.name==='set_settings_view').at(-1).args.enabled,true);
+ }finally{f.dom.window.close();}
+});
+
+test('About settings show product details and open only the selected external links',async()=>{
+ const f=await Fixture.create();try{
+  await f.panel.settings(true);f.dom.window.document.querySelector('[data-settings-tab="about"]').click();
+  assert.equal(f.dom.window.document.querySelector('#settings-general').hidden,true);
+  assert.equal(f.dom.window.document.querySelector('#settings-sync').hidden,true);
+  assert.equal(f.dom.window.document.querySelector('#settings-about').hidden,false);
+  assert.equal(f.dom.window.document.querySelector('.about-logo').getAttribute('src'),'typerelay-logo.svg');
+  assert.equal(f.dom.window.document.querySelector('#app-version').textContent,'Version 1.2.0');
+  assert.match(f.dom.window.document.querySelector('.about-products-title').textContent,/If you like TypeRelay, check out:/);
+  const urls=[...f.dom.window.document.querySelectorAll('[data-about-url]')].map(button=>button.dataset.aboutUrl);
+  assert.deepEqual(urls,['https://feedback.typerelay.com','https://docs.typerelay.com','https://typerelay.com','mailto:hi@typerelay.com','https://razuna.com','https://streamient.com','https://managani.com','https://helpmonks.com','https://mailtwine.com']);
+  for(const button of f.dom.window.document.querySelectorAll('[data-about-url]')){button.click();await new Promise(resolve=>setTimeout(resolve,0));}
+  assert.deepEqual(f.calls.filter(call=>call.name==='open_web_app'&&call.args?.url).map(call=>call.args.url),urls);
  }finally{f.dom.window.close();}
 });
 

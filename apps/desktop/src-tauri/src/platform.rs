@@ -18,7 +18,7 @@ pub fn input_monitoring(prompt:bool)->bool { #[cfg(target_os="macos")] {native::
 pub fn open_accessibility_settings()->Result<()> { #[cfg(target_os="macos")] {native::open_accessibility_settings()} #[cfg(not(target_os="macos"))] {anyhow::bail!("Accessibility settings are available on macOS")} }
 pub fn open_input_monitoring_settings()->Result<()> { #[cfg(target_os="macos")] {native::open_input_monitoring_settings()} #[cfg(not(target_os="macos"))] {anyhow::bail!("Input Monitoring settings are available on macOS")} }
 pub fn open_tui()->Result<()> {native::open_tui()}
-pub fn open_web_app()->Result<()> {native::open_url("https://app.typerelay.com")}
+pub fn open_web_app(url:Option<&str>)->Result<()> {let url=url.unwrap_or("https://app.typerelay.com");anyhow::ensure!(["https://app.typerelay.com","https://feedback.typerelay.com","https://docs.typerelay.com","https://typerelay.com","mailto:hi@typerelay.com","https://razuna.com","https://streamient.com","https://managani.com","https://helpmonks.com","https://mailtwine.com"].contains(&url),"Unsupported TypeRelay link");native::open_url(url)}
 #[cfg(target_os="macos")]
 pub fn release_modifiers()->Result<()> {native::release_modifiers()}
 

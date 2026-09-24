@@ -179,7 +179,7 @@ fn initialize(app:tauri::AppHandle)->std::result::Result<Value,String> {
 		#[cfg(not(target_os="macos"))]
 		let notifications:Option<bool>=None;
 		let connected=state.root.join("sync/credentials.json").exists();let authenticating=state.authenticating.load(Ordering::SeqCst);
-		Ok(json!({"config":settings,"prompt":state.prompt_hit.lock().unwrap().clone(),"server":typerelay_client::settings::SettingsStore::open(state.root.join("settings.yml")).ok().map(|s|s.settings.sync_url).unwrap_or_default(),"connected":connected,"connection_state":if authenticating{"authenticating"}else if connected{"connected"}else{"disconnected"},"auth_error":*state.auth_error.lock().unwrap(),"theme":Runtime::theme(),"settings":state.settings.load(Ordering::SeqCst),"status":*state.status.lock().unwrap(),"update":app.state::<update::UpdateState>().value(),"accessibility":accessibility,"input_monitoring":input_monitoring,"notifications":notifications,"empty":empty}))
+		Ok(json!({"config":settings,"prompt":state.prompt_hit.lock().unwrap().clone(),"server":typerelay_client::settings::SettingsStore::open(state.root.join("settings.yml")).ok().map(|s|s.settings.sync_url).unwrap_or_default(),"connected":connected,"connection_state":if authenticating{"authenticating"}else if connected{"connected"}else{"disconnected"},"auth_error":*state.auth_error.lock().unwrap(),"theme":Runtime::theme(),"settings":state.settings.load(Ordering::SeqCst),"status":*state.status.lock().unwrap(),"update":app.state::<update::UpdateState>().value(),"accessibility":accessibility,"input_monitoring":input_monitoring,"notifications":notifications,"empty":empty,"version":app.package_info().version.to_string()}))
 }
 #[tauri::command]
 async fn search(app:tauri::AppHandle,query:String)->std::result::Result<Vec<Hit>,String> {
@@ -305,7 +305,7 @@ fn open_notification_settings()->std::result::Result<(),String>{#[cfg(target_os=
 #[tauri::command]
 fn open_tui()->std::result::Result<(),String>{platform::open_tui().map_err(|e|e.to_string())}
 #[tauri::command]
-fn open_web_app()->std::result::Result<(),String>{platform::open_web_app().map_err(|e|e.to_string())}
+fn open_web_app(url:Option<String>)->std::result::Result<(),String>{platform::open_web_app(url.as_deref()).map_err(|e|e.to_string())}
 fn main() {
     let arguments = std::env::args().collect::<Vec<_>>();
     if arguments.get(1).is_some_and(|value| value.starts_with("chrome-extension://")) { if let Err(error) = browser_bridge::BrowserBridge::serve() { eprintln!("TypeRelay browser bridge: {error:#}"); } return; }
