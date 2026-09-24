@@ -1,10 +1,17 @@
+---
+title: "Test the Type Relay Chrome extension"
+description: "Build, load, sign in to, and test the Type Relay Chrome extension against a matching development server."
+---
+
 # TypeRelay Chrome extension
 
 The Chrome extension expands synced snippets in editable web fields. It keeps a local snapshot for offline use. The toolbar searches snippets and opens the existing web app for edits. Internal browser pages, the address bar, and native apps are outside its reach.
 
 ## Build and load
 
-Build the production extension with `pnpm --filter @typerelay/extension build`. For the NadaMini development app, run `dbh-run urls` first and use the reported app origin, for example `pnpm --filter @typerelay/extension exec node build.mjs --origin=https://tr.n.lan`. Open `chrome://extensions`, enable Developer mode, and load `apps/extension/dist` unpacked.
+For development testing on NadaMini, run `dbh-run urls` first and build for its reported app origin, for example `pnpm --filter @typerelay/extension exec node build.mjs --origin=https://tr.n.lan`. Open `chrome://extensions`, enable Developer mode, and load `apps/extension/dist` unpacked. After changing the build origin, reload the extension there and accept the new site permission if Chrome asks. The default `pnpm --filter @typerelay/extension build` targets `https://app.typerelay.com` and requires the browser OAuth server changes to be deployed there.
+
+Sign in inside Chrome's authorization window, then select an account and click **Connect device**. Account sign-in alone does not connect the extension. The extension popup shows **Signed out** until Chrome receives the callback and the token exchange succeeds.
 
 The extension uses the first-party device OAuth flow with PKCE and a `chromiumapp.org` callback. Browser connections appear in device management and do not count against Free's machine limit. Snippets and short-lived and refresh tokens stay in Chrome's extension storage. Images are cached in Cache Storage for offline insertion. The extension sends only OAuth and sync requests to the selected TypeRelay app origin. It does not send field contents to TypeRelay. The native host receives only a short-lived ownership signal; it never receives snippets or field text.
 
