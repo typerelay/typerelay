@@ -2,6 +2,8 @@
 	each warning in warnings
 		p.text-warning= warning
 	p.small.text-muted Select snippets to import. Abbreviations are optional. Existing libraries will not be replaced.
+	.d-flex.justify-content-end.mb-3
+		button#import-submit-top.btn.btn-primary.btn-sm(type="submit") Import
 	each entry in entries
 		.border-bottom.pb-3.mb-3(data-import-entry=entry.key)
 			.form-check.mb-3
@@ -22,3 +24,7 @@
 					span.input-group-text ;
 					input.form-control.form-control-sm(id='abbr-' + entry.key data-import-trigger=entry.key value=entry.trigger data-review=entry.review disabled=entry.review pattern="[a-z0-9\\-]{1,63}")
 				pre.small= entry.content.text
+	.d-flex.align-items-center.justify-content-between.mb-3(data-import-pagination hidden=entries.length <= 15)
+		button.btn.btn-outline-secondary.btn-sm(type="button" data-import-page="previous") Previous
+		span.small(data-import-page-label)
+		button.btn.btn-outline-secondary.btn-sm(type="button" data-import-page="next") Next

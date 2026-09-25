@@ -11,7 +11,7 @@ use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "typerelay", version, about = "TypeRelay command-line tools for snippets and synchronization")]
+#[command(name = "typerelay", version = env!("TYPERELAY_VERSION"), about = "TypeRelay command-line tools for snippets and synchronization")]
 struct Cli { #[command(subcommand)] command: Commands }
 
 #[derive(Args)]

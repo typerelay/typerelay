@@ -7,9 +7,9 @@ description: "Search, filter, copy, edit, and expand TypeRelay snippets from the
 
 Press **Ctrl+Shift+;** or left-click the **T** tray/menu-bar icon. Search across accessible local libraries by abbreviation, title or content. Exact abbreviations rank first, followed by abbreviation prefixes, abbreviation substrings and content matches. Results identify their library and show a literal preview.
 
-Click a result once, or use arrow keys and **Enter**, to insert into the previously active application. TypeRelay rechecks the snippet revision and access immediately before insertion. **Escape** or an outside click dismisses the panel. **Copy** is available when insertion cannot safely restore the original target.
+Click a result once, or use arrow keys and **Enter**, to insert into the previously active application. Press **Ctrl+C** or **Super/Command+C** to copy the highlighted result, even while the search field has focus; the **Copy** button does the same. TypeRelay rechecks the snippet revision and access before using it. **Escape** or an outside click dismisses the panel.
 
-Right-click the T icon for **Sync now**, **Check for updates…**, **Settings** and **Quit TypeRelay**. Settings controls the shortcut, launch at login and account connection. **Authenticate** signs in through the browser and links this desktop to the selected account; it does not merely open the web dashboard.
+Right-click the T icon for **Sync now**, **Settings**, **Check for updates** and **Quit**. Settings controls the shortcut, launch at login and account connection. About shows the installed version, TypeRelay help and documentation links, and related products. **Authenticate** signs in through the browser and links this desktop to the selected account; it does not merely open the web dashboard.
 
 Closing the panel hides it. On Omarchy, quitting the panel leaves the separate expansion service running. Search works offline. Read-only snippets and entries without abbreviations remain searchable.
 

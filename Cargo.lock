@@ -3283,7 +3283,7 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
 name = "typerelay-client"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3318,7 +3318,7 @@ dependencies = [
 
 [[package]]
 name = "typerelay-core"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "ammonia",
  "base64 0.22.1",
@@ -3332,7 +3332,7 @@ dependencies = [
 
 [[package]]
 name = "typerelay-mobile"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3346,8 +3346,10 @@ dependencies = [
 
 [[package]]
 name = "typerelay-template-wasm"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "typerelay-core",
 ]
 

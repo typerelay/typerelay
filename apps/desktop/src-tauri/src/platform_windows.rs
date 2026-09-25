@@ -1,10 +1,11 @@
 use anyhow::{Context, Result, ensure};
 use std::{cell::RefCell,path::PathBuf,sync::{Arc,mpsc::{Receiver,SyncSender,sync_channel}},os::windows::io::{OwnedHandle,FromRawHandle},time::Duration};
 use typerelay_client::{database::DatabaseSnapshot,settings::SettingsStore};
-use typerelay_core::{Engine,Expansion,Input};
+use typerelay_core::{Engine,Expansion,Input,FeedResult};
+use typerelay_client::browser_lease::BrowserLease;
 use windows::Win32::System::Threading::{OpenProcess,PROCESS_QUERY_LIMITED_INFORMATION};
 use windows::Win32::System::{Com::{DVASPECT_CONTENT,FORMATETC,IDataObject,STGMEDIUM,TYMED_HGLOBAL},Memory::{GlobalLock,GlobalSize,GlobalUnlock},Ole::{OleGetClipboard,OleInitialize,OleUninitialize,ReleaseStgMedium}};
-use windows::Win32::{Foundation::{HWND,LPARAM,LRESULT,RECT,WPARAM}, UI::{WindowsAndMessaging::{CallNextHookEx,DispatchMessageW,GetForegroundWindow,GetGUIThreadInfo,GetMessageW,GetSystemMetrics,GetWindowRect,GetWindowTextW,GetClassNameW,GetWindowThreadProcessId,IsWindow,KBDLLHOOKSTRUCT,KillTimer,MSG,SendMessageTimeoutW,SetForegroundWindow,SetTimer,SetWindowsHookExW,TranslateMessage,UnhookWindowsHookEx,WH_KEYBOARD_LL,WM_KEYDOWN,WM_KEYUP,WM_SYSKEYDOWN,WM_SYSKEYUP,WM_TIMER,GUITHREADINFO,HHOOK,SMTO_ABORTIFHUNG,SM_REMOTESESSION}, Input::KeyboardAndMouse::{GetAsyncKeyState,GetKeyboardLayout,GetKeyboardState,SendInput,ToUnicodeEx,INPUT,INPUT_0,INPUT_KEYBOARD,KEYBDINPUT,KEYEVENTF_KEYUP,VIRTUAL_KEY,VK_BACK,VK_CONTROL,VK_LWIN,VK_MENU,VK_RETURN,VK_RWIN,VK_V}}};
+use windows::Win32::{Foundation::{HWND,LPARAM,LRESULT,RECT,WPARAM}, UI::{WindowsAndMessaging::{CallNextHookEx,DispatchMessageW,GetForegroundWindow,GetGUIThreadInfo,GetMessageW,GetSystemMetrics,GetWindowRect,GetWindowTextW,GetClassNameW,GetWindowThreadProcessId,IsWindow,KBDLLHOOKSTRUCT,KillTimer,MSG,SendMessageTimeoutW,SetForegroundWindow,SetTimer,SetWindowsHookExW,TranslateMessage,UnhookWindowsHookEx,WH_KEYBOARD_LL,WH_MOUSE_LL,WM_KEYDOWN,WM_KEYUP,WM_SYSKEYDOWN,WM_SYSKEYUP,WM_LBUTTONDOWN,WM_RBUTTONDOWN,WM_MBUTTONDOWN,WM_XBUTTONDOWN,WM_TIMER,GUITHREADINFO,HHOOK,SMTO_ABORTIFHUNG,SM_REMOTESESSION}, Input::KeyboardAndMouse::{GetAsyncKeyState,GetKeyboardLayout,GetKeyboardState,SendInput,ToUnicodeEx,INPUT,INPUT_0,INPUT_KEYBOARD,KEYBDINPUT,KEYEVENTF_KEYUP,VIRTUAL_KEY,VK_BACK,VK_CONTROL,VK_LWIN,VK_MENU,VK_RETURN,VK_RWIN,VK_SHIFT,VK_V}}};
 const TYPERELAY_EVENT_MARKER:usize=0x5452_4c59;
 #[derive(Clone,Debug)]
 pub struct Target { handle: isize, pid: u32, class:String, _process: Arc<OwnedHandle>, pub bounds: Option<(i32,i32,u32,u32)> }
@@ -32,26 +33,29 @@ pub fn remote_session()->bool {unsafe{GetSystemMetrics(SM_REMOTESESSION)!=0}}
 pub fn insert(target:&Target,erase:usize,paste:bool)->Result<()>{ensure!(target.focused()?,"Original window lost focus");fn key(key:VIRTUAL_KEY,up:bool)->INPUT{INPUT{r#type:INPUT_KEYBOARD,Anonymous:INPUT_0{ki:KEYBDINPUT{wVk:key,dwFlags:if up{KEYEVENTF_KEYUP}else{Default::default()},dwExtraInfo:TYPERELAY_EVENT_MARKER,..Default::default()}}}}fn send(input:&[INPUT])->Result<()>{let sent=unsafe{SendInput(input,std::mem::size_of::<INPUT>() as i32)};ensure!(sent as usize==input.len(),"Windows rejected native input");Ok(())}let mut removal=Vec::with_capacity(erase*2);for _ in 0..erase{removal.extend([key(VK_BACK,false),key(VK_BACK,true)]);}if !removal.is_empty(){send(&removal)?;std::thread::sleep(Duration::from_millis(30));}
     if paste{send(&[key(VK_CONTROL,false),key(VK_V,false),key(VK_V,true),key(VK_CONTROL,true)])}else{send(&[key(VK_RETURN,false),key(VK_RETURN,true)])}}
 pub fn fallback_allowed()->bool { unsafe { let window=GetForegroundWindow();let mut pid=0;GetWindowThreadProcessId(window,Some(&mut pid));let mut class=[0u16;256];let length=GetClassNameW(window,&mut class);pid==std::process::id() || ["Shell_TrayWnd","NotifyIconOverflowWindow","#32768"].contains(&String::from_utf16_lossy(&class[..length as usize]).as_str()) } }
-pub fn open_url(url:&str)->Result<()> { std::process::Command::new("rundll32.exe").args(["url.dll,FileProtocolHandler",url]).spawn().context("Could not open the TypeRelay web app")?;Ok(()) }
+pub fn open_url(url:&str)->Result<()> { std::process::Command::new("rundll32.exe").args(["url.dll,FileProtocolHandler",url]).spawn().context("Could not open link")?;Ok(()) }
 pub fn open_tui()->Result<()> { let executable=std::env::current_exe()?.with_file_name("typerelay-tui.exe");ensure!(executable.is_file(),"TypeRelay TUI is missing from this installation");std::process::Command::new(executable).spawn().context("Could not open TypeRelay TUI")?;Ok(()) }
 
 pub struct ExpansionRequest { pub target:Target, pub expansion:Expansion, pub released:Receiver<()> }
-struct HookState { store:DatabaseSnapshot, settings:SettingsStore, engine:Engine, target:Option<Target>, sender:SyncSender<ExpansionRequest>, suppress_space:Option<SyncSender<()>> }
+struct HookState { store:DatabaseSnapshot, settings:SettingsStore, engine:Engine, target:Option<Target>, sender:SyncSender<ExpansionRequest>, suppress_space:Option<SyncSender<()>>, suppress_right:bool, right_forwarded:bool }
 thread_local! { static HOOK_STATE:RefCell<Option<HookState>>=const{RefCell::new(None)}; }
 impl HookState {
-    fn new(directory:PathBuf,settings_path:PathBuf,sender:SyncSender<ExpansionRequest>)->Result<Self>{let store=DatabaseSnapshot::open(&directory)?;let settings=SettingsStore::open(settings_path)?;let mut engine=Engine::new(store.snapshot.clone());engine.set_prefix(&settings.settings.trigger_prefix).map_err(anyhow::Error::msg)?;Ok(Self{store,settings,engine,target:None,sender,suppress_space:None})}
-    fn input(vk:u32,scan:u32)->Input {match vk{0x08=>Input::Backspace,0x20=>Input::Space,_=>unsafe{let window=GetForegroundWindow();let thread=GetWindowThreadProcessId(window,None);let layout=GetKeyboardLayout(thread);let mut state=[0u8;256];if GetKeyboardState(&mut state).is_err(){return Input::Cancel;}
+    fn new(directory:PathBuf,settings_path:PathBuf,sender:SyncSender<ExpansionRequest>)->Result<Self>{let store=DatabaseSnapshot::open(&directory)?;let settings=SettingsStore::open(settings_path)?;let mut engine=Engine::new(store.snapshot.clone());engine.set_prefix(&settings.settings.trigger_prefix).map_err(anyhow::Error::msg)?;Ok(Self{store,settings,engine,target:None,sender,suppress_space:None,suppress_right:false,right_forwarded:false})}
+    fn input(vk:u32,scan:u32)->Input {match vk{0x08=>Input::Backspace,0x2e=>Input::Delete,0x25=>Input::Left,0x27=>Input::Right,0x20=>Input::Space,_=>unsafe{let window=GetForegroundWindow();let thread=GetWindowThreadProcessId(window,None);let layout=GetKeyboardLayout(thread);let mut state=[0u8;256];if GetKeyboardState(&mut state).is_err(){return Input::Cancel;}
         if let Some(key)=state.get_mut(vk as usize){*key|=0x80;}let mut buffer=[0u16;8];let length=ToUnicodeEx(vk,scan,&state,&mut buffer,5,Some(layout));if length<=0{return Input::Cancel;}let Ok(value)=String::from_utf16(&buffer[..usize::try_from(length).unwrap_or_default().min(buffer.len())])else{return Input::Cancel;};let mut characters=value.chars();let Some(character)=characters.next()else{return Input::Cancel;};if characters.next().is_some(){Input::Cancel}else{Input::Character(character)}}}}
-    fn modified()->bool {unsafe{let control=GetAsyncKeyState(VK_CONTROL.0 as i32)<0;let alt=GetAsyncKeyState(VK_MENU.0 as i32)<0;[VK_LWIN,VK_RWIN].iter().any(|key|GetAsyncKeyState(key.0 as i32)<0)||control!=alt}}
+    fn modified()->bool {unsafe{let control=GetAsyncKeyState(VK_CONTROL.0 as i32)<0;let alt=GetAsyncKeyState(VK_MENU.0 as i32)<0;[VK_LWIN,VK_RWIN,VK_SHIFT].iter().any(|key|GetAsyncKeyState(key.0 as i32)<0)||control!=alt}}
     fn key(&mut self,vk:u32,scan:u32,down:bool)->bool {
-        if !down {if vk==0x20&&let Some(released)=self.suppress_space.take(){let _=released.try_send(());return true;}return false;}
+        if !down {if vk==0x27{if self.suppress_right{self.suppress_right=false;return true;}self.right_forwarded=false;}if vk==0x20&&let Some(released)=self.suppress_space.take(){let _=released.try_send(());return true;}return false;}
+		if BrowserLease::active(){self.engine.feed(Input::Cancel);self.target=None;return false;}
+        if vk==0x27{if self.suppress_right{return true;}if self.right_forwarded{self.engine.feed(Input::Cancel);self.target=None;return false;}self.right_forwarded=true;}
         if Self::modified(){self.engine.feed(Input::Cancel);self.target=None;return false;}
         if self.target.as_ref().is_some_and(|target|target.focused().ok()!=Some(true)){self.engine.feed(Input::Cancel);self.target=None;}
         let input=Self::input(vk,scan);
         if matches!(input,Input::Character(character)if character==self.engine.prefix()){self.target=Target::capture().ok();}
         if self.target.is_none(){self.engine.feed(Input::Cancel);return false;}
-        let expansion=self.engine.feed(input);
-        if let Some(expansion)=expansion&&let Some(target)=self.target.take()&&target.focused().ok()==Some(true){let (release,released)=sync_channel(1);if self.sender.try_send(ExpansionRequest{target,expansion,released}).is_ok(){self.suppress_space=Some(release);return true;}}
+        let result=self.engine.feed_event(input);
+        if matches!(result,FeedResult::Suppress){self.right_forwarded=false;self.suppress_right=true;return true;}
+        if let FeedResult::Expand(expansion)=result&&let Some(target)=self.target.take()&&target.focused().ok()==Some(true){let (release,released)=sync_channel(1);if self.sender.try_send(ExpansionRequest{target,expansion,released}).is_ok(){self.suppress_space=Some(release);return true;}}
         if matches!(input,Input::Cancel|Input::Space){self.target=None;}
         false
     }
@@ -72,15 +76,20 @@ impl ExpansionSession {
     fn run(directory:PathBuf,settings:PathBuf,sender:SyncSender<ExpansionRequest>,ready:SyncSender<Result<()>>)->Result<()>{
         let state=HookState::new(directory,settings,sender)?;HOOK_STATE.with(|current|current.replace(Some(state)));
         let hook=Hook(unsafe{SetWindowsHookExW(WH_KEYBOARD_LL,Some(Self::callback),None,0)}?);
+        let mouse_hook=Hook(unsafe{SetWindowsHookExW(WH_MOUSE_LL,Some(Self::mouse_callback),None,0)}?);
         let timer=unsafe{SetTimer(None,1,500,None)};ensure!(timer!=0,"Cannot start Windows expansion reload timer");
         let _=ready.send(Ok(()));let mut message=MSG::default();
         loop {let result=unsafe{GetMessageW(&mut message,None,0,0)}.0;if result==0{break;}ensure!(result>0,"Windows expansion event loop failed");if message.message==WM_TIMER{HOOK_STATE.with(|state|{if let Ok(mut state)=state.try_borrow_mut()&&let Some(state)=state.as_mut(){state.reload();}});}
             unsafe{let _=TranslateMessage(&message);DispatchMessageW(&message);}
         }
-        unsafe{let _=KillTimer(None,timer);}HOOK_STATE.with(|state|state.replace(None));drop(hook);Ok(())
+        unsafe{let _=KillTimer(None,timer);}HOOK_STATE.with(|state|state.replace(None));drop(mouse_hook);drop(hook);Ok(())
     }
     unsafe extern "system" fn callback(code:i32,wparam:WPARAM,lparam:LPARAM)->LRESULT {
         if code>=0 {let event=unsafe{&*(lparam.0 as *const KBDLLHOOKSTRUCT)};if event.dwExtraInfo!=TYPERELAY_EVENT_MARKER{let message=wparam.0 as u32;let down=message==WM_KEYDOWN||message==WM_SYSKEYDOWN;let up=message==WM_KEYUP||message==WM_SYSKEYUP;if (down||up)&&HOOK_STATE.with(|state|state.try_borrow_mut().ok().and_then(|mut state|state.as_mut().map(|state|state.key(event.vkCode,event.scanCode,down))).unwrap_or(false)){return LRESULT(1);}}}
+        unsafe{CallNextHookEx(None,code,wparam,lparam)}
+    }
+    unsafe extern "system" fn mouse_callback(code:i32,wparam:WPARAM,lparam:LPARAM)->LRESULT {
+        if code>=0&&[WM_LBUTTONDOWN,WM_RBUTTONDOWN,WM_MBUTTONDOWN,WM_XBUTTONDOWN].contains(&(wparam.0 as u32)){HOOK_STATE.with(|state|{if let Ok(mut state)=state.try_borrow_mut()&&let Some(state)=state.as_mut(){state.engine.feed(Input::Cancel);state.target=None;}});}
         unsafe{CallNextHookEx(None,code,wparam,lparam)}
     }
 }

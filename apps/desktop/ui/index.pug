@@ -38,7 +38,7 @@ html(lang="en")
 						span Insert
 						span.keycap esc
 						span Close
-					button#copy.secondary(type="button" disabled) Copy
+					button#copy.secondary(type="button" disabled aria-keyshortcuts="Control+C Meta+C" title="Copy highlighted snippet") Copy
 			section#fill-view(hidden)
 				form#fill-form
 					h2 Fill template
@@ -58,6 +58,7 @@ html(lang="en")
 				nav.settings-tabs(aria-label="Settings sections")
 					button(type="button" data-settings-tab="general" aria-selected="true") General
 					button(type="button" data-settings-tab="sync" aria-selected="false") Sync
+					button(type="button" data-settings-tab="about" aria-selected="false") About
 				section#settings-general.settings-page
 					form#settings-form.settings-list
 						.setting-row
@@ -126,6 +127,48 @@ html(lang="en")
 							h3 Needs review
 							p#conflict-count.settings-description
 							div#sync-conflicts
+				section#settings-about.settings-page(hidden)
+					.about-identity
+						img.about-logo(src="typerelay-logo.svg" alt="TypeRelay")
+						p#app-version Version
+					.settings-list.about-links
+						button.about-link(type="button" data-about-url="https://feedback.typerelay.com")
+							span
+								strong Get help
+								small feedback.typerelay.com
+							span.about-arrow(aria-hidden="true") ↗
+						button.about-link(type="button" data-about-url="https://docs.typerelay.com")
+							span
+								strong Read docs
+								small docs.typerelay.com
+							span.about-arrow(aria-hidden="true") ↗
+						button.about-link(type="button" data-about-url="https://typerelay.com")
+							span
+								strong Web
+								small typerelay.com
+							span.about-arrow(aria-hidden="true") ↗
+						button.about-link(type="button" data-about-url="mailto:hi@typerelay.com")
+							span
+								strong Email
+								small hi@typerelay.com
+							span.about-arrow(aria-hidden="true") ↗
+					h3.about-products-title If you like TypeRelay, check out:
+					.settings-list.about-links
+						button.about-link(type="button" data-about-url="https://razuna.com")
+							strong Razuna
+							span.about-arrow(aria-hidden="true") ↗
+						button.about-link(type="button" data-about-url="https://streamient.com")
+							strong Streamient
+							span.about-arrow(aria-hidden="true") ↗
+						button.about-link(type="button" data-about-url="https://managani.com")
+							strong Managani
+							span.about-arrow(aria-hidden="true") ↗
+						button.about-link(type="button" data-about-url="https://helpmonks.com")
+							strong Helpmonks
+							span.about-arrow(aria-hidden="true") ↗
+						button.about-link(type="button" data-about-url="https://mailtwine.com")
+							strong Mailtwine
+							span.about-arrow(aria-hidden="true") ↗
 		template#result-template
 			li(role="option" aria-selected="false")
 				.row

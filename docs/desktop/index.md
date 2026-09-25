@@ -14,4 +14,4 @@ The TypeRelay desktop app provides a resident search panel, continuous abbreviat
 | Windows x64 | NSIS installer with panel, CLI and TUI | Beta; layout-aware expansion |
 | Other Linux desktops | GUI packages may launch | Continuous expansion and safe insertion are not supported; no non-Hyprland claim |
 
-Read [Operating system notes](./platforms) before deployment. The resident app checks for signed updates shortly after launch and every six hours. Use **Check for updates…** from the tray/menu-bar menu for an immediate check.
+Read [Operating system notes](./platforms) before deployment. The resident app checks for signed updates shortly after launch and every six hours. Use **Check for updates** from the tray/menu-bar menu for an immediate check.

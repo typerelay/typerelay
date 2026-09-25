@@ -36,6 +36,6 @@ Use **Settings → Connected devices** to confirm the device is still active. A 
 
 ## Updates fail
 
-Use **Check for updates…** to see the immediate error. Verify network access to the configured updater endpoint and install only matching signed artifacts. On Omarchy, never update the engine, TUI or panel independently.
+Use **Check for updates** to see the immediate error. Verify network access to the configured updater endpoint and install only matching signed artifacts. On Omarchy, never update the engine, TUI or panel independently.
 
 See [Operating system notes](./platforms) for platform-specific limits and [Sync and offline use](../guide/sync) for queue/recovery behavior.

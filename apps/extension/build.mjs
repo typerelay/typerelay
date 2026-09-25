@@ -1,0 +1,21 @@
+import { execFileSync } from 'node:child_process';
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import pug from 'pug';
+
+const root = fileURLToPath(new URL('../../', import.meta.url));
+const dist = fileURLToPath(new URL('./dist/', import.meta.url));
+const origin = process.argv.find(value => value.startsWith('--origin='))?.slice(9) || 'https://app.typerelay.com';
+const parsed = new URL(origin);
+if (parsed.origin !== origin || (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && parsed.hostname === 'localhost'))) throw new Error('Use an HTTPS origin or local development server');
+mkdirSync(dist, { recursive: true });
+execFileSync('cargo', ['build', '--release', '-p', 'typerelay-template-wasm', '--target', 'wasm32-unknown-unknown'], { cwd: root, stdio: 'inherit' });
+for (const name of ['worker.js', 'content.js', 'runtime.js', 'messages.js', 'popup.js', 'popup.css', 'options.js', 'options.css', 'prompt.css', 'notice.css']) copyFileSync(new URL(name, import.meta.url), new URL(name, `file://${dist}/`));
+copyFileSync(new URL('../../target/wasm32-unknown-unknown/release/typerelay_template_wasm.wasm', import.meta.url), new URL('template.wasm', `file://${dist}/`));
+copyFileSync(new URL('../desktop/src-tauri/icons/icon.png', import.meta.url), new URL('icon.png', `file://${dist}/`));
+for (const name of ['popup', 'options', 'prompt', 'notice']) writeFileSync(new URL(`${name}.html`, `file://${dist}/`), pug.renderFile(fileURLToPath(new URL(`${name}.pug`, import.meta.url)), { pretty: true }));
+const manifest = JSON.parse(readFileSync(new URL('manifest.json', import.meta.url), 'utf8'));
+manifest.host_permissions = [`${origin}/*`];
+writeFileSync(new URL('manifest.json', `file://${dist}/`), JSON.stringify(manifest, null, 2));
+const worker = readFileSync(new URL('worker.js', import.meta.url), 'utf8').replace('https://app.typerelay.com', origin);
+writeFileSync(new URL('worker.js', `file://${dist}/`), worker);

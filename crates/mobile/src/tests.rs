@@ -41,6 +41,45 @@ fn keyboard_generation_is_stable_across_connections_and_rejects_stale_selection(
 }
 
 #[test]
+fn keyboard_matches_bare_abbreviations_without_expanding_ambiguous_text() {
+    let snapshot = json!({"libraries":[{"_id":"one","records":[
+        {"id":"short","trigger":"xe","title":"Short","content":{"text":"Short text"}},
+        {"id":"long","trigger":"xeod","title":"End-of-day update","content":{"text":"Update"}},
+        {"id":"duplicate","trigger":"xeod","title":"Another update","content":{"text":"Other"}}
+    ]}]});
+    let typing = |context: &str| Mobile::keyboard_matches(&snapshot, &json!({"mode":"typing","context":context})).unwrap();
+    assert_eq!(typing("Hello X")["matches"][0]["trigger"], "xe");
+    assert!(typing("xe")["exact"].is_null());
+    assert!(typing("xeod")["exact"].is_null());
+    assert!(typing("héxe")["matches"].as_array().unwrap().is_empty());
+    assert!(typing("hello ")["matches"].as_array().unwrap().is_empty());
+    let unique = json!({"libraries":[{"_id":"one","records":[{"id":"only","trigger":"xeod","title":"End-of-day update","content":{"text":"Update"}}]}]});
+    assert_eq!(Mobile::keyboard_matches(&unique, &json!({"mode":"typing","context":"Hello XEOD"})).unwrap()["exact"]["id"], "only");
+}
+
+#[test]
+fn keyboard_search_ranks_abbreviations_before_content_and_rejects_stale_generation() {
+    let ranked = json!({"libraries":[{"_id":"one","records":[
+        {"id":"body","trigger":"note","title":"Note","content":{"text":"hello body"}},
+        {"id":"title","trigger":"memo","title":"Hello title","content":{"text":"body"}},
+        {"id":"prefix","trigger":"helloworld","title":"Prefix","content":{"text":"body"}},
+        {"id":"exact","trigger":"hello","title":"Exact","content":{"text":"body"}}
+    ]}]});
+    let matches = Mobile::keyboard_matches(&ranked, &json!({"mode":"search","query":"hello"})).unwrap();
+    assert_eq!(matches["matches"].as_array().unwrap().iter().map(|hit| hit["id"].as_str().unwrap()).collect::<Vec<_>>(), ["exact", "prefix", "title", "body"]);
+    assert_eq!(matches["matches"][3]["preview"], "hello body");
+    let multiline = json!({"libraries":[{"_id":"one","records":[{"id":"snippet","trigger":"hi","title":"hi","content":{"text":"First line\n  second line"}}]}]});
+    assert_eq!(Mobile::keyboard_matches(&multiline, &json!({"mode":"search","query":""})).unwrap()["matches"][0]["preview"], "First line second line");
+    let fixture = Fixture::new();
+    fixture.call(json!({"action":"state"})).unwrap();
+    let snapshot = fixture.call(json!({"action":"keyboard"})).unwrap();
+    let generation = &snapshot["generation"];
+    let result = fixture.call(json!({"action":"keyboard_matches","generation":generation,"mode":"search","query":"hello"})).unwrap();
+    assert_eq!(result["matches"][0]["id"], "snippet-one");
+    assert!(fixture.call(json!({"action":"keyboard_matches","generation":"old","mode":"typing","context":"hello"})).is_err());
+}
+
+#[test]
 fn snapshot_excludes_drafts_and_revoked_libraries_and_reset_scrubs_data() {
     let fixture = Fixture::new();
     fixture.call(json!({"action":"draft","draft":{"secret":"Unsent draft"}})).unwrap();

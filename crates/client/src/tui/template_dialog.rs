@@ -41,7 +41,8 @@ impl Dialog {
                 },_=>()
             };return Ok(None)
         }
-        if (key.modifiers.contains(KeyModifiers::CONTROL)&&key.code==KeyCode::Char('s'))||key.code==KeyCode::F(4){
+        let copy_key=self.fill&&matches!(key.code,KeyCode::Char('c'|'C'))&&key.modifiers.intersects(KeyModifiers::CONTROL|KeyModifiers::SUPER|KeyModifiers::META);
+        if (key.modifiers.contains(KeyModifiers::CONTROL)&&key.code==KeyCode::Char('s'))||key.code==KeyCode::F(4)||copy_key{
 			if self.fill{return Ok(Some(Outcome::Copy{rendered:self.render(false)?,values:self.answers()}))}
             let (name,variable)=self.definition()?;let insert=key.code!=KeyCode::F(4);ensure!(insert||self.template.variables.contains_key(&name),"Insert a new variable first");return Ok(Some(Outcome::Definition{name,variable:Some(variable),insert}))
         }
@@ -76,7 +77,7 @@ impl Dialog {
             let preview=if self.fill{self.render(true).map(|result|result.steps.iter().map(|step|match step{Step::Text{text}=>text.clone(),Step::Enter=>"⏎ [Enter key]".into()}).collect::<String>())}else{self.definition().and_then(|(name,variable)|Templates::render(&serde_json::json!({"type":"template","text":format!("{{{{{name}}}}}"),"variables":{name:variable}}),BTreeMap::new(),true).map(|r|r.text))};
             frame.render_widget(Paragraph::new(preview.unwrap_or_default()).block(Block::default().borders(Borders::ALL).title("Preview · Copy omits Enter actions")).wrap(Wrap{trim:false}),parts[1]);
         }
-        frame.render_widget(Paragraph::new(format!("{}\nTab / F2 next · Ctrl+T tab character · Ctrl+S {} · F4 save settings only · Esc cancel",self.error,if self.fill{"Copy"}else{"Insert"})).wrap(Wrap{trim:false}),rows[2]);
+        frame.render_widget(Paragraph::new(format!("{}\n{}",self.error,if self.fill{"Tab / F2 next · Ctrl+T tab character · Ctrl+C Copy · Esc cancel"}else{"Tab / F2 next · Ctrl+T tab character · Ctrl+S Insert · F4 save settings only · Esc cancel"})).wrap(Wrap{trim:false}),rows[2]);
     }
 }
 
@@ -90,6 +91,14 @@ mod tests {
         dialog.inputs[0]=Dialog::text("{{date}}");
         let Some(Outcome::Copy{rendered:result,..})=dialog.event(Event::Key(KeyEvent::new(KeyCode::Char('s'),KeyModifiers::CONTROL))) else{panic!("Expected copy")};
         assert_eq!(result.text,"Hi {{date}} {{date}}");assert_eq!(result.enter_actions,1);
+    }
+    #[test] fn fill_accepts_copy_shortcuts(){
+        for modifiers in [KeyModifiers::CONTROL,KeyModifiers::SUPER,KeyModifiers::META]{
+            let mut dialog=Dialog::fill(Template{text:"Hi {{name}}".into(),variables:BTreeMap::new()}).unwrap();
+            dialog.inputs[0]=Dialog::text("Ada");
+            let Some(Outcome::Copy{rendered,..})=dialog.event(Event::Key(KeyEvent::new(KeyCode::Char('c'),modifiers)))else{panic!("Expected copy")};
+            assert_eq!(rendered.text,"Hi Ada");
+        }
     }
     #[test] fn picker_inserts_enter_as_action_and_escape_cancels(){let mut dialog=Dialog::variables(Template{text:"Hello".into(),variables:BTreeMap::new()}).unwrap();dialog.index=4;assert!(matches!(dialog.event(Event::Key(KeyEvent::new(KeyCode::Enter,KeyModifiers::NONE))),Some(Outcome::Definition{variable:None,..})));assert!(matches!(dialog.event(Event::Key(KeyEvent::new(KeyCode::Esc,KeyModifiers::NONE))),Some(Outcome::Cancel)));}
 }

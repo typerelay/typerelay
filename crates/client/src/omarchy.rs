@@ -4,8 +4,8 @@ use anyhow::{Context, Result, bail};
 use evdev::{Device, EventType, InputEvent, KeyCode, InputId, BusType, uinput::VirtualDevice};
 use fs2::FileExt;
 use std::{collections::{BTreeSet, VecDeque}, fs, io::Read, os::unix::net::UnixStream, path::PathBuf, process::Command, sync::{Arc, atomic::{AtomicBool, Ordering}}, thread, time::{Duration, Instant}};
-use typerelay_core::{Engine, Input, Expansion};
-use typerelay_client::{settings::SettingsStore, editor::Paths};
+use typerelay_core::{Engine, Input, Expansion, FeedResult};
+use typerelay_client::{settings::SettingsStore, editor::Paths, browser_lease::BrowserLease};
 
 pub struct Session;
 
@@ -191,6 +191,9 @@ impl Session {
         match code {
             KeyCode::KEY_SPACE => Input::Space,
             KeyCode::KEY_BACKSPACE => Input::Backspace,
+            KeyCode::KEY_DELETE => Input::Delete,
+            KeyCode::KEY_LEFT => Input::Left,
+            KeyCode::KEY_RIGHT => Input::Right,
             KeyCode::KEY_COMMA => Input::Character(','),
             KeyCode::KEY_SEMICOLON => Input::Character(';'),
             KeyCode::KEY_DOT => Input::Character('.'),
@@ -298,7 +301,7 @@ impl Session {
         engine.set_prefix(&settings.settings.trigger_prefix).map_err(anyhow::Error::msg)?;
         let mut pressed = BTreeSet::new();
         let mut suppressed_space = false;
-        let mut suppressed_panel_key = None;
+        let mut suppressed_key = None;
         let (panel_requests, template_tx) = typerelay_client::panel_ipc::PanelIpc::engine(running.clone())?;
         let mut input_generation = 0u64;
         let mut template_wait: Option<TemplateWait> = None;
@@ -349,7 +352,7 @@ impl Session {
             if buffered.is_empty() {
                 Self::release_stale_keys(&mut output, &mut pressed, &keys_down)?;
                 if suppressed_space && !keys_down.contains(&KeyCode::KEY_SPACE.0) { suppressed_space = false; }
-                if suppressed_panel_key.is_some_and(|key|!keys_down.contains(&key)) { suppressed_panel_key = None; }
+                if suppressed_key.is_some_and(|key|!keys_down.contains(&key)) { suppressed_key = None; }
             }
             if paste.is_none() && insertion.is_empty() && pressed.is_empty() && (buffered.is_empty() || template_wait.is_some()) && keys_down.iter().all(|key| !Self::MODIFIERS.iter().any(|modifier|modifier.0 == *key)) && let Ok(request) = panel_requests.try_recv() {
                     if template_wait.as_ref().is_none_or(|wait|request.generation==Some(wait.generation)) && Instant::now() < request.deadline && request.generation.is_none_or(|expected| expected == input_generation) && Self::target()? == Some(request.target.clone()) {
@@ -418,8 +421,8 @@ impl Session {
             while let Some(event) = buffered.pop_front() {
                 if event.event_type() != EventType::KEY { continue; }
                 let code = KeyCode(event.code());
-                if suppressed_panel_key == Some(code.0) {
-                    if event.value() == 0 { suppressed_panel_key = None; pressed.remove(&code.0); }
+                if suppressed_key == Some(code.0) {
+                    if event.value() == 0 { suppressed_key = None; pressed.remove(&code.0); }
                     continue;
                 }
                 if suppressed_space && code == KeyCode::KEY_SPACE {
@@ -429,17 +432,20 @@ impl Session {
                 if event.value() == 0 { pressed.remove(&code.0); }
                 if event.value() == 1 { pressed.insert(code.0); input_generation = input_generation.wrapping_add(1); }
                 if event.value() == 1 && panel_shortcut.as_ref().is_some_and(|(key, groups)| *key == code.0 && groups.iter().all(|group|group.iter().any(|key|pressed.contains(key))) && pressed.iter().all(|key|*key == code.0 || groups.iter().any(|group|group.contains(key)))) && typerelay_client::panel_ipc::PanelIpc::notify() {
-                    suppressed_panel_key = Some(code.0); engine.feed(Input::Cancel); target = None; continue;
+                    suppressed_key = Some(code.0); engine.feed(Input::Cancel); target = None; continue;
                 }
                 if event.value() != 0 {
                     last_input = Instant::now();
+					if BrowserLease::active() { engine.feed(Input::Cancel); target = None; output.emit(&[event])?; continue; }
                     if code == KeyCode::KEY_CAPSLOCK && event.value() == 1 { caps = !caps; }
                     if caps || Self::MODIFIERS.iter().any(|key| pressed.contains(&key.0)) {
                         engine.feed(Input::Cancel);
                     } else {
                         if context.changed(target.as_deref())? { engine.feed(Input::Cancel); target = None; }
                         if matches!(Self::input(code), Input::Character(c) if c == engine.prefix()) { target = Self::target()?; if std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some() { eprintln!("Candidate target available: {}", target.is_some()); } }
-                        let expansion = if target.is_some() { engine.feed(Self::input(code)) } else { engine.feed(Input::Cancel); None };
+                        let result = if code == KeyCode::KEY_RIGHT && event.value() == 2 { engine.feed(Input::Cancel); target = None; FeedResult::Forward } else if target.is_some() { engine.feed_event(Self::input(code)) } else { engine.feed(Input::Cancel); FeedResult::Forward };
+                        if matches!(result, FeedResult::Suppress) { suppressed_key = Some(code.0); pressed.remove(&code.0); continue; }
+                        let expansion = if let FeedResult::Expand(expansion) = result { Some(expansion) } else { None };
                         if expansion.is_some() && std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some() { eprintln!("Match found; held-key count {}", pressed.len()); }
                         if let Some(expansion) = expansion
                             && Self::target()? == target && !context.changed(target.as_deref())? {

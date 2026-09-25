@@ -57,35 +57,80 @@ describe('mobile release packaging', () => {
 	it('keeps both native keyboards aligned to platform-sized keycaps', () => {
 		const android = source('apps/mobile/android/app/src/main/java/com/typerelay/mobile/SnippetKeyboard.kt');
 		const ios = source('apps/mobile/ios/App/Keyboard/KeyboardViewController.swift');
-		assert.match(android, /setBackgroundColor\(keyboardColor\(\)\)/);
-		assert.match(android, /setTextSize\(TypedValue\.COMPLEX_UNIT_SP, if \(special\) 17f else 24f\)/);
+		assert.match(android, /setBackgroundColor\(palette\.surface\)/);
 		assert.match(android, /LinearLayout\.LayoutParams\(0, dp\(52\), weight\)/);
 		assert.match(android, /key\("⌫", true\)/);
+		assert.match(android, /special && label != "Space"/);
 		assert.match(ios, /row\.heightAnchor\.constraint\(equalToConstant: 44\)/);
 		assert.match(ios, /systemFont\(ofSize: special \? 16 : 22/);
 		assert.match(ios, /key\("⌫", special: true\)/);
 		assert.match(ios, /view\.backgroundColor = color/);
 	});
 
-	it('keeps keyboard search contextual with inset-safe layered results', () => {
+	it('keeps the Android suggestion strip and system palette visually aligned', () => {
+		const android = source('apps/mobile/android/app/src/main/java/com/typerelay/mobile/SnippetKeyboard.kt');
+		assert.match(android, /LinearLayout\.LayoutParams\(0, dp\(48\), 1f\)/);
+		assert.match(android, /LinearLayout\.LayoutParams\(dp\(64\), dp\(44\)\)/);
+		assert.match(android, /allDivider = View\(this\)/);
+		assert.match(android, /allButton\.text = "All"/);
+		assert.doesNotMatch(android, /Showing 60 of|\$matchCount matches/);
+		assert.match(android, /allButton\.background = rounded\(palette\.surface\)/);
+		assert.match(android, /allButton\.elevation = 0f/);
+		assert.match(android, /allButton\.setTextColor\(palette\.muted\)/);
+		assert.match(android, /bars\.bottom \+ dp\(22\)/);
+		assert.match(android, /Build\.VERSION\.SDK_INT >= Build\.VERSION_CODES\.S/);
+		for (const color of ['system_neutral1_900', 'system_neutral1_50', 'system_accent2_700', 'system_accent2_100']) assert.match(android, new RegExp(`android\\.R\\.color\\.${color}`));
+		assert.match(android, /isAppearanceLightNavigationBars/);
+		assert.match(android, /Color\.rgb\(40, 42, 46\)/);
+		assert.match(android, /onConfigurationChanged\(newConfig: Configuration\).*palette = keyboardPalette\(\)/);
+		assert.match(android, /KeyboardMode\.FIELD_EDITING -> editingField\?\.let \{ showFieldEditing/);
+		assert.match(android, /setTextColor\(palette\.muted\)/);
+		assert.match(android, /overlayLayer = column\(\).*visibility = View\.GONE/);
+	});
+
+	it('types into host fields and keeps searchable results beside the keys', () => {
 		const android = source('apps/mobile/android/app/src/main/java/com/typerelay/mobile/SnippetKeyboard.kt');
 		const ios = source('apps/mobile/ios/App/Keyboard/KeyboardViewController.swift');
-		for (const nativeKeyboard of [android, ios]) {
-			assert.doesNotMatch(nativeKeyboard, /button\("Libraries"\)/);
-			assert.doesNotMatch(nativeKeyboard, /button\("Back"\)/);
-		}
-		assert.match(android, /input\("Snippet search"\)\.apply \{ visibility = View\.GONE \}/);
+		const searchIcon = source('apps/mobile/android/app/src/main/res/drawable/ic_keyboard_search.xml');
+		for (const nativeKeyboard of [android, ios]) assert.match(nativeKeyboard, /keyboard_matches/);
+		assert.match(searchIcon, /<vector/);
+		assert.match(searchIcon, /strokeWidth="2\.3"/);
+		assert.match(android, /contentDescription = "Search snippets"/);
+		assert.match(android, /setColor\(palette\.special\)/);
+		assert.match(android, /showSearch\(false\)/);
+		assert.match(android, /showSearch\(true\)/);
+		assert.match(android, /query\.isEmpty\(\) && !browseAll/);
+		assert.match(android, /stripRow\.visibility = View\.GONE; searchPanel\.visibility = View\.VISIBLE/);
+		assert.match(android, /if \(blocked\).*stripRow\.visibility = View\.GONE/);
+		assert.match(android, /searchBackButton = button\("Back"\)/);
+		assert.doesNotMatch(android, /searchTitle/);
+		assert.match(android, /text = "—"/);
+		assert.match(android, /text = match\.preview/);
+		assert.match(android, /maxLines = 1; ellipsize = TextUtils\.TruncateAt\.END/);
+		assert.match(ios, /UIImage\(systemName: "magnifyingglass"\)/);
+		assert.match(ios, /showSearch\(browse: false\)/);
+		assert.match(ios, /showSearch\(browse: true\)/);
+		assert.match(ios, /query\.isEmpty && !browseAll/);
+		assert.match(ios, /searchPanel\.isHidden = false; strip\.isHidden = true/);
+		assert.match(ios, /if textDocumentProxy\.isSecureTextEntry.*strip\.isHidden = true/);
+		assert.match(ios, /searchHeader\.addArrangedSubview\(searchBack\)/);
+		assert.match(ios, /searchBack = button\("Back"\)/);
+		assert.doesNotMatch(ios, /searchTitle/);
+		assert.match(ios, /dash\.text = "—"/);
+		assert.match(ios, /preview\.numberOfLines = 1/);
+		assert.match(android, /connection\.commitText\(text, 1\)/);
+		assert.match(android, /connection\.deleteSurroundingText\(anchorFragment\.length, 0\)/);
 		assert.match(android, /WindowInsetsCompat\.Type\.navigationBars\(\) or WindowInsetsCompat\.Type\.mandatorySystemGestures\(\)/);
-		assert.match(android, /enum class KeyboardMode \{ TYPING, RESULTS, PREVIEW, FIELD_EDITING \}/);
+		assert.match(android, /enum class KeyboardMode \{ TYPING, SEARCH, PREVIEW, FIELD_EDITING \}/);
+		assert.match(android, /searchPanel\.visibility = View\.VISIBLE/);
 		assert.match(android, /resultListScroll = ScrollView/);
 		assert.match(android, /previewScroll = ScrollView/);
-		assert.doesNotMatch(android, /dp\(92\)/);
-		assert.match(ios, /queryButton = button\(""\)/);
-		assert.match(ios, /enum KeyboardMode \{ case typing, results, preview, fieldEditing \}/);
+		assert.match(ios, /textDocumentProxy\.insertText\(text\)/);
+		assert.match(ios, /textDocumentProxy\.deleteBackward\(\)/);
+		assert.match(ios, /enum KeyboardMode \{ case typing, search, preview, fieldEditing \}/);
+		assert.match(ios, /searchPanel\.isHidden = false/);
 		assert.match(ios, /resultListScroll = UIScrollView\(\)/);
 		assert.match(ios, /previewScroll = UIScrollView\(\)/);
-		assert.match(ios, /case \.results, \.preview: target = 360/);
-		assert.doesNotMatch(ios, /resultHeight: CGFloat|resultHeight =|\? 0 : 80/);
 		for (const nativeKeyboard of [android, ios]) assert.match(nativeKeyboard, /overlayFooter/);
 	});
 });

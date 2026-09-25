@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { NativeTools } from '../apps/desktop/scripts/stage-native-tools.mjs';
+import { DesktopVersion } from './desktop-version.mjs';
 
 export class SigningBridge {
 	constructor(socketPath, roots, sign) { this.path = socketPath; this.roots = roots; this.sign = sign; this.queue = Promise.resolve(); this.signed = new Set(); this.connections = new Set(); }
@@ -85,6 +86,7 @@ export class PanelRelease {
 	static buildEnvironment(environment) {
 		const result = { ...environment };
 		for (const key of Object.keys(result)) if (key === 'WINDOWS_SIGNING_PIN' || key.startsWith('BUNNY_STORAGE_PASSWORD') || key.startsWith('APPLE_')) delete result[key];
+		if (result.TAURI_SIGNING_PRIVATE_KEY) delete result.TAURI_SIGNING_PRIVATE_KEY_PATH;
 		return result;
 	}
 	static appleEnvironment(environment) {
@@ -127,7 +129,7 @@ export class PanelRelease {
 		await PanelRelease.requireCommands(['git', 'pnpm', 'cargo', 'rustup', 'tar', 'file', ...(options.mode === 'windows' ? ['cargo-xwin', 'clang', 'lld-link', 'llvm-rc', 'makensis', 'wine'] : options.mode === 'macos' ? ['security', 'codesign', 'spctl', 'xcrun', 'lipo'] : [])]);
 		if (!process.env.TAURI_SIGNING_PRIVATE_KEY) throw new Error('TAURI_SIGNING_PRIVATE_KEY is required');
 		const commit = await PanelRelease.repository();
-		const config = JSON.parse(await fs.readFile(path.join(working, 'src-tauri/tauri.conf.json'), 'utf8'));
+		const config = await DesktopVersion.config();
 		const targets = options.target === 'universal-apple-darwin' ? ['aarch64-apple-darwin', 'x86_64-apple-darwin'] : [options.target];
 		const installed = await PanelRelease.run('rustup', ['target', 'list', '--installed'], { capture: true });
 		if (targets.some(value => !installed.split('\n').includes(value))) throw new Error('Install Rust targets first: rustup target add ' + targets.join(' '));

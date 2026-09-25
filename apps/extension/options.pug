@@ -1,0 +1,55 @@
+doctype html
+html(lang="en")
+	head
+		meta(charset="utf-8")
+		meta(name="viewport" content="width=device-width, initial-scale=1")
+		title Type Relay settings
+		link(rel="stylesheet" href="options.css")
+	body
+		main
+			header
+				img(src="icon.png" alt="" width="48" height="48")
+				div
+					h1 Type Relay settings
+					p Connect your snippets and choose how typing expands them.
+			section
+				h2 Account
+				p#account-state(role="status") Checking connection…
+				p#auth-error.error(role="alert" hidden)
+				form#server-form(hidden)
+					label(for="server") Server
+					div.server-group
+						span https://
+						input#server(type="text" value="app.typerelay.com" required autocapitalize="none" spellcheck="false")
+						button#connect(type="submit") Sign in
+					button#reset-server(type="button") reset
+				div.actions
+					button#restart-connect(type="button" hidden) Start over
+					button#disconnect(type="button" hidden) Sign out
+			section
+				h2 Sync
+				p#sync-summary Sign in to sync your snippets.
+				p#last-sync
+				div.actions
+					button#sync(type="button" disabled) Sync now
+					span#sync-status(role="status")
+			section
+				h2 Trigger prefix
+				label(for="prefix") Character before a snippet abbreviation
+				select#prefix
+					option(value=";") ;
+					option(value=",") ,
+					option(value=".") .
+					option(value="/") /
+					option(value="'") '
+					option(value="[") [
+					option(value="]") ]
+					option(value="\\") \
+					option(value="`") `
+					option(value="=") =
+				p#prefix-status(role="status")
+			section
+				h2 Snippets
+				p Create and edit snippets in the Type Relay app.
+				a#edit(target="_blank" rel="noopener noreferrer") Open Type Relay
+		script(type="module" src="options.js")

@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+build = "build.rs"
 
 [[bin]]
 required-features = ["desktop"]
@@ -24,6 +25,9 @@ path = "src/yaml_helper.rs"
 default = ["desktop"]
 mobile = ["reqwest/rustls-tls-webpki-roots"]
 desktop = ["dep:clap", "dep:ctrlc", "dep:ratatui", "dep:ratatui-textarea", "dep:tui-markdown", "dep:ratatui-image"]
+
+[build-dependencies]
+serde_json = "1"
 
 [dependencies]
 typerelay-core = { path = "../core" }

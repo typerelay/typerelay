@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { PanelRelease, SigningBridge } from '../../../scripts/release-panel.mjs';
+import { DesktopVersion } from '../../../scripts/desktop-version.mjs';
 
 test('release mode requires the right host and rejects publishing/unsupported targets', () => {
 	assert.equal(PanelRelease.options(['windows', '--dry-run'], 'darwin').target, 'x86_64-pc-windows-msvc');
@@ -18,6 +19,10 @@ test('release mode requires the right host and rejects publishing/unsupported ta
 test('build children never receive the hardware PIN or publishing credentials', () => {
 	const env = PanelRelease.buildEnvironment({ PATH: '/bin', WINDOWS_SIGNING_PIN: 'fixture-pin', BUNNY_STORAGE_PASSWORD_TEST: 'fixture-storage', APPLE_PASSWORD: 'fixture-apple' });
 	assert.deepEqual(env, { PATH: '/bin' });
+});
+test('Tauri signing receives only one private key source', () => {
+	const env = PanelRelease.buildEnvironment({ TAURI_SIGNING_PRIVATE_KEY: 'fixture-key', TAURI_SIGNING_PRIVATE_KEY_PATH: '/private/key', TAURI_SIGNING_PRIVATE_KEY_PASSWORD: 'fixture-password' });
+	assert.deepEqual(env, { TAURI_SIGNING_PRIVATE_KEY: 'fixture-key', TAURI_SIGNING_PRIVATE_KEY_PASSWORD: 'fixture-password' });
 });
 test('Apple credential aliases match the existing Electron release environment', () => {
 	const env = PanelRelease.appleEnvironment({ APPLE_API_KEY: '/private/AuthKey.p8', APPLE_API_KEY_ID: 'KEYID', APPLE_API_ISSUER: 'ISSUER', WINDOWS_SIGNING_PIN: 'fixture-pin' });
@@ -75,7 +80,20 @@ test('release tooling creates signed updater artifacts for every supported platf
 	assert.match(config.plugins.updater.pubkey, /^[A-Za-z0-9+/=]+$/);
 });
 
-test('desktop release version matches both native workspaces', async () => {
-	const config=JSON.parse(await fs.readFile(path.join(PanelRelease.root,'apps/desktop/src-tauri/tauri.conf.json'),'utf8'));const rootPackage=JSON.parse(await fs.readFile(path.join(PanelRelease.root,'package.json'),'utf8'));const desktop=JSON.parse(await fs.readFile(path.join(PanelRelease.root,'apps/desktop/package.json'),'utf8'));const workspace=await fs.readFile(path.join(PanelRelease.root,'Cargo.toml'),'utf8');const panel=await fs.readFile(path.join(PanelRelease.root,'apps/desktop/src-tauri/Cargo.toml'),'utf8');
-	assert.equal(rootPackage.version,config.version);assert.equal(desktop.version,config.version);assert.match(workspace,new RegExp(`\\[workspace\\.package\\][\\s\\S]*?version = "${config.version}"`));assert.match(panel,new RegExp(`\\[package\\][\\s\\S]*?version = "${config.version}"`));
+test('desktop package version feeds Tauri and native builds', async () => {
+	const config=JSON.parse(await fs.readFile(path.join(PanelRelease.root,'apps/desktop/src-tauri/tauri.conf.json'),'utf8'));const desktop=JSON.parse(await fs.readFile(path.join(PanelRelease.root,'apps/desktop/package.json'),'utf8'));const panel=await fs.readFile(path.join(PanelRelease.root,'apps/desktop/src-tauri/Cargo.toml'),'utf8');
+	assert.equal(config.version,'../package.json');assert.equal((await DesktopVersion.config()).version,desktop.version);assert.doesNotMatch(panel,/^version = /m);
+	for(const name of ['crates/client/src/main.rs','crates/client/src/tui/main.rs','apps/desktop/src-tauri/src/main.rs'])assert.match(await fs.readFile(path.join(PanelRelease.root,name),'utf8'),/env!\("TYPERELAY_VERSION"\)/);
+	for(const name of ['crates/client/build.rs','apps/desktop/src-tauri/build.rs'])assert.match(await fs.readFile(path.join(PanelRelease.root,name),'utf8'),/DesktopVersion::emit/);
+	assert.match(await fs.readFile(path.join(PanelRelease.root,'scripts/desktop-version-build.rs'),'utf8'),/cargo:rerun-if-changed/);
+});
+
+test('changing only the desktop package version changes the release version', async () => {
+	const root=await fs.mkdtemp(path.join(os.tmpdir(),'typerelay-version-test-'));const originalRoot=DesktopVersion.root;
+	try {
+		for(const name of ['apps/desktop/package.json','apps/desktop/src-tauri/tauri.conf.json']) {const destination=path.join(root,name);await fs.mkdir(path.dirname(destination),{recursive:true});await fs.copyFile(path.join(originalRoot,name),destination);}
+		const desktopPath=path.join(root,'apps/desktop/package.json');const desktop=JSON.parse(await fs.readFile(desktopPath,'utf8'));desktop.version='9.8.7';await fs.writeFile(desktopPath,JSON.stringify(desktop,null,2)+'\n');
+		DesktopVersion.root=root;
+		assert.equal(await DesktopVersion.version(),'9.8.7');assert.equal((await DesktopVersion.config()).version,'9.8.7');
+	}finally{DesktopVersion.root=originalRoot;await fs.rm(root,{recursive:true,force:true});}
 });

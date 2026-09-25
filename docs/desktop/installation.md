@@ -15,7 +15,7 @@ The generic Linux AppImage or DEB installs only the GUI. It does not configure t
 
 ## macOS
 
-Open the DMG and install **TypeRelay.app**. The app bundles **TypeRelay TUI**, available from the menu-bar menu or **Settings → General**. Both use:
+Open the DMG and install **TypeRelay.app**. The app bundles **TypeRelay TUI**, available from **Settings → General**. Both use:
 
 ```text
 ~/Library/Application Support/TypeRelay

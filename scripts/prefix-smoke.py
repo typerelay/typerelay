@@ -26,7 +26,7 @@ class PrefixSmoke(desktop.Smoke):
             snippets = config / "snippets"
             snippets.mkdir(parents=True)
             file = snippets / "test.yml"
-            content = "matches:\n- trigger: brb\n  replace: 'Be right back.'\n"
+            content = "matches:\n- trigger: brb\n  replace: 'Be right back.'\n- trigger: efish\n  replace: 'Wrong fish.'\n- trigger: sfish\n  replace: 'Correct fish.'\n"
             file.write_text(content)
             settings = config / "settings.yml"
             settings.write_text("trigger_prefix: ','\nsync_url: ''\n")
@@ -56,7 +56,23 @@ class PrefixSmoke(desktop.Smoke):
                 self.type_keys(identity, "--overlap")
                 actual = output.read_text()
                 assert actual == "Be right back.Be right back.,brb Be right back.x", repr(actual)
-                print("PASS: prefix reload, overlapping-key expansion and following input order", flush=True)
+                identity = self.focus("TypeRelay GTK Test")
+                self.type_keys(identity, ";efish" + "\x1c" * 5 + "\x7f" + "s" + "\x1d" * 4 + " ")
+                actual = output.read_text()
+                assert actual == "Be right back.Be right back.,brb Be right back.xCorrect fish.", repr(actual)
+                identity = self.focus("TypeRelay GTK Test")
+                self.type_keys(identity, ";efish" + "\x1c" * 4 + "\b" + "s" + "\x1d" * 4 + " ")
+                actual = output.read_text()
+                assert actual == "Be right back.Be right back.,brb Be right back.xCorrect fish.Correct fish.", repr(actual)
+                identity = self.focus("TypeRelay GTK Test")
+                self.type_keys(identity, ";efish" + "\x1c" * 4 + "\b" + "s" + "\x1d" * 5 + " ")
+                actual = output.read_text()
+                assert actual == "Be right back.Be right back.,brb Be right back.xCorrect fish.Correct fish.Correct fish.", repr(actual)
+                identity = self.focus("TypeRelay GTK Test")
+                self.type_keys(identity, "Z\x1c;efish" + "\x1c" * 4 + "\b" + "s" + "\x1d" * 5 + " ")
+                actual = output.read_text()
+                assert actual == "Be right back.Be right back.,brb Be right back.xCorrect fish.Correct fish.Correct fish.Correct fish.Z", repr(actual)
+                print("PASS: prefix reload, overlapping keys, caret correction with extra Right and following text", flush=True)
             finally:
                 if client and client.poll() is None:
                     client.send_signal(signal.SIGINT)

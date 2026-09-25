@@ -24,7 +24,7 @@ TypeRelay verifies the original window before insertion. If focus cannot be rest
 - Continuous expansion listens at the physical HID event tap. Apple Screen Sharing and some VNC tools synthesize input above that tap, so panel insertion can work while typed abbreviations are not detected. Test locally or through a hardware KVM.
 - The current public package target is Apple Silicon. Universal builds are a release option only when both architectures are present and verified.
 - TypeRelay uses the clipboard briefly for insertion and restores it only while it still owns the temporary value. A clipboard state it cannot preserve causes insertion to stop; use Copy.
-- The bundled TUI opens in Terminal from the menu-bar menu or Settings and shares the same database.
+- The bundled TUI opens in Terminal from Settings and shares the same database.
 - Replacing the app with an ad-hoc or differently signed build may reset Accessibility or Input Monitoring approval.
 
 ## Windows

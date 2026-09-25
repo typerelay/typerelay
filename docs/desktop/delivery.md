@@ -7,7 +7,7 @@ Version 0.10.0 adds the shared panel and native adapters. Omarchy is installed w
 Live Omarchy verification passed:
 
 - Ctrl+Shift+Semicolon opens a floating, themed panel.
-- StatusNotifierItem Activate (the tray left-click action) opens search directly; the right-click menu exposes Sync now, Settings and Quit.
+- StatusNotifierItem Activate (the tray left-click action) opens search directly; the right-click menu exposes Sync now, Settings, Check for updates and Quit.
 - Enter inserts into the original GTK editor, Chromium text field and Foot terminal.
 - Multiline content, literal tabs and Unicode are preserved; Foot receives bracketed paste.
 - Clipboard text is restored after insertion; Escape dismisses the panel.

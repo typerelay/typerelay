@@ -7,6 +7,8 @@ description: "Use the keyboard-first TypeRelay TUI to browse libraries, search s
 
 Run `typerelay-tui` to edit the same local SQLite libraries used by the engine and desktop panel. It works offline. Normal exit prompts before discarding a draft; closing the terminal does not save unsaved changes.
 
+The library picker shows each library's active snippet count, such as `mysnippets (6)`. Its search field finds snippets across all active local libraries by title, abbreviation, or expansion. Results show the source library and a preview. Select a result and press Enter to edit it, or Ctrl+C to copy it. Copy also works while the search field has focus. Returning from the editor keeps the global query. Search inside an opened library stays limited to that library.
+
 ## Library and list controls
 
 | Key | Action |
@@ -14,10 +16,11 @@ Run `typerelay-tui` to edit the same local SQLite libraries used by the engine a
 | F1 | Open the library picker |
 | F2 | Add a snippet, or move to the next editor field |
 | Enter | Open the selected library or snippet |
-| `/` | Search abbreviations and expansion text |
+| `/` | Focus search in the library picker or current library |
 | Space | Select the current snippet |
 | Shift+Up/Down | Extend selection from its anchor |
 | Ctrl+A / Ctrl+D | Select visible matches / clear selection |
+| Ctrl+C | Copy the highlighted snippet, including when other rows are selected |
 | F3 | Move selected/current snippets to Trash |
 | F4 | Move the current library to Trash, or add an image while editing Rich text |
 | F5 | Sync now |
@@ -25,9 +28,9 @@ Run `typerelay-tui` to edit the same local SQLite libraries used by the engine a
 | F7 | Open Trash |
 | F8 | Move selected snippets, or choose a destination while editing |
 | M | Merge the selected library from the library picker |
-| Ctrl+Q / Ctrl+C | Quit |
+| Ctrl+Q | Quit |
 
-Trash actions use R to restore and E to empty eligible items. Destructive actions require confirmation. Trash retains recoverable content for 30 days.
+The toolbar's Copy button provides a mouse action. Super+C or Meta+C also copies when the terminal sends that key event to TypeRelay; a terminal that handles the shortcut itself cannot forward it. F10 remains a copy shortcut for existing users. Trash actions use R to restore and E to empty eligible items. Destructive actions require confirmation. Trash retains recoverable content for 30 days.
 
 D confirms a Trash action, M confirms a bulk move or library merge, and Enter/Escape cancels the confirmation. Left/Right scrolls a long preview. Narrow terminals wrap the toolbar without changing shortcuts.
 
@@ -41,7 +44,7 @@ Ctrl+M or F8 chooses another editable library with the same sync status. A save-
 
 ## Variables
 
-F11 opens the variable picker/settings. Ctrl+S inserts the selected variable; F4 saves settings for an existing variable without inserting a duplicate reference. F10 opens **Fill and copy**. In the fill form, Tab/F2 changes fields, Ctrl+T inserts a tab and Ctrl+S copies the result.
+F11 opens the variable picker/settings. Ctrl+S inserts the selected variable; F4 saves settings for an existing variable without inserting a duplicate reference. Copy opens **Fill and copy** when the snippet needs values. In the fill form, Tab/F2 changes fields, Ctrl+T inserts a tab and Ctrl+C copies the result.
 
 ## Concurrent changes
 

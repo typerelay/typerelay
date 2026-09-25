@@ -94,7 +94,7 @@ export class Billing {
 			Snippet.countDocuments({ account: accountId, library: { $in: activeLibraries.map(library => library._id) }, state: 'active' }).session(session || null),
 			Member.countDocuments({ account: accountId }).session(session || null),
 			Ticket.countDocuments({ account: accountId, kind: 'invite', expires: { $gt: new Date() } }).session(session || null),
-			Device.countDocuments({ account: accountId, revoked: false }).session(session || null),
+			Device.countDocuments({ account: accountId, revoked: false, client_type: { $ne: 'browser' } }).session(session || null),
 		]);
 		return { libraries: activeLibraries.length, snippets, people, invitations, machines };
 	}
@@ -111,16 +111,18 @@ export class Billing {
 		Billing.assertLimit(ctx, resource, usage[resource], increase);
 	}
 
-	static async assertDeviceEnrollment(ctx, session = null) {
+	static async assertDeviceEnrollment(ctx, session = null, client = 'typerelay-desktop') {
+		if (client === 'typerelay-browser') return;
 		if (!ctx.entitlements.limits.machines) return;
-		const count = await Device.countDocuments({ account: ctx.account, user: ctx.user, revoked: false }).session(session || null);
+		const count = await Device.countDocuments({ account: ctx.account, user: ctx.user, revoked: false, client_type: { $ne: 'browser' } }).session(session || null);
 		Billing.assertLimit(ctx, 'machines', count, 1);
 	}
 
 	static async assertDevice(ctx, device, session = null) {
+		if (device.client_type === 'browser') return;
 		if (!ctx.entitlements.limits.machines) return;
 		if (ctx.entitlements.machine_override) return;
-		const primary = await Device.findOne({ account: ctx.account, user: ctx.user, revoked: false }).sort({ createdAt: 1, _id: 1 }).select('_id').session(session || null).lean();
+		const primary = await Device.findOne({ account: ctx.account, user: ctx.user, revoked: false, client_type: { $ne: 'browser' } }).sort({ createdAt: 1, _id: 1 }).select('_id').session(session || null).lean();
 		if (!primary || String(primary._id) === String(device._id || device)) return;
 		throw Billing.error(403, 'Free allows one connected machine', 'plan_limit', { resource: 'machines', limit: 1, upgrade_url: '/#settings-subscription' });
 	}

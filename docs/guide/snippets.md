@@ -15,7 +15,7 @@ The prefix is a local setting, so the same synchronized abbreviation can use a d
 
 The web editor shows the default semicolon beside the abbreviation because the server does not know each machine’s local prefix. It is illustrative, not stored. Leading semicolons or legacy commas pasted into the field are removed. A local prefix may be one unshifted US punctuation character from: comma, semicolon, period, slash, apostrophe, left/right bracket, backslash, backtick or equals.
 
-Backspace edits the abbreviation while typing. Modifier shortcuts, pointer clicks, focus changes and unsupported input cancel the pending match instead of inserting into an uncertain target.
+Backspace, Delete and unmodified Left/Right arrows can edit within a typed abbreviation before Space. Move the caret back to the end before pressing Space to expand. After an internal correction, TypeRelay ignores one extra Right press at the end so the caret stays there; a second Right moves past the abbreviation and cancels the match. Modifier shortcuts, pointer clicks, focus changes, other moves outside the abbreviation and unsupported navigation cancel the pending match instead of inserting into an uncertain target.
 
 ## Text
 
