@@ -25,7 +25,7 @@ export class Libraries {
 		Support.assert(entry?.trigger == null || typeof entry.trigger === 'string', 'Invalid abbreviation');
 		return { trigger: Abbreviation.normalize(entry?.trigger) || null, title: entry?.title || '', content: Libraries.content(entry) };
 	}
-	static async prepared(ctx,entry){if(entry?.content?.type==='rich_text')return{...entry,content:await RichText.prepare(ctx,entry.content)};if(entry?.type==='rich_text')return{...entry,content:await RichText.prepare(ctx,{version:2,type:'rich_text',markdown:entry.replace,variables:entry.variables||{}})};return entry;}
+	static async prepared(ctx,entry,session=null){if(entry?.content?.type==='rich_text')return{...entry,content:await RichText.prepare(ctx,entry.content,session)};if(entry?.type==='rich_text')return{...entry,content:await RichText.prepare(ctx,{version:2,type:'rich_text',markdown:entry.replace,variables:entry.variables||{}},session)};return entry;}
 	static yaml(entry) { const value = Libraries.value(entry); return { trigger: value.trigger, title: value.title, replace: value.content.text, type: value.content.type === 'rich_text' ? 'plain_text' : value.content.type, language: value.content.language || 'plain_text', variables: value.content.type === 'rich_text' ? {} : (value.content.variables || {}) }; }
 	static exportEntry(entry){const value=Libraries.value(entry);if(value.content.type==='rich_text'){Support.assert(!value.content.assets.length,'Export rich text with images as a TypeRelay bundle',409);return{trigger:value.trigger,title:value.title,replace:value.content.markdown,type:'rich_text',variables:value.content.variables};}return Libraries.yaml(value);}
 	static entry(snippet) { if(snippet.content?.type==='rich_text'){const assets=Object.fromEntries((snippet.content.assets||[]).map(id=>[id,`/snippet-assets/${snippet.account}/${id}`]));return{...snippet,replace:snippet.content.markdown,rich_html:RichText.render({...snippet.content,assets}).html};}return { ...snippet, replace: snippet.content?.text }; }
@@ -62,6 +62,7 @@ export class Libraries {
 		yaml: { name: 'TypeRelay YAML', accept: '.yml,.yaml', instructions: 'Choose a TypeRelay YAML export.', beta: false },
 		snippetslab: { name: 'SnippetsLab', accept: '.json', instructions: 'In SnippetsLab, use Library → Export → JSON.', beta: false },
 		raycast: { name: 'Raycast', accept: '.json', instructions: 'Choose a Raycast snippets JSON export. Placeholders are preserved literally and marked Needs review without an abbreviation.', beta: false },
+		keyboardmaestro: { name: 'Keyboard Maestro', accept: '.kmmacros', instructions: 'Choose a Keyboard Maestro XML export. Single typing/pasting actions support text, formatting and images. Other macros are skipped; dynamic or restricted macros require review.', beta: false },
 		textexpander: { name: 'TextExpander', accept: '.csv', instructions: 'On TextExpander.com, open Import/Export → Export and download a group as CSV. Native .textexpander files are not supported.', beta: true },
 		textblaze: { name: 'Text Blaze', accept: '.json', instructions: 'Open the Text Blaze dashboard’s Import/Export page and export folders as JSON.', beta: true },
 		typeit4me: { name: 'TypeIt4Me', accept: '.typeit4me', instructions: 'Choose a .typeit4me snippet set from Finder. Beta supports recognized XML set and XML property-list layouts; binary files are not supported.', beta: true },
@@ -79,34 +80,62 @@ export class Libraries {
 		};
 		return render(document);
 	}
-	static xmlSet(source) {
-		Support.assert(typeof source === 'string', 'Choose a TypeIt4Me XML set');
+	static xmlSet(source, format = 'typeit4me') {
+		const name = Libraries.importFormats[format].name;
+		Support.assert(typeof source === 'string' && !source.startsWith('bplist'), 'Choose a ' + name + ' XML export; binary property lists are not supported');
 		// Recognize the standard plist declaration without resolving its external DTD.
 		source = source.replace(/<!DOCTYPE plist PUBLIC "-\/\/Apple(?: Computer)?\/\/DTD PLIST 1\.0\/\/EN" "https?:\/\/www\.apple\.com\/DTDs\/PropertyList-1\.0\.dtd"\s*>/g, '');
 		Support.assert(!/<!DOCTYPE|<!ENTITY/i.test(source), 'XML declarations with DTDs/entities are not supported');
-		let invalid = false;
-		const document = new DOMParser({ onError: () => { invalid = true; } }).parseFromString(source, 'application/xml');
-		Support.assert(!invalid && document.documentElement, 'Malformed TypeIt4Me XML');
+		let invalid = false; let document;
+		try { document = new DOMParser({ onError: () => { invalid = true; } }).parseFromString(source, 'application/xml'); } catch { invalid = true; }
+		Support.assert(!invalid && document?.documentElement, 'Malformed ' + name + ' XML');
 		const children = node => Array.from(node.childNodes || []).filter(child => child.nodeType === 1);
 		const decode = (node, depth = 0) => {
 			Support.assert(depth < 30, 'XML nesting is too deep');
 			if (node.tagName === 'dict') {
 				const items = children(node); const result = Object.create(null);
 				Support.assert(items.length % 2 === 0, 'Malformed property-list dictionary');
-				for (let index = 0; index < items.length; index += 2) { Support.assert(items[index].tagName === 'key', 'Invalid property-list key'); result[items[index].textContent] = decode(items[index + 1], depth + 1); }
+				for (let index = 0; index < items.length; index += 2) { Support.assert(items[index].tagName === 'key' && !Object.hasOwn(result, items[index].textContent), 'Invalid or duplicate property-list key'); result[items[index].textContent] = decode(items[index + 1], depth + 1); }
 				return result;
 			}
 			if (node.tagName === 'array') return children(node).map(child => decode(child, depth + 1));
 			if (node.tagName === 'string') return node.textContent;
+			if (node.tagName === 'data' && format === 'keyboardmaestro') return { base64: node.textContent };
 			if (node.tagName === 'true' || node.tagName === 'false') return node.tagName === 'true';
 			return null;
 		};
 		const root = document.documentElement;
 		if (root.tagName === 'plist') { const nodes = children(root); Support.assert(nodes.length === 1, 'Invalid property list'); return decode(nodes[0]); }
+		Support.assert(format !== 'keyboardmaestro', 'Choose a Keyboard Maestro XML property list');
 		Support.assert(['typeit4me', 'snippets', 'clippings'].includes(root.tagName.toLowerCase()), 'Unrecognized TypeIt4Me XML layout');
 		const records = children(root);
 		Support.assert(records.every(node => ['snippet', 'clipping'].includes(node.tagName.toLowerCase())), 'Unrecognized TypeIt4Me record layout');
 		return { name: root.getAttribute('name'), snippets: records.map(node => Object.fromEntries(children(node).map(field => [field.tagName, field.textContent]))) };
+	}
+	static keyboardMaestro(source) {
+		Support.assert(Array.isArray(source), 'Expected a Keyboard Maestro group array');
+		const groups = new Map(); const macros = new Set(); const warnings = [];
+		const restricted = item => item.IsActive === false || item.IsEnabled === false || item.Enabled === false || item.Disabled === true || (item.Activate !== undefined && item.Activate !== 'Normal') || (item.Targeting && Object.keys(item.Targeting).length > 0 && item.Targeting.Targeting !== 'All') || (item.TargetingType !== undefined && item.TargetingType !== 'Front') || (item.TargetApplication && Object.keys(item.TargetApplication).length > 0);
+		for (const row of source) {
+			Support.assert(row && typeof row.UID === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(row.UID) && typeof row.Name === 'string' && Array.isArray(row.Macros), 'Invalid Keyboard Maestro group');
+			if (!groups.has(row.UID)) groups.set(row.UID, { id: row.UID, name: row.Name, snippets: [], review: false });
+			Support.assert(groups.size <= 256, 'Import exceeds 256 libraries');
+			const group = groups.get(row.UID);
+			group.review ||= restricted(row);
+			for (const macro of row.Macros) {
+				Support.assert(macro && typeof macro.UID === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(macro.UID) && !macros.has(macro.UID) && Array.isArray(macro.Actions) && (macro.Name === undefined || typeof macro.Name === 'string') && (macro.Triggers === undefined || Array.isArray(macro.Triggers)), 'Invalid or duplicate Keyboard Maestro macro');
+				macros.add(macro.UID);
+				Support.assert(macros.size <= 1000, 'Import exceeds 1000 macros');
+				const title = macro.Name || 'Untitled macro'; const action = macro.Actions[0];
+				const reason = macro.Actions.length !== 1 ? 'expected exactly one action' : action?.MacroActionType !== 'InsertText' ? 'not a text insertion action' : !['ByTyping', 'ByPasting'].includes(action.Action) ? 'not a typing or pasting action' : null;
+				if (reason) { warnings.push('Skipped ' + group.name + ' / ' + title + ': ' + reason + '.'); continue; }
+				const triggers = macro.Triggers || []; const trigger = triggers[0]; const notes = [];
+				const ordinary = triggers.length === 1 && trigger?.MacroTriggerType === 'TypedString' && typeof trigger.TypedString === 'string' && trigger.SimulateDeletes === true && Object.keys(trigger).every(key => ['MacroTriggerType', 'TypedString', 'SimulateDeletes'].includes(key));
+				if (triggers.length && !ordinary) notes.push('Multiple or unsupported triggers/settings were not imported. No abbreviation is assigned.');
+				group.snippets.push({ id: macro.UID, title, text: action.Text, styled: action.Action === 'ByPasting' ? action.StyledText : undefined, trigger: ordinary ? trigger.TypedString : null, review: restricted(macro) || restricted(action), warnings: notes });
+			}
+		}
+		return { groups: [...groups.values()], warnings };
 	}
 	static async previewImport(format, body) {
 		Support.assert(Object.hasOwn(Libraries.importFormats, format), 'Unknown import format');
@@ -120,10 +149,12 @@ export class Libraries {
 		}
 		const filename = typeof body.filename === 'string' ? body.filename : Libraries.importFormats[format].name;
 		const name = filename.split(/[\\/]/).pop().replace(/\.[^.]+$/, '').slice(0, 85) || 'Imported snippets';
-		let groups;
+		let groups; let warnings = [];
 		if (format === 'yaml') {
 			const parsed = await Yaml.run(body.source);
 			groups = [{ name, snippets: parsed.matches }];
+		} else if (format === 'keyboardmaestro') {
+			({ groups, warnings } = Libraries.keyboardMaestro(Libraries.xmlSet(body.source, format)));
 		} else if (format === 'textexpander') {
 			Support.assert(typeof body.source === 'string', 'Choose a CSV export');
 			let records;
@@ -160,7 +191,7 @@ export class Libraries {
 				groups = [{ name: source.name || source.title || name, snippets: source.snippets || source.clippings }];
 			}
 		}
-		const entries = []; const warnings = [];
+		const entries = [];
 		Support.assert(groups.length <= 256, 'Import exceeds 256 libraries');
 		for (const [groupIndex, group] of groups.entries()) {
 			Support.assert(typeof group.name === 'string', 'Invalid library name');
@@ -169,19 +200,29 @@ export class Libraries {
 				const original = record.trigger ?? record.shortcut ?? record.abbreviation ?? record.abbr ?? null;
 				const entry = { key: groupIndex + ':' + index, folder: String(groupIndex), name: group.name.replaceAll('/', '∕').replaceAll('\\', '∖').slice(0, 85), title: record.title ?? record.name ?? record.label ?? '', original_trigger: original, trigger: Abbreviation.normalize(original) || null, warnings: [] };
 				let text = record.text ?? record.body ?? record.snippet ?? record.replace ?? record.plainText ?? record.content ?? record.clip;
+				if (format === 'keyboardmaestro') {
+					entry.key = group.id + ':' + record.id; entry.folder = group.id; entry.warnings.push(...record.warnings);
+					if (record.styled !== undefined) {
+						try { const styled = await RichText.styled(record.styled); entry.warnings.push(...styled.warnings); entry.styled = styled.html; text = Libraries.htmlText(styled.html); } catch (error) { entry.error = 'Styled text could not be imported: ' + error.message; }
+					}
+				}
 				if (record.html && format === 'textblaze') { const rich = RichText.content({ version: 2, type: 'rich_text', markdown: record.html, variables: {} }); text = rich.text; entry.content = rich; entry.warnings.push('Imported HTML as rich text; remote images are cached when the import is committed.'); }
-				if (format !== 'raycast' && typeof text === 'string' && /^\{\\rtf/i.test(text)) { const rich = RichText.content({ version: 2, type: 'rich_text', markdown: RichText.rtf(text), variables: {} }); text = rich.text; entry.content = rich; entry.warnings.push('Imported RTF as rich text; embedded images are cached when committed.'); }
-				if (typeof text !== 'string') { entry.error = 'No readable text found; images/binary content cannot be imported.'; text = ''; }
-				const dynamic = format !== 'yaml' && (/\{(?:[a-z][a-z0-9_-]*(?=[:;}])|=)/i.test(text) || /%[A-Za-z]|%\{|[⊢⊣]|\{\{|\$\|\$/.test(text) || /script|macro/i.test(String(record.type || record.kind || '')) || (format === 'raycast' && /\{(?:argument|clipboard|cursor)\b[^}]*\}/i.test(text)));
-				entry.review = dynamic;
-				if (dynamic) { entry.title = (entry.title || original || 'Imported snippet') + ' (Needs review)'; entry.trigger = null; entry.warnings.push('Unsupported commands preserved literally. No abbreviation is assigned.'); }
+				if (!['raycast', 'keyboardmaestro'].includes(format) && typeof text === 'string' && /^\{\\rtf/i.test(text)) { const rich = RichText.content({ version: 2, type: 'rich_text', markdown: RichText.rtf(text), variables: {} }); text = rich.text; entry.content = rich; entry.warnings.push('Imported RTF as rich text; embedded images are cached when committed.'); }
+				if (typeof text !== 'string') { entry.error ||= 'No readable text found; images/binary content cannot be imported.'; text = ''; }
+				const commandText = format === 'keyboardmaestro' ? text + '\n' + (record.text || '') : text;
+				const dynamic = format !== 'yaml' && (/\{(?:[a-z][a-z0-9_-]*(?=[:;}])|=)/i.test(commandText) || /%[A-Za-z]|%\{|[⊢⊣]|\{\{|\$\|\$/.test(commandText) || /script|macro/i.test(String(record.type || record.kind || '')) || (format === 'raycast' && /\{(?:argument|clipboard|cursor)\b[^}]*\}/i.test(commandText)));
+				entry.review = dynamic || (format === 'keyboardmaestro' && (record.review || group.review));
+				if (entry.review) { entry.title = (entry.title || original || 'Imported snippet') + ' (Needs review)'; entry.trigger = null; entry.warnings.push(dynamic ? 'Unsupported commands preserved literally. No abbreviation is assigned.' : 'Disabled or restricted macro; activation/targeting rules are not imported. No abbreviation is assigned.'); }
+				if (entry.styled && !dynamic && !entry.error) { try { entry.content = RichText.content({ version: 2, type: 'rich_text', markdown: entry.styled, variables: {} }); } catch (error) { entry.error = error.message; } }
+				if (entry.styled && dynamic) { if (typeof record.text === 'string' && record.text && !text.includes(record.text)) text += '\nPlain-text source:\n' + record.text; entry.warnings.push('Styled content is preserved as literal text for review; formatting and images are omitted.'); }
+				delete entry.styled;
 				entry.content ||= format === 'yaml' ? Libraries.content(record) : { version: 1, type: dynamic ? 'code' : 'plain_text', text: text.replaceAll('\r\n', '\n'), ...(dynamic ? { language: 'plain_text' } : {}) };
 				try { await Libraries.validate([{ ...entry, trigger: null }]); } catch (error) { entry.error ||= error.message; }
 				if (entry.trigger && (typeof entry.trigger !== 'string' || !/^[a-z0-9-]{1,63}$/.test(entry.trigger))) entry.trigger_error = 'Correct or clear this abbreviation before importing.';
 				entries.push(entry);
 			}
 		}
-		Support.assert(entries.length > 0, 'No snippets found; this export layout may not be supported');
+		Support.assert(entries.length > 0 || (format === 'keyboardmaestro' && warnings.length > 0), 'No snippets found; this export layout may not be supported');
 		return { entries, warnings };
 	}
 	static async snippetsLab(source) {
@@ -244,7 +285,7 @@ export class Libraries {
 	}
 	static async create(ctx, body, session) {
 		const sourceEntries = body.yaml !== undefined ? (await Yaml.run(body.yaml)).matches : (body.snippets || []);
-		const entries=[];for(const entry of sourceEntries)entries.push(await Libraries.prepared(ctx,entry));
+		const entries=[];for(const entry of sourceEntries)entries.push(await Libraries.prepared(ctx,entry,session));
 		await Libraries.validate(entries, ctx, session);
 		await Billing.assertResourceIncrease(ctx, 'libraries', 1, session);
 		await Billing.assertResourceIncrease(ctx, 'snippets', entries.length, session);
@@ -325,7 +366,7 @@ export class Libraries {
 			const server = await Snippet.findOne({ account: ctx.account, id: change.id }).session(session).lean();
 			Support.assert(!server || Support.equal(server.library, library._id), 'Snippet moved to another library; review your changes', 409);
 			Support.assert(server?.state !== 'purged', 'Snippet was permanently purged; it cannot be restored', 410);
-			const local = change.value === null ? null : Libraries.value(await Libraries.prepared(ctx,change.value), server?.content);
+			const local = change.value === null ? null : Libraries.value(await Libraries.prepared(ctx,change.value,session), server?.content);
 			if (local) await Libraries.validate([local], ctx, session);
 			if (server?.state === 'active' && library.state === 'active' && Libraries.same(server, local)) continue;
 			if (server?.state === 'trashed' && local === null) continue;
@@ -376,7 +417,7 @@ export class Libraries {
 			let position = (last?.position ?? -1) + 1;
 			for (const record of selected) {
 				const item = body.items.find(item => item.id === record.id);
-				const change = item.value === undefined ? {} : Libraries.value(await Libraries.prepared(ctx,item.value), record.content);
+				const change = item.value === undefined ? {} : Libraries.value(await Libraries.prepared(ctx,item.value,session), record.content);
 				await Snippet.updateOne({ _id: record._id }, { $set: { library: destination._id, position: position++, ...change }, $inc: { revision: 1 } }, { session, timestamps: item.value !== undefined });
 				await Conflict.updateMany({ account: ctx.account, library: source._id, snippet: record.id }, { $set: { library: destination._id } }, { session });
 			}

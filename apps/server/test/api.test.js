@@ -11,6 +11,7 @@ import { AdminAccounts } from '../services/admin_accounts.js';
 import { operations } from '../api/catalog.js';
 import spec, { ApiSchema } from '../api/openapi.js';
 import { StorageMigration } from '../services/storage_migration.js';
+import { KeyboardMaestroFixture as KM } from './fixtures/keyboardmaestro.js';
 
 class ApiFixture {
 	static server; static base; static owner; static outsider; static token; static reader; static library;
@@ -43,14 +44,16 @@ test('public authentication is separate from desktop and scope-limited; no token
 	const metadata = await (await fetch(ApiFixture.base + '/.well-known/oauth-authorization-server')).json(); assert.deepEqual(metadata.token_endpoint_auth_methods_supported, ['none', 'client_secret_post']);
 	assert.equal(Auth.oauthConfig().resource_metadata_url, new URL(Auth.mcpResource()).origin + '/.well-known/oauth-protected-resource/mcp');
 });
-test('public API advertises and accepts Raycast imports', async () => {
+for (const [name, source, key, trigger] of [
+	['raycast', [{ name: 'API Raycast', text: 'Hello from Raycast', keyword: ';raycast-api' }], '0:0', 'raycast-api'],
+	['keyboardmaestro', KM.xml([KM.group([KM.macro('keyboardmaestro-api')])]), 'group:keyboardmaestro-api', 'keyboardmaestro-api'],
+]) test('public API advertises and accepts ' + name + ' imports', async () => {
 	const format = spec.paths['/imports/{format}/preview'].post.parameters.find(parameter => parameter.name === 'format');
-	assert.ok(format.schema.enum.includes('raycast'));
-	const source = [{ name: 'API Raycast', text: 'Hello from Raycast', keyword: ';raycast-api' }];
-	const preview = await ApiFixture.request('/imports/raycast/preview', 'POST', { source });
+	assert.ok(format.schema.enum.includes(name));
+	const preview = await ApiFixture.request('/imports/' + name + '/preview', 'POST', { source });
 	assert.equal(preview.status, 200);
-	assert.equal(preview.value.entries[0].trigger, 'raycast-api');
-	const imported = await ApiFixture.request('/imports/raycast', 'POST', { operation_id: randomUUID(), source, filename: 'API Raycast.json', selected: [{ key: '0:0' }] });
+	assert.equal(preview.value.entries[0].trigger, trigger);
+	const imported = await ApiFixture.request('/imports/' + name, 'POST', { operation_id: randomUUID(), source, selected: [{ key }] });
 	assert.equal(imported.status, 200);
 });
 

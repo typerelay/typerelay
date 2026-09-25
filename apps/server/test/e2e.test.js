@@ -12,6 +12,7 @@ import { mongoose, Account, Member, User, Device, Ticket, Library, Conflict } fr
 import { Support } from '../services/support.js';
 import { Auth } from '../services/auth.js';
 import { Libraries } from '../services/libraries.js';
+import { KeyboardMaestroFixture as KM } from './fixtures/keyboardmaestro.js';
 
 class Fixture {
 	static root; static server; static actor; static account; static cookie; static csrf; static one; static two;
@@ -622,6 +623,25 @@ test('web AJAX updates only affected snippets; preserves panel, filter and multi
 	assert.equal(raycastLibrary.snippets.find(item => item.content.type === 'code').trigger, null);
 	assert.ok(dom.window.document.querySelector('#libraries [data-id="' + raycastLibrary._id + '"]'));
 	assert.equal(client.libraries.size, oldCount + 2);
+	client.request = importRequest;
+	await client.onClick({ target: dom.window.document.querySelector('[data-import-format="keyboardmaestro"]') });
+	const maestroFile = dom.window.document.querySelector('#import-file');
+	assert.equal(maestroFile.accept, '.kmmacros');
+	const maestroText = KM.xml([KM.group([KM.macro('maestro-ui'), KM.macro('review-ui', '%CurrentClipboard%'), KM.macro('complex', '', { Actions: [] }), KM.macro('bad', '', { Actions: [{ MacroActionType: 'InsertText', Action: 'ByPasting', StyledText: Buffer.from('invalid') }] })], { Name: 'UI Keyboard Maestro' })]);
+	Object.defineProperty(maestroFile, 'files', { value: [{ name: 'UI.kmmacros', size: maestroText.length, text: async () => maestroText }] });
+	await client.onClick({ target: dom.window.document.querySelector('#preview-import') });
+	assert.match(dom.window.document.querySelector('.snippetslab-results').textContent, /Skipped UI Keyboard Maestro \/ complex/);
+	assert.equal(dom.window.document.querySelector('[data-import-key="group:bad"]').disabled, true);
+	assert.equal(dom.window.document.querySelector('[data-import-trigger="group:review-ui"]').disabled, true);
+	dom.window.document.querySelector('[data-import-trigger="group:maestro-ui"]').value = 'maestro-corrected';
+	client.request = (path, ...args) => { assert.equal(path, 'import/keyboardmaestro', 'Import must not load a whole view'); return importRequest(path, ...args); };
+	await client.onSubmit({ target: dom.window.document.querySelector('#record-form'), preventDefault() {} });
+	const maestroLibrary = [...client.libraries.values()].find(item => item.name === 'UI Keyboard Maestro');
+	assert.ok(maestroLibrary); assert.equal(maestroLibrary.snippets.length, 2);
+	assert.equal(maestroLibrary.snippets.find(item => item.title === 'maestro-ui').trigger, 'maestro-corrected');
+	assert.equal(maestroLibrary.snippets.find(item => item.content.type === 'code').trigger, null);
+	assert.ok(dom.window.document.querySelector('#libraries [data-id="' + maestroLibrary._id + '"]'));
+	assert.equal(client.libraries.size, oldCount + 3);
 	assert.equal(dom.window.document.querySelector('#libraries'), list);
 	assert.equal(dom.window.document.querySelector('#editor'), panel);
 	dom.window.close();

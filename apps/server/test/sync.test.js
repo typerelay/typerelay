@@ -1,12 +1,13 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID, createHash } from 'node:crypto';
-import { mongoose, User, Account, Member, Library, Group, Device, Conflict, Snippet, MigrationBackup } from '../model/index.js';
+import { mongoose, User, Account, Member, Library, Group, Device, Conflict, Snippet, SnippetAsset, MigrationBackup } from '../model/index.js';
 import { Support, Yaml } from '../services/support.js';
 import { Libraries } from '../services/libraries.js';
 import { Auth } from '../services/auth.js';
 import { StorageMigration } from '../services/storage_migration.js';
 import { Team } from '../services/team.js';
+import { KeyboardMaestroFixture as KM } from './fixtures/keyboardmaestro.js';
 
 class Fixture {
 	static owner; static member; static admin; static outsider; static account;
@@ -488,6 +489,38 @@ test('Raycast commits selection privately, enforces review, retries and rolls ba
 	assert.equal(next.libraries[0].snippets[0].trigger, null);
 	const admin = await Fixture.user('admin', owner.account);
 	await assert.rejects(Libraries.get(admin, library._id), /not found/);
+});
+
+test('Keyboard Maestro commits rich assets atomically, enforces review and preserves selection/privacy/retries', async () => {
+	const owner = await Fixture.user('owner', (await Account.create({ name: 'Keyboard Maestro import' }))._id);
+	const rich = KM.macro('rich', '', { Actions: [{ MacroActionType: 'InsertText', Action: 'ByPasting', Text: 'Bold λ', StyledText: KM.native }] });
+	const source = KM.xml([KM.group([rich, KM.macro('token', '%CurrentClipboard%'), KM.macro('disabled', 'Disabled', { IsActive: false }), KM.macro('unselected')]), KM.group([KM.macro('second')], { UID: 'second', Name: 'Other' }), KM.group([KM.macro('skip', '', { Actions: [] })], { UID: 'empty', Name: 'Empty' })]);
+	const duplicate = { source, selected: [{ key: 'group:rich', trigger: 'same' }, { key: 'second:second', trigger: 'same' }] };
+	await assert.rejects(Libraries.mutate(owner, randomUUID(), duplicate, (ctx, session) => Libraries.commitImport(ctx, 'keyboardmaestro', duplicate, session)), /Duplicate/);
+	assert.equal(await Library.countDocuments({ account: owner.account }), 0);
+	assert.equal(await SnippetAsset.countDocuments({ account: owner.account }), 0);
+	const body = { source, selected: [{ key: 'group:rich', trigger: 'fixed' }, { key: 'group:token', trigger: 'must-not-activate' }, { key: 'group:disabled', trigger: 'also-disabled' }, { key: 'second:second', trigger: '' }] };
+	const operation = randomUUID();
+	const run = () => Libraries.mutate(owner, operation, body, (ctx, session) => Libraries.commitImport(ctx, 'keyboardmaestro', body, session));
+	const { libraries } = await run();
+	assert.equal(libraries.length, 2); assert.ok(libraries.every(library => library.shared === false));
+	assert.deepEqual(libraries.map(library => library.name), ['Imported group', 'Other']);
+	const snippet = libraries[0].snippets.find(entry => entry.title === 'rich');
+	assert.equal(snippet.trigger, 'fixed'); assert.equal(snippet.content.type, 'rich_text'); assert.equal(snippet.content.assets.length, 1);
+	assert.match(snippet.content.markdown, /typerelay-asset:/); assert.doesNotMatch(snippet.content.markdown, /data:image/);
+	assert.equal(await SnippetAsset.countDocuments({ account: owner.account }), 1);
+	assert.ok(libraries[0].snippets.filter(entry => entry.title !== 'rich').every(entry => entry.trigger === null));
+	assert.equal(libraries[0].snippets.length, 3); assert.equal(libraries[1].snippets[0].trigger, null);
+	assert.deepEqual((await run()).libraries.map(library => library._id), libraries.map(library => library._id));
+	await assert.rejects(Libraries.mutate(owner, randomUUID(), body, (ctx, session) => Libraries.commitImport(ctx, 'keyboardmaestro', body, session)), /Duplicate/);
+	assert.equal(await Library.countDocuments({ account: owner.account }), 2);
+	const cleared = { source, selected: [{ key: 'group:rich', trigger: '' }] };
+	const next = await Libraries.mutate(owner, randomUUID(), cleared, (ctx, session) => Libraries.commitImport(ctx, 'keyboardmaestro', cleared, session));
+	assert.equal(next.libraries[0].name, 'Imported group (2)'); assert.equal(next.libraries[0].snippets[0].trigger, null);
+	const admin = await Fixture.user('admin', owner.account);
+	await assert.rejects(Libraries.get(admin, libraries[0]._id), /not found/);
+	const invalid = { source: KM.xml([KM.group([KM.macro('bad', '', { Actions: [{ MacroActionType: 'InsertText', Action: 'ByPasting', StyledText: Buffer.from('invalid') }] })])]), selected: [{ key: 'group:bad' }] };
+	await assert.rejects(Libraries.mutate(owner, randomUUID(), invalid, (ctx, session) => Libraries.commitImport(ctx, 'keyboardmaestro', invalid, session)), /invalid/);
 });
 
 test('template metadata survives imports, edits, conflicts, moves and Trash', async () => {

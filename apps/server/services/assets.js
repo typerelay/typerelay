@@ -75,7 +75,7 @@ export class Assets {
 		Support.assert(addresses.length && addresses.every(item => !Assets.privateIp(item.address)), 'Remote image host is not public', 400);
 		return addresses.map(item => item.address).sort();
 	}
-	static async remote(ctx, value) {
+	static async remote(ctx, value, session = null) {
 		let url; try { url = new URL(value); } catch { Support.assert(false, 'Invalid remote image URL', 400); }
 		for (let redirects = 0; redirects <= 3; redirects++) {
 			const before = await Assets.publicHost(url);
@@ -88,7 +88,7 @@ export class Assets {
 			Support.assert(!length || length <= Assets.maximumInput, 'Remote image exceeds 5 MiB', 413);
 			const reader = response.body.getReader(); const chunks = []; let total = 0;
 			while (true) { const { done, value: chunk } = await reader.read(); if (done) break; total += chunk.length; Support.assert(total <= Assets.maximumInput, 'Remote image exceeds 5 MiB', 413); chunks.push(chunk); }
-			return Assets.put(ctx, Buffer.concat(chunks.map(chunk => Buffer.from(chunk))), url.href);
+			return Assets.put(ctx, Buffer.concat(chunks.map(chunk => Buffer.from(chunk))), url.href, session);
 		}
 		Support.assert(false, 'Remote image could not be downloaded', 422);
 	}
