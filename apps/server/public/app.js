@@ -1,3 +1,4 @@
+import { Statistics } from './statistics.js';
 import { ProductNews } from './product-updates.js';
 import { TrialCountdown } from './trial-countdown.js';
 import { TemplateEditor, TemplateFill } from './template-editor.js';
@@ -26,6 +27,7 @@ class TypeRelay {
 	searchFocus = null;
 	submit = null;
 	constructor() {
+		this.statistics = new Statistics(this);
 		this.templateEditor = new TemplateEditor(this); this.templateFill = new TemplateFill(this);
 		this.trialCountdown = new TrialCountdown(this);
 		document.querySelectorAll('.library').forEach(node => this.libraries.set(node.dataset.id, JSON.parse(node.dataset.record)));
@@ -579,7 +581,7 @@ class TypeRelay {
 		}
 		const data = button.dataset;
 		const library = this.libraries.get(this.selected);
-		if (button.dataset.copySnippet) { const library = this.libraries.get(this.selected); const entry = library.snippets.find(item => item.id === button.dataset.copySnippet); if (['template', 'rich_text'].includes(entry.content.type)) return this.templateFill.open(entry.content, async () => { const current = await this.request('library-view/' + library._id); if (!current.library.snippets.some(item => item.id === entry.id && item.revision === entry.revision)) throw new Error('Snippet changed; reopen it before copying.'); }); await navigator.clipboard.writeText(entry.replace); return this.toast('Copied'); }
+		if (button.dataset.copySnippet) { const library = this.libraries.get(this.selected); const entry = library.snippets.find(item => item.id === button.dataset.copySnippet); if (['template', 'rich_text'].includes(entry.content.type)) return this.templateFill.open(entry.content, async () => { const current = await this.request('library-view/' + library._id); if (!current.library.snippets.some(item => item.id === entry.id && item.revision === entry.revision)) throw new Error('Snippet changed; reopen it before copying.'); }, (text, characters) => this.statistics.record(library, entry, text, characters)); await navigator.clipboard.writeText(entry.replace); this.statistics.record(library, entry, entry.replace); return this.toast('Copied'); }
 		if (button.dataset.importPage) { const controls = button.closest('[data-import-pagination]'); this.renderImportPage(Number(controls.dataset.page) + (button.dataset.importPage === 'next' ? 1 : -1)); return; }
 		if (button.dataset.importFormat) { this.importSource = null; this.importFormat = button.dataset.importFormat; return this.form('import', { format: this.importFormat }, async () => {
 			const selected = [...document.querySelectorAll('[data-import-key]:checked')].map(input => ({ key: input.dataset.importKey, trigger: Abbreviation.normalize(document.querySelector('[data-import-trigger="' + input.dataset.importKey + '"]').value) }));

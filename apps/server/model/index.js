@@ -130,3 +130,12 @@ productUpdateSchema.index({ active: 1, published_at: -1, _id: -1 });
 productUpdateSchema.index({ active: 1, show_modal: 1, published_at: -1, _id: -1 });
 
 export const ProductUpdate = mongoose.model('ProductUpdate', productUpdateSchema);
+
+const usageEventSchema = new mongoose.Schema({ account: { type: objectid, required: true }, user: { type: objectid, required: true }, event_id: { type: String, required: true }, library: { type: objectid, required: true }, snippet: { type: String, required: true }, action: { type: String, enum: ['copy', 'insert'], required: true }, client: String, occurred_at: { type: Date, required: true }, characters: { type: Number, required: true }, shared: Boolean }, { timestamps: true });
+usageEventSchema.index({ account: 1, user: 1, event_id: 1 }, { unique: true });
+usageEventSchema.index({ account: 1, user: 1, occurred_at: 1 });
+usageEventSchema.index({ account: 1, shared: 1, occurred_at: 1 });
+export const UsageEvent = mongoose.model('UsageEvent', usageEventSchema);
+const statisticsPreferenceSchema = new mongoose.Schema({ account: { type: objectid, required: true }, user: { type: objectid, default: null }, wpm: { type: Number, default: 50 }, hourly_rate: { type: Number, default: 30 }, currency: { type: String, default: 'USD' } });
+statisticsPreferenceSchema.index({ account: 1, user: 1 }, { unique: true });
+export const StatisticsPreference = mongoose.model('StatisticsPreference', statisticsPreferenceSchema);

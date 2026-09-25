@@ -233,3 +233,15 @@ fn mobile_sync_retries_a_lost_server_response_without_persisting_credentials() {
     assert!(Database::open(fixture.private.path()).unwrap().pending().unwrap().is_empty());
     assert!(!fixture.private.path().join("sync/credentials.json").exists());
 }
+
+#[test]
+fn keyboard_usage_is_durable_content_free_and_generation_bound() {
+    let fixture=Fixture::new(); let db=Database::open(fixture.private.path()).unwrap();
+    let identity=json!({"server":"https://example.test","account":"account","user":"user"});db.set_meta("statistics_identity",&identity).unwrap();
+    let state=fixture.call(json!({"action":"state"})).unwrap();
+    fixture.call(json!({"action":"keyboard_usage","generation":state["generation"],"library":fixture.library,"id":"snippet-one","kind":"insert","characters":12})).unwrap();
+    let files=fs::read_dir(fixture.shared.path().join("usage")).unwrap().collect::<std::io::Result<Vec<_>>>().unwrap();assert_eq!(files.len(),1);
+    let value:Value=serde_json::from_slice(&fs::read(files[0].path()).unwrap()).unwrap();assert_eq!(value["identity"],identity);assert_eq!(value["event"]["characters"],12);assert!(value["event"].get("text").is_none());
+    assert!(fixture.call(json!({"action":"keyboard_usage","generation":"stale","library":fixture.library,"id":"snippet-one","kind":"insert","characters":12})).is_err());
+    fixture.call(json!({"action":"reset"})).unwrap();assert!(!fixture.shared.path().join("usage").exists());
+}

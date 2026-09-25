@@ -291,6 +291,9 @@ class SnippetKeyboard: InputMethodService() {
 		candidateStrip.addView(field, LinearLayout.LayoutParams(dp(220), dp(44))); activeField = field; field.requestFocus()
 		allButton.visibility = View.VISIBLE; allButton.text = "Done"; allButton.setOnClickListener { showPreview() }
 	}
+	private fun recordUsage(characters: Int) {
+		try { NativeCore.execute(this, JSONObject().put("action", "keyboard_usage").put("generation", snapshot.getString("generation")).put("library", selectedLibrary).put("id", selected!!.getString("id")).put("kind", "insert").put("characters", characters.coerceAtLeast(0)), true) } catch (_: Exception) { }
+	}
 	private fun insert(rich: Boolean) {
 		try {
 			val rendered = render(false); if (rendered.optInt("enter_actions") != 0 || blocked) return
@@ -300,6 +303,7 @@ class SnippetKeyboard: InputMethodService() {
 			connection.beginBatchEdit()
 			try { if (anchorFragment.isNotEmpty() && !connection.deleteSurroundingText(anchorFragment.length, 0)) throw Exception("The abbreviation could not be replaced."); if (!connection.commitText(text, 1)) { if (anchorFragment.isNotEmpty()) connection.commitText(anchorFragment, 1); throw Exception("This field cannot accept the snippet.") } }
 			finally { connection.endBatchEdit() }
+			recordUsage(rendered.optInt("characters", rendered.getString("text").codePointCount(0, rendered.getString("text").length)) - anchorFragment.codePointCount(0, anchorFragment.length))
 			selected = null; values = JSONObject(); showTyping()
 		} catch (error: Exception) { showPreview(error.message ?: "The snippet could not be inserted.") }
 	}
@@ -317,6 +321,7 @@ class SnippetKeyboard: InputMethodService() {
 			connection.beginBatchEdit()
 			try { if (anchorFragment.isNotEmpty() && !connection.deleteSurroundingText(anchorFragment.length, 0)) throw Exception("The abbreviation could not be replaced."); if (!connection.commitContent(InputContentInfo(uri, ClipDescription("TypeRelay image", arrayOf(mime)), null), InputConnection.INPUT_CONTENT_GRANT_READ_URI_PERMISSION, null)) { if (anchorFragment.isNotEmpty()) connection.commitText(anchorFragment, 1); throw Exception("Image insertion was declined. Insert plain text instead.") } }
 			finally { connection.endBatchEdit() }
+			recordUsage(0)
 			selected = null; values = JSONObject(); showTyping()
 		} catch (error: Exception) { showPreview(error.message ?: "The image could not be inserted.") }
 	}

@@ -19,6 +19,23 @@ impl Mobile {
             ensure!(snapshot["generation"] == request["generation"], "Snippets changed; search again");
             return Self::keyboard_matches(&snapshot, request);
         }
+        if action == "keyboard_usage" {
+            let snapshot: Value = serde_json::from_slice(&fs::read(shared.join("keyboard.json"))?)?;
+            ensure!(snapshot["generation"] == request["generation"], "Snippets changed");
+            let identity = &snapshot["statistics_identity"];
+            if !identity["user"].is_string() { return Ok(json!({})); }
+            let library = snapshot["libraries"].as_array().context("Invalid snapshot")?.iter().find(|library| library["_id"] == request["library"]).context("Library unavailable")?;
+            if library["synced"] != true { return Ok(json!({})); }
+            ensure!(library["records"].as_array().context("Invalid library")?.iter().any(|record| record["id"] == request["id"]), "Snippet unavailable");
+            ensure!(matches!(request["kind"].as_str(), Some("copy" | "insert")), "Invalid usage action");
+            let characters = request["characters"].as_u64().context("Missing character count")?;
+            let client = if cfg!(target_os="ios") { "ios" } else if cfg!(target_os="android") { "android" } else { "mobile" };
+            let event = Database::usage_event(Self::text(request,"library")?,Self::text(request,"id")?,library["shared"]==true,Self::text(request,"kind")?,client,characters as usize);
+            let id = event["event_id"].as_str().context("Missing usage ID")?;
+            fs::create_dir_all(shared.join("usage"))?;
+            Paths::atomic_write(&shared.join("usage").join(id), &serde_json::to_vec(&json!({"identity":identity,"event":event}))?, false)?;
+            return Ok(json!({}));
+        }
         if action == "keyboard_render" {
             let snapshot: Value = serde_json::from_slice(&fs::read(shared.join("keyboard.json"))?)?;
             ensure!(snapshot["generation"] == request["generation"], "Snippets changed; select again");
@@ -36,6 +53,7 @@ impl Mobile {
         if action == "reset" {
             // Revoke keyboard visibility first, even if private-data removal subsequently fails.
             Paths::atomic_write(&shared.join("keyboard.json"), br#"{"generation":"signed-out","libraries":[]}"#, false)?;
+            if shared.join("usage").exists() { fs::remove_dir_all(shared.join("usage"))?; }
             if shared.join("assets").exists() { fs::remove_dir_all(shared.join("assets"))?; }
             if directory.exists() { fs::remove_dir_all(directory)?; }
             return Ok(json!({}));
@@ -113,6 +131,9 @@ impl Mobile {
                 result
             }
             "sync" => {
+                if shared.join("usage").exists() {
+                    for file in fs::read_dir(shared.join("usage"))? { let file = file?; if !file.file_type()?.is_file() || file.file_name().to_string_lossy().contains('.') { continue; } let value: Value = serde_json::from_slice(&fs::read(file.path())?)?; db.queue_usage(&value["identity"], &value["event"])?; fs::remove_file(file.path())?; }
+                }
                 let server = Self::text(request, "server")?;
                 let mut credentials = Credentials { server: server.into(), access_token: Self::text(request, "access_token")?.into(), refresh_token: String::new(), account:None, device:None };
                 let sync = Sync::new(directory.to_owned(), directory.to_owned())?;
@@ -211,8 +232,10 @@ impl Mobile {
             if library["state"] != "active" || library["permissions"]["read"] != true { continue; }
             let id = library["_id"].as_str().context("Missing library ID")?;
             let file = db.editor(library["name"].as_str().context("Missing name")?)?;
+            let synced=db.synced(id)?;
             library["records"] = json!(db.effective_records(id)?.into_iter().filter(|record| record["state"] == "active").map(|mut record| { record["abbreviation_collision"]=json!(collisions.contains(record["effective_trigger"].as_str().unwrap_or(""))); record }).collect::<Vec<_>>());
             library["editor_revision"] = json!(file.revision);
+            library["synced"] = json!(synced);
             libraries.push(library);
         }
         let snapshot_libraries = libraries.iter().cloned().map(|mut library| { library.as_object_mut().unwrap().remove("editor_revision"); library }).collect::<Vec<_>>();
@@ -234,7 +257,7 @@ impl Mobile {
                 }
             }
         }
-        Paths::atomic_write(&shared.join("keyboard.json"), &serde_json::to_vec(&json!({"generation":state["generation"],"libraries":state["libraries"]}))?, false)?;
+        Paths::atomic_write(&shared.join("keyboard.json"), &serde_json::to_vec(&json!({"generation":state["generation"],"libraries":state["libraries"],"statistics_identity":db.meta("statistics_identity")?}))?, false)?;
         for file in fs::read_dir(shared.join("assets"))? { let file = file?; if !referenced.contains(&file.file_name().to_string_lossy().to_string()) && file.file_type()?.is_file() { fs::remove_file(file.path())?; } }
         Ok(())
     }

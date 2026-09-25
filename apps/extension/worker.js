@@ -1,8 +1,10 @@
 import { Runtime } from './runtime.js';
+import { Usage } from './usage.js';
 
 let origin = 'https://app.typerelay.com';
 const originReady = chrome.storage.local.get('origin').then(data => { origin = data.origin || origin; });
 const client = 'typerelay-browser';
+const usage = new Usage(path => request(path.path, path.options), () => origin);
 const callbackPath = '/oauth/browser-callback';
 const assetPath = id => `/api/v2/assets/${id}`;
 let refreshJob;
@@ -15,7 +17,7 @@ const bridgeReplies = new Map();
 const base64 = bytes => btoa(String.fromCharCode(...bytes)).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
 
 async function clear() {
-	await chrome.storage.local.remove(['tokens', 'items', 'cursor', 'account', 'lastSync']);
+	await chrome.storage.local.remove(['tokens', 'items', 'cursor', 'account', 'lastSync', 'statisticsIdentity']);
 	await caches.delete('typerelay-assets-v1');
 }
 
@@ -102,10 +104,11 @@ async function sync() {
 		if (!await cache.match(key)) await cache.put(key, await request(assetPath(id)));
 	}
 	const overrides = new Map((snapshot.personal_abbreviations || []).map(row => [row.snippet, row.trigger]));
-	const items = snapshot.libraries.filter(library => library.state === 'active').flatMap(library => library.snippets.filter(snippet => snippet.state === 'active').map(snippet => ({ id: snippet.id, trigger: library.shared ? (overrides.get(snippet.id) ?? snippet.trigger) : snippet.trigger, title: snippet.title, library: library.name, content: snippet.content })));
+	const items = snapshot.libraries.filter(library => library.state === 'active').flatMap(library => library.snippets.filter(snippet => snippet.state === 'active').map(snippet => ({ id: snippet.id, trigger: library.shared ? (overrides.get(snippet.id) ?? snippet.trigger) : snippet.trigger, title: snippet.title, library: library.name, library_id: library._id, shared: library.shared === true, content: snippet.content })));
 	const counts = new Map(); for (const item of items) if (item.trigger) counts.set(item.trigger, (counts.get(item.trigger) || 0) + 1);
 	for (const item of items) item.abbreviation_collision = (counts.get(item.trigger) || 0) > 1;
-	await chrome.storage.local.set({ items, cursor: snapshot.cursor, lastSync: Date.now() });
+	await chrome.storage.local.set({ items, cursor: snapshot.cursor, lastSync: Date.now(), statisticsIdentity: snapshot.statistics_identity ? { server: origin, account: snapshot.statistics_identity.account, user: snapshot.statistics_identity.user } : null });
+	await usage.flush().catch(() => undefined);
 	for (const key of await cache.keys()) if (!ids.has(key.url.split('/').at(-1))) await cache.delete(key);
 	await chrome.storage.session.remove('browserAuthError');
 	return { count: items.length, cursor: snapshot.cursor };
@@ -135,7 +138,8 @@ async function prepared(id, values, preview) {
 	const { items = [] } = await chrome.storage.local.get('items');
 	const item = items.find(row => row.id === id);
 	if (!item) throw new Error('Snippet no longer available');
-	return { item, rendered: await render(item, values, preview) };
+	const { statisticsIdentity } = await chrome.storage.local.get("statisticsIdentity");
+	return { item, rendered: await render(item, values, preview), statisticsIdentity };
 }
 
 async function claim(active = true) {
@@ -194,6 +198,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
 			}
 			case 'prefix': { if (!",;./'[]\\`=".includes(message.value) || message.value.length !== 1) throw new Error('Invalid prefix'); await chrome.storage.local.set({ prefix: message.value }); return { prefix: message.value }; }
 			case 'match': return Runtime.match(message.before, message.prefix, message.triggers);
+			case 'usage': return usage.record(message.event);
 			case 'prepare': return prepared(message.id, message.values || {}, !!message.preview);
 			case 'claim': return { verified: sender.tab?.url && new URL(sender.tab.url).hostname === 'docs.google.com' ? false : await claim() };
 			default: throw new Error('Unknown request');

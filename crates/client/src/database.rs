@@ -20,6 +20,7 @@ impl Database {
             CREATE TABLE IF NOT EXISTS departures(library TEXT,id TEXT,PRIMARY KEY(library,id));
             CREATE TABLE IF NOT EXISTS base_libraries(id TEXT PRIMARY KEY,data TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS base_snippets(id TEXT PRIMARY KEY,library TEXT NOT NULL,data TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS usage_events(id TEXT PRIMARY KEY,identity TEXT NOT NULL,event TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS outbox(seq INTEGER PRIMARY KEY AUTOINCREMENT,operation TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS recovery(id TEXT PRIMARY KEY,library TEXT,snippet TEXT,data TEXT NOT NULL);
@@ -34,6 +35,19 @@ impl Database {
         self.connection.query_row("SELECT value FROM meta WHERE key=?1", [key], |row| row.get::<_, String>(0)).optional()?.map(|text| serde_json::from_str(&text).map_err(Into::into)).transpose()
     }
     pub fn set_meta(&self, key: &str, value: &Value) -> Result<()> { self.connection.execute("INSERT INTO meta(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![key, value.to_string()])?; Ok(()) }
+    pub fn usage(&self, library: &str, snippet: &str, action: &str, client: &str, characters: usize) -> Result<()> {
+        if !self.synced(library)? { return Ok(()); }
+        let Some(identity) = self.meta("statistics_identity")?.filter(|value| value["user"].is_string()) else { return Ok(()); };
+        let event = Self::usage_event(library, snippet, self.library(library)?["shared"]==true, action, client, characters);
+        self.queue_usage(&identity, &event)
+    }
+    pub fn usage_event(library: &str, snippet: &str, shared: bool, action: &str, client: &str, characters: usize) -> Value { json!({"event_id":Uuid::new_v4().to_string(),"library":library,"snippet":snippet,"action":action,"client":client,"occurred_at":Utc::now().to_rfc3339(),"characters":characters,"shared":shared}) }
+    pub fn queue_usage(&self, identity: &Value, event: &Value) -> Result<()> { self.connection.execute("INSERT OR IGNORE INTO usage_events(id,identity,event) VALUES(?1,?2,?3)", params![event["event_id"].as_str().context("Missing usage ID")?, identity.to_string(), event.to_string()])?; Ok(()) }
+    pub fn pending_usage(&self, identity: &Value) -> Result<Vec<Value>> {
+        let mut statement = self.connection.prepare("SELECT event FROM usage_events WHERE identity=?1 ORDER BY rowid LIMIT 100")?;
+        statement.query_map([identity.to_string()], |row| row.get::<_, String>(0))?.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
+    }
+    pub fn acknowledge_usage(&self, ids: &[Value]) -> Result<()> { for id in ids { self.connection.execute("DELETE FROM usage_events WHERE id=?1", [id.as_str().context("Invalid usage acknowledgment")?])?; } Ok(()) }
     pub fn libraries(&self) -> Result<Vec<Value>> {
         let mut statement = self.connection.prepare("SELECT data FROM libraries ORDER BY name,id")?;
         statement.query_map([], |row| row.get::<_, String>(0))?.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
@@ -119,7 +133,7 @@ impl Database {
         ensure!(count <= 256 && total <= 8 * 1048576, "Active library limits exceeded");
         let mut snapshot = Bridge::validate(&entries)?;
         for library in self.libraries()?.iter().filter(|library| library["state"] == "active") {
-            for record in self.effective_records(library["_id"].as_str().unwrap())?.iter().filter(|record|record["state"] == "active" && !collisions.contains(record["effective_trigger"].as_str().unwrap_or("")) && matches!(record["content"]["type"].as_str(),Some("template")|Some("rich_text"))) {
+            for record in self.effective_records(library["_id"].as_str().unwrap())?.iter().filter(|record|record["state"] == "active" && !collisions.contains(record["effective_trigger"].as_str().unwrap_or(""))) {
 				for asset in record["content"]["assets"].as_array().into_iter().flatten(){let exists:bool=self.connection.query_row("SELECT EXISTS(SELECT 1 FROM assets WHERE id=?1)",[asset.as_str().unwrap_or("")],|row|row.get(0))?;ensure!(exists,"Rich text image is not available locally");}
 				snapshot.identify(record["effective_trigger"].as_str().unwrap_or_default(), typerelay_core::Identity { id: record["id"].as_str().context("Missing ID")?.into(), library: library["_id"].as_str().unwrap().into(), revision: record["revision"].as_i64().context("Missing revision")? });
 			}
@@ -1092,5 +1106,20 @@ mod tests {
     }
 	#[test]
 	fn rich_text_assets_and_bundle_round_trip_without_inline_binary(){let source=tempfile::tempdir().unwrap();let db=Database::open(source.path()).unwrap();let png=base64::engine::general_purpose::STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=").unwrap();use base64::Engine as _;let id=format!("{:x}",sha2::Sha256::digest(&png));use sha2::Digest as _;let metadata=json!({"id":id.clone(),"mime_type":"image/png","size":png.len(),"width":1,"height":1,"animated":false,"source_urls":[]});db.put_asset(&metadata,&png,false).unwrap();let file=db.create("Rich").unwrap();let markdown=format!("# Hello\n\n<img src=\"typerelay-asset:{id}\" alt=\"dot\">");let entry=Match{trigger:"rich".into(),replace:markdown.clone(),kind:"rich_text".into(),..Default::default()};db.edit(&file,None,Some(entry)).unwrap();let bundle=source.path().join("rich.typerelay.zip");db.export("Rich",&bundle).unwrap();let destination=tempfile::tempdir().unwrap();let target=Database::open(destination.path()).unwrap();let imported=target.import_bundle("Imported",&bundle).unwrap();assert_eq!(imported.entries[0].replace,markdown);assert!(target.asset(&id).unwrap().is_some());assert!(std::fs::metadata(bundle).unwrap().len()<100_000);}
+
+    #[test]
+    fn usage_queue_survives_restart_and_isolates_accounts() {
+        let root=tempfile::tempdir().unwrap();
+        let identity=json!({"server":"https://example.test","account":"one","user":"owner"});
+        let event=Database::usage_event("111111111111111111111111","snippet",true,"insert","desktop",42);
+        { let db=Database::open(root.path()).unwrap(); db.queue_usage(&identity,&event).unwrap(); db.queue_usage(&identity,&event).unwrap(); }
+        let db=Database::open(root.path()).unwrap();
+        assert_eq!(db.pending_usage(&identity).unwrap(),vec![event.clone()]);
+        assert!(db.pending_usage(&json!({"server":"https://other.test","account":"one","user":"owner"})).unwrap().is_empty());
+        assert!(db.pending_usage(&json!({"server":"https://example.test","account":"one","user":"other"})).unwrap().is_empty());
+        db.acknowledge_usage(&[event["event_id"].clone()]).unwrap();
+        assert!(db.pending_usage(&identity).unwrap().is_empty());
+        let file=db.create("Local").unwrap(); db.set_meta("statistics_identity",&identity).unwrap(); db.usage(&file.id,"snippet","copy","terminal",40).unwrap(); assert!(db.pending_usage(&identity).unwrap().is_empty());
+    }
 
 }

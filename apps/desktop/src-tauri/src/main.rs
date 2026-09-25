@@ -118,9 +118,10 @@ impl Runtime {
 				let state=app.state::<Runtime>();if state.busy.load(Ordering::SeqCst)||state.prompting.load(Ordering::SeqCst){#[cfg(target_os="windows")]platform::paste(&target,0,Some(typerelay_client::clipboard_payload::ClipboardPayload::text(" ".into())))?;return Ok(());}
                 let prompt_app=app.clone();let main_app=prompt_app.clone();let prompt_target=target.clone();prompt_app.run_on_main_thread(move||{let state=main_app.state::<Runtime>();*state.target.lock().unwrap()=Some(prompt_target);*state.erase.lock().unwrap()=expansion.erase;*state.prompt_hit.lock().unwrap()=Some(hit);state.prompting.store(true,Ordering::SeqCst);Runtime::open(&main_app,false);})?;return Ok(());
             }
-			let directory=app.state::<Runtime>().root.join("snippets");let steps=Panel::steps_at(&directory,&hit,Default::default(),false,typerelay_client::templates::Templates::clock())?;let mut erase=expansion.erase;
+			let directory=app.state::<Runtime>().root.join("snippets");let steps=Panel::steps_at(&directory,&hit,Default::default(),false,typerelay_client::templates::Templates::clock())?;let characters=Panel::usage_characters(&steps,expansion.erase);let mut erase=expansion.erase;
 			for step in steps {Panel::content(&directory,&hit)?;platform::paste(&target,std::mem::take(&mut erase),match step{typerelay_client::clipboard_payload::ClipboardStep::Payload(payload)=>Some(payload),typerelay_client::clipboard_payload::ClipboardStep::Enter=>None})?;}
-		}else{platform::paste(&target,expansion.erase,Some(typerelay_client::clipboard_payload::ClipboardPayload::text(expansion.text)))?;}
+            Panel::record_usage(&directory,&hit,"insert","desktop",characters);
+		}else{let characters=expansion.text.chars().count().saturating_sub(expansion.erase);let identity=expansion.identity;platform::paste(&target,expansion.erase,Some(typerelay_client::clipboard_payload::ClipboardPayload::text(expansion.text)))?;if let Some(identity)=identity { let hit=Hit{id:identity.id,library:identity.library,revision:identity.revision,library_name:String::new(),title:String::new(),abbreviation:String::new(),preview:String::new()};Panel::record_usage(&app.state::<Runtime>().root.join("snippets"),&hit,"insert","desktop",characters); }}
         Ok(())})();
         #[cfg(target_os="macos")]
         if !prompted {let replay=deferred.finish(&target).map(|_|());return result.and(replay);}
@@ -218,7 +219,7 @@ async fn insert(app:tauri::AppHandle,hit:Hit,values:Option<std::collections::BTr
         #[cfg(target_os="linux")]
 		{ let _=steps; typerelay_client::panel_ipc::PanelIpc::insert(typerelay_client::panel_ipc::Request{hit,values,generation:None,clock:Some(clock),erase:0,prepare:false,target:target.address.clone(),created_ms:std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis()})?; }
         #[cfg(not(target_os="linux"))]
-		{ let mut erase=erase;for step in steps { Panel::content(&directory,&hit)?; platform::paste(&target,std::mem::take(&mut erase),match step { typerelay_client::clipboard_payload::ClipboardStep::Payload(payload)=>Some(payload),typerelay_client::clipboard_payload::ClipboardStep::Enter=>None })?; } }
+		{ let characters=Panel::usage_characters(&steps,erase);let mut erase=erase;for step in steps { Panel::content(&directory,&hit)?; platform::paste(&target,std::mem::take(&mut erase),match step { typerelay_client::clipboard_payload::ClipboardStep::Payload(payload)=>Some(payload),typerelay_client::clipboard_payload::ClipboardStep::Enter=>None })?; } Panel::record_usage(&directory,&hit,"insert","desktop",characters); }
         Ok(())
     }).await.map_err(|e|e.to_string()).and_then(|r|r.map_err(|e|e.to_string()));
     app.state::<Runtime>().busy.store(false,Ordering::SeqCst);
@@ -229,7 +230,7 @@ async fn insert(app:tauri::AppHandle,hit:Hit,values:Option<std::collections::BTr
 #[tauri::command]
 async fn copy_snippet(app:tauri::AppHandle,hit:Hit,values:Option<std::collections::BTreeMap<String,String>>)->std::result::Result<(),String> {
     let directory=app.state::<Runtime>().root.join("snippets");
-	 tauri::async_runtime::spawn_blocking(move ||->Result<()>{let content=Panel::content(&directory,&hit)?;if content["type"]=="rich_text"{let(_,payload)=Panel::rich_payload(&directory,&content,values.unwrap_or_default(),false)?;platform::copy_payload(payload)}else{Panel::render(&directory,&hit,values.unwrap_or_default(),false).and_then(|rendered|platform::copy(rendered.text))}}).await.map_err(|e|e.to_string())?.map_err(|e|e.to_string())
+	 tauri::async_runtime::spawn_blocking(move ||->Result<()>{let content=Panel::content(&directory,&hit)?;if content["type"]=="rich_text"{let(rendered,payload)=Panel::rich_payload(&directory,&content,values.unwrap_or_default(),false)?;platform::copy_payload(payload)?;Panel::record_usage(&directory,&hit,"copy","desktop",rendered.characters);Ok(())}else{let rendered=Panel::render(&directory,&hit,values.unwrap_or_default(),false)?;let characters=rendered.text.chars().count();platform::copy(rendered.text)?;Panel::record_usage(&directory,&hit,"copy","desktop",characters);Ok(())}}).await.map_err(|e|e.to_string())?.map_err(|e|e.to_string())
 }
 #[tauri::command]
 async fn prepare_template(app:tauri::AppHandle,hit:Hit,values:Option<std::collections::BTreeMap<String,String>>)->std::result::Result<Value,String> {

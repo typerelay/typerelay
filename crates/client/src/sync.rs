@@ -203,6 +203,9 @@ impl Sync {
         let cursor = if db.pending()?.is_empty() && db.meta("sync_protocol")? == Some(json!(6)) { db.meta("cursor")?.and_then(|value| value.as_u64()).unwrap_or(0) } else { 0 };
         let response = self.request(credentials, reqwest::Method::GET, &format!("sync?cursor={cursor}"), None)?;
         ensure!(response["protocol"] == 6, "Server upgrade required: sync protocol 6");
+        let usage_identity = response.get("statistics_identity").filter(|value| value["user"].is_string() && value["account"].is_string()).map(|value| json!({"server":credentials.server,"account":value["account"],"user":value["user"]}));
+        if let Some(identity) = &usage_identity { db.set_meta("statistics_identity", identity)?; } else { db.set_meta("statistics_identity", &Value::Null)?; }
+
 		db.reconcile_detached(&response,&credentials.server,credentials.account.as_deref())?;
 		self.download_assets(credentials,&db,&response)?;
         db.apply(&response, None)?;
@@ -231,6 +234,15 @@ impl Sync {
         }
         let cursor = if db.pending()?.is_empty() && db.meta("sync_protocol")? == Some(json!(6)) { db.meta("cursor")?.and_then(|value| value.as_u64()).unwrap_or(0) } else { 0 };
 		let response=self.request(credentials,reqwest::Method::GET,&format!("sync?cursor={cursor}"),None)?;self.download_assets(credentials,&db,&response)?;db.apply(&response,None)?;
+        if let Some(identity) = usage_identity {
+            loop {
+                let events = db.pending_usage(&identity)?; if events.is_empty() { break; }
+                match self.request(credentials, reqwest::Method::POST, "statistics/events", Some(&json!({"identity":identity,"events":events}))) {
+                    Ok(result) => { let ids: Vec<Value> = ["accepted", "discarded"].iter().flat_map(|key| result[key].as_array().into_iter().flatten().cloned()).collect(); if ids.is_empty() { break; } db.acknowledge_usage(&ids)?; }
+                    Err(error) => { eprintln!("TypeRelay statistics upload deferred: {error}"); break; }
+                }
+            }
+        }
         let conflicts = db.meta("conflicts")?.and_then(|value|value.as_array().map(Vec::len)).unwrap_or(0);
         Paths::atomic_write(&self.path("status"), format!("Synced. {conflicts} conflicts. {} Resolve: {}/", db.meta("last_failure")?.and_then(|value|value.as_str().map(str::to_owned)).unwrap_or_default(), credentials.server).as_bytes(), false)?;
         Ok(())
@@ -244,6 +256,7 @@ impl Sync {
         let libraries:Vec<String>=db.libraries()?.into_iter().filter_map(|library|library["_id"].as_str().map(str::to_owned)).filter(|id|db.synced(id).unwrap_or(false)).collect();
         db.connection.execute("UPDATE libraries SET synced=0", [])?;
         for (seq, operation) in db.pending()? { if !matches!(operation["kind"].as_str(),Some("merge_local"|"merge_synced")){db.recover_operation(&operation)?;}db.connection.execute("DELETE FROM outbox WHERE seq=?1", [seq])?; }
+        db.set_meta("statistics_identity", &Value::Null)?;
         db.set_meta("cursor", &json!(0))?;
         db.set_meta("personal_abbreviations", &json!([]))?; db.set_meta("personal_capability", &Value::Null)?;
         db.connection.execute("DELETE FROM meta WHERE key LIKE 'personal_rejected:%'", [])?;

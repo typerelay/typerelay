@@ -23,6 +23,7 @@ import { WhiteLabel } from './services/white_label.js';
 import { Assets } from './services/assets.js';
 import { ProductUpdates } from './services/product_updates.js';
 import { Bundles } from './services/bundles.js';
+import { Statistics } from './services/statistics.js';
 import { recordException, shutdownObservability } from '@typerelay/observability';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -148,6 +149,15 @@ export class Server {
 		});
 		if (process.env.NODE_ENV === 'development' && process.env.TYPERELAY_MOBILE_PREVIEW_URL) app.get('/api/v2/mobile-preview/identity', (req, res) => { Support.assert(req.ctx.device, 'Device sign-in required', 401); res.json({ user: req.ctx.user, account: req.ctx.account, device: req.ctx.device }); });
 		PublicApi.mountSettings(app);
+		app.post('/api/v2/statistics/events', async (req, res) => res.json(await Statistics.ingest(req.ctx, req.body)));
+		app.get('/api/v2/statistics', async (req, res) => {
+			const report = await Statistics.report(req.ctx, req.query);
+			const rows = Object.fromEntries(['days', 'snippets', 'libraries', 'members'].map(kind => [kind, report[kind].map(row => ({ id: row.id, html: pug.renderFile('./views/ajax/statistics-row.pug', { row, kind, settings: report.settings }) }))]));
+			res.json({ ...report, rows });
+		});
+		app.get('/api/v2/statistics/export', async (req, res) => res.type('text/csv').attachment('typerelay-statistics.csv').send(Statistics.csv(await Statistics.report(req.ctx, req.query))));
+		app.patch('/api/v2/statistics/preferences', async (req, res) => res.json(await Statistics.preferences(req.ctx, req.body.scope, req.body)));
+
 		app.post('/api/v2/assets', express.raw({ type: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'], limit: '5mb' }), async (req, res) => res.json(await Assets.put(req.ctx, req.body)));
 		app.post('/api/v2/assets/presence', async (req, res) => res.json(await Assets.presence(req.ctx, req.body.ids)));
 		app.put('/api/v2/assets/:id', express.raw({ type: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'], limit: '2mb' }), async (req, res) => res.json(await Assets.accept(req.ctx, req.body, req.params.id)));
@@ -245,7 +255,7 @@ export class Server {
 			const result = await Libraries.mutate(req.ctx, req.body.operation_id, { ...req.body, snippet: req.params.id }, (ctx, session) => Libraries.personal(ctx, req.params.id, req.body, session));
 			res.json({ ...result, ...await Server.personalPresentation(req.ctx) });
 		});
-		app.get('/api/v2/sync', async (req, res) => res.json(await Libraries.download(req.ctx, Number(req.query.cursor || 0), req.headers['x-typerelay-personal-abbreviations'] === '1')));
+		app.get('/api/v2/sync', async (req, res) => res.json({ ...await Libraries.download(req.ctx, Number(req.query.cursor || 0), req.headers['x-typerelay-personal-abbreviations'] === '1'), statistics_identity: { account: req.ctx.account, user: req.ctx.user, device: req.ctx.device || null } }));
 		app.post('/api/v2/conflicts/:id', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.resolve(ctx, req.params.id, req.body, session))));
 		app.get('/api/v2/team', async (req, res) => res.json(await Team.list(req.ctx)));
 		app.post('/api/v2/team/members', async (req, res) => { const result = await Team.add(req.ctx, req.body); res.json({ ...result, html: pug.renderFile('./views/ajax/member.pug', { member: result.member, ctx: req.ctx }) }); });

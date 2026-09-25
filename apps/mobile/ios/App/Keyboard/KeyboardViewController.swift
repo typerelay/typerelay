@@ -240,6 +240,7 @@ final class KeyboardViewController: UIInputViewController {
             for _ in anchorFragment { textDocumentProxy.deleteBackward() }
             textDocumentProxy.insertText(rendered["text"] as? String ?? "")
             changingHost = false
+            _ = try? TypeRelayCore.execute(["action": "keyboard_usage", "generation": snapshot["generation"] ?? "", "library": selectionLibrary, "id": selection?["id"] ?? "", "kind": "insert", "characters": max(0, ((rendered["characters"] as? Int) ?? (rendered["text"] as? String ?? "").unicodeScalars.count) - anchorFragment.unicodeScalars.count)], keyboard: true)
             values.removeAll(); selection = nil; field = nil; showTyping()
         } catch { changingHost = false; showPreview(message: error.localizedDescription) }
     }

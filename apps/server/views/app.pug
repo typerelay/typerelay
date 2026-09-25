@@ -1,6 +1,6 @@
 extends layout
 block content
-	#workspace(data-account=account._id)
+	#workspace(data-account=account._id data-user=ctx.user)
 		.row#workspace-content
 			aside.col-md-4
 				.library-controls.d-flex.align-items-center.gap-3.mb-3
@@ -11,8 +11,8 @@ block content
 					button#new-library.btn.btn-primary.btn-sm.library-icon-button(type="button" aria-label="New library" title="New library")
 						svg.rich-toolbar-icon(viewBox="0 0 16 16" aria-hidden="true" focusable="false")
 							path(d="M2 2h3v12H2zM7 2h3v12H7zM11 3l2-.5L16 13l-2 .5zM2 5h3M7 5h3")
-					span.d-inline-flex(title="Statistics — coming soon" tabindex="0" aria-label="Statistics — coming soon")
-						button#statistics.btn.btn-outline-secondary.btn-sm.library-icon-button(type="button" disabled aria-label="Statistics" title="Statistics — coming soon")
+					span.d-inline-flex
+						button#statistics.btn.btn-outline-secondary.btn-sm.library-icon-button(type="button" data-bs-toggle="modal" data-bs-target="#statistics-modal" aria-label="Statistics" title="Statistics")
 							svg.rich-toolbar-icon(viewBox="0 0 16 16" aria-hidden="true" focusable="false")
 								path(d="M2 2v12h12M5 11V8M9 11V5M13 11V2")
 				- var selectedLibrary = libraries.length ? String(libraries[0]._id) : null
@@ -34,6 +34,7 @@ block content
 					else
 						h2.fw-bold Select a library
 						p.text-muted Import YAML or create your first library.
+		include ajax/statistics
 		#conflicts.mt-3
 		#rich-image-modal.modal.fade(tabindex="-1" aria-label="Add rich-text image" data-bs-backdrop="static" data-bs-keyboard="false")
 			.modal-dialog.modal-lg.modal-dialog-scrollable

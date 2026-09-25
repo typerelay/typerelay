@@ -13,6 +13,7 @@ pub struct Snippet {
 pub struct Snapshot {
     snippets: BTreeMap<String, Snippet>,
     templates: BTreeMap<String, TemplateExpansion>,
+    identities: BTreeMap<String, Identity>,
 }
 
 impl Snapshot {
@@ -31,12 +32,12 @@ impl Snapshot {
                 return Err("Duplicate trigger".into());
             }
         }
-        Ok(Self { snippets: indexed, templates: BTreeMap::new() })
+        Ok(Self { snippets: indexed, templates: BTreeMap::new(), identities: BTreeMap::new() })
     }
 
     pub fn set_template(&mut self, abbreviation: &str, template: template::Template) -> Result<(), String> { let template=template.normalize()?; let prompted=!template.fields()?.is_empty(); self.templates.insert(abbreviation.into(), TemplateExpansion { abbreviation: abbreviation.into(), identity: None, prompted, rich:false }); Ok(()) }
     pub fn set_rich(&mut self, abbreviation: &str, prompted: bool) { self.templates.insert(abbreviation.into(), TemplateExpansion { abbreviation: abbreviation.into(), identity: None, prompted, rich:true }); }
-    pub fn identify(&mut self, abbreviation: &str, identity: Identity) { if let Some(template) = self.templates.get_mut(abbreviation) { template.identity = Some(identity); } }
+    pub fn identify(&mut self, abbreviation: &str, identity: Identity) { self.identities.insert(abbreviation.into(), identity.clone()); if let Some(template) = self.templates.get_mut(abbreviation) { template.identity = Some(identity.clone()); } }
     pub fn len(&self) -> usize { self.snippets.len() }
     pub fn is_empty(&self) -> bool { self.snippets.is_empty() }
 }
@@ -52,6 +53,7 @@ pub struct Identity { pub id: String, pub library: String, pub revision: i64 }
 pub struct TemplateExpansion { pub prompted: bool, pub rich: bool, pub abbreviation: String, pub identity: Option<Identity> }
 #[derive(Debug, PartialEq, Eq)]
 pub struct Expansion {
+    pub identity: Option<Identity>,
     pub template: Option<TemplateExpansion>,
     pub erase: usize,
     pub text: String,
@@ -126,7 +128,7 @@ impl Engine {
             Input::Left | Input::Right => self.clear_pending(),
             Input::Space => {
                 let abbreviation = if self.cursor == self.pending.len() { self.pending.strip_prefix(self.prefix) } else { None };
-                let expansion = abbreviation.and_then(|abbreviation| self.snapshot.snippets.get(abbreviation)).map(|s| Expansion { template: self.snapshot.templates.get(&s.trigger).cloned(), erase: self.pending.len(), text: s.replacement.clone() });
+                let expansion = abbreviation.and_then(|abbreviation| self.snapshot.snippets.get(abbreviation)).map(|s| Expansion { identity: self.snapshot.identities.get(&s.trigger).cloned(), template: self.snapshot.templates.get(&s.trigger).cloned(), erase: self.pending.len(), text: s.replacement.clone() });
                 self.clear_pending();
                 return expansion.map_or(FeedResult::Forward, FeedResult::Expand);
             }
@@ -159,9 +161,9 @@ mod tests {
     fn waits_for_space_and_allows_overlap() {
         let mut engine = Engine::new(Fixture::snapshot());
         Fixture::type_text(&mut engine, ";brbmore");
-        assert_eq!(engine.feed(Input::Space), Some(Expansion { template: None, erase: 8, text: "Later".into() }));
+        assert_eq!(engine.feed(Input::Space), Some(Expansion { identity: None, template: None, erase: 8, text: "Later".into() }));
         Fixture::type_text(&mut engine, ";brb");
-        assert_eq!(engine.feed(Input::Space), Some(Expansion { template: None, erase: 4, text: "Be right back.".into() }));
+        assert_eq!(engine.feed(Input::Space), Some(Expansion { identity: None, template: None, erase: 4, text: "Be right back.".into() }));
         assert_eq!(engine.feed(Input::Space), None);
     }
     #[test]
@@ -195,7 +197,7 @@ mod tests {
             engine.feed(Input::Character('s'));
             for _ in 0..4 { engine.feed(Input::Right); }
             assert!(matches!(engine.feed_event(Input::Right), FeedResult::Suppress));
-            assert_eq!(engine.feed(Input::Space), Some(Expansion { template: None, erase: 6, text: "Corrected".into() }));
+            assert_eq!(engine.feed(Input::Space), Some(Expansion { identity: None, template: None, erase: 6, text: "Corrected".into() }));
         }
     }
     #[test]
@@ -271,7 +273,7 @@ mod tests {
         Fixture::type_text(&mut engine, ";brb");
         assert!(engine.feed(Input::Space).is_none());
         Fixture::type_text(&mut engine, ",brb");
-        assert_eq!(engine.feed(Input::Space).unwrap(), Expansion { template: None, erase: 4, text: "Be right back.".into() });
+        assert_eq!(engine.feed(Input::Space).unwrap(), Expansion { identity: None, template: None, erase: 4, text: "Be right back.".into() });
         for prefix in ["", "::", "a", "-", " ", ":"] { assert!(engine.set_prefix(prefix).is_err()); }
         assert_eq!(engine.prefix(), ',');
     }
@@ -298,9 +300,17 @@ mod tests {
 
     #[test]
     fn long_paragraphs_use_paste_and_short_text_stays_native() {
-        assert!(Expansion { template: None, erase: 4, text: "a".repeat(600) }.requires_paste());
-        assert!(!Expansion { template: None, erase: 4, text: "Be right back.".into() }.requires_paste());
+        assert!(Expansion { identity: None, template: None, erase: 4, text: "a".repeat(600) }.requires_paste());
+        assert!(!Expansion { identity: None, template: None, erase: 4, text: "Be right back.".into() }.requires_paste());
         assert!(Snapshot::new(vec![Snippet { trigger: "long".into(), replacement: "a".repeat(65536) }]).is_ok());
         assert!(Snapshot::new(vec![Snippet { trigger: "long".into(), replacement: "a".repeat(65537) }]).is_err());
     }
+    #[test]
+    fn plain_expansion_retains_statistics_identity() {
+        let mut snapshot=Snapshot::new(vec![Snippet{trigger:"hi".into(),replacement:"Hello 🌍".into()}]).unwrap();
+        let identity=Identity{id:"one".into(),library:"library".into(),revision:1};snapshot.identify("hi",identity.clone());
+        let mut engine=Engine::new(snapshot);for ch in ";hi".chars(){engine.feed(Input::Character(ch));}
+        let expansion=engine.feed(Input::Space).unwrap();assert_eq!(expansion.identity,Some(identity));assert_eq!(expansion.erase,3);assert_eq!(expansion.text.chars().count(),7);assert!(expansion.template.is_none());
+    }
+
 }
