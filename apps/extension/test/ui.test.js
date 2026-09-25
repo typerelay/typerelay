@@ -61,7 +61,7 @@ test('options page updates account, sync and prefix controls in place', async ()
 	page('options');
 	let state = { connected: false, authPending: false, count: 0, prefix: ';', origin: 'https://tr.n.lan' };
 	let changed;
-	globalThis.chrome = { permissions: { request: async ({ origins }) => { assert.deepEqual(origins, ['https://custom.example.com/*']); return true; } }, storage: { onChanged: { addListener: listener => { changed = listener; } } }, runtime: { sendMessage: async message => {
+	globalThis.chrome = { permissions: { request: async ({ origins }) => { assert.deepEqual(origins, ['https://custom.example.com/*']); return true; } }, storage: { onChanged: { addListener: listener => { changed = listener; } } }, runtime: { getManifest: () => ({ version: '1.1.1' }), sendMessage: async message => {
 		if (message.type === 'prefix' && message.value === '.') return { ok: false, error: 'Save failed' };
 		if (message.type === 'connect') state = { ...state, authPending: true, origin: message.origin };
 		if (message.type === 'sync') state = { ...state, count: 4, lastSync: Date.now() };

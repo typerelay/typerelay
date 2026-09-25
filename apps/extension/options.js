@@ -8,6 +8,8 @@ let connectBusy = false;
 let refreshSerial = 0;
 let serverLoaded = false;
 
+$('#version').textContent = `Version ${chrome.runtime.getManifest().version}`;
+
 async function refresh() {
 	const serial = ++refreshSerial;
 	const state = await send({ type: 'status' });
