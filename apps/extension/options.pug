@@ -14,7 +14,9 @@ html(lang="en")
 					p Connect your snippets and choose how typing expands them.
 			section
 				h2 Account
-				p#account-state(role="status") Checking connection…
+				div.status-row
+					p#account-state(role="status") Checking connection…
+					button#disconnect.button-sm(type="button" hidden) Sign out
 				p#auth-error.error(role="alert" hidden)
 				form#server-form(hidden)
 					label(for="server") Server
@@ -25,13 +27,13 @@ html(lang="en")
 					button#reset-server(type="button") reset
 				div.actions
 					button#restart-connect(type="button" hidden) Start over
-					button#disconnect(type="button" hidden) Sign out
 			section
 				h2 Sync
-				p#sync-summary Sign in to sync your snippets.
+				div.status-row
+					p#sync-summary Sign in to sync your snippets.
+					button#sync.button-sm(type="button" disabled) Sync now
 				p#last-sync
 				div.actions
-					button#sync(type="button" disabled) Sync now
 					span#sync-status(role="status")
 			section
 				h2 Trigger prefix

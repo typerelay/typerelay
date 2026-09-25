@@ -1,3 +1,7 @@
+(() => {
+if (globalThis.typeRelayContentReady) return;
+globalThis.typeRelayContentReady = true;
+
 let items = [];
 let prefix = ';';
 let ownedUntil = 0;
@@ -170,9 +174,11 @@ document.addEventListener('keydown', event => {
 chrome.runtime.onMessage.addListener((message, _sender, reply) => {
 	if (message.type !== 'insert') return;
 	if (location.hostname === 'docs.google.com') { reply({ ok: false, error: 'Google Docs insertion awaits compatibility verification' }); return; }
-	const editor = lastEditor;
-	const saved = lastSelection;
+	const editor = editorFor(document.activeElement) || lastEditor;
+	const saved = editor ? selectionFor(editor) || lastSelection : null;
 	if (!editor || !saved) { reply({ ok: false, error: 'Focus an editable field first' }); return; }
 	void expand(editor, saved, message.id).then(() => reply({ ok: true }), error => reply({ ok: false, error: error.message }));
 	return true;
 });
+
+})();

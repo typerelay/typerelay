@@ -4,7 +4,7 @@
   "description": "Expand your Type Relay snippets in Chrome and on Chromebooks.",
   "version": "1.1.1",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArQDZ/LdvQ+Yg5kZp0kJrayanDMVlgWdTnyuj/POqS8KZXwgZZ4Ls2Sl36t4vA0CaROijPFEGzjPtTnJvtLr41QI+kQv2m74FMSUlFLcb34kP7zTwgtx7dR4gVxkLXRPMyebrpLNUQYt8CF9weeDQj++qbze/4jiWOEXRS7ELv7lSKVHUI9lDE8fzmHcPAVEAn9YZnmc9hcQDxwN7/brwTaOo9PonSwkFoI9N+3LH+CTXmq0jJBydJnPCpq+WqY5aXDsJ7/j4ZW/oH3yI6BxwFB136gtnZW+53bK6DPgxWqAt8CjOfuEff3IejS6aJ1GbAcndkSQHSHnK+m8CuWhqVQIDAQAB",
-  "permissions": ["storage", "unlimitedStorage", "alarms", "activeTab", "nativeMessaging"],
+  "permissions": ["storage", "unlimitedStorage", "alarms", "activeTab", "scripting", "nativeMessaging"],
   "optional_host_permissions": ["https://*/*"],
   "host_permissions": ["https://app.typerelay.com/*"],
   "background": { "service_worker": "worker.js", "type": "module" },

@@ -170,7 +170,24 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
 			case 'cancel-connect': { await chrome.storage.session.remove(['browserAuth', 'browserAuthError']); return { cancelled: true }; }
 			case 'snapshot': { const data = await chrome.storage.local.get(['items', 'prefix']); return { items: data.items || [], prefix: data.prefix || ';' }; }
 			case 'focus': { if (sender.tab?.id == null || sender.frameId == null) return {}; await chrome.storage.session.set({ [`frame-${sender.tab.id}`]: sender.frameId }); return {}; }
-			case 'insert': { const [tab] = await chrome.tabs.query({ active: true, currentWindow: true }); if (!tab?.id) throw new Error('No active Chrome tab'); const state = await chrome.storage.session.get(`frame-${tab.id}`); const response = await chrome.tabs.sendMessage(tab.id, { type: 'insert', id: message.id }, { frameId: state[`frame-${tab.id}`] ?? 0 }); if (!response?.ok) throw new Error(response?.error || 'Focus an editable field first'); return {}; }
+			case 'insert': {
+				const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+				if (!tab?.id) throw new Error('No active Chrome tab');
+				if (tab.url && !/^https?:/.test(tab.url)) throw new Error('Open a web page and focus an editable field before inserting.');
+				const state = await chrome.storage.session.get(`frame-${tab.id}`);
+				const frameId = state[`frame-${tab.id}`] ?? 0;
+				let response;
+				try { response = await chrome.tabs.sendMessage(tab.id, { type: 'insert', id: message.id }, { frameId }); }
+				catch (error) {
+					if (!error.message?.includes('Receiving end does not exist')) throw error;
+					try { await chrome.scripting.executeScript({ target: { tabId: tab.id, frameIds: [frameId] }, files: ['content.js'] }); }
+					catch { throw new Error('Cannot access this page. Reload it, allow Type Relay site access, and focus an editable field before trying again.'); }
+					try { response = await chrome.tabs.sendMessage(tab.id, { type: 'insert', id: message.id }, { frameId }); }
+					catch { throw new Error('Reload this page and focus an editable field before trying again.'); }
+				}
+				if (!response?.ok) throw new Error(response?.error || 'Focus an editable field first');
+				return {};
+			}
 			case 'prefix': { if (!",;./'[]\\`=".includes(message.value) || message.value.length !== 1) throw new Error('Invalid prefix'); await chrome.storage.local.set({ prefix: message.value }); return { prefix: message.value }; }
 			case 'match': return Runtime.match(message.before, message.prefix, message.triggers);
 			case 'prepare': return prepared(message.id, message.values || {}, !!message.preview);
