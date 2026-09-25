@@ -17,11 +17,10 @@
     "@codemirror/commands": "^6.11.1",
     "@codemirror/language": "^6.12.4",
     "@codemirror/language-data": "^6.5.2",
-    "@codemirror/state": "^6.7.5",
-    "@codemirror/view": "^6.43.12",
+    "@codemirror/state": "^6.7.6",
+    "@codemirror/view": "^6.43.13",
     "@managani/cache": "0.1.5",
     "@managani/node": "0.1.2",
-    "@typerelay/observability": "workspace:*",
     "@simplewebauthn/browser": "^14.0.0",
     "@simplewebauthn/server": "^14.0.2",
     "@tiptap/core": "^3.31.3",
@@ -36,6 +35,7 @@
     "@tiptap/markdown": "^3.31.3",
     "@tiptap/pm": "^3.31.3",
     "@tiptap/starter-kit": "^3.31.3",
+    "@typerelay/observability": "workspace:*",
     "@xmldom/xmldom": "^0.9.12",
     "ajv": "^8.20.0",
     "bcryptjs": "^3.0.3",
@@ -52,7 +52,7 @@
     "formidable": "^3.5.4",
     "helmet": "^8.3.0",
     "htmlparser2": "^12.0.0",
-    "mongoose": "^9.10.1",
+    "mongoose": "^9.10.2",
     "nodemailer": "^10.0.10",
     "otplib": "^13.5.0",
     "pug": "^3.0.4",
@@ -63,6 +63,6 @@
   },
   "devDependencies": {
     "cbor-x": "^1.6.6",
-    "jsdom": "^30.1.0"
+    "jsdom": "^30.1.1"
   }
 }
