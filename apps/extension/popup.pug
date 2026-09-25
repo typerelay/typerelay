@@ -3,24 +3,42 @@ html(lang="en")
 	head
 		meta(charset="utf-8")
 		meta(name="viewport" content="width=device-width, initial-scale=1")
-		title Type Relay
+		title Typerelay
+		link(rel="stylesheet" href="prompt.css")
 		link(rel="stylesheet" href="popup.css")
 	body
 		main
 			header
 				img(src="icon.png" alt="" width="32" height="32")
-				h1 Type Relay
-				button#settings(type="button") Settings
+				h1 Typerelay
+				button#settings(type="button") Options
+				a#open-app.button(target="_blank" rel="noopener noreferrer" title="Open Typerelay" aria-label="Open Typerelay" hidden) ↗
 			p#status(role="status" hidden)
 			section#signed-out(hidden)
-				p Sign in from settings to search your snippets.
+				p Sign in from options to search your snippets.
 			section#signed-in(hidden)
 				label(for="search") Search snippets
-				input#search(type="search" autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="results" aria-expanded="false")
-				p#search-message(role="status") Type to search snippets.
+				input#search(type="search" aria-label="Search snippets" autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="results" aria-expanded="false")
+				p.copy-hint Enter or click to copy, then paste with Ctrl/Cmd+V.
+				p#search-message(role="status" hidden)
 				ul#results(role="listbox" hidden)
 				template#result-template
 					li(role="option" tabindex="-1" aria-selected="false")
-						strong
-						small
+						div.result-heading
+							div.result-summary
+								strong
+								small
+							button.detail(type="button" aria-expanded="false") Detail
+						div.preview(hidden)
+							p.preview-status(role="status")
+							pre.preview-text(hidden)
+							iframe.preview-rich(title="Snippet preview" sandbox="" referrerpolicy="no-referrer" hidden)
+				template#preview-shell
+					meta(http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'")
+					style
+						include preview.css
+					div#preview-content
+			section#copy-prompt(hidden)
+			template#prompt-template
+				include prompt.pug
 		script(type="module" src="popup.js")

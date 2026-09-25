@@ -1,0 +1,13 @@
+tr(data-statistics-id=row.id)
+	td
+		span= row.name
+		if kind === 'snippets'
+			div.small.text-muted= row.library
+		if kind === 'days'
+			meter.w-100(min="0" max=Math.max(row.uses, 1) value=row.uses aria-label=row.uses + ' uses')= row.uses
+	td= row.uses.toLocaleString()
+	td= row.copies.toLocaleString()
+	td= row.insertions.toLocaleString()
+	td= row.characters.toLocaleString()
+	td= row.minutes.toFixed(1)
+	td= new Intl.NumberFormat('en', { style: 'currency', currency: settings.currency }).format(row.money)

@@ -19,6 +19,24 @@ class Fixture {
  static hit(id){return{id,library:'one',revision:2,library_name:'Personal',title:'Title '+id,abbreviation:id,preview:'<b>literal</b>\n\tCode'};}
 }
 
+test('personal abbreviation save updates the selected result without rebuilding search or other rows',async()=>{
+ const {dom,panel,calls}=await Fixture.create();
+ try {
+  const hit={...Fixture.hit('one'),can_personal:true,personal:{revision:0,trigger:null,conflicts:[]}};
+  panel.rows=[hit,Fixture.hit('two')];panel.render();
+  const list=panel.list;const sibling=list.children[1];const original=list.children[0];
+  const invoke=panel.invoke;panel.invoke=async(name,args)=>{if(name==='personal_abbreviation')return{shared_trigger:'tw',can_edit:true,personal:{revision:0,trigger:args.change?.trigger||null,pending:!!args.change,conflicts:[]}};return invoke(name,args);};
+  await panel.openPersonal(hit);dom.window.document.querySelector('#personal-trigger').value='mine';
+  const searches=calls.filter(call=>call.name==='search').length;
+  panel.render=()=>{throw Error('No whole-list render allowed');};
+  await panel.savePersonal();
+  assert.equal(panel.list,list);assert.equal(list.children[0],original);assert.equal(list.children[1],sibling);
+  assert.equal(original.querySelector('.result-abbreviation').textContent,'mine');
+  assert.match(original.querySelector('.result-personal-status').textContent,/waiting to sync/);
+  assert.equal(calls.filter(call=>call.name==='search').length,searches);
+ } finally {dom.window.close();}
+});
+
 test('stale search cannot insert an old result; Enter waits for current query',async()=>{
  const f=await Fixture.create();try {
   f.panel.query.value='old';const old=f.panel.search(0);f.pending[0].resolve([Fixture.hit('old')]);await old;

@@ -55,6 +55,16 @@ Library sharing is explicit. Team membership alone does not reveal private libra
 
 Moving a snippet into a shared library shares it under the destination’s rules. Moving one out requires edit access to both libraries.
 
+## Personal abbreviations
+
+Editors can choose **My abbreviation** on a shared snippet in the web app or desktop search results. Your abbreviation replaces the shared default only for you; the expansion stays shared. Choose **Use shared default** and save to reset it.
+
+Personal abbreviations sync to your devices, browser extension, and mobile keyboard. Desktop changes work offline and show **waiting to sync** until accepted. If two devices change the same abbreviation, open **My abbreviation** to keep the current value or select the pending value and save. Rejected changes remain available for review.
+
+You cannot assign an abbreviation already used by another active snippet. If a later shared update introduces a duplicate, automatic expansion pauses for that abbreviation. Both snippets remain available through search and manual insertion.
+
+An existing personal abbreviation remains usable if your access becomes read-only. It follows the snippet between shared libraries, is suspended while private or in Trash, and is removed on permanent deletion. Copies and exports retain the shared default.
+
 ## Plan changes
 
 Team includes five prepaid seats; extra seats must be purchased before more invitations or members fit. Seat reductions and Team-to-Pro changes take effect at renewal only after active members and pending invitations fit the requested capacity.

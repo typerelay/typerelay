@@ -135,6 +135,9 @@ importers:
 
   apps/extension:
     devDependencies:
+      fflate:
+        specifier: ^0.8.3
+        version: 0.8.3
       jsdom:
         specifier: ^30.1.1
         version: 30.1.1(@noble/hashes@2.4.0)

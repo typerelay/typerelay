@@ -75,6 +75,9 @@ snippetSchema.index({ library: 1, id: 1 }, { unique: true });
 snippetSchema.index({ account: 1, id: 1 }, { unique: true });
 snippetSchema.index({ library: 1, trigger: 1 }, { unique: true, partialFilterExpression: { state: 'active', trigger: { $type: 'string', $gt: '' } } });
 const Snippet = mongoose.model('Snippet', snippetSchema);
+const personalAbbreviationSchema = new mongoose.Schema({ account: { type: objectid, required: true }, user: { type: objectid, required: true }, snippet: { type: String, required: true }, trigger: { type: String, default: null }, revision: { type: Number, default: 0 }, conflicts: { type: [mixed], default: [] } }, { timestamps: true });
+personalAbbreviationSchema.index({ account: 1, user: 1, snippet: 1 }, { unique: true });
+export const PersonalAbbreviation = mongoose.model('PersonalAbbreviation', personalAbbreviationSchema);
 const snippetAssetSchema = new mongoose.Schema({ account: objectid, id: String, data: { type: Buffer, select: false }, mime_type: String, size: Number, width: Number, height: Number, animated: Boolean, source_urls: [String], last_referenced_at: Date }, { timestamps: true });
 snippetAssetSchema.index({ account: 1, id: 1 }, { unique: true });
 snippetAssetSchema.index({ account: 1, last_referenced_at: 1 });
@@ -127,3 +130,12 @@ productUpdateSchema.index({ active: 1, published_at: -1, _id: -1 });
 productUpdateSchema.index({ active: 1, show_modal: 1, published_at: -1, _id: -1 });
 
 export const ProductUpdate = mongoose.model('ProductUpdate', productUpdateSchema);
+
+const usageEventSchema = new mongoose.Schema({ account: { type: objectid, required: true }, user: { type: objectid, required: true }, event_id: { type: String, required: true }, library: { type: objectid, required: true }, snippet: { type: String, required: true }, action: { type: String, enum: ['copy', 'insert'], required: true }, client: String, occurred_at: { type: Date, required: true }, characters: { type: Number, required: true }, shared: Boolean }, { timestamps: true });
+usageEventSchema.index({ account: 1, user: 1, event_id: 1 }, { unique: true });
+usageEventSchema.index({ account: 1, user: 1, occurred_at: 1 });
+usageEventSchema.index({ account: 1, shared: 1, occurred_at: 1 });
+export const UsageEvent = mongoose.model('UsageEvent', usageEventSchema);
+const statisticsPreferenceSchema = new mongoose.Schema({ account: { type: objectid, required: true }, user: { type: objectid, default: null }, wpm: { type: Number, default: 50 }, hourly_rate: { type: Number, default: 30 }, currency: { type: String, default: 'USD' } });
+statisticsPreferenceSchema.index({ account: 1, user: 1 }, { unique: true });
+export const StatisticsPreference = mongoose.model('StatisticsPreference', statisticsPreferenceSchema);

@@ -1,3 +1,4 @@
+import { Statistics } from './statistics.js';
 import { ProductNews } from './product-updates.js';
 import { TrialCountdown } from './trial-countdown.js';
 import { TemplateEditor, TemplateFill } from './template-editor.js';
@@ -26,10 +27,11 @@ class TypeRelay {
 	searchFocus = null;
 	submit = null;
 	constructor() {
+		this.statistics = new Statistics(this);
 		this.templateEditor = new TemplateEditor(this); this.templateFill = new TemplateFill(this);
 		this.trialCountdown = new TrialCountdown(this);
 		document.querySelectorAll('.library').forEach(node => this.libraries.set(node.dataset.id, JSON.parse(node.dataset.record)));
-		document.addEventListener('input', event => { if ((event.target.id === 'trigger' || event.target.hasAttribute('data-import-trigger')) && !event.isComposing) Abbreviation.field(event.target); });
+		document.addEventListener('input', event => { if ((['trigger', 'personal-trigger'].includes(event.target.id) || event.target.hasAttribute('data-import-trigger')) && !event.isComposing) Abbreviation.field(event.target); });
 		document.addEventListener('compositionend', event => { if (event.target.id === 'trigger') Abbreviation.field(event.target); });
 		document.addEventListener('submit', event => this.onSubmit(event));
 		document.querySelector('#settings')?.addEventListener('hidden.bs.modal', () => { for (const secret of document.querySelectorAll('[data-secret-value]')) secret.value = ''; document.querySelector('#access-token-secret')?.replaceChildren(); document.querySelector('#oauth-client-secret')?.replaceChildren(); });
@@ -110,13 +112,13 @@ class TypeRelay {
 		await PasswordField.copy(input, status, () => this.toast('Password copied'));
 	}
 	async request(path, method = 'GET', body, raw = false) {
-		const response = await fetch(path.startsWith('/') ? path : '/api/v2/' + path, { method, headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': document.querySelector('meta[name=csrf-token]').content, 'X-Account-Id': this.account || '' }, body: body ? JSON.stringify({ operation_id: this.submitting ? this.formOperation : crypto.randomUUID(), ...body }) : undefined });
+		const response = await fetch(path.startsWith('/') ? path : '/api/v2/' + path, { method, headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': document.querySelector('meta[name=csrf-token]').content, 'X-Account-Id': this.account || '', 'X-TypeRelay-Personal-Abbreviations': '1' }, body: body ? JSON.stringify({ operation_id: this.submitting ? this.formOperation : crypto.randomUUID(), ...body }) : undefined });
 		if (!response.ok) { const result = await response.json(); const error = new Error(result.error); Object.assign(error, result); throw error; }
 		if (response.headers.get('X-CSRF-Token')) document.querySelector('meta[name=csrf-token]').content = response.headers.get('X-CSRF-Token');
 		return raw ? response.text() : response.json();
 	}
 	async upload(path, data) {
-		const response = await fetch('/api/v2/' + path, { method: 'POST', headers: { 'X-CSRF-Token': document.querySelector('meta[name=csrf-token]').content, 'X-Account-Id': this.account || '' }, body: data });
+		const response = await fetch('/api/v2/' + path, { method: 'POST', headers: { 'X-CSRF-Token': document.querySelector('meta[name=csrf-token]').content, 'X-Account-Id': this.account || '', 'X-TypeRelay-Personal-Abbreviations': '1' }, body: data });
 		if (!response.ok) { const result = await response.json(); const error = new Error(result.error); Object.assign(error, result); throw error; }
 		return response.json();
 	}
@@ -135,6 +137,19 @@ class TypeRelay {
 		if (window.scrollX !== scroll.x || window.scrollY !== scroll.y) window.scrollTo(scroll.x, scroll.y);
 	}
 	async apply(result) {
+		if (result.personal_fragments) {
+			if (result.personal_sequence !== undefined && result.personal_sequence < (this.personalSequence || 0)) return;
+			this.personalSequence = result.personal_sequence ?? this.personalSequence;
+			for (const item of result.personal_fragments) {
+				const library = this.libraries.get(item.library); const previous = library?.snippets.find(row => row.id === item.snippet.id);
+				if (!previous || previous.revision > item.snippet.revision || (previous.personal?.revision || 0) > item.snippet.personal.revision) continue;
+				const changed = previous.effective_trigger !== item.snippet.effective_trigger || previous.abbreviation_collision !== item.snippet.abbreviation_collision || JSON.stringify(previous.personal) !== JSON.stringify(item.snippet.personal);
+				Object.assign(previous, item.snippet);
+				if (changed && this.selected === item.library) this.update('[data-snippet="' + item.snippet.id + '"]', '#snippets', item.html);
+			}
+			this.syncSelection();
+			return;
+		}
 		if (result.purged) for (const id of result.purged) {
 			const previous = this.libraries.get(id);
 			if (previous) await this.apply({ library: { ...previous, deleted: true } });
@@ -301,7 +316,7 @@ class TypeRelay {
 
 	}
 	async snippetValue(fields) { const type = fields.get('type') || 'plain_text'; const text = fields.get('replace'); const dynamic = type !== 'code' && (type === 'rich_text' || Object.keys(this.templateEditor.variables || {}).length || /(^|[^\\])\{\{/.test(text)); const template = dynamic ? await this.templateEditor.content() : null; if (type === 'rich_text') return { trigger: fields.get('trigger') || null, title: fields.get('title') || '', content: { version: 2, type, markdown: this.richView?.content() || text, variables: template?.variables || {} } }; const storedType = type === 'plain_text' && dynamic ? 'template' : type; return { trigger: fields.get('trigger') || null, title: fields.get('title') || '', content: { version: 1, type: storedType, text, ...(storedType === 'template' ? { variables: template.variables } : {}), ...(type === 'code' ? { language: fields.get('language') || 'plain_text' } : {}) } }; }
-	async assetFile(file) { const response = await fetch('/api/v2/assets', { method: 'POST', headers: { 'Content-Type': file.type, 'X-CSRF-Token': document.querySelector('meta[name=csrf-token]').content, 'X-Account-Id': this.account || '' }, body: file }); if (!response.ok) throw new Error((await response.json()).error); return response.json(); }
+	async assetFile(file) { const response = await fetch('/api/v2/assets', { method: 'POST', headers: { 'Content-Type': file.type, 'X-CSRF-Token': document.querySelector('meta[name=csrf-token]').content, 'X-Account-Id': this.account || '', 'X-TypeRelay-Personal-Abbreviations': '1' }, body: file }); if (!response.ok) throw new Error((await response.json()).error); return response.json(); }
 	async richAssets(content) { const first = await RichTextRuntime.render(content, {}, true); const assets = {}; for (const id of first.assets) { const response = await fetch('/api/v2/assets/' + id, { headers: { 'X-Account-Id': this.account || '' } }); if (!response.ok) throw new Error('Could not load rich-text image'); const blob = await response.blob(); assets[id] = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(blob); }); } return assets; }
 	async copyRich(content, values = {}) { const assets = await this.richAssets(content); const rendered = await RichTextRuntime.render(content, values, false, new Date(), assets); try { await navigator.clipboard.write([new ClipboardItem({ 'text/plain': new Blob([rendered.text], { type: 'text/plain' }), 'text/html': new Blob([rendered.html], { type: 'text/html' }) })]); } catch { await navigator.clipboard.writeText(rendered.text); this.toast('This browser copied the plain-text fallback'); } return rendered; }
 	async codeEditor() {
@@ -415,7 +430,8 @@ class TypeRelay {
 			}
 			if (form.id === 'account-form') {
 				await this.request('account', 'PATCH', { name: data.get('name') });
-				document.querySelector('#account-switch').selectedOptions[0].textContent = data.get('name');
+				const selectedAccount = document.querySelector('#account-switch')?.selectedOptions[0];
+				if (selectedAccount) selectedAccount.textContent = data.get('name');
 				this.toast('Account saved');
 			}
 			if (form.id === 'team-member-form') {
@@ -565,7 +581,7 @@ class TypeRelay {
 		}
 		const data = button.dataset;
 		const library = this.libraries.get(this.selected);
-		if (button.dataset.copySnippet) { const library = this.libraries.get(this.selected); const entry = library.snippets.find(item => item.id === button.dataset.copySnippet); if (['template', 'rich_text'].includes(entry.content.type)) return this.templateFill.open(entry.content, async () => { const current = await this.request('library-view/' + library._id); if (!current.library.snippets.some(item => item.id === entry.id && item.revision === entry.revision)) throw new Error('Snippet changed; reopen it before copying.'); }); await navigator.clipboard.writeText(entry.replace); return this.toast('Copied'); }
+		if (button.dataset.copySnippet) { const library = this.libraries.get(this.selected); const entry = library.snippets.find(item => item.id === button.dataset.copySnippet); if (['template', 'rich_text'].includes(entry.content.type)) return this.templateFill.open(entry.content, async () => { const current = await this.request('library-view/' + library._id); if (!current.library.snippets.some(item => item.id === entry.id && item.revision === entry.revision)) throw new Error('Snippet changed; reopen it before copying.'); }, (text, characters) => this.statistics.record(library, entry, text, characters)); await navigator.clipboard.writeText(entry.replace); this.statistics.record(library, entry, entry.replace); return this.toast('Copied'); }
 		if (button.dataset.importPage) { const controls = button.closest('[data-import-pagination]'); this.renderImportPage(Number(controls.dataset.page) + (button.dataset.importPage === 'next' ? 1 : -1)); return; }
 		if (button.dataset.importFormat) { this.importSource = null; this.importFormat = button.dataset.importFormat; return this.form('import', { format: this.importFormat }, async () => {
 			const selected = [...document.querySelectorAll('[data-import-key]:checked')].map(input => ({ key: input.dataset.importKey, trigger: Abbreviation.normalize(document.querySelector('[data-import-trigger="' + input.dataset.importKey + '"]').value) }));
@@ -587,6 +603,13 @@ class TypeRelay {
 		}
 		if (button.id === 'new-library') return this.form('library', {}, async fields => this.apply(await this.request('libraries', 'POST', { name: fields.get('name'), yaml: fields.get('yaml') })));
 		if ('librarySettings' in data) return this.form('library', { library: library._id }, async fields => this.apply(await this.request('libraries/' + library._id, 'PATCH', { base_revision: library.revision, name: fields.get('name'), shared: fields.has('shared'), editable: fields.get('editable') === 'true', members: fields.getAll('members'), groups: fields.getAll('groups') })));
+		if ('resetPersonal' in data) { document.querySelector('#personal-trigger').value = ''; return; }
+		if ('usePersonalConflict' in data) { document.querySelector('#personal-trigger').value = document.querySelector('#personal-conflict').selectedOptions[0].dataset.trigger; return; }
+		if (data.personalSnippet) return this.form('personal', { library: library._id, snippet: data.personalSnippet }, async fields => {
+			const result = await this.request('snippets/' + data.personalSnippet + '/personal-abbreviation', 'POST', { trigger: fields.get('trigger') || null, base_revision: Number(fields.get('base_revision')), conflict: fields.get('conflict') || undefined });
+			await this.apply(result);
+			if (result.personal_abbreviations.find(row => row.snippet === data.personalSnippet)?.conflicts.length) { this.formOperation = crypto.randomUUID(); throw new Error('Personal abbreviation conflict. Close and reopen My abbreviation to resolve.'); }
+		});
 		if ('addSnippet' in data || data.editSnippet) return this.editSnippet(library, data.editSnippet);
 		if (data.deleteSnippet && await this.confirm('Move this snippet to Trash?')) return this.snippet(data.deleteSnippet, null);
 		if (data.deleteLibrary && await this.confirm('Move this library and its active snippets to Trash?')) {
@@ -641,6 +664,7 @@ class TypeRelay {
 		document.querySelectorAll('[data-conflict]').forEach(node => { if (!conflicts.has(node.dataset.conflict)) node.remove(); });
 		for (const conflict of result.conflicts) if (!document.querySelector('[data-conflict="' + conflict._id + '"]')) this.update('[data-conflict="' + conflict._id + '"]', '#conflicts', await this.request('fragments/conflict/' + conflict._id, 'GET', null, true));
 		if (document.querySelector('#trash')?.classList.contains('show')) await this.loadTrash();
+		if (result.capabilities?.personal_abbreviations) await this.apply(await this.request('personal-abbreviations'));
 		this.cursor = result.cursor;
 		} finally { this.polling = false; }
 	}

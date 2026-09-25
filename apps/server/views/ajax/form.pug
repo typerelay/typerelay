@@ -1,3 +1,18 @@
+if kind === 'personal'
+	input(type="hidden" name="base_revision" value=snippet.personal.revision)
+	p.mb-3
+		span.me-1 Shared abbreviation:
+		strong= snippet.trigger || 'None'
+	label.form-label(for="personal-trigger") My abbreviation
+	input#personal-trigger.form-control.form-control-sm.mb-3(name="trigger" value=snippet.personal.trigger || '' maxlength="63" pattern="[a-z0-9-]{1,63}")
+	button.btn.btn-outline-secondary.btn-sm.mb-3(type="button" data-reset-personal) Use shared default
+	if snippet.personal.conflicts.length
+		label.form-label(for="personal-conflict") Resolve personal abbreviation conflict
+		select#personal-conflict.form-select.form-select-sm.mb-3(name="conflict")
+			each conflict in snippet.personal.conflicts
+				option(value=conflict.id data-trigger=conflict.trigger || '')= 'Pending: ' + (conflict.trigger || 'Shared default')
+		button.btn.btn-outline-secondary.btn-sm(type="button" data-use-personal-conflict) Use pending value
+		p.small Saving resolves the selected conflict. Keep the current value or use the pending value.
 if kind === 'library'
 	label.form-label.fw-bold(for="name") Library name
 	input#name.form-control.form-control-sm.mb-4(name="name" value=library ? library.name : '' required maxlength="100")
@@ -22,12 +37,15 @@ if kind === 'library'
 			.alert.alert-warning Sharing is disabled. Saving this library removes its stored sharing grants.
 		button.btn.btn-outline-danger.btn-sm(type="button" data-delete-library=library._id) Move library to Trash
 	else
-		label.form-label.fw-bold(for="yaml-file") Import YAML (optional)
-		input#yaml-file.form-control.form-control-sm.mb-4(type="file" accept=".yml,.yaml")
-		label.form-label.fw-bold(for="yaml") YAML
-		textarea#yaml.form-control.form-control-sm.mb-4(name="yaml") matches: []
-		button#preview.btn.btn-outline-secondary.btn-sm(type="button") Validate import
-		p#preview-result.mt-3
+		button.btn.btn-outline-secondary.btn-sm.mb-3(type="button" data-bs-toggle="collapse" data-bs-target="#library-import" aria-expanded="false" aria-controls="library-import") Import YAML (optional)
+		#library-import.collapse
+			.border.rounded.p-4.mb-4
+				label.form-label.fw-bold(for="yaml-file") YAML file
+				input#yaml-file.form-control.form-control-sm.mb-3(type="file" accept=".yml,.yaml")
+				label.form-label.fw-bold(for="yaml") YAML
+				textarea#yaml.form-control.form-control-sm.mb-3(name="yaml") matches: []
+				button#preview.btn.btn-outline-secondary.btn-sm(type="button") Validate import
+				p#preview-result.mt-3.mb-0
 if kind === 'move'
 	label.form-label.fw-bold(for="destination-library") Destination library
 	select#destination-library.form-select.form-select-sm.mb-4(name="destination_library" required disabled=!destinations.length)
@@ -39,7 +57,7 @@ if kind === 'move'
 if kind === 'snippet' || kind === 'conflict'
 	.row.align-items-center.g-0
 		.col-md-4
-			label.form-label.snippet-label(for="trigger") Abbreviation
+			label.form-label.snippet-label(for="trigger")= library && library.shared ? 'Shared abbreviation' : 'Abbreviation'
 			.input-group.input-group-sm.mb-3
 				span.input-group-text(aria-hidden="true") ;
 				input#trigger.form-control.form-control-sm(name="trigger" value=snippet ? snippet.trigger : '' pattern="[a-z0-9\\-]{1,63}" autocapitalize="off" spellcheck="false")
@@ -95,10 +113,11 @@ if kind === 'snippet' || kind === 'conflict'
 		pre= JSON.stringify(current, null, 2)
 if kind === 'snippetslab' || kind === 'import'
 	label.form-label.fw-bold(for="import-file")= importFormat.name + ' export'
-	input#import-file.form-control.form-control-sm.mb-3(type="file" accept=importFormat.accept)
+	.input-group.input-group-sm.mb-3
+		input#import-file.form-control.form-control-sm(type="file" accept=importFormat.accept)
+		button#preview-import.btn.btn-outline-secondary.btn-sm(type="button")= importFormat.name === 'TypeRelay bundle' ? 'Import bundle' : 'Preview import'
 	p.small.text-muted= importFormat.instructions
 	if importFormat.beta
 		p.small.text-muted Beta: export layouts may vary between app versions. Review the preview before importing.
 	p.small.text-muted Imported libraries are private. Existing libraries are never replaced.
-	button#preview-import.btn.btn-outline-secondary.btn-sm.mb-3(type="button")= importFormat.name === 'TypeRelay bundle' ? 'Import bundle' : 'Preview import'
 	#import-preview

@@ -98,6 +98,12 @@ impl ContextWatch {
 }
 
 impl Session {
+    fn record_usage(expansion: &Expansion) {
+        if let Some(identity) = &expansion.identity {
+            if let Ok(root) = Paths::config_dir() { let hit=typerelay_client::panel::Hit{id:identity.id.clone(),library:identity.library.clone(),revision:identity.revision,library_name:String::new(),title:String::new(),abbreviation:String::new(),preview:String::new()};typerelay_client::panel::Panel::record_usage(&root.join("snippets"),&hit,"insert","desktop",expansion.text.chars().count().saturating_sub(expansion.erase)); }
+        }
+    }
+
     const MODIFIERS: [KeyCode; 8] = [KeyCode::KEY_LEFTSHIFT, KeyCode::KEY_RIGHTSHIFT, KeyCode::KEY_LEFTCTRL, KeyCode::KEY_RIGHTCTRL, KeyCode::KEY_LEFTALT, KeyCode::KEY_RIGHTALT, KeyCode::KEY_LEFTMETA, KeyCode::KEY_RIGHTMETA];
 
     fn interference_present(devices: &serde_json::Value) -> bool {
@@ -312,6 +318,7 @@ impl Session {
         let mut caps = false;
         let mut buffered = VecDeque::new();
         let mut insertion = VecDeque::<Vec<InputEvent>>::new();
+        let mut usage: Option<Expansion> = None;
         let mut last_stroke = Instant::now();
         let mut paste: Option<PasteState> = None;
         let mut last_conflict_check = Instant::now();
@@ -324,7 +331,7 @@ impl Session {
             let context_changed=context.changed(target.as_deref())?;
             if context_changed {input_generation=input_generation.wrapping_add(1);}
             if context_changed || last_input.elapsed() > Duration::from_secs(10) {
-                engine.feed(Input::Cancel); target = None; insertion.clear();
+                engine.feed(Input::Cancel); target = None; insertion.clear(); usage = None;
                 if let Some(state) = &mut paste { state.cancelled = true; state.job.cancel(); }
             }
             if last_reload.elapsed() > Duration::from_millis(500) {
@@ -358,7 +365,7 @@ impl Session {
                     if template_wait.as_ref().is_none_or(|wait|request.generation==Some(wait.generation)) && Instant::now() < request.deadline && request.generation.is_none_or(|expected| expected == input_generation) && Self::target()? == Some(request.target.clone()) {
                         engine.feed(Input::Cancel); last_input=Instant::now();
                         match request.step {
-							typerelay_client::clipboard_payload::ClipboardStep::Payload(payload) if !payload.plain.is_empty()||payload.html.is_some()=>{let text=payload.plain.clone();paste=Some(PasteState{job:PasteJob::start_payload(payload),expansion:Expansion{template:None,erase:request.erase,text},target:Some(request.target),reply:Some(request.reply),generation:input_generation,started:false,sent:false,cancelled:false});}
+							typerelay_client::clipboard_payload::ClipboardStep::Payload(payload) if !payload.plain.is_empty()||payload.html.is_some()=>{let text=payload.plain.clone();paste=Some(PasteState{job:PasteJob::start_payload(payload),expansion:Expansion{identity:None,template:None,erase:request.erase,text},target:Some(request.target),reply:Some(request.reply),generation:input_generation,started:false,sent:false,cancelled:false});}
                             step => {
                                 if let Some(wait)=&mut template_wait {wait.started=true;}
                                 for _ in 0..request.erase { output.emit(&Self::stroke(KeyCode::KEY_BACKSPACE,false))?; }
@@ -379,7 +386,7 @@ impl Session {
                         state.started = true;
                     }
                     Ok(Ok(Progress::Ready)) => { state.cancelled = true; state.job.cancel(); }
-                    Ok(Ok(Progress::Finished)) => { if let Some(reply) = state.reply.take() { let _ = reply.send(if state.sent && !state.cancelled { Ok(state.generation) } else { Err("Insertion cancelled; nothing retried".into()) }); } paste = None; continue; }
+                    Ok(Ok(Progress::Finished)) => { if state.sent && !state.cancelled && state.reply.is_none() { Self::record_usage(&state.expansion); } if let Some(reply) = state.reply.take() { let _ = reply.send(if state.sent && !state.cancelled { Ok(state.generation) } else { Err("Insertion cancelled; nothing retried".into()) }); } paste = None; continue; }
                     Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                         eprintln!("Clipboard paste failed; no automatic retry");
                         if state.reply.is_none() && !state.started && !state.cancelled && Self::target()? == state.target { for event in Self::stroke(KeyCode::KEY_SPACE, false) { output.emit(&[event])?; } }
@@ -406,6 +413,7 @@ impl Session {
                     if let Some(stroke) = insertion.pop_front() {
                         for event in stroke { output.emit(&[event])?; }
                     }
+                    if insertion.is_empty() && let Some(expansion)=usage.take() { Self::record_usage(&expansion); }
                     last_stroke = Instant::now();
                 }
                 thread::sleep(Duration::from_millis(1));
@@ -475,7 +483,7 @@ impl Session {
                                 if expansion.requires_paste() {
                                     paste = Some(PasteState { job: PasteJob::start(expansion.text.clone()), expansion, target: target.clone(), reply: None, generation:input_generation, started: false, sent: false, cancelled: false });
                                 } else {
-                                    insertion = Self::inject(&expansion, None)?;
+                                    insertion = Self::inject(&expansion, None)?; usage=Some(expansion);
                                 }
                                 target = None;
                                 break;
@@ -538,7 +546,7 @@ mod tests {
     }
     #[test]
     fn multiline_paste_does_not_emit_enter_keys() {
-        let expansion = Expansion { template: None, erase: 4, text: "Sincerely,\nNitai\nCeo & Founder\n".into() };
+        let expansion = Expansion { identity: None, template: None, erase: 4, text: "Sincerely,\nNitai\nCeo & Founder\n".into() };
         for terminal in [false, true] {
             let strokes = Session::inject(&expansion, Some(terminal)).unwrap();
             assert_eq!(strokes.len(), 5);

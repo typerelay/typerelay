@@ -10,7 +10,7 @@ import { WhiteLabel } from './white_label.js';
 import { StarterContent } from './starter_content.js';
 
 export class AdminAccounts {
-	static owned = ['Member', 'Group', 'SignupNotification', 'Library', 'Snippet', 'SnippetAsset', 'Device', 'Change', 'Operation', 'Conflict', 'Integration', 'OAuthClient', 'ApiAudit', 'AdminAudit'];
+	static owned = ['UsageEvent', 'StatisticsPreference', 'Member', 'Group', 'SignupNotification', 'Library', 'Snippet', 'PersonalAbbreviation', 'SnippetAsset', 'Device', 'Change', 'Operation', 'Conflict', 'Integration', 'OAuthClient', 'ApiAudit', 'AdminAudit'];
 	static state(account) { return account.deletion?.requested_at ? account.deletion.stage === 'failed' ? 'failed' : 'deleting' : account.is_active === false ? 'suspended' : 'active'; }
 	static async counts(ids) {
 		const match = { account: { $in: ids } };
@@ -197,6 +197,8 @@ export class AdminAccounts {
 				await Models.Member.deleteMany({ user: userId }, { session });
 				await Models.Passkey.deleteMany({ user: userId }, { session });
 				await Models.Ticket.deleteMany({ $or: [{ email: user.email }, { 'data.user': { $in: [userId, String(userId)] } }] }, { session });
+				await Models.UsageEvent.deleteMany({ user: userId }, { session });
+				await Models.StatisticsPreference.deleteMany({ user: userId }, { session });
 				await Models.User.deleteOne({ _id: userId }, { session });
 			});
 			// connect-mongo stores sessions as JSON strings. Parse, never match a

@@ -35,6 +35,7 @@ impl PanelIpc {
     }
     pub fn execute(tx: &mpsc::SyncSender<Insertion>, hit: &Hit, target: &str, steps: Vec<ClipboardStep>, erase: usize, generation: Option<u64>) -> Result<()> {
 		let steps = if steps.is_empty() { vec![ClipboardStep::Payload(crate::clipboard_payload::ClipboardPayload::text(String::new()))] } else { steps };
+        let record_usage=steps.iter().any(|step| match step { ClipboardStep::Payload(payload)=> !payload.plain.is_empty() || payload.html.is_some(), ClipboardStep::Enter=>true });let characters=Panel::usage_characters(&steps,erase);
         let mut expected_generation=generation;
         for (index, step) in steps.into_iter().enumerate() {
             Panel::content(&Paths::config_dir()?.join("snippets"),hit)?;
@@ -42,6 +43,7 @@ impl PanelIpc {
             tx.try_send(Insertion { deadline: std::time::Instant::now()+Duration::from_secs(2), step, erase: if index == 0 {erase} else {0}, generation:expected_generation, target:target.into(), reply }).context("Expansion service is busy")?;
             expected_generation=Some(wait.recv_timeout(Duration::from_secs(5)).context("Insertion timed out; no automatic retry")?.map_err(anyhow::Error::msg)?);
         }
+        if record_usage { Panel::record_usage(&Paths::config_dir()?.join("snippets"),hit,"insert","desktop",characters); }
         Ok(())
     }
     pub fn engine(running: Arc<AtomicBool>) -> Result<(mpsc::Receiver<Insertion>,mpsc::SyncSender<Insertion>)> {

@@ -66,7 +66,7 @@ impl Sync {
     }
     fn request(&self, credentials: &mut Credentials, method: reqwest::Method, path: &str, body: Option<&Value>) -> Result<Value> {
         let send = |credentials: &Credentials| {
-            let request = self.client.request(method.clone(), format!("{}/api/v2/{path}", credentials.server)).bearer_auth(&credentials.access_token).header("X-TypeRelay-Sync-Protocol", "6");
+            let request = self.client.request(method.clone(), format!("{}/api/v2/{path}", credentials.server)).bearer_auth(&credentials.access_token).header("X-TypeRelay-Sync-Protocol", "6").header("X-TypeRelay-Personal-Abbreviations", "1");
             if let Some(body) = body { request.json(body).send() } else { request.send() }
         };
         let mut response = send(credentials)?;
@@ -203,6 +203,9 @@ impl Sync {
         let cursor = if db.pending()?.is_empty() && db.meta("sync_protocol")? == Some(json!(6)) { db.meta("cursor")?.and_then(|value| value.as_u64()).unwrap_or(0) } else { 0 };
         let response = self.request(credentials, reqwest::Method::GET, &format!("sync?cursor={cursor}"), None)?;
         ensure!(response["protocol"] == 6, "Server upgrade required: sync protocol 6");
+        let usage_identity = response.get("statistics_identity").filter(|value| value["user"].is_string() && value["account"].is_string()).map(|value| json!({"server":credentials.server,"account":value["account"],"user":value["user"]}));
+        if let Some(identity) = &usage_identity { db.set_meta("statistics_identity", identity)?; } else { db.set_meta("statistics_identity", &Value::Null)?; }
+
 		db.reconcile_detached(&response,&credentials.server,credentials.account.as_deref())?;
 		self.download_assets(credentials,&db,&response)?;
         db.apply(&response, None)?;
@@ -210,13 +213,13 @@ impl Sync {
 		self.upload_assets(credentials,&db)?;
         while let Some((seq, mut operation)) = db.pending()?.into_iter().next() {
             let id = operation["library"].as_str().context("Missing library")?;
-			let result=if operation["kind"]=="merge_synced"{(||->Result<Value>{if operation.get("trash_body").is_none(){let moved=self.request(credentials,reqwest::Method::POST,"snippets/batch",Some(&operation["move_body"]))?;db.apply(&moved,None)?;let source=operation["source"].as_str().context("Missing merge source")?;let library=moved["libraries"].as_array().and_then(|rows|rows.iter().find(|library|library["_id"]==source)).context("Merge response omitted source library")?;operation["trash_body"]=json!({"operation_id":operation["trash_operation_id"],"target":{"type":"library","id":source,"library":source,"revision":library["revision"]},"action":"trash"});db.connection.execute("UPDATE outbox SET operation=?2 WHERE seq=?1",rusqlite::params![seq,operation.to_string()])?;}self.request(credentials,reqwest::Method::POST,"trash/action",Some(&operation["trash_body"]))})()}else{let path=match operation["kind"].as_str(){Some("create")=>"libraries".to_owned(),Some("edit"|"merge_local")=>format!("libraries/{id}/snippets"),Some("trash")=>"trash/action".into(),Some("batch")=>"snippets/batch".into(),Some("resolve")=>format!("conflicts/{}",operation["conflict"].as_str().context("Missing conflict")?),_=>anyhow::bail!("Unknown pending operation")};self.request(credentials,reqwest::Method::POST,&path,Some(&operation["body"]))};
+			let result=if operation["kind"]=="merge_synced"{(||->Result<Value>{if operation.get("trash_body").is_none(){let moved=self.request(credentials,reqwest::Method::POST,"snippets/batch",Some(&operation["move_body"]))?;db.apply(&moved,None)?;let source=operation["source"].as_str().context("Missing merge source")?;let library=moved["libraries"].as_array().and_then(|rows|rows.iter().find(|library|library["_id"]==source)).context("Merge response omitted source library")?;operation["trash_body"]=json!({"operation_id":operation["trash_operation_id"],"target":{"type":"library","id":source,"library":source,"revision":library["revision"]},"action":"trash"});db.connection.execute("UPDATE outbox SET operation=?2 WHERE seq=?1",rusqlite::params![seq,operation.to_string()])?;}self.request(credentials,reqwest::Method::POST,"trash/action",Some(&operation["trash_body"]))})()}else{let path=match operation["kind"].as_str(){Some("personal")=>format!("snippets/{}/personal-abbreviation",operation["snippet"].as_str().context("Missing snippet")?),Some("create")=>"libraries".to_owned(),Some("edit"|"merge_local")=>format!("libraries/{id}/snippets"),Some("trash")=>"trash/action".into(),Some("batch")=>"snippets/batch".into(),Some("resolve")=>format!("conflicts/{}",operation["conflict"].as_str().context("Missing conflict")?),_=>anyhow::bail!("Unknown pending operation")};self.request(credentials,reqwest::Method::POST,&path,Some(&operation["body"]))};
             match result {
                 Ok(result) => db.apply(&result, Some((seq, &operation)))?,
                 Err(error) => {
                     let message = error.to_string();
                     let status = error.downcast_ref::<ServerError>().map(|error|error.status);
-                    if ServerError::rejected(&error, matches!(operation["kind"].as_str(),Some("batch"|"merge_local"|"merge_synced"))) {
+                    if ServerError::rejected(&error, matches!(operation["kind"].as_str(),Some("batch"|"merge_local"|"merge_synced"|"personal"))) {
                         let transaction = db.connection.unchecked_transaction()?;
 						if status != Some(410) && !matches!(operation["kind"].as_str(),Some("merge_local"|"merge_synced")) { db.recover_operation(&operation)?; }
                         db.connection.execute("DELETE FROM outbox WHERE seq=?1", [seq])?;
@@ -231,6 +234,15 @@ impl Sync {
         }
         let cursor = if db.pending()?.is_empty() && db.meta("sync_protocol")? == Some(json!(6)) { db.meta("cursor")?.and_then(|value| value.as_u64()).unwrap_or(0) } else { 0 };
 		let response=self.request(credentials,reqwest::Method::GET,&format!("sync?cursor={cursor}"),None)?;self.download_assets(credentials,&db,&response)?;db.apply(&response,None)?;
+        if let Some(identity) = usage_identity {
+            loop {
+                let events = db.pending_usage(&identity)?; if events.is_empty() { break; }
+                match self.request(credentials, reqwest::Method::POST, "statistics/events", Some(&json!({"identity":identity,"events":events}))) {
+                    Ok(result) => { let ids: Vec<Value> = ["accepted", "discarded"].iter().flat_map(|key| result[key].as_array().into_iter().flatten().cloned()).collect(); if ids.is_empty() { break; } db.acknowledge_usage(&ids)?; }
+                    Err(error) => { eprintln!("TypeRelay statistics upload deferred: {error}"); break; }
+                }
+            }
+        }
         let conflicts = db.meta("conflicts")?.and_then(|value|value.as_array().map(Vec::len)).unwrap_or(0);
         Paths::atomic_write(&self.path("status"), format!("Synced. {conflicts} conflicts. {} Resolve: {}/", db.meta("last_failure")?.and_then(|value|value.as_str().map(str::to_owned)).unwrap_or_default(), credentials.server).as_bytes(), false)?;
         Ok(())
@@ -244,7 +256,10 @@ impl Sync {
         let libraries:Vec<String>=db.libraries()?.into_iter().filter_map(|library|library["_id"].as_str().map(str::to_owned)).filter(|id|db.synced(id).unwrap_or(false)).collect();
         db.connection.execute("UPDATE libraries SET synced=0", [])?;
         for (seq, operation) in db.pending()? { if !matches!(operation["kind"].as_str(),Some("merge_local"|"merge_synced")){db.recover_operation(&operation)?;}db.connection.execute("DELETE FROM outbox WHERE seq=?1", [seq])?; }
+        db.set_meta("statistics_identity", &Value::Null)?;
         db.set_meta("cursor", &json!(0))?;
+        db.set_meta("personal_abbreviations", &json!([]))?; db.set_meta("personal_capability", &Value::Null)?;
+        db.connection.execute("DELETE FROM meta WHERE key LIKE 'personal_rejected:%'", [])?;
 		if !libraries.is_empty(){db.set_meta("detached",&json!({"server":credentials.as_ref().map(|value|value.server.as_str()),"account":credentials.as_ref().and_then(|value|value.account.as_deref()),"libraries":libraries}))?;}
         transaction.commit()?;
         match fs::remove_file(self.path("credentials.json")){Ok(())=>(),Err(error)if error.kind()==ErrorKind::NotFound=>(),Err(error)=>return Err(error.into())}
@@ -284,6 +299,51 @@ impl Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn personal_offline_reconnect_preserves_conflicts_and_recovers_rejected_values() {
+        for rejected in [false,true] {
+            let root=tempfile::tempdir().unwrap(); let directory=root.path().join("snippets"); let db=Database::open(&directory).unwrap();
+            let id="0123456789abcdef01234567"; let snippet="personal-snippet-0001";
+            let library=json!({"_id":id,"name":"Shared","shared":true,"revision":1,"state":"active","permissions":{"read":true,"edit":true,"manage":true},"records":[{"id":snippet,"trigger":"tw","title":"Shared","content":{"version":1,"type":"plain_text","text":"Shared"},"revision":1,"state":"active","position":0}]});
+            let initial=json!({"protocol":6,"cursor":1,"libraries":[library],"accessible":[id],"capabilities":{"personal_abbreviations":1},"personal_abbreviations":[],"assets":[],"conflicts":[]});
+            db.apply(&initial,None).unwrap(); db.personal_edit(id,snippet,Some("offline"),0,None).unwrap();
+            let listener=TcpListener::bind("127.0.0.1:0").unwrap(); let server=format!("http://{}",listener.local_addr().unwrap());
+            let operation=db.pending().unwrap()[0].1["body"]["operation_id"].clone();
+            let worker=std::thread::spawn(move || {
+                let mut latest=initial.clone(); latest["personal_abbreviations"]=json!([{"snippet":snippet,"trigger":"server","revision":1,"conflicts":[]}]);
+                if rejected { latest["libraries"][0]["permissions"]["edit"]=json!(false); }
+                let count=if rejected {4} else {3};
+                for index in 0..count {
+                    let (mut stream,_)=listener.accept().unwrap(); let mut bytes=Vec::new(); let mut byte=[0];
+                    while !bytes.ends_with(b"\r\n\r\n") { stream.read_exact(&mut byte).unwrap(); bytes.push(byte[0]); }
+                    let headers=String::from_utf8(bytes).unwrap();
+                    assert!(headers.to_lowercase().contains("x-typerelay-personal-abbreviations: 1"));
+                    let length=headers.lines().find_map(|line|line.to_lowercase().strip_prefix("content-length: ").and_then(|value|value.parse::<usize>().ok())).unwrap_or(0);
+                    let mut body=vec![0;length]; stream.read_exact(&mut body).unwrap();
+                    let (status,response)=if index==1 {
+                        assert!(headers.starts_with(&format!("POST /api/v2/snippets/{snippet}/personal-abbreviation ")));
+                        let body:Value=serde_json::from_slice(&body).unwrap(); assert_eq!(body["base_revision"],0); assert_eq!(body["trigger"],"offline");
+                        if rejected { ("403 Forbidden",json!({"error":"Editing permission required"})) } else {
+                            latest["personal_abbreviations"][0]["revision"]=json!(2);
+                            latest["personal_abbreviations"][0]["conflicts"]=json!([{"id":operation,"trigger":"offline","base_revision":0}]);
+                            ("200 OK",json!({"personal_abbreviations":latest["personal_abbreviations"]}))
+                        }
+                    } else { ("200 OK",latest.clone()) };
+                    let text=response.to_string(); write!(stream,"HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",text.len()).unwrap();
+                }
+            });
+            let sync=Sync::new(root.path().into(),directory.clone()).unwrap();
+            sync.secret(&Credentials{server,access_token:"access".into(),refresh_token:String::new(),account:Some("account".into()),device:Some("device".into())}).unwrap();
+            sync.cycle().unwrap(); worker.join().unwrap();
+            let personal=db.personal(snippet).unwrap(); assert!(db.pending().unwrap().is_empty()); assert_eq!(personal["trigger"],"server");
+            assert_eq!(db.records(id).unwrap()[0]["trigger"],"tw");
+            if rejected { assert_eq!(personal["rejected"]["trigger"],"offline"); } else {
+                assert_eq!(personal["conflicts"][0]["trigger"],"offline");
+                db.personal_edit(id,snippet,Some("offline"),2,personal["conflicts"][0]["id"].as_str()).unwrap();
+                assert_eq!(db.pending().unwrap()[0].1["body"]["base_revision"],2);
+            }
+        }
+    }
     #[test]
     fn transport_failures_never_discard_queued_operations() {
         assert!(!ServerError::rejected(&anyhow::anyhow!("connection refused at http://127.0.0.1:40901"), true));

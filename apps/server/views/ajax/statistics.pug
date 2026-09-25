@@ -1,0 +1,67 @@
+#statistics-modal.modal.fade(tabindex="-1" aria-labelledby="statistics-title")
+	.modal-dialog.modal-xl.modal-dialog-scrollable
+		.modal-content
+			.modal-header
+				h1#statistics-title.modal-title.h5 Statistics
+				button.btn-close(type="button" data-bs-dismiss="modal" aria-label="Close")
+			.modal-body
+				form#statistics-filters.row.align-items-center.mb-5
+					.col-md-3.mb-3
+						label.form-label(for="statistics-scope") Report
+						select#statistics-scope.form-select.form-select-sm(name="scope")
+							option(value="personal") Personal
+							if ctx.role === 'owner' || ctx.role === 'admin'
+								if ctx.entitlements && ctx.entitlements.plan === 'team'
+									option(value="team") Team
+					.col-md-3.mb-3
+						label.form-label(for="statistics-range") Date range
+						select#statistics-range.form-select.form-select-sm(name="range")
+							each days in [7, 30, 90]
+								option(value=days selected=days === 30)= 'Last ' + days + ' days'
+							option(value="all") All time
+							option(value="custom") Custom
+					.col-md-3.mb-3(data-statistics-custom hidden)
+						label.form-label(for="statistics-start") Start date
+						input#statistics-start.form-control.form-control-sm(type="date" name="start")
+					.col-md-3.mb-3(data-statistics-custom hidden)
+						label.form-label(for="statistics-end") End date
+						input#statistics-end.form-control.form-control-sm(type="date" name="end")
+					.col-12.d-flex.justify-content-end
+						button#statistics-export.btn.btn-outline-secondary.btn-sm.me-3(type="button") Export CSV
+						button.btn.btn-primary.btn-sm(type="submit") Refresh
+				#statistics-summary.row.mb-5(aria-live="polite")
+					each label, key in { uses: 'Total uses', copies: 'Copies', insertions: 'Insertions', characters: 'Characters saved', minutes: 'Estimated minutes saved', money: 'Estimated money saved' }
+						.col-sm-6.col-lg-4.mb-3
+							div.text-muted= label
+							strong(data-statistics-total=key) —
+				p#statistics-estimate.text-muted.small
+				p.text-muted.small Counts successful copies and insertions from synced libraries since this update. Copying does not confirm pasting. Offline activity appears after synchronization. Time and money savings are estimates; images and Enter key actions add no text savings.
+				form#statistics-preferences.mb-5
+					h2.h6 Estimate settings
+					.row.align-items-center
+						.col-md-4.mb-3
+							label.form-label(for="statistics-wpm") Words per minute
+							input#statistics-wpm.form-control.form-control-sm(type="number" name="wpm" min="1" max="1000" step="any" value="50" required)
+						.col-md-4.mb-3
+							label.form-label(for="statistics-rate") Hourly rate
+							input#statistics-rate.form-control.form-control-sm(type="number" name="hourly_rate" min="0" max="1000000" step="0.01" value="30" required)
+						.col-md-4.mb-3
+							label.form-label(for="statistics-currency") Currency
+							select#statistics-currency.form-select.form-select-sm(name="currency")
+								each currency in Intl.supportedValuesOf('currency')
+									option(value=currency selected=currency === 'USD')= currency === 'USD' ? 'USD ($)' : currency
+					.d-flex.justify-content-end
+						button.btn.btn-primary.btn-sm(type="submit") Save
+				p#statistics-empty.text-muted No usage in this period.
+				div#statistics-tables
+					each label, kind in { days: 'Daily activity', snippets: 'Snippets', libraries: 'Libraries', members: 'Members' }
+						section.mb-5(data-statistics-section=kind hidden=kind === 'members')
+							h2.h6= label
+							.table-responsive
+								table.table.table-sm
+									thead
+										tr
+											each title, key in { name: 'Name', uses: 'Uses', copies: 'Copies', insertions: 'Insertions', characters: 'Characters', minutes: 'Minutes saved', money: 'Money saved' }
+												th(scope="col")
+													button.btn.btn-sm.btn-link.p-0(type="button" data-statistics-sort=key data-statistics-kind=kind)= title
+									tbody(data-statistics-rows=kind)

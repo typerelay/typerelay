@@ -1,8 +1,10 @@
 import { Runtime } from './runtime.js';
+import { Usage } from './usage.js';
 
 let origin = 'https://app.typerelay.com';
 const originReady = chrome.storage.local.get('origin').then(data => { origin = data.origin || origin; });
 const client = 'typerelay-browser';
+const usage = new Usage(path => request(path.path, path.options), () => origin);
 const callbackPath = '/oauth/browser-callback';
 const assetPath = id => `/api/v2/assets/${id}`;
 let refreshJob;
@@ -15,7 +17,7 @@ const bridgeReplies = new Map();
 const base64 = bytes => btoa(String.fromCharCode(...bytes)).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
 
 async function clear() {
-	await chrome.storage.local.remove(['tokens', 'items', 'cursor', 'account', 'lastSync']);
+	await chrome.storage.local.remove(['tokens', 'items', 'cursor', 'account', 'lastSync', 'statisticsIdentity']);
 	await caches.delete('typerelay-assets-v1');
 }
 
@@ -34,7 +36,7 @@ async function token(force = false) {
 }
 
 async function request(path, options = {}) {
-	const send = async force => fetch(`${origin}${path}`, { ...options, headers: { ...options.headers, Authorization: `Bearer ${await token(force)}`, 'X-TypeRelay-Sync-Protocol': '6' }, redirect: 'error' });
+	const send = async force => fetch(`${origin}${path}`, { ...options, headers: { ...options.headers, Authorization: `Bearer ${await token(force)}`, 'X-TypeRelay-Sync-Protocol': '6', 'X-TypeRelay-Personal-Abbreviations': '1' }, redirect: 'error' });
 	let response = await send(false);
 	if (response.status === 401) response = await send(true);
 	if (!response.ok) { if (response.status === 401 || response.status === 403) await clear(); throw new Error((await response.json().catch(() => ({}))).error || `TypeRelay request failed (${response.status})`); }
@@ -101,8 +103,12 @@ async function sync() {
 		const key = `${origin}${assetPath(id)}`;
 		if (!await cache.match(key)) await cache.put(key, await request(assetPath(id)));
 	}
-	const items = snapshot.libraries.filter(library => library.state === 'active').flatMap(library => library.snippets.filter(snippet => snippet.state === 'active').map(snippet => ({ id: snippet.id, trigger: snippet.trigger, title: snippet.title, library: library.name, content: snippet.content })));
-	await chrome.storage.local.set({ items, cursor: snapshot.cursor, lastSync: Date.now() });
+	const overrides = new Map((snapshot.personal_abbreviations || []).map(row => [row.snippet, row.trigger]));
+	const items = snapshot.libraries.filter(library => library.state === 'active').flatMap(library => library.snippets.filter(snippet => snippet.state === 'active').map(snippet => ({ id: snippet.id, trigger: library.shared ? (overrides.get(snippet.id) ?? snippet.trigger) : snippet.trigger, title: snippet.title, library: library.name, library_id: library._id, shared: library.shared === true, content: snippet.content })));
+	const counts = new Map(); for (const item of items) if (item.trigger) counts.set(item.trigger, (counts.get(item.trigger) || 0) + 1);
+	for (const item of items) item.abbreviation_collision = (counts.get(item.trigger) || 0) > 1;
+	await chrome.storage.local.set({ items, cursor: snapshot.cursor, lastSync: Date.now(), statisticsIdentity: snapshot.statistics_identity ? { server: origin, account: snapshot.statistics_identity.account, user: snapshot.statistics_identity.user } : null });
+	await usage.flush().catch(() => undefined);
 	for (const key of await cache.keys()) if (!ids.has(key.url.split('/').at(-1))) await cache.delete(key);
 	await chrome.storage.session.remove('browserAuthError');
 	return { count: items.length, cursor: snapshot.cursor };
@@ -132,7 +138,8 @@ async function prepared(id, values, preview) {
 	const { items = [] } = await chrome.storage.local.get('items');
 	const item = items.find(row => row.id === id);
 	if (!item) throw new Error('Snippet no longer available');
-	return { item, rendered: await render(item, values, preview) };
+	const { statisticsIdentity } = await chrome.storage.local.get("statisticsIdentity");
+	return { item, rendered: await render(item, values, preview), statisticsIdentity };
 }
 
 async function claim(active = true) {
@@ -170,11 +177,30 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
 			case 'cancel-connect': { await chrome.storage.session.remove(['browserAuth', 'browserAuthError']); return { cancelled: true }; }
 			case 'snapshot': { const data = await chrome.storage.local.get(['items', 'prefix']); return { items: data.items || [], prefix: data.prefix || ';' }; }
 			case 'focus': { if (sender.tab?.id == null || sender.frameId == null) return {}; await chrome.storage.session.set({ [`frame-${sender.tab.id}`]: sender.frameId }); return {}; }
-			case 'insert': { const [tab] = await chrome.tabs.query({ active: true, currentWindow: true }); if (!tab?.id) throw new Error('No active Chrome tab'); const state = await chrome.storage.session.get(`frame-${tab.id}`); const response = await chrome.tabs.sendMessage(tab.id, { type: 'insert', id: message.id }, { frameId: state[`frame-${tab.id}`] ?? 0 }); if (!response?.ok) throw new Error(response?.error || 'Focus an editable field first'); return {}; }
+			case 'insert': {
+				const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+				if (!tab?.id) throw new Error('No active Chrome tab');
+				if (tab.url && new URL(tab.url).hostname === 'docs.google.com') throw new Error('Google Docs insertion is not supported yet. Copy your snippet and paste it into the document.');
+				if (tab.url && !/^https?:/.test(tab.url)) throw new Error('Open a web page and focus an editable field before inserting.');
+				const state = await chrome.storage.session.get(`frame-${tab.id}`);
+				const frameId = state[`frame-${tab.id}`] ?? 0;
+				let response;
+				try { response = await chrome.tabs.sendMessage(tab.id, { type: 'insert', id: message.id }, { frameId }); }
+				catch (error) {
+					if (!error.message?.includes('Receiving end does not exist')) throw error;
+					try { await chrome.scripting.executeScript({ target: { tabId: tab.id, frameIds: [frameId] }, files: ['content.js'] }); }
+					catch { throw new Error('Cannot access this page. Reload it, allow Type Relay site access, and focus an editable field before trying again.'); }
+					try { response = await chrome.tabs.sendMessage(tab.id, { type: 'insert', id: message.id }, { frameId }); }
+					catch { throw new Error('Reload this page and focus an editable field before trying again.'); }
+				}
+				if (!response?.ok) throw new Error(response?.error || 'Focus an editable field first');
+				return {};
+			}
 			case 'prefix': { if (!",;./'[]\\`=".includes(message.value) || message.value.length !== 1) throw new Error('Invalid prefix'); await chrome.storage.local.set({ prefix: message.value }); return { prefix: message.value }; }
 			case 'match': return Runtime.match(message.before, message.prefix, message.triggers);
+			case 'usage': return usage.record(message.event);
 			case 'prepare': return prepared(message.id, message.values || {}, !!message.preview);
-			case 'claim': return { verified: await claim() };
+			case 'claim': return { verified: sender.tab?.url && new URL(sender.tab.url).hostname === 'docs.google.com' ? false : await claim() };
 			default: throw new Error('Unknown request');
 		}
 	})().then(value => reply({ ok: true, value }), error => reply({ ok: false, error: error.message || String(error) }));

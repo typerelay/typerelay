@@ -44,6 +44,7 @@ pub struct App {
     variables: std::collections::BTreeMap<String,typerelay_core::template::Variable>,
     template_dialog: Option<crate::template_dialog::Dialog>,
     fill_base: Option<(String,i64)>,
+    copy_identity: Option<(String,String)>,
 	rich_fill: Option<serde_json::Value>,
     preview_x: u16,
     expansion: TextArea<'static>,
@@ -89,7 +90,7 @@ impl App {
         let files = Self::load_files(&store)?;
         let mut file_state = ListState::default();
         file_state.select(Some(0));
-        Ok(Self { store, settings, screen: Screen::Files, files, file_state, global_search: TextArea::default(), global_search_focused: false, global_hits: Vec::new(), global_state: ListState::default(), global_edit: false, snippets_state: ListState::default(), file: None, search: TextArea::default(), search_focused: false, trigger: TextArea::default(), title: TextArea::default(), language: "plain_text".into(), code: false, template:false, rich:false, rich_preview:false,rich_image:None,image_source:TextArea::default(),image_alt:TextArea::default(),image_title:TextArea::default(),image_width:Self::text("640"),image_focus:0, variables:Default::default(), template_dialog:None, fill_base:None, rich_fill:None, preview_x: 0, expansion: TextArea::default(), name: TextArea::default(), url: TextArea::default(), editor_focus: 0, editing: None, original_entry: None, original_url: String::new(), prefix: TextArea::default(), original_prefix: String::new(), pending: None, pending_delete: None, selected_ids: std::collections::BTreeSet::new(), selection_anchor: None, move_destination: None, move_choices: Vec::new(), move_state: ListState::default(), move_from: Screen::Browse, move_items: Vec::new(), pending_batch: None,pending_merge:None, bulk_buttons: Vec::new(), pending_trash: None, trash_rows: Vec::new(), trash_state: ListState::default(), trash_buttons: Vec::new(), confirm_from: Screen::Files, status: "Choose a file, or create a new one".into(), error: false, quit: false, toolbar: Vec::new(), list_area: Rect::default(), field_areas: Vec::new(), save_area: Rect::default(), cancel_area: Rect::default(), confirm_buttons: Vec::new(),merge_button:Rect::default() })
+        Ok(Self { store, settings, screen: Screen::Files, files, file_state, global_search: TextArea::default(), global_search_focused: false, global_hits: Vec::new(), global_state: ListState::default(), global_edit: false, snippets_state: ListState::default(), file: None, search: TextArea::default(), search_focused: false, trigger: TextArea::default(), title: TextArea::default(), language: "plain_text".into(), code: false, template:false, rich:false, rich_preview:false,rich_image:None,image_source:TextArea::default(),image_alt:TextArea::default(),image_title:TextArea::default(),image_width:Self::text("640"),image_focus:0, variables:Default::default(), template_dialog:None, fill_base:None, copy_identity:None, rich_fill:None, preview_x: 0, expansion: TextArea::default(), name: TextArea::default(), url: TextArea::default(), editor_focus: 0, editing: None, original_entry: None, original_url: String::new(), prefix: TextArea::default(), original_prefix: String::new(), pending: None, pending_delete: None, selected_ids: std::collections::BTreeSet::new(), selection_anchor: None, move_destination: None, move_choices: Vec::new(), move_state: ListState::default(), move_from: Screen::Browse, move_items: Vec::new(), pending_batch: None,pending_merge:None, bulk_buttons: Vec::new(), pending_trash: None, trash_rows: Vec::new(), trash_state: ListState::default(), trash_buttons: Vec::new(), confirm_from: Screen::Files, status: "Choose a file, or create a new one".into(), error: false, quit: false, toolbar: Vec::new(), list_area: Rect::default(), field_areas: Vec::new(), save_area: Rect::default(), cancel_area: Rect::default(), confirm_buttons: Vec::new(),merge_button:Rect::default() })
     }
     fn load_files(store: &EditorStore) -> Result<Vec<OpenFile>> { store.files()?.iter().map(|name| store.open(name)).collect() }
     fn text(value: &str) -> TextArea<'static> { TextArea::new(value.split('\n').map(str::to_owned).collect()) }
@@ -390,7 +391,12 @@ impl App {
             _ => { self.pending = None; Ok(()) },
         }
     }
+    fn record_copy(&self, characters: usize) {
+        if let Some((library,snippet))=&self.copy_identity { if let Err(error)=typerelay_client::database::Database::open(&self.store.directory).and_then(|db|db.usage(library,snippet,"copy","terminal",characters)) { eprintln!("TypeRelay usage could not be queued: {error}"); } }
+    }
     fn copy_current(&mut self) -> Result<()> {
+        self.copy_identity=match self.screen { Screen::Edit=>self.file.as_ref().and_then(|file|self.editing.and_then(|index|file.ids.get(index)).map(|id|(file.id.clone(),id.clone()))), Screen::Browse=>self.file.as_ref().and_then(|file|self.selected().and_then(|index|file.ids.get(index)).map(|id|(file.id.clone(),id.clone()))), Screen::Files=>self.selected_global().map(|hit|(hit.library_id.clone(),hit.snippet_id.clone())), _=>None };
+
         let (entry, base) = match self.screen {
             Screen::Edit => (self.draft(), self.file.as_ref().map(|file| (file.name.clone(), file.revision))),
             Screen::Browse => {
@@ -409,7 +415,7 @@ impl App {
             let (result, _) = typerelay_client::panel::Panel::rich_payload(&self.store.directory, &content, Default::default(), true)?;
             if result.fields.is_empty() {
                 let (result, payload) = typerelay_client::panel::Panel::rich_payload(&self.store.directory, &content, Default::default(), false)?;
-                typerelay_client::clipboard::PasteJob::copy_payload(payload)?;
+                typerelay_client::clipboard::PasteJob::copy_payload(payload)?;self.record_copy(result.characters);
                 self.message(if result.enter_actions > 0 { "Copied rich text; Enter key actions omitted" } else { "Copied rich text" }, false);
             } else {
                 self.fill_base = base;
@@ -420,14 +426,14 @@ impl App {
             let template = typerelay_core::template::Template { text: entry.replace.clone(), variables: entry.variables.clone() };
             if template.fields().map_err(anyhow::Error::msg)?.is_empty() {
                 let rendered = typerelay_client::templates::Templates::render(&entry.value()["content"], Default::default(), false)?;
-                typerelay_client::clipboard::PasteJob::copy_text(rendered.text)?;
+                let characters=rendered.text.chars().count();typerelay_client::clipboard::PasteJob::copy_text(rendered.text)?;self.record_copy(characters);
                 self.message(if rendered.enter_actions > 0 { "Copied text; Enter key actions omitted" } else { "Copied" }, false);
             } else {
                 self.fill_base = base;
                 self.template_dialog = Some(crate::template_dialog::Dialog::fill(template)?);
             }
         } else {
-            typerelay_client::clipboard::PasteJob::copy_text(entry.replace)?;
+            let characters=entry.replace.chars().count();typerelay_client::clipboard::PasteJob::copy_text(entry.replace)?;self.record_copy(characters);
             self.message("Copied", false);
         }
         Ok(())
@@ -483,7 +489,7 @@ impl App {
                     if insert{self.expansion.insert_str(format!("{{{{{name}}}}}"));}},
 				crate::template_dialog::Outcome::Copy{rendered,values}=>{
 					if let Some((name,revision))=&self.fill_base{let current=self.store.open(name)?;anyhow::ensure!(current.revision==*revision,"Library changed; reopen the template before copying");}
-					if let Some(content)=self.rich_fill.take(){let(result,payload)=typerelay_client::panel::Panel::rich_payload(&self.store.directory,&content,values,false)?;typerelay_client::clipboard::PasteJob::copy_payload(payload)?;self.message(if result.enter_actions>0{"Copied rich text; Enter key actions omitted"}else{"Copied rich text"},false);}else{typerelay_client::clipboard::PasteJob::copy_text(rendered.text)?;self.message(if rendered.enter_actions>0{"Copied text; Enter key actions omitted"}else{"Copied"},false);}
+					if let Some(content)=self.rich_fill.take(){let(result,payload)=typerelay_client::panel::Panel::rich_payload(&self.store.directory,&content,values,false)?;typerelay_client::clipboard::PasteJob::copy_payload(payload)?;self.record_copy(result.characters);self.message(if result.enter_actions>0{"Copied rich text; Enter key actions omitted"}else{"Copied rich text"},false);}else{let characters=rendered.text.chars().count();typerelay_client::clipboard::PasteJob::copy_text(rendered.text)?;self.record_copy(characters);self.message(if rendered.enter_actions>0{"Copied text; Enter key actions omitted"}else{"Copied"},false);}
 				}
 			} self.template_dialog=None; self.fill_base=None;self.rich_fill=None; } return Ok(());
         }

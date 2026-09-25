@@ -45,9 +45,9 @@ impl Panel {
         for library in db.libraries()? {
             if library["state"] != "active" || library["permissions"]["read"] != true { continue; }
             let id = library["_id"].as_str().context("Invalid library ID")?;
-            for entry in db.records(id)?.into_iter().filter(|entry| entry["state"] == "active") {
-                let abbreviation = entry["trigger"].as_str().unwrap_or_default();
-                let text = entry["content"]["text"].as_str().context("Missing snippet content")?;
+            for entry in db.effective_records(id)?.into_iter().filter(|entry| entry["state"] == "active") {
+                let abbreviation = entry["effective_trigger"].as_str().unwrap_or_default();
+                let text = entry["content"]["text"].as_str().or(entry["content"]["markdown"].as_str()).context("Missing snippet content")?;
                 let needle = abbreviation.to_lowercase();
                 let rank = if needle == query { 0 } else if needle.starts_with(&query) { 1 } else if needle.contains(&query) { 2 } else if text.to_lowercase().contains(&query) { 3 } else { continue; };
                 ranked.push((rank, Hit { id: entry["id"].as_str().context("Missing snippet ID")?.into(), library: id.into(), library_name: library["name"].as_str().unwrap_or_default().into(), revision: entry["revision"].as_i64().context("Missing revision")?, title: entry["title"].as_str().unwrap_or_default().into(), abbreviation: abbreviation.into(), preview: text.chars().take(800).collect() }));
@@ -56,6 +56,21 @@ impl Panel {
         transaction.commit()?;
         ranked.sort_by(|(a,x),(b,y)| a.cmp(b).then(x.abbreviation.cmp(&y.abbreviation)).then(x.library_name.cmp(&y.library_name)).then(x.id.cmp(&y.id)));
         Ok(ranked.into_iter().take(50).map(|(_, hit)|hit).collect())
+    }
+    pub fn personal_rows(directory: &Path, hits: &[Hit]) -> Result<serde_json::Value> {
+        let db=Database::open(directory)?; let transaction=db.connection.unchecked_transaction()?; let collisions=db.abbreviation_collisions()?; let mut rows=Vec::new();
+        for hit in hits {
+            let Ok(library)=db.library(&hit.library) else { continue; };
+            if library["state"]!="active" || library["permissions"]["read"]!=true { continue; }
+            let Some(record)=db.effective_records(&hit.library)?.into_iter().find(|row|row["id"]==hit.id && row["state"]=="active") else { continue; };
+            let mut value=serde_json::to_value(hit)?;
+            value["abbreviation"]=record["effective_trigger"].clone(); value["shared_trigger"]=record["trigger"].clone(); value["personal"]=record["personal"].clone();
+            value["can_personal"]=serde_json::json!(library["shared"]==true && library["permissions"]["edit"]==true && db.synced(&hit.library)? && db.meta("personal_capability")?==Some(serde_json::json!(1)));
+            value["review_personal"]=serde_json::json!(record["personal"]["rejected"].is_object() || record["personal"]["conflicts"].as_array().is_some_and(|rows|!rows.is_empty()));
+            value["abbreviation_collision"]=serde_json::json!(collisions.contains(record["effective_trigger"].as_str().unwrap_or("")));
+            rows.push(value);
+        }
+        transaction.commit()?; Ok(serde_json::json!(rows))
     }
     pub fn content(directory: &Path, hit: &Hit) -> Result<serde_json::Value> {
         let db = Database::open(directory)?;
@@ -68,13 +83,17 @@ impl Panel {
         let content = entry["content"].clone();
         transaction.commit()?; Ok(content)
     }
+    pub fn record_usage(directory: &Path, hit: &Hit, action: &str, client: &str, characters: usize) {
+        if let Err(error) = Database::open(directory).and_then(|db| db.usage(&hit.library, &hit.id, action, client, characters)) { eprintln!("TypeRelay usage could not be queued: {error}"); }
+    }
+    pub fn usage_characters(steps: &[crate::clipboard_payload::ClipboardStep], erase: usize) -> usize { steps.iter().map(|step| match step { crate::clipboard_payload::ClipboardStep::Payload(payload) => payload.characters, crate::clipboard_payload::ClipboardStep::Enter => 0 }).sum::<usize>().saturating_sub(erase) }
     pub fn selected(directory: &Path, hit: &Hit) -> Result<String> { let content = Self::content(directory, hit)?; ensure!(content["type"] != "template", "Fill this template before copying/inserting"); Ok(content["text"].as_str().context("Missing text")?.into()) }
     pub fn render(directory: &Path, hit: &Hit, values: std::collections::BTreeMap<String,String>, preview: bool) -> Result<typerelay_core::template::Rendered> { Self::render_at(directory,hit,values,preview,crate::templates::Templates::clock()) }
 
     pub fn render_at(directory:&Path,hit:&Hit,values:std::collections::BTreeMap<String,String>,preview:bool,clock:(i64,i32))->Result<typerelay_core::template::Rendered>{crate::templates::Templates::render_at(&Self::content(directory,hit)?,values,preview,clock)}
 	pub fn rich_render(directory:&Path,content:&serde_json::Value,values:std::collections::BTreeMap<String,String>,preview:bool,clock:(i64,i32))->Result<typerelay_core::rich_text::RichRendered>{ensure!(content["type"]=="rich_text","Snippet is not rich text");let db=Database::open(directory)?;let mut assets=std::collections::BTreeMap::new();for id in content["assets"].as_array().into_iter().flatten(){let id=id.as_str().context("Invalid asset ID")?;let(metadata,bytes)=db.asset(id)?.context("Rich-text image is unavailable")?;assets.insert(id.into(),format!("data:{};base64,{}",metadata["mime_type"].as_str().context("Missing asset MIME")?,STANDARD.encode(bytes)));}typerelay_core::rich_text::RichText::render(typerelay_core::rich_text::RichRequest{markdown:content["markdown"].as_str().context("Missing rich text")?.into(),variables:serde_json::from_value(content.get("variables").cloned().unwrap_or_else(||serde_json::json!({})))?,values,assets,now_ms:clock.0,offset_minutes:clock.1,preview}).map_err(anyhow::Error::msg)}
-	pub fn rich_payload(directory:&Path,content:&serde_json::Value,values:std::collections::BTreeMap<String,String>,preview:bool)->Result<(typerelay_core::rich_text::RichRendered,crate::clipboard_payload::ClipboardPayload)>{let rendered=Self::rich_render(directory,content,values,preview,crate::templates::Templates::clock())?;let payload=crate::clipboard_payload::ClipboardPayload{plain:rendered.text.clone(),html:Some(rendered.html.clone()),rtf:Some(rendered.rtf.clone())};Ok((rendered,payload))}
-	pub fn steps_at(directory:&Path,hit:&Hit,values:std::collections::BTreeMap<String,String>,preview:bool,clock:(i64,i32))->Result<Vec<crate::clipboard_payload::ClipboardStep>>{let content=Self::content(directory,hit)?;if content["type"]=="rich_text"{let rendered=Self::rich_render(directory,&content,values,preview,clock)?;Ok(rendered.steps.into_iter().map(|step|match step{typerelay_core::rich_text::RichStep::Content{text,html,rtf,..}=>crate::clipboard_payload::ClipboardStep::Payload(crate::clipboard_payload::ClipboardPayload{plain:text,html:Some(html),rtf:Some(rtf)}),typerelay_core::rich_text::RichStep::Enter=>crate::clipboard_payload::ClipboardStep::Enter}).collect())}else{Ok(crate::templates::Templates::render_at(&content,values,preview,clock)?.steps.into_iter().map(|step|match step{typerelay_core::template::Step::Text{text}=>crate::clipboard_payload::ClipboardStep::Payload(crate::clipboard_payload::ClipboardPayload::text(text)),typerelay_core::template::Step::Enter=>crate::clipboard_payload::ClipboardStep::Enter}).collect())}}
+	pub fn rich_payload(directory:&Path,content:&serde_json::Value,values:std::collections::BTreeMap<String,String>,preview:bool)->Result<(typerelay_core::rich_text::RichRendered,crate::clipboard_payload::ClipboardPayload)>{let rendered=Self::rich_render(directory,content,values,preview,crate::templates::Templates::clock())?;let payload=crate::clipboard_payload::ClipboardPayload{characters:rendered.characters,plain:rendered.text.clone(),html:Some(rendered.html.clone()),rtf:Some(rendered.rtf.clone())};Ok((rendered,payload))}
+	pub fn steps_at(directory:&Path,hit:&Hit,values:std::collections::BTreeMap<String,String>,preview:bool,clock:(i64,i32))->Result<Vec<crate::clipboard_payload::ClipboardStep>>{let content=Self::content(directory,hit)?;if content["type"]=="rich_text"{let rendered=Self::rich_render(directory,&content,values,preview,clock)?;Ok(rendered.steps.into_iter().map(|step|match step{typerelay_core::rich_text::RichStep::Content{text,html,rtf,characters,..}=>crate::clipboard_payload::ClipboardStep::Payload(crate::clipboard_payload::ClipboardPayload{characters,plain:text,html:Some(html),rtf:Some(rtf)}),typerelay_core::rich_text::RichStep::Enter=>crate::clipboard_payload::ClipboardStep::Enter}).collect())}else{Ok(crate::templates::Templates::render_at(&content,values,preview,clock)?.steps.into_iter().map(|step|match step{typerelay_core::template::Step::Text{text}=>crate::clipboard_payload::ClipboardStep::Payload(crate::clipboard_payload::ClipboardPayload::text(text)),typerelay_core::template::Step::Enter=>crate::clipboard_payload::ClipboardStep::Enter}).collect())}}
 
 }
 

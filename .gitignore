@@ -51,3 +51,5 @@ credentials*.json
 /apps/mobile/native/
 /apps/mobile/android/app/src/main/jniLibs/
 /apps/mobile/android/local.properties
+
+/apps/extension/releases/

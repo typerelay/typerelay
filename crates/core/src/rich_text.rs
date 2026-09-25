@@ -24,10 +24,11 @@ pub struct RichRequest {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum RichStep { Content { markdown: String, text: String, html: String, rtf: String }, Enter }
+pub enum RichStep { Content { markdown: String, text: String, html: String, rtf: String, #[serde(default)] characters: usize }, Enter }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RichRendered {
+    #[serde(default)] pub characters: usize,
     pub markdown: String,
     pub text: String,
     pub html: String,
@@ -113,7 +114,7 @@ impl RichText {
 	fn rtf_html(output:&mut String,value:&str){let sanitized=Self::sanitizer().clean(value).to_string().replace("<u>","\u{e000}").replace("</u>","\u{e001}");if sanitized.contains("text-align:center"){output.push_str("\\qc ");}else if sanitized.contains("text-align:right"){output.push_str("\\qr ");}else if sanitized.contains("text-align:justify"){output.push_str("\\qj ");}let images=Regex::new(r#"(?is)<img\b[^>]*\bsrc=["']data:image/(png|jpeg);base64,([^"']+)["'][^>]*>"#).unwrap();let mut offset=0;for capture in images.captures_iter(&sanitized){let whole=capture.get(0).unwrap();Self::rtf_markup_text(output,&Self::raw_text(&sanitized[offset..whole.start()]));if let Ok(bytes)=STANDARD.decode(&capture[2]){output.push_str("{\\pict");output.push_str(if &capture[1].to_ascii_lowercase()=="png"{"\\pngblip"}else{"\\jpegblip"});output.push(' ');for byte in bytes{output.push_str(&format!("{byte:02x}"));}output.push('}');}offset=whole.end();}Self::rtf_markup_text(output,&Self::raw_text(&sanitized[offset..]));if sanitized.contains("text-align:"){output.push_str("\\ql ");}}
 	fn rtf(markdown:&str,assets:&BTreeMap<String,String>)->String{let syntax=Self::syntax(markdown);let parser=Parser::new_ext(&syntax,Self::options());let mut found=BTreeSet::new();let events=Self::rewrite_assets(parser,assets,&mut found);let mut output=String::from("{\\rtf1\\ansi\\deff0\\uc1 ");let mut image=false;for event in events{match event{Event::Start(Tag::Strong)=>output.push_str("\\b "),Event::End(TagEnd::Strong)=>output.push_str("\\b0 "),Event::Start(Tag::Emphasis)=>output.push_str("\\i "),Event::End(TagEnd::Emphasis)=>output.push_str("\\i0 "),Event::Start(Tag::Strikethrough)=>output.push_str("\\strike "),Event::End(TagEnd::Strikethrough)=>output.push_str("\\strike0 "),Event::Start(Tag::Heading{level,..})=>output.push_str(&format!("\\b\\fs{} ",match level{pulldown_cmark::HeadingLevel::H1=>40,pulldown_cmark::HeadingLevel::H2=>34,pulldown_cmark::HeadingLevel::H3=>30,pulldown_cmark::HeadingLevel::H4=>26,pulldown_cmark::HeadingLevel::H5=>24,pulldown_cmark::HeadingLevel::H6=>22})),Event::End(TagEnd::Heading(_))=>output.push_str("\\b0\\fs24\\par "),Event::Start(Tag::BlockQuote(_))=>output.push_str("\\li360\\i "),Event::End(TagEnd::BlockQuote(_))=>output.push_str("\\li0\\i0\\par "),Event::Start(Tag::CodeBlock(_))=>output.push_str("\\fmodern "),Event::End(TagEnd::CodeBlock)=>output.push_str("\\f0\\par "),Event::Start(Tag::Item)=>output.push_str("\\bullet\\tab "),Event::End(TagEnd::Item)|Event::End(TagEnd::Paragraph)=>output.push_str("\\par "),Event::End(TagEnd::TableCell)=>output.push_str("\\tab "),Event::End(TagEnd::TableRow)=>output.push_str("\\par "),Event::Start(Tag::Image{dest_url,title,..})=>{image=true;let value=dest_url.as_ref();let encoded=value.split_once(",").filter(|_|value.starts_with("data:image/")).and_then(|(_,data)|STANDARD.decode(data).ok());if let Some(bytes)=encoded{let kind=if value.starts_with("data:image/png"){"\\pngblip"}else if value.starts_with("data:image/jpeg"){"\\jpegblip"}else{""};if !kind.is_empty(){output.push_str("{\\pict");output.push_str(kind);output.push(' ');for byte in bytes{output.push_str(&format!("{byte:02x}"));}output.push('}');}}else{output.push_str("[Image");if !title.is_empty(){output.push_str(": ");Self::rtf_text(&mut output,&title);}output.push(']');}},Event::End(TagEnd::Image)=>image=false,Event::Text(value)|Event::Code(value)if !image=>Self::rtf_text(&mut output,&value),Event::Html(value)|Event::InlineHtml(value)=>{let tag=value.trim().to_ascii_lowercase();if tag=="<u>"{output.push_str("\\ul ");}else if tag=="</u>"{output.push_str("\\ul0 ");}else{Self::rtf_html(&mut output,&value);}},Event::HardBreak|Event::SoftBreak=>output.push_str("\\line "),Event::Rule=>output.push_str("\\par ____________________\\par "),Event::TaskListMarker(done)=>output.push_str(if done{"[x] "}else{"[ ] "}),_=>(),}}output.push('}');output}
 
-    fn render_fragment(markdown: &str, assets: &BTreeMap<String, String>) -> Result<(String, String, Vec<String>), String> {
+    fn render_fragment(markdown: &str, assets: &BTreeMap<String, String>) -> Result<(String, String, Vec<String>, usize), String> {
         if markdown.len() > 65536 || markdown.chars().any(|character| character.is_control() && character != '\n' && character != '\t') { return Err("Rich text must contain at most 65536 UTF-8 bytes; only newline/tab controls are allowed".into()); }
 		let syntax=Self::syntax(markdown);
 		let parser = Parser::new_ext(&syntax, Self::options());
@@ -129,12 +130,12 @@ impl RichText {
         let mut rendered = String::new();
         html::push_html(&mut rendered, events.clone().into_iter());
         let sanitized = Self::sanitizer().clean(&rendered).to_string();
-		let mut text = String::new();let mut image_alt:Option<String>=None;
+		let mut text = String::new();let mut image_alt:Option<String>=None;let mut image_characters=0usize;let image_tags=Regex::new(r"(?is)<img\b[^>]*>").unwrap();
         let mut list_depth = 0usize;
         for event in events {
             match event {
 				Event::Text(value)|Event::Code(value)=>if let Some(alt)=&mut image_alt{alt.push_str(&value)}else{text.push_str(&value)},
-                Event::Html(value) | Event::InlineHtml(value) => text.push_str(&Self::raw_text(&Self::sanitizer().clean(&value).to_string())),
+                Event::Html(value) | Event::InlineHtml(value) => { let cleaned=Self::sanitizer().clean(&value).to_string();let plain=Self::raw_text(&cleaned);let without=Self::raw_text(&image_tags.replace_all(&cleaned,""));image_characters+=plain.chars().count().saturating_sub(without.chars().count());text.push_str(&plain); },
                 Event::Start(Tag::List(_)) => { list_depth += 1; if !text.ends_with('\n') { text.push('\n'); } },
                 Event::End(TagEnd::List(_)) => { list_depth = list_depth.saturating_sub(1); if !text.ends_with('\n') { text.push('\n'); } },
                 Event::Start(Tag::Item) => { text.push_str(&"  ".repeat(list_depth.saturating_sub(1))); text.push_str("• "); },
@@ -142,12 +143,13 @@ impl RichText {
                 Event::End(TagEnd::TableCell) => text.push('\t'),
                 Event::HardBreak | Event::SoftBreak | Event::Rule => text.push('\n'),
                 Event::TaskListMarker(done) => text.push_str(if done { "[x] " } else { "[ ] " }),
-				Event::Start(Tag::Image{..})=>image_alt=Some(String::new()),Event::End(TagEnd::Image)=>{let alt=image_alt.take().unwrap_or_default();text.push_str("[Image");if !alt.is_empty(){text.push_str(": ");text.push_str(&alt);}text.push(']');},
+				Event::Start(Tag::Image{..})=>image_alt=Some(String::new()),Event::End(TagEnd::Image)=>{let alt=image_alt.take().unwrap_or_default();image_characters+=7+if alt.is_empty(){0}else{2+alt.chars().count()};text.push_str("[Image");if !alt.is_empty(){text.push_str(": ");text.push_str(&alt);}text.push(']');},
                 _ => (),
             }
         }
         while text.contains("\n\n\n") { text = text.replace("\n\n\n", "\n\n"); }
-		Ok((text.trim_end().into(), sanitized, found.into_iter().collect()))
+		let characters=text.trim_end().chars().count().saturating_sub(image_characters);
+		Ok((text.trim_end().into(), sanitized, found.into_iter().collect(), characters))
     }
 
     pub fn render(mut request: RichRequest) -> Result<RichRendered, String> {
@@ -159,21 +161,23 @@ impl RichText {
         let mut full_html = String::new();
 		let mut full_rtf=String::new();
         let mut full_text = String::new();
+        let mut characters=0;
         for step in &rendered.steps {
             match step {
                 Step::Enter => steps.push(RichStep::Enter),
 				Step::Text { text: source } => {let markdown=Self::substitute(source,&replacements)?;
-					let (text, html, assets) = Self::render_fragment(&markdown, &request.assets)?;let rtf=Self::rtf(&markdown,&request.assets);
+					let (text, html, assets, count) = Self::render_fragment(&markdown, &request.assets)?;let rtf=Self::rtf(&markdown,&request.assets);
+                    characters+=count;
                     all_assets.extend(assets);
                     full_text.push_str(&text);
                     full_html.push_str(&html);
 					full_rtf.push_str(rtf.trim_start_matches("{\\rtf1\\ansi\\deff0\\uc1 ").trim_end_matches('}'));
-					steps.push(RichStep::Content { markdown, text, html, rtf });
+					steps.push(RichStep::Content { markdown, text, html, rtf, characters:count });
                 }
             }
         }
 		let rtf=format!("{{\\rtf1\\ansi\\deff0\\uc1 {full_rtf}}}");
-        Ok(RichRendered { markdown: request.markdown, text: full_text, html: full_html, rtf, assets: all_assets.into_iter().collect(), variables: rendered.template.variables, fields: rendered.fields, steps, enter_actions: rendered.enter_actions })
+        Ok(RichRendered { characters, markdown: request.markdown, text: full_text, html: full_html, rtf, assets: all_assets.into_iter().collect(), variables: rendered.template.variables, fields: rendered.fields, steps, enter_actions: rendered.enter_actions })
     }
 
     pub fn json(input: &str) -> String {
@@ -225,4 +229,12 @@ mod tests {
     }
 	#[test]
 	fn template_values_are_escaped_by_context(){let mut request=RichRequest{markdown:"[Profile]({{url}})\n\nHello {{name}}\n\n<span title=\"{{name}}\">raw</span>".into(),preview:false,..Default::default()};request.values.insert("url".into(),"https://example.com/a?q=1".into());request.values.insert("name".into(),"<b>*literal*</b>".into());let value=RichText::render(request).unwrap();assert!(value.html.contains("href=\"https://example.com/a?q=1\""));assert!(!value.html.contains("<strong>literal</strong>"));assert!(!value.html.contains("<b>"));let mut bad=RichRequest{markdown:"[Bad]({{url}})".into(),preview:false,..Default::default()};bad.values.insert("url".into(),"javascript:alert(1)".into());assert!(RichText::render(bad).is_err());}
+    #[test]
+    fn statistics_excludes_images_without_changing_plain_fallback() {
+        let image=render("![A picture](https://example.test/image.png)");assert_eq!(image.characters,0);assert_eq!(image.text,"[Image: A picture]");
+        let raw=render("<img src=\"https://example.test/image.png\" alt=\"A picture\">");assert_eq!(raw.characters,0);
+        let plain=render("Hello 🌍");assert_eq!(plain.characters,7);
+        let actions=render("Before\n\n{{key:enter}}\n\nAfter");assert_eq!(actions.characters,actions.text.chars().count());
+    }
+
 }

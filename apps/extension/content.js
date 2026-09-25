@@ -1,9 +1,14 @@
+(() => {
+if (globalThis.typeRelayContentReady) return;
+globalThis.typeRelayContentReady = true;
+
 let items = [];
 let prefix = ';';
 let ownedUntil = 0;
 let lastEditor;
 let lastSelection;
 let promptOpen = false;
+const googleDocs = [location.origin, ...Array.from(location.ancestorOrigins || [])].includes('https://docs.google.com');
 
 const send = async message => { const response = await chrome.runtime.sendMessage(message); if (!response?.ok) throw new Error(response?.error || 'TypeRelay is unavailable'); return response.value; };
 
@@ -70,31 +75,11 @@ async function promptFields(fields, variables) {
 	const panel = document.createElement('div');
 	panel.innerHTML = html;
 	shadow.append(panel);
-	const form = shadow.querySelector('form');
-	const container = shadow.querySelector('[data-fields]');
-	const answers = {};
-	for (const [index, name] of fields.entries()) {
-		const variable = variables?.[name] || {};
-		const template = shadow.querySelector(variable.multiline ? '[data-multiline]' : '[data-single]');
-		const row = template.content.cloneNode(true);
-		const label = row.querySelector('label');
-		const input = row.querySelector('input, textarea');
-		label.textContent = variable.label || name;
-		label.htmlFor = `typerelay-field-${index}`;
-		input.id = label.htmlFor;
-		input.name = name;
-		input.value = variable.default || '';
-		input.required = variable.required !== false;
-		container.append(row);
-	}
 	document.documentElement.append(host);
-	return new Promise(resolve => {
-		const finish = value => { host.remove(); promptOpen = false; resolve(value); };
-		form.addEventListener('submit', event => { event.preventDefault(); for (const field of fields) answers[field] = new FormData(form).get(field) || ''; finish(answers); });
-		shadow.querySelector('[data-cancel]').addEventListener('click', () => finish(null));
-		host.addEventListener('keydown', event => { if (event.key === 'Escape') finish(null); });
-		form.querySelector('input, textarea')?.focus();
-	});
+	try {
+		const { promptFields } = await import(chrome.runtime.getURL('prompt.js'));
+		return await promptFields(shadow, fields, variables);
+	} finally { host.remove(); promptOpen = false; }
 }
 
 function insert(editor, saved, expected, erase, rendered, rich) {
@@ -127,10 +112,11 @@ async function expand(editor, saved, id, expected = '', erase = 0) {
 	const result = await send({ type: 'prepare', id, values, preview: false });
 	if (result.rendered.enter_actions) { notice('This snippet uses an Enter key action, which Chrome cannot perform safely. The field was left unchanged.'); return; }
 	insert(editor, saved, expected, erase, result.rendered, result.item.content.type === 'rich_text');
+	await send({ type: 'usage', event: { event_id: crypto.randomUUID(), identity: result.statisticsIdentity, library: result.item.library_id, snippet: result.item.id, shared: result.item.shared, action: 'insert', client: 'extension', occurred_at: new Date().toISOString(), characters: Math.max(0, (result.rendered.characters ?? [...result.rendered.text].length) - erase) } }).catch(() => undefined);
 }
 
 async function claim() {
-	if (location.hostname === 'docs.google.com') { ownedUntil = 0; return; }
+	if (googleDocs) { ownedUntil = 0; return; }
 	if (!document.hasFocus() || !editorFor(document.activeElement) || promptOpen) { ownedUntil = 0; return; }
 	try { if ((await send({ type: 'claim' })).verified) ownedUntil = Date.now() + 650; else ownedUntil = 0; } catch { ownedUntil = 0; }
 }
@@ -156,12 +142,12 @@ document.addEventListener('keydown', event => {
 	if (!before) return;
 	const match = before.match(/[,;./'\[\]\\`=][a-z0-9-]{1,63}$/);
 	if (!match || match[0][0] !== prefix) return;
-	const item = items.find(row => row.trigger === match[0].slice(1));
+	const item = items.find(row => !row.abbreviation_collision && row.trigger === match[0].slice(1));
 	if (!item) return;
 	const saved = selectionFor(editor);
 	event.preventDefault();
 	event.stopImmediatePropagation();
-	void send({ type: 'match', before, prefix, triggers: [...new Set(items.map(row => row.trigger).filter(Boolean))] }).then(result => {
+	void send({ type: 'match', before, prefix, triggers: [...new Set(items.filter(row => !row.abbreviation_collision).map(row => row.trigger).filter(Boolean))] }).then(result => {
 		if (!result || result.trigger !== item.trigger || result.erase !== match[0].length) throw new Error('Abbreviation changed');
 		return expand(editor, saved, item.id, match[0], result.erase);
 	}).catch(error => notice(error.message));
@@ -169,10 +155,12 @@ document.addEventListener('keydown', event => {
 
 chrome.runtime.onMessage.addListener((message, _sender, reply) => {
 	if (message.type !== 'insert') return;
-	if (location.hostname === 'docs.google.com') { reply({ ok: false, error: 'Google Docs insertion awaits compatibility verification' }); return; }
-	const editor = lastEditor;
-	const saved = lastSelection;
+	if (googleDocs) { reply({ ok: false, error: 'Google Docs insertion is not supported yet. Copy your snippet and paste it into the document.' }); return; }
+	const editor = editorFor(document.activeElement) || lastEditor;
+	const saved = editor ? selectionFor(editor) || lastSelection : null;
 	if (!editor || !saved) { reply({ ok: false, error: 'Focus an editable field first' }); return; }
 	void expand(editor, saved, message.id).then(() => reply({ ok: true }), error => reply({ ok: false, error: error.message }));
 	return true;
 });
+
+})();

@@ -3,18 +3,20 @@ html(lang="en")
 	head
 		meta(charset="utf-8")
 		meta(name="viewport" content="width=device-width, initial-scale=1")
-		title Type Relay settings
+		title Typerelay options
 		link(rel="stylesheet" href="options.css")
 	body
 		main
 			header
 				img(src="icon.png" alt="" width="48" height="48")
 				div
-					h1 Type Relay settings
+					h1 Typerelay options
 					p Connect your snippets and choose how typing expands them.
 			section
 				h2 Account
-				p#account-state(role="status") Checking connection…
+				div.status-row
+					p#account-state(role="status") Checking connection…
+					button#disconnect.button-sm(type="button" hidden) Sign out
 				p#auth-error.error(role="alert" hidden)
 				form#server-form(hidden)
 					label(for="server") Server
@@ -25,31 +27,43 @@ html(lang="en")
 					button#reset-server(type="button") reset
 				div.actions
 					button#restart-connect(type="button" hidden) Start over
-					button#disconnect(type="button" hidden) Sign out
 			section
 				h2 Sync
-				p#sync-summary Sign in to sync your snippets.
+				div.status-row
+					p#sync-summary Sign in to sync your snippets.
+					button#sync.button-sm(type="button" disabled) Sync now
 				p#last-sync
 				div.actions
-					button#sync(type="button" disabled) Sync now
 					span#sync-status(role="status")
 			section
 				h2 Trigger prefix
-				label(for="prefix") Character before a snippet abbreviation
-				select#prefix
-					option(value=";") ;
-					option(value=",") ,
-					option(value=".") .
-					option(value="/") /
-					option(value="'") '
-					option(value="[") [
-					option(value="]") ]
-					option(value="\\") \
-					option(value="`") `
-					option(value="=") =
+				div.prefix-group
+					select#prefix
+						option(value=";") ;
+						option(value=",") ,
+						option(value=".") .
+						option(value="/") /
+						option(value="'") '
+						option(value="[") [
+						option(value="]") ]
+						option(value="\\") \
+						option(value="`") `
+						option(value="=") =
+					label(for="prefix") Character before a snippet abbreviation
 				p#prefix-status(role="status")
 			section
 				h2 Snippets
-				p Create and edit snippets in the Type Relay app.
-				a#edit(target="_blank" rel="noopener noreferrer") Open Type Relay
+				div.status-row
+					p Create and edit snippets in the Typerelay app.
+					a#edit.button.button-sm(target="_blank" rel="noopener noreferrer") Open Typerelay
+			section
+				h2 About
+				p#version
+				p
+					a(href="https://feedback.typerelay.com" target="_blank" rel="noopener noreferrer") Feedback
+					span= ' - '
+					a#statistics-link(href="https://app.typerelay.com/#statistics" target="_blank" rel="noopener noreferrer") Statistics
+					a(href="https://docs.typerelay.com" target="_blank" rel="noopener noreferrer") Docs
+					span= ' - '
+					a(href="mailto:hi@typerelay.com") Email
 		script(type="module" src="options.js")

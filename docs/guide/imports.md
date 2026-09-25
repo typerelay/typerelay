@@ -1,6 +1,6 @@
 ---
 title: "Import and export TypeRelay snippets"
-description: "Import and export TypeRelay libraries with YAML, bundles, SnippetsLab, TextExpander, Text Blaze, and TypeIt4Me while preserving supported content."
+description: "Import and export TypeRelay libraries with YAML, bundles, SnippetsLab, Raycast, Keyboard Maestro, TextExpander, Text Blaze, and TypeIt4Me while preserving supported content."
 ---
 
 # Import and export
@@ -16,11 +16,15 @@ Imports always create private libraries and never replace a matching name. A num
 | TypeRelay bundle | Supported | ZIP manifest plus deduplicated images; preserves rich Markdown, raw HTML, variables, asset hashes and remote-source metadata |
 | TypeRelay YAML | Supported | Preserves Text, Rich text without images, Code, Template variables, titles, abbreviations and code language |
 | SnippetsLab JSON library export | Supported | Folders become libraries; fragments become separate snippets; tags, smart groups, shortcuts, pinning and notes are omitted with warnings |
+| Raycast JSON | Supported | Names, text and optional keywords; placeholders remain literal Code marked Needs review, without an abbreviation |
+| Keyboard Maestro .kmmacros | Supported | Single typing/pasting actions; groups become libraries; supported rich formatting and images are preserved; complex automation is skipped with reasons |
 | TextExpander CSV | Beta | Requires `abbreviation` and `snippet` headers; optional `label`; native `.textexpander` files are unsupported |
 | Text Blaze JSON | Beta | Recognized folder exports; supported HTML becomes Rich text and remote images are cached when committed |
 | TypeIt4Me XML | Beta | Recognized XML/plist sets; embedded RTF formatting and PNG/JPEG pictures become Rich text; binary archives remain unsupported |
 
 Beta vendor formats vary between application versions. Review the preview, especially folder names, line breaks and abbreviations.
+
+Keyboard Maestro imports XML exports, with up to 1,000 macros including skipped macros. A single ordinary typed-string trigger supplies the abbreviation; other triggers remain unassigned. Disabled or app-restricted macros require review before assigning an abbreviation. Styled content that cannot be decoded is disabled in preview; unsupported attachments and formatting are reported. Fonts, colors and advanced layout are not preserved.
 
 ## Dynamic content
 
