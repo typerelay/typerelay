@@ -173,6 +173,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
 			case 'insert': {
 				const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 				if (!tab?.id) throw new Error('No active Chrome tab');
+				if (tab.url && new URL(tab.url).hostname === 'docs.google.com') throw new Error('Google Docs insertion is not supported yet. Copy your snippet and paste it into the document.');
 				if (tab.url && !/^https?:/.test(tab.url)) throw new Error('Open a web page and focus an editable field before inserting.');
 				const state = await chrome.storage.session.get(`frame-${tab.id}`);
 				const frameId = state[`frame-${tab.id}`] ?? 0;
@@ -191,7 +192,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
 			case 'prefix': { if (!",;./'[]\\`=".includes(message.value) || message.value.length !== 1) throw new Error('Invalid prefix'); await chrome.storage.local.set({ prefix: message.value }); return { prefix: message.value }; }
 			case 'match': return Runtime.match(message.before, message.prefix, message.triggers);
 			case 'prepare': return prepared(message.id, message.values || {}, !!message.preview);
-			case 'claim': return { verified: await claim() };
+			case 'claim': return { verified: sender.tab?.url && new URL(sender.tab.url).hostname === 'docs.google.com' ? false : await claim() };
 			default: throw new Error('Unknown request');
 		}
 	})().then(value => reply({ ok: true, value }), error => reply({ ok: false, error: error.message || String(error) }));

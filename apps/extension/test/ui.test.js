@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
 import pug from 'pug';
 
@@ -176,4 +177,22 @@ test('Detail previews toggle independently without inserting and ignore stale re
 	results.querySelector('.result-summary').click();
 	await tick();
 	assert.deepEqual(inserted, ['two', 'two']);
+});
+
+for (const url of ['https://docs.google.com/document/d/example/edit', 'about:blank']) test(`Google Docs guard covers ${url}`, () => {
+	const dom = new JSDOM('<textarea></textarea>', { url, runScripts: 'outside-only' });
+	try {
+		let listener;
+		const sent = [];
+		Object.defineProperty(dom.window.location, 'ancestorOrigins', { value: url === 'about:blank' ? ['https://docs.google.com'] : [] });
+		dom.window.chrome = { storage: { onChanged: { addListener() {} } }, runtime: { onMessage: { addListener: value => { listener = value; } }, sendMessage: async message => { sent.push(message.type); return { ok: true, value: { items: [], prefix: ';' } }; } } };
+		dom.window.eval(readFileSync(new URL('../content.js', import.meta.url), 'utf8'));
+		dom.window.document.querySelector('textarea').focus();
+		let response;
+		listener({ type: 'insert', id: 'snippet' }, {}, value => { response = value; });
+		assert.equal(response.ok, false);
+		assert.match(response.error, /Google Docs insertion is not supported yet/);
+		assert.equal(sent.includes('prepare'), false);
+		assert.equal(sent.includes('claim'), false);
+	} finally { dom.window.close(); }
 });

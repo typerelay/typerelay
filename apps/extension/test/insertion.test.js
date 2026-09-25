@@ -37,6 +37,12 @@ test('insertion recovers a missing page listener once and preserves the target f
 	assert.equal(injections, 1);
 	failure = 'field';
 	assert.equal((await send()).error, 'Focus an editable field first');
+	url = 'https://docs.google.com/document/d/example/edit';
+	assert.match((await send()).error, /Google Docs insertion is not supported yet/);
+	assert.equal(attempts, 4);
+	assert.equal(injections, 1);
+	const ownership = await new Promise(resolve => listener({ type: 'claim' }, { url: 'about:blank', tab: { id: 7, url }, frameId: 3 }, resolve));
+	assert.equal(ownership.value.verified, false);
 	url = 'chrome://extensions';
 	assert.match((await send()).error, /Open a web page/);
 	assert.equal(attempts, 4);

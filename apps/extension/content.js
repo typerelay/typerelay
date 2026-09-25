@@ -8,6 +8,7 @@ let ownedUntil = 0;
 let lastEditor;
 let lastSelection;
 let promptOpen = false;
+const googleDocs = [location.origin, ...Array.from(location.ancestorOrigins || [])].includes('https://docs.google.com');
 
 const send = async message => { const response = await chrome.runtime.sendMessage(message); if (!response?.ok) throw new Error(response?.error || 'TypeRelay is unavailable'); return response.value; };
 
@@ -134,7 +135,7 @@ async function expand(editor, saved, id, expected = '', erase = 0) {
 }
 
 async function claim() {
-	if (location.hostname === 'docs.google.com') { ownedUntil = 0; return; }
+	if (googleDocs) { ownedUntil = 0; return; }
 	if (!document.hasFocus() || !editorFor(document.activeElement) || promptOpen) { ownedUntil = 0; return; }
 	try { if ((await send({ type: 'claim' })).verified) ownedUntil = Date.now() + 650; else ownedUntil = 0; } catch { ownedUntil = 0; }
 }
@@ -173,7 +174,7 @@ document.addEventListener('keydown', event => {
 
 chrome.runtime.onMessage.addListener((message, _sender, reply) => {
 	if (message.type !== 'insert') return;
-	if (location.hostname === 'docs.google.com') { reply({ ok: false, error: 'Google Docs insertion awaits compatibility verification' }); return; }
+	if (googleDocs) { reply({ ok: false, error: 'Google Docs insertion is not supported yet. Copy your snippet and paste it into the document.' }); return; }
 	const editor = editorFor(document.activeElement) || lastEditor;
 	const saved = editor ? selectionFor(editor) || lastSelection : null;
 	if (!editor || !saved) { reply({ ok: false, error: 'Focus an editable field first' }); return; }
