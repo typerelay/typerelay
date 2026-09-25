@@ -8,7 +8,7 @@ let connectBusy = false;
 let refreshSerial = 0;
 let serverLoaded = false;
 
-$('#version').textContent = `Version ${chrome.runtime.getManifest().version}`;
+$('#version').textContent = `Typerelay Extension Version ${chrome.runtime.getManifest().version}`;
 
 async function refresh() {
 	const serial = ++refreshSerial;
