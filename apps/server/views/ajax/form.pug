@@ -37,12 +37,15 @@ if kind === 'library'
 			.alert.alert-warning Sharing is disabled. Saving this library removes its stored sharing grants.
 		button.btn.btn-outline-danger.btn-sm(type="button" data-delete-library=library._id) Move library to Trash
 	else
-		label.form-label.fw-bold(for="yaml-file") Import YAML (optional)
-		input#yaml-file.form-control.form-control-sm.mb-4(type="file" accept=".yml,.yaml")
-		label.form-label.fw-bold(for="yaml") YAML
-		textarea#yaml.form-control.form-control-sm.mb-4(name="yaml") matches: []
-		button#preview.btn.btn-outline-secondary.btn-sm(type="button") Validate import
-		p#preview-result.mt-3
+		button.btn.btn-outline-secondary.btn-sm.mb-3(type="button" data-bs-toggle="collapse" data-bs-target="#library-import" aria-expanded="false" aria-controls="library-import") Import YAML (optional)
+		#library-import.collapse
+			.border.rounded.p-4.mb-4
+				label.form-label.fw-bold(for="yaml-file") YAML file
+				input#yaml-file.form-control.form-control-sm.mb-3(type="file" accept=".yml,.yaml")
+				label.form-label.fw-bold(for="yaml") YAML
+				textarea#yaml.form-control.form-control-sm.mb-3(name="yaml") matches: []
+				button#preview.btn.btn-outline-secondary.btn-sm(type="button") Validate import
+				p#preview-result.mt-3.mb-0
 if kind === 'move'
 	label.form-label.fw-bold(for="destination-library") Destination library
 	select#destination-library.form-select.form-select-sm.mb-4(name="destination_library" required disabled=!destinations.length)
