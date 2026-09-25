@@ -4,6 +4,36 @@ import { readFile } from 'node:fs/promises';
 import { JSDOM } from 'jsdom';
 import pug from 'pug';
 
+test('personal abbreviation updates only its row and ignores duplicate and out-of-order responses', async () => {
+	const snippets = [{ id: 'one', title: 'One', trigger: 'tw', effective_trigger: 'tw', replace: 'Shared', revision: 1, personal: { revision: 0, trigger: null, conflicts: [] } }, { id: 'two', title: 'Two', trigger: 'other', replace: 'Other', revision: 1 }];
+	const library = { _id: 'shared', name: 'Shared', shared: true, revision: 1, permissions: { edit: true, manage: true }, snippets };
+	const dom = new JSDOM('<div id="libraries"></div>' + pug.renderFile('./views/ajax/editor.pug', { library }), { runScripts: 'outside-only', pretendToBeVisual: true });
+	try {
+		const source = (await readFile('./public/app.js', 'utf8')).replace(/^import .*;$/gm, '').replace('const client = new TypeRelay();', '').replace('export { client };', 'window.TypeRelay = TypeRelay;');
+		dom.window.eval(source);
+		const client = Object.create(dom.window.TypeRelay.prototype);
+		Object.assign(client, { libraries: new Map([['shared', library]]), tombstones: new Set(), selected: 'shared', selectedSnippets: new Set(['one']) });
+		client.request = () => { throw new Error('No page, section, or library reload allowed'); };
+		const document = dom.window.document;
+		const container = document.querySelector('#snippets'); const sibling = document.querySelector('[data-snippet="two"]');
+		document.querySelector('[data-personal-snippet="one"]').focus();
+		const updated = { ...snippets[0], effective_trigger: 'mine', personal: { revision: 1, trigger: 'mine', conflicts: [] } };
+		const result = { personal_sequence: 5, personal_fragments: [{ library: 'shared', snippet: updated, html: pug.renderFile('./views/ajax/snippet.pug', { library, snippet: updated }) }] };
+		await client.apply(result);
+		const node = document.querySelector('[data-snippet="one"]');
+		await client.apply(result);
+		await client.apply({ personal_sequence: 4, personal_fragments: [{ ...result.personal_fragments[0], snippet: { ...updated, effective_trigger: 'stale' } }] });
+		assert.equal(document.querySelector('[data-snippet="one"]'), node);
+		assert.equal(document.querySelector('[data-snippet="two"]'), sibling);
+		assert.equal(document.querySelector('#snippets'), container);
+		assert.equal(document.activeElement.dataset.personalSnippet, 'one');
+		assert.equal(document.querySelector('[data-select-snippet="one"]').checked, true);
+		assert.equal(library.snippets[0].trigger, 'tw');
+		assert.equal(library.snippets[0].effective_trigger, 'mine');
+		assert.match(node.textContent, /mine/);
+	} finally { dom.window.close(); }
+});
+
 test('snippet edits and creates reorder individual rows without reloading or losing focus and selection', async () => {
 	const snippets = [{ id: 'old', trigger: 'old', replace: 'Old', revision: 1 }, { id: 'new', trigger: 'new', replace: 'New', revision: 1 }];
 	const library = { _id: 'one', name: 'Library', revision: 1, permissions: { edit: true, manage: true }, snippets };

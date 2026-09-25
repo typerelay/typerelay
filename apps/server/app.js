@@ -155,7 +155,7 @@ export class Server {
 		app.post('/api/v2/assets/remote', async (req, res) => res.json(await Assets.remote(req.ctx, req.body.url)));
 		app.post('/api/v2/assets/:id/refresh', async (req, res) => { const asset = await Assets.get(req.ctx, req.params.id); Support.assert(asset.source_urls?.length, 'Asset has no remote source', 409); res.json(await Assets.remote(req.ctx, asset.source_urls.at(-1))); });
 		app.get('/api/v2/libraries/:id/export-bundle', async (req, res) => { const bundle = await Bundles.export(req.ctx, req.params.id); res.set({ 'Content-Type': 'application/zip', 'Content-Disposition': `attachment; filename="${bundle.name}"`, 'Content-Length': String(bundle.bytes.length) }).send(bundle.bytes); });
-		app.post('/api/v2/import/bundle', express.raw({ type: ['application/zip', 'application/octet-stream'], limit: '16mb' }), async (req, res) => { const bundle = await Bundles.import(req.ctx, req.body); const result = await Libraries.mutate(req.ctx, String(req.headers['x-operation-id'] || ''), { bundle: Support.hash(req.body) }, async (ctx, session) => ({ library: await Libraries.create(ctx, bundle, session) })); Server.result(res, req.ctx, result); });
+		app.post('/api/v2/import/bundle', express.raw({ type: ['application/zip', 'application/octet-stream'], limit: '16mb' }), async (req, res) => { const bundle = await Bundles.import(req.ctx, req.body); const result = await Libraries.mutate(req.ctx, String(req.headers['x-operation-id'] || ''), { bundle: Support.hash(req.body) }, async (ctx, session) => ({ library: await Libraries.create(ctx, bundle, session) })); await Server.result(res, req.ctx, result); });
 		Security.mountPrivate(app, rateLimit({ windowMs: 900000, limit: 60, message: { error: 'Too many security requests; try again later.' } }));
 		app.post('/api/v2/billing/trial', async (req, res) => {
 			Support.assert(Support.admin(req.ctx), 'Admin required', 403);
@@ -221,7 +221,7 @@ export class Server {
 			const results = [];
 			if (query) for (const library of await Libraries.list(req.ctx)) {
 				if (library.name.toLowerCase().includes(query)) results.push({ library: library._id, title: library.name, name: 'Library' });
-				for (const snippet of library.snippets) if ((snippet.trigger || '').toLowerCase().includes(query) || (snippet.title || '').toLowerCase().includes(query) || snippet.replace.toLowerCase().includes(query)) results.push({ library: library._id, snippet: snippet.id, title: snippet.title || snippet.trigger || 'Untitled snippet', name: library.name, preview: snippet.replace.slice(0, 240) });
+				for (const snippet of library.snippets) if ((snippet.effective_trigger || '').toLowerCase().includes(query) || (snippet.title || '').toLowerCase().includes(query) || snippet.replace.toLowerCase().includes(query)) results.push({ library: library._id, snippet: snippet.id, title: snippet.title || snippet.effective_trigger || 'Untitled snippet', name: library.name, preview: snippet.replace.slice(0, 240) });
 				if (results.length > 60) break;
 			}
 			res.render('ajax/search', { query, results: results.slice(0, 60), truncated: results.length > 60 });
@@ -240,7 +240,12 @@ export class Server {
 		app.post('/api/v2/libraries', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, async (ctx, session) => ({ library: await Libraries.create(ctx, req.body, session) }))));
 		app.patch('/api/v2/libraries/:id', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.settings(ctx, req.params.id, req.body, session))));
 		app.post('/api/v2/libraries/:id/snippets', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.upload(ctx, req.params.id, req.body, session))));
-		app.get('/api/v2/sync', async (req, res) => res.json(await Libraries.download(req.ctx, Number(req.query.cursor || 0))));
+		app.get('/api/v2/personal-abbreviations', async (req, res) => res.json(await Server.personalPresentation(req.ctx)));
+		app.post('/api/v2/snippets/:id/personal-abbreviation', async (req, res) => {
+			const result = await Libraries.mutate(req.ctx, req.body.operation_id, { ...req.body, snippet: req.params.id }, (ctx, session) => Libraries.personal(ctx, req.params.id, req.body, session));
+			res.json({ ...result, ...await Server.personalPresentation(req.ctx) });
+		});
+		app.get('/api/v2/sync', async (req, res) => res.json(await Libraries.download(req.ctx, Number(req.query.cursor || 0), req.headers['x-typerelay-personal-abbreviations'] === '1')));
 		app.post('/api/v2/conflicts/:id', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.resolve(ctx, req.params.id, req.body, session))));
 		app.get('/api/v2/team', async (req, res) => res.json(await Team.list(req.ctx)));
 		app.post('/api/v2/team/members', async (req, res) => { const result = await Team.add(req.ctx, req.body); res.json({ ...result, html: pug.renderFile('./views/ajax/member.pug', { member: result.member, ctx: req.ctx }) }); });
@@ -262,8 +267,9 @@ export class Server {
 		app.get('/api/v2/forms/:kind', async (req, res) => {
 			const kind = req.params.kind;
 			if (kind === 'import') Support.assert(Object.hasOwn(Libraries.importFormats, req.query.format || ''), 'Unknown import format');
-			Support.assert(['library', 'snippet', 'conflict', 'move', 'snippetslab', 'import'].includes(kind), 'Unknown form');
+			Support.assert(['library', 'snippet', 'personal', 'conflict', 'move', 'snippetslab', 'import'].includes(kind), 'Unknown form');
 			const library = req.query.library ? Libraries.view(req.ctx, await Libraries.get(req.ctx, req.query.library, null, true)) : null;
+			if (kind === 'personal') { Support.assert(library?.shared && library.permissions.edit, 'Shared-library editing permission required', 403); Support.assert(library.snippets.some(snippet => snippet.id === req.query.snippet), 'Snippet not found', 404); }
 			const conflict = req.query.conflict ? await Conflict.findOne({ _id: Support.id(req.query.conflict), account: req.ctx.account, library: library?._id, resolved: false }).lean() : null;
 			if (kind === 'conflict') Support.assert(conflict && library.permissions.edit, 'Conflict not found', 404);
 			const current = library?.records.find(snippet => snippet.id === conflict?.snippet) || null;
@@ -317,10 +323,21 @@ export class Server {
 		return `${protocol}://${host}`;
 	}
 	static whiteLabelResult(res, settings) { res.json({ settings, html: pug.renderFile('./views/ajax/white-label.pug', { whiteLabelSettings: settings }), brand_html: pug.renderFile('./views/ajax/brand.pug', { brandUrl: settings.logo_url }) }); }
+	static async personalPresentation(ctx) {
+		let result;
+		await mongoose.connection.transaction(async session => {
+			const libraries = await Libraries.list(ctx, session);
+			const account = await Account.findById(ctx.account).select('sequence').session(session).lean();
+			result = { personal_sequence: account.sequence, personal_fragments: libraries.flatMap(library => library.snippets.map(snippet => ({ library: library._id, snippet, html: pug.renderFile('./views/ajax/snippet.pug', { snippet, library }) }))) };
+		}, { readConcern: { level: 'snapshot' } });
+		return result;
+	}
 	static presentation(library) {
 		return { library, html: pug.renderFile('./views/ajax/library.pug', { library }), fragments: library.snippets.map(snippet => ({ id: snippet.id, revision: snippet.revision, html: pug.renderFile('./views/ajax/snippet.pug', { snippet, library }) })) };
 	}
-	static result(res, ctx, result) {
+	static async result(res, ctx, result) {
+		if (result.libraries) result.libraries = await Libraries.personalize(ctx, result.libraries);
+		if (result.library) [result.library] = await Libraries.personalize(ctx, [result.library]);
 		if (result.libraries) return res.json({ ...result, updates: result.libraries.map(Server.presentation) });
 		res.json(result.library ? { ...result, ...Server.presentation(result.library) } : result);
 	}

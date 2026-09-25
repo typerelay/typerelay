@@ -10,7 +10,7 @@ import { WhiteLabel } from './white_label.js';
 import { StarterContent } from './starter_content.js';
 
 export class AdminAccounts {
-	static owned = ['Member', 'Group', 'SignupNotification', 'Library', 'Snippet', 'SnippetAsset', 'Device', 'Change', 'Operation', 'Conflict', 'Integration', 'OAuthClient', 'ApiAudit', 'AdminAudit'];
+	static owned = ['Member', 'Group', 'SignupNotification', 'Library', 'Snippet', 'PersonalAbbreviation', 'SnippetAsset', 'Device', 'Change', 'Operation', 'Conflict', 'Integration', 'OAuthClient', 'ApiAudit', 'AdminAudit'];
 	static state(account) { return account.deletion?.requested_at ? account.deletion.stage === 'failed' ? 'failed' : 'deleting' : account.is_active === false ? 'suspended' : 'active'; }
 	static async counts(ids) {
 		const match = { account: { $in: ids } };

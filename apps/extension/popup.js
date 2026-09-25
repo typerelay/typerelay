@@ -65,7 +65,7 @@ function results() {
 		const row = $('#result-template').content.firstElementChild.cloneNode(true);
 		row.id = 'result-' + item.id;
 		row.querySelector('strong').textContent = item.title || item.trigger || 'Untitled snippet';
-		row.querySelector('small').textContent = item.library + ' · ' + (item.trigger || 'Search only');
+		row.querySelector('small').textContent = item.library + ' · ' + (item.trigger || 'Search only') + (item.abbreviation_collision ? ' · Abbreviation paused: duplicate' : '');
 		row.querySelector('.result-summary').addEventListener('click', () => void copy(item));
 		const detail = row.querySelector('.detail');
 		const preview = row.querySelector('.preview');

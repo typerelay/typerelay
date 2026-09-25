@@ -170,7 +170,8 @@ impl Mobile {
         if mode == "search" || !needle.is_empty() {
             for library in snapshot["libraries"].as_array().context("Invalid keyboard snapshot")? {
                 for record in library["records"].as_array().context("Invalid keyboard records")? {
-                    let trigger = record["trigger"].as_str().unwrap_or("");
+                    if mode=="typing" && record["abbreviation_collision"]==true { continue; }
+                    let trigger = record.get("effective_trigger").unwrap_or(&record["trigger"]).as_str().unwrap_or("");
                     let title = record["title"].as_str().filter(|title| !title.is_empty()).unwrap_or(trigger);
                     let content = &record["content"];
                     let replacement = content["text"].as_str().filter(|text| !text.trim().is_empty()).or_else(|| content["markdown"].as_str()).unwrap_or(title);
@@ -205,11 +206,12 @@ impl Mobile {
     fn state(db: &Database) -> Result<Value> {
         let transaction = db.connection.unchecked_transaction()?;
         let mut libraries = Vec::new();
+        let collisions = db.abbreviation_collisions()?;
         for mut library in db.libraries()? {
             if library["state"] != "active" || library["permissions"]["read"] != true { continue; }
             let id = library["_id"].as_str().context("Missing library ID")?;
             let file = db.editor(library["name"].as_str().context("Missing name")?)?;
-            library["records"] = json!(db.records(id)?.into_iter().filter(|record| record["state"] == "active").collect::<Vec<_>>());
+            library["records"] = json!(db.effective_records(id)?.into_iter().filter(|record| record["state"] == "active").map(|mut record| { record["abbreviation_collision"]=json!(collisions.contains(record["effective_trigger"].as_str().unwrap_or(""))); record }).collect::<Vec<_>>());
             library["editor_revision"] = json!(file.revision);
             libraries.push(library);
         }

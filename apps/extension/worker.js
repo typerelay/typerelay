@@ -34,7 +34,7 @@ async function token(force = false) {
 }
 
 async function request(path, options = {}) {
-	const send = async force => fetch(`${origin}${path}`, { ...options, headers: { ...options.headers, Authorization: `Bearer ${await token(force)}`, 'X-TypeRelay-Sync-Protocol': '6' }, redirect: 'error' });
+	const send = async force => fetch(`${origin}${path}`, { ...options, headers: { ...options.headers, Authorization: `Bearer ${await token(force)}`, 'X-TypeRelay-Sync-Protocol': '6', 'X-TypeRelay-Personal-Abbreviations': '1' }, redirect: 'error' });
 	let response = await send(false);
 	if (response.status === 401) response = await send(true);
 	if (!response.ok) { if (response.status === 401 || response.status === 403) await clear(); throw new Error((await response.json().catch(() => ({}))).error || `TypeRelay request failed (${response.status})`); }
@@ -101,7 +101,10 @@ async function sync() {
 		const key = `${origin}${assetPath(id)}`;
 		if (!await cache.match(key)) await cache.put(key, await request(assetPath(id)));
 	}
-	const items = snapshot.libraries.filter(library => library.state === 'active').flatMap(library => library.snippets.filter(snippet => snippet.state === 'active').map(snippet => ({ id: snippet.id, trigger: snippet.trigger, title: snippet.title, library: library.name, content: snippet.content })));
+	const overrides = new Map((snapshot.personal_abbreviations || []).map(row => [row.snippet, row.trigger]));
+	const items = snapshot.libraries.filter(library => library.state === 'active').flatMap(library => library.snippets.filter(snippet => snippet.state === 'active').map(snippet => ({ id: snippet.id, trigger: library.shared ? (overrides.get(snippet.id) ?? snippet.trigger) : snippet.trigger, title: snippet.title, library: library.name, content: snippet.content })));
+	const counts = new Map(); for (const item of items) if (item.trigger) counts.set(item.trigger, (counts.get(item.trigger) || 0) + 1);
+	for (const item of items) item.abbreviation_collision = (counts.get(item.trigger) || 0) > 1;
 	await chrome.storage.local.set({ items, cursor: snapshot.cursor, lastSync: Date.now() });
 	for (const key of await cache.keys()) if (!ids.has(key.url.split('/').at(-1))) await cache.delete(key);
 	await chrome.storage.session.remove('browserAuthError');

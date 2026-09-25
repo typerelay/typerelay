@@ -1,3 +1,18 @@
+if kind === 'personal'
+	input(type="hidden" name="base_revision" value=snippet.personal.revision)
+	p.mb-3
+		span.me-1 Shared abbreviation:
+		strong= snippet.trigger || 'None'
+	label.form-label(for="personal-trigger") My abbreviation
+	input#personal-trigger.form-control.form-control-sm.mb-3(name="trigger" value=snippet.personal.trigger || '' maxlength="63" pattern="[a-z0-9-]{1,63}")
+	button.btn.btn-outline-secondary.btn-sm.mb-3(type="button" data-reset-personal) Use shared default
+	if snippet.personal.conflicts.length
+		label.form-label(for="personal-conflict") Resolve personal abbreviation conflict
+		select#personal-conflict.form-select.form-select-sm.mb-3(name="conflict")
+			each conflict in snippet.personal.conflicts
+				option(value=conflict.id data-trigger=conflict.trigger || '')= 'Pending: ' + (conflict.trigger || 'Shared default')
+		button.btn.btn-outline-secondary.btn-sm(type="button" data-use-personal-conflict) Use pending value
+		p.small Saving resolves the selected conflict. Keep the current value or use the pending value.
 if kind === 'library'
 	label.form-label.fw-bold(for="name") Library name
 	input#name.form-control.form-control-sm.mb-4(name="name" value=library ? library.name : '' required maxlength="100")
@@ -39,7 +54,7 @@ if kind === 'move'
 if kind === 'snippet' || kind === 'conflict'
 	.row.align-items-center.g-0
 		.col-md-4
-			label.form-label.snippet-label(for="trigger") Abbreviation
+			label.form-label.snippet-label(for="trigger")= library && library.shared ? 'Shared abbreviation' : 'Abbreviation'
 			.input-group.input-group-sm.mb-3
 				span.input-group-text(aria-hidden="true") ;
 				input#trigger.form-control.form-control-sm(name="trigger" value=snippet ? snippet.trigger : '' pattern="[a-z0-9\\-]{1,63}" autocapitalize="off" spellcheck="false")

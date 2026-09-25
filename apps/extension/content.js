@@ -141,12 +141,12 @@ document.addEventListener('keydown', event => {
 	if (!before) return;
 	const match = before.match(/[,;./'\[\]\\`=][a-z0-9-]{1,63}$/);
 	if (!match || match[0][0] !== prefix) return;
-	const item = items.find(row => row.trigger === match[0].slice(1));
+	const item = items.find(row => !row.abbreviation_collision && row.trigger === match[0].slice(1));
 	if (!item) return;
 	const saved = selectionFor(editor);
 	event.preventDefault();
 	event.stopImmediatePropagation();
-	void send({ type: 'match', before, prefix, triggers: [...new Set(items.map(row => row.trigger).filter(Boolean))] }).then(result => {
+	void send({ type: 'match', before, prefix, triggers: [...new Set(items.filter(row => !row.abbreviation_collision).map(row => row.trigger).filter(Boolean))] }).then(result => {
 		if (!result || result.trigger !== item.trigger || result.erase !== match[0].length) throw new Error('Abbreviation changed');
 		return expand(editor, saved, item.id, match[0], result.erase);
 	}).catch(error => notice(error.message));

@@ -4,12 +4,58 @@ import { parseDocument } from 'htmlparser2';
 import { DOMParser } from '@xmldom/xmldom';
 import { Abbreviation } from '../public/abbreviation.js';
 import { randomUUID } from 'node:crypto';
-import { mongoose, Library, Snippet, SnippetAsset, Operation, Conflict, Account, Change, Member, Group } from '../model/index.js';
+import { mongoose, Library, Snippet, SnippetAsset, Operation, Conflict, Account, Change, Member, Group, PersonalAbbreviation } from '../model/index.js';
 import { Support, Yaml } from './support.js';
 import { Billing } from './billing.js';
 import { RichText } from './rich_text.js';
 
 export class Libraries {
+	static async personalState(ctx, session = null) {
+		const libraries = await Library.find({ account: ctx.account, state: { $ne: 'purged' } }).session(session).lean();
+		const visible = libraries.filter(library => Support.access(ctx, library).read).map(library => library._id);
+		const snippets = await Snippet.find({ account: ctx.account, library: { $in: visible }, state: { $ne: 'purged' } }).select('id').session(session).lean();
+		return PersonalAbbreviation.find({ account: ctx.account, user: ctx.user, snippet: { $in: snippets.map(snippet => snippet.id) } }).select('snippet trigger revision conflicts -_id').session(session).lean();
+	}
+	static async personalize(ctx, libraries, session = null) {
+		const personal = new Map((await Libraries.personalState(ctx, session)).map(row => [row.snippet, row]));
+		const counts = new Map();
+		const visible = (await Library.find({ account: ctx.account, state: 'active' }).session(session).lean()).filter(library => Support.access(ctx, library).read);
+		const shared = new Set(visible.filter(library => library.shared).map(library => String(library._id)));
+		for (const snippet of await Snippet.find({ library: { $in: visible.map(library => library._id) }, state: 'active' }).select('id library trigger').session(session).lean()) {
+			const effective = (shared.has(String(snippet.library)) ? personal.get(snippet.id)?.trigger : null) ?? snippet.trigger;
+			if (effective) counts.set(effective, (counts.get(effective) || 0) + 1);
+		}
+		for (const library of libraries) for (const snippet of library.snippets) {
+			const override = library.shared ? personal.get(snippet.id) : null;
+			snippet.personal = override || { snippet: snippet.id, trigger: null, revision: 0, conflicts: [] };
+			snippet.effective_trigger = override?.trigger ?? snippet.trigger;
+		}
+		for (const library of libraries) for (const snippet of library.snippets) snippet.abbreviation_collision = (counts.get(snippet.effective_trigger) || 0) > 1;
+		return libraries;
+	}
+	static async personal(ctx, id, body, session) {
+		const snippet = await Snippet.findOne({ account: ctx.account, id, state: 'active' }).session(session).lean();
+		Support.assert(snippet, 'Snippet not found', 404);
+		const library = await Libraries.get(ctx, String(snippet.library), session);
+		Support.assert(library.shared && Support.access(ctx, library).edit, 'Shared-library editing permission required', 403);
+		Support.assert(body.trigger === null || typeof body.trigger === 'string', 'Invalid abbreviation');
+		Support.assert(Number.isSafeInteger(body.base_revision) && body.base_revision >= 0, 'Invalid personal revision');
+		const trigger = Abbreviation.normalize(body.trigger) || null;
+		Support.assert(trigger === null || /^[a-z0-9-]{1,63}$/.test(trigger), 'Use 1–63 lowercase letters, numbers or hyphens');
+		const filter = { account: ctx.account, user: ctx.user, snippet: id };
+		const current = await PersonalAbbreviation.findOne(filter).session(session).lean() || { ...filter, trigger: null, revision: 0, conflicts: [] };
+		if (body.conflict) Support.assert(current.conflicts.some(conflict => conflict.id === body.conflict), 'Personal conflict no longer exists', 409);
+		if (body.base_revision !== current.revision) {
+			await PersonalAbbreviation.updateOne(filter, { $setOnInsert: { trigger: current.trigger }, $inc: { revision: 1 }, $push: { conflicts: { id: body.operation_id, trigger, base_revision: body.base_revision } } }, { upsert: true, session });
+		} else {
+			const libraries = await Libraries.list(ctx, session);
+			const effective = trigger ?? snippet.trigger;
+			Support.assert(!effective || !libraries.some(item => item.snippets.some(row => row.id !== id && row.effective_trigger === effective)), 'Duplicate personal abbreviation; choose another abbreviation', 409);
+			await PersonalAbbreviation.updateOne(filter, { $set: { trigger, revision: current.revision + 1, conflicts: current.conflicts.filter(conflict => conflict.id !== body.conflict) } }, { upsert: true, session });
+		}
+		await Support.change(ctx.account, library._id, 'personal_abbreviation', session);
+		return { personal_abbreviations: await Libraries.personalState(ctx, session), personal_snippet: id, personal_library: String(library._id) };
+	}
 	static retention = 30 * 86400000;
 	static trashFields(actor, now = new Date()) { return { state: 'trashed', trashed_at: now, expires_at: new Date(+now + Libraries.retention), trashed_by: actor }; }
 	static content(value) {
@@ -37,11 +83,11 @@ export class Libraries {
 	static async get(ctx, id, session, includeTrash = false) {
 		const library = await Library.findOne({ _id: Support.id(id), account: ctx.account }).session(session || null).lean();
 		Support.assert(library && Support.access(ctx, library).read && (includeTrash || library.state === 'active'), 'Library not found', 404);
-		return Libraries.hydrate(library, session);
+		return (await Libraries.personalize(ctx, [await Libraries.hydrate(library, session)], session))[0];
 	}
 	static async list(ctx, session) {
 		const libraries = await Library.find({ account: ctx.account, state: 'active' }).session(session || null).lean();
-		return Promise.all(libraries.filter(library => Support.access(ctx, library).read).map(async library => Libraries.view(ctx, await Libraries.hydrate(library, session))));
+		return Libraries.personalize(ctx, await Promise.all(libraries.filter(library => Support.access(ctx, library).read).map(async library => Libraries.view(ctx, await Libraries.hydrate(library, session)))), session);
 	}
 	static async validate(entries, ctx = null, session = null) {
 		const values = entries.map(Libraries.value);
@@ -298,6 +344,7 @@ export class Libraries {
 	}
 	static async receipt(ctx, stored, session) {
 		const result = { ...stored };
+		if (stored.personal_snippet) result.personal_abbreviations = await Libraries.personalState(ctx, session);
 		if (stored.library_ids) {
 			result.libraries = [];
 			for (const id of stored.library_ids) {
@@ -457,6 +504,7 @@ export class Libraries {
 	static async purge(library, entry, session) {
 		const filter = entry ? { library: library._id, id: entry.id } : { library: library._id };
 		const ids = (await Snippet.find(filter).select('id').session(session).lean()).map(row => row.id);
+		await PersonalAbbreviation.deleteMany({ account: library.account, snippet: { $in: ids } }).session(session);
 		await Snippet.updateMany(filter, { $set: { state: 'purged' }, $inc: { revision: 1 }, $unset: { title: 1, trigger: 1, content: 1, position: 1, trashed_by: 1, trashed_at: 1, expires_at: 1 } }, { session });
 		await Conflict.deleteMany({ library: library._id, ...(entry ? { snippet: { $in: ids } } : {}) }, { session });
 		if (!entry) {
@@ -528,7 +576,7 @@ export class Libraries {
 		}
 		return summary;
 	}
-	static async download(ctx, cursor) {
+	static async download(ctx, cursor, personal = false) {
 		Support.assert(Number.isSafeInteger(cursor) && cursor >= 0, 'Invalid cursor');
 		let result;
 		await mongoose.connection.transaction(async session => {
@@ -549,7 +597,7 @@ export class Libraries {
 			const departures = [...new Map(candidates.filter(item => locations.has(item.id) && locations.get(item.id) !== item.library).map(item => [item.library + ':' + item.id, item])).values()];
 			const assetIds = [...new Set([...libraries.flatMap(library => library.records || []).flatMap(record => record.content?.type === 'rich_text' ? record.content.assets : []), ...conflicts.flatMap(conflict => [conflict.local, conflict.base, conflict.server].flatMap(value => value?.content?.type === 'rich_text' ? value.content.assets : []))])];
 			const assets = assetIds.length ? await SnippetAsset.find({ account: ctx.account, id: { $in: assetIds } }).select('id mime_type size width height animated source_urls').session(session).lean() : [];
-			result = { protocol: 6, departures, purged, cursor: account.sequence, accessible: visible.map(library => String(library._id)), libraries, assets, tombstones, conflicts, trash: await Libraries.trash(ctx, session) };
+			result = { ...(personal ? { personal_abbreviations: await Libraries.personalState(ctx, session), capabilities: { personal_abbreviations: 1 } } : {}), protocol: 6, departures, purged, cursor: account.sequence, accessible: visible.map(library => String(library._id)), libraries, assets, tombstones, conflicts, trash: await Libraries.trash(ctx, session) };
 		}, { readConcern: { level: 'snapshot' } });
 		return result;
 	}

@@ -3,7 +3,7 @@ mod platform;
 mod browser_bridge;
 mod tray;
 mod update;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use serde_json::{json,Value};
 use std::{sync::{Mutex,atomic::{AtomicBool,Ordering}},path::PathBuf};
 use tauri::{Manager,Emitter};
@@ -182,9 +182,25 @@ fn initialize(app:tauri::AppHandle)->std::result::Result<Value,String> {
 		Ok(json!({"config":settings,"prompt":state.prompt_hit.lock().unwrap().clone(),"server":typerelay_client::settings::SettingsStore::open(state.root.join("settings.yml")).ok().map(|s|s.settings.sync_url).unwrap_or_default(),"connected":connected,"connection_state":if authenticating{"authenticating"}else if connected{"connected"}else{"disconnected"},"auth_error":*state.auth_error.lock().unwrap(),"theme":Runtime::theme(),"settings":state.settings.load(Ordering::SeqCst),"status":*state.status.lock().unwrap(),"update":app.state::<update::UpdateState>().value(),"accessibility":accessibility,"input_monitoring":input_monitoring,"notifications":notifications,"empty":empty,"version":app.package_info().version.to_string()}))
 }
 #[tauri::command]
-async fn search(app:tauri::AppHandle,query:String)->std::result::Result<Vec<Hit>,String> {
+async fn search(app:tauri::AppHandle,query:String)->std::result::Result<Value,String> {
     let directory=app.state::<Runtime>().root.join("snippets");
-    tauri::async_runtime::spawn_blocking(move ||Panel::search(&directory,&query).map_err(|e|e.to_string())).await.map_err(|e|e.to_string())?
+    tauri::async_runtime::spawn_blocking(move ||Panel::search(&directory,&query).and_then(|hits|Panel::personal_rows(&directory,&hits)).map_err(|e|e.to_string())).await.map_err(|e|e.to_string())?
+}
+#[tauri::command]
+async fn personal_status(app:tauri::AppHandle,hits:Vec<Hit>)->std::result::Result<Value,String> {
+    let directory=app.state::<Runtime>().root.join("snippets");
+    tauri::async_runtime::spawn_blocking(move ||Panel::personal_rows(&directory,&hits).map_err(|error|error.to_string())).await.map_err(|error|error.to_string())?
+}
+#[tauri::command]
+async fn personal_abbreviation(app:tauri::AppHandle,hit:Hit,change:Option<Value>)->std::result::Result<Value,String> {
+    let root=app.state::<Runtime>().root.clone();
+    tauri::async_runtime::spawn_blocking(move || (|| -> Result<Value> {
+        let db=Database::open(&root.join("snippets"))?; let library=db.library(&hit.library)?;
+        ensure!(library["shared"]==true && library["permissions"]["read"]==true, "Shared library is no longer available");
+        let record=db.records(&hit.library)?.into_iter().find(|row|row["id"]==hit.id && row["state"]=="active").context("Snippet no longer exists")?;
+        if let Some(change)=change { db.personal_edit(&hit.library,&hit.id,change["trigger"].as_str(),change["base_revision"].as_i64().context("Missing personal revision")?,change["conflict"].as_str())?; let _=Sync::trigger(&root); }
+        Ok(json!({"personal":db.personal(&hit.id)?,"shared_trigger":record["trigger"],"can_edit":library["permissions"]["edit"]==true}))
+    })().map_err(|error|error.to_string())).await.map_err(|error|error.to_string())?
 }
 #[tauri::command]
 async fn insert(app:tauri::AppHandle,hit:Hit,values:Option<std::collections::BTreeMap<String,String>>)->std::result::Result<(),String> {
@@ -371,7 +387,7 @@ fn main() {
     }).on_window_event(|window,event|match event {
         tauri::WindowEvent::CloseRequested{api,..}=>{api.prevent_close();set_prompt_view(window.app_handle().clone(),false);Runtime::hide(window.app_handle());},
         tauri::WindowEvent::Focused(false)if Runtime::hide_on_focus_loss() && !window.app_handle().state::<Runtime>().busy.load(Ordering::SeqCst) && !window.app_handle().state::<Runtime>().settings.load(Ordering::SeqCst) && !window.app_handle().state::<Runtime>().prompting.load(Ordering::SeqCst)=> {Runtime::hide(window.app_handle());},_=>()
-    }).invoke_handler(tauri::generate_handler![initialize,search,insert,copy_snippet,prepare_template,set_prompt_view,set_settings_view,dismiss,notify,sync_now,save_settings,connect,cancel_connect,disconnect,libraries,merge_destinations,merge_library,conflicts,resolve_conflict,enroll,open_accessibility_settings,open_input_monitoring_settings,open_notification_settings,open_tui,open_web_app]).run(tauri::generate_context!());
+    }).invoke_handler(tauri::generate_handler![initialize,search,personal_status,personal_abbreviation,insert,copy_snippet,prepare_template,set_prompt_view,set_settings_view,dismiss,notify,sync_now,save_settings,connect,cancel_connect,disconnect,libraries,merge_destinations,merge_library,conflicts,resolve_conflict,enroll,open_accessibility_settings,open_input_monitoring_settings,open_notification_settings,open_tui,open_web_app]).run(tauri::generate_context!());
     if let Err(error)=result {eprintln!("TypeRelay panel: {error}");std::process::exit(1);}
 }
 

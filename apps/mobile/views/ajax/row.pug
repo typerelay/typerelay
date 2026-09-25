@@ -1,3 +1,4 @@
+- const effectiveTrigger = snippet.effective_trigger === undefined ? snippet.trigger : snippet.effective_trigger;
 article.snippet-swipe-shell(data-record=snippet.id data-library=library._id data-editable=library.permissions.edit ? 'true' : 'false')
 	.snippet-swipe-rail
 		button.snippet-swipe-action.is-left(type="button" data-swipe-side="right")
@@ -6,13 +7,16 @@ article.snippet-swipe-shell(data-record=snippet.id data-library=library._id data
 		button.snippet-swipe-action.is-right(type="button" data-swipe-side="left")
 			span.material-symbols-outlined(data-swipe-icon) content_copy
 			span(data-swipe-label) Copy
-	button.snippet-row(type="button" data-use=snippet.id aria-label='Open ' + (snippet.title || snippet.trigger || 'snippet'))
+	button.snippet-row(type="button" data-use=snippet.id aria-label='Open ' + (snippet.title || effectiveTrigger || 'snippet'))
 		span.snippet-kind(class='kind-' + snippet.content.type)
 			span.material-symbols-outlined= snippet.content.type === 'rich_text' ? 'format_align_left' : snippet.content.type === 'template' ? 'variable_add' : snippet.content.type === 'code' ? 'code' : 'notes'
 		span.snippet-copy
-			strong= snippet.title || snippet.trigger || 'Untitled snippet'
+			strong= snippet.title || effectiveTrigger || 'Untitled snippet'
 			small
 				span= library.name
-				if snippet.trigger
-					span.trigger-chip= snippet.trigger
+				if effectiveTrigger
+					span.trigger-chip= effectiveTrigger
 			span.snippet-preview= snippet.content.text || snippet.content.markdown || 'Empty snippet'
+
+	if snippet.abbreviation_collision
+		span.text-warning Abbreviation paused: duplicate

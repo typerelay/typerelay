@@ -45,9 +45,9 @@ impl Panel {
         for library in db.libraries()? {
             if library["state"] != "active" || library["permissions"]["read"] != true { continue; }
             let id = library["_id"].as_str().context("Invalid library ID")?;
-            for entry in db.records(id)?.into_iter().filter(|entry| entry["state"] == "active") {
-                let abbreviation = entry["trigger"].as_str().unwrap_or_default();
-                let text = entry["content"]["text"].as_str().context("Missing snippet content")?;
+            for entry in db.effective_records(id)?.into_iter().filter(|entry| entry["state"] == "active") {
+                let abbreviation = entry["effective_trigger"].as_str().unwrap_or_default();
+                let text = entry["content"]["text"].as_str().or(entry["content"]["markdown"].as_str()).context("Missing snippet content")?;
                 let needle = abbreviation.to_lowercase();
                 let rank = if needle == query { 0 } else if needle.starts_with(&query) { 1 } else if needle.contains(&query) { 2 } else if text.to_lowercase().contains(&query) { 3 } else { continue; };
                 ranked.push((rank, Hit { id: entry["id"].as_str().context("Missing snippet ID")?.into(), library: id.into(), library_name: library["name"].as_str().unwrap_or_default().into(), revision: entry["revision"].as_i64().context("Missing revision")?, title: entry["title"].as_str().unwrap_or_default().into(), abbreviation: abbreviation.into(), preview: text.chars().take(800).collect() }));
@@ -56,6 +56,21 @@ impl Panel {
         transaction.commit()?;
         ranked.sort_by(|(a,x),(b,y)| a.cmp(b).then(x.abbreviation.cmp(&y.abbreviation)).then(x.library_name.cmp(&y.library_name)).then(x.id.cmp(&y.id)));
         Ok(ranked.into_iter().take(50).map(|(_, hit)|hit).collect())
+    }
+    pub fn personal_rows(directory: &Path, hits: &[Hit]) -> Result<serde_json::Value> {
+        let db=Database::open(directory)?; let transaction=db.connection.unchecked_transaction()?; let collisions=db.abbreviation_collisions()?; let mut rows=Vec::new();
+        for hit in hits {
+            let Ok(library)=db.library(&hit.library) else { continue; };
+            if library["state"]!="active" || library["permissions"]["read"]!=true { continue; }
+            let Some(record)=db.effective_records(&hit.library)?.into_iter().find(|row|row["id"]==hit.id && row["state"]=="active") else { continue; };
+            let mut value=serde_json::to_value(hit)?;
+            value["abbreviation"]=record["effective_trigger"].clone(); value["shared_trigger"]=record["trigger"].clone(); value["personal"]=record["personal"].clone();
+            value["can_personal"]=serde_json::json!(library["shared"]==true && library["permissions"]["edit"]==true && db.synced(&hit.library)? && db.meta("personal_capability")?==Some(serde_json::json!(1)));
+            value["review_personal"]=serde_json::json!(record["personal"]["rejected"].is_object() || record["personal"]["conflicts"].as_array().is_some_and(|rows|!rows.is_empty()));
+            value["abbreviation_collision"]=serde_json::json!(collisions.contains(record["effective_trigger"].as_str().unwrap_or("")));
+            rows.push(value);
+        }
+        transaction.commit()?; Ok(serde_json::json!(rows))
     }
     pub fn content(directory: &Path, hit: &Hit) -> Result<serde_json::Value> {
         let db = Database::open(directory)?;

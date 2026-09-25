@@ -101,13 +101,17 @@ impl Database {
         Ok(snapshot)
     }
     fn validated_snapshot(&self) -> Result<Snapshot> {
+        let collisions = self.abbreviation_collisions()?;
         let mut entries = Vec::new();
         let mut total = 0;
         let mut count = 0;
         for library in self.libraries()? {
             if library["state"] != "active" { continue; }
             count += 1;
-            let next = Self::entries(&self.records(library["_id"].as_str().unwrap())?)?;
+            let mut records = self.effective_records(library["_id"].as_str().unwrap())?;
+            Bridge::validate(&Self::entries(&records)?)?;
+            for record in &mut records { record["trigger"] = if collisions.contains(record["effective_trigger"].as_str().unwrap_or("")) { Value::Null } else { record["effective_trigger"].clone() }; }
+            let next = Self::entries(&records)?;
             let bytes = serde_json::to_vec(&next)?;
             ensure!(bytes.len() <= 1048576, "Library exceeds 1 MiB");
             total += bytes.len(); entries.extend(next);
@@ -115,14 +119,65 @@ impl Database {
         ensure!(count <= 256 && total <= 8 * 1048576, "Active library limits exceeded");
         let mut snapshot = Bridge::validate(&entries)?;
         for library in self.libraries()?.iter().filter(|library| library["state"] == "active") {
-            for record in self.records(library["_id"].as_str().unwrap())?.iter().filter(|record|record["state"] == "active" && matches!(record["content"]["type"].as_str(),Some("template")|Some("rich_text"))) {
+            for record in self.effective_records(library["_id"].as_str().unwrap())?.iter().filter(|record|record["state"] == "active" && !collisions.contains(record["effective_trigger"].as_str().unwrap_or("")) && matches!(record["content"]["type"].as_str(),Some("template")|Some("rich_text"))) {
 				for asset in record["content"]["assets"].as_array().into_iter().flatten(){let exists:bool=self.connection.query_row("SELECT EXISTS(SELECT 1 FROM assets WHERE id=?1)",[asset.as_str().unwrap_or("")],|row|row.get(0))?;ensure!(exists,"Rich text image is not available locally");}
-				snapshot.identify(record["trigger"].as_str().unwrap_or_default(), typerelay_core::Identity { id: record["id"].as_str().context("Missing ID")?.into(), library: library["_id"].as_str().unwrap().into(), revision: record["revision"].as_i64().context("Missing revision")? });
+				snapshot.identify(record["effective_trigger"].as_str().unwrap_or_default(), typerelay_core::Identity { id: record["id"].as_str().context("Missing ID")?.into(), library: library["_id"].as_str().unwrap().into(), revision: record["revision"].as_i64().context("Missing revision")? });
 			}
         }
         Ok(snapshot)
     }
-    fn validate_transaction(&self) -> Result<()> { self.validated_snapshot().map(|_| ()) }
+    fn validate_transaction(&self) -> Result<()> {
+        let mut entries = Vec::new();
+        for library in self.libraries()?.iter().filter(|row|row["state"]=="active") { entries.extend(Self::entries(&self.records(library["_id"].as_str().unwrap())?)?); }
+        Bridge::validate(&entries)?;
+        self.validated_snapshot().map(|_| ())
+    }
+    fn personal_state(&self) -> Result<std::collections::BTreeMap<String,Value>> {
+        let mut values=std::collections::BTreeMap::new();
+        for row in self.meta("personal_abbreviations")?.and_then(|value|value.as_array().cloned()).unwrap_or_default() { if let Some(id)=row["snippet"].as_str() { values.insert(id.to_owned(),row); } }
+        for (_,operation) in self.pending()? { if operation["kind"]=="personal" { let id=operation["snippet"].as_str().context("Missing personal snippet")?; let row=values.entry(id.into()).or_insert_with(||json!({"snippet":id,"revision":0,"conflicts":[]})); row["trigger"]=operation["body"]["trigger"].clone(); row["pending"]=json!(true); } }
+        let mut statement=self.connection.prepare("SELECT key,value FROM meta WHERE key LIKE 'personal_rejected:%'")?;
+        for value in statement.query_map([],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?)))? { let (key,text)=value?; let rejected:Value=serde_json::from_str(&text)?; if !rejected.is_null() { let id=key.trim_start_matches("personal_rejected:"); values.entry(id.into()).or_insert_with(||json!({"snippet":id,"trigger":null,"revision":0,"conflicts":[]}))["rejected"]=rejected; } }
+        Ok(values)
+    }
+    pub fn personal(&self, id: &str) -> Result<Value> {
+        Ok(self.personal_state()?.remove(id).unwrap_or(json!({"snippet":id,"trigger":null,"revision":0,"conflicts":[]})))
+    }
+    pub fn personal_edit(&self, library: &str, id: &str, trigger: Option<&str>, base_revision: i64, conflict: Option<&str>) -> Result<()> {
+        let transaction = self.connection.unchecked_transaction()?;
+        self.editable(library)?;
+        let info = self.library(library)?;
+        ensure!(info["shared"]==true && info["state"]=="active" && self.synced(library)?, "An active shared library is required");
+        ensure!(self.meta("personal_capability")?==Some(json!(1)), "Sync with an updated server first");
+        let record = self.records(library)?.into_iter().find(|row|row["id"]==id && row["state"]=="active").context("Snippet no longer exists")?;
+        let trigger = trigger.map(|value|value.trim_start_matches([',',';'])).filter(|value|!value.is_empty());
+        ensure!(trigger.is_none_or(|value|value.len()<=63 && value.bytes().all(|byte|byte.is_ascii_lowercase()||byte.is_ascii_digit()||byte==b'-')), "Use 1–63 lowercase letters, numbers or hyphens");
+        let personal = self.personal(id)?;
+        ensure!(personal["revision"].as_i64().unwrap_or(0)==base_revision, "Personal abbreviation changed; reopen it");
+        ensure!(personal["pending"]!=true, "This abbreviation is waiting to sync");
+        let effective = trigger.or(record["trigger"].as_str()).unwrap_or("");
+        for other in self.libraries()?.iter().filter(|row|row["state"]=="active") { for row in self.effective_records(other["_id"].as_str().unwrap())? { ensure!(effective.is_empty() || row["state"]!="active" || row["id"]==id || row["effective_trigger"]!=effective, "Duplicate personal abbreviation"); } }
+        self.queue(&json!({"kind":"personal","library":library,"snippet":id,"body":{"operation_id":Uuid::new_v4().to_string(),"trigger":trigger,"base_revision":base_revision,"conflict":conflict}}))?;
+        self.set_meta(&format!("personal_rejected:{id}"), &Value::Null)?;
+        transaction.commit()?;
+        Ok(())
+    }
+    pub fn effective_records(&self, library: &str) -> Result<Vec<Value>> {
+        let info = self.library(library)?;
+        let mut records = self.records(library)?;
+        let mut overrides=if info["shared"]==true && self.synced(library)? { self.personal_state()? } else { Default::default() };
+        for record in &mut records {
+            let personal = overrides.remove(record["id"].as_str().unwrap_or("")).unwrap_or(json!({"trigger":null,"revision":0,"conflicts":[]}));
+            record["effective_trigger"] = personal.get("trigger").filter(|value|!value.is_null()).unwrap_or(&record["trigger"]).clone();
+            record["personal"] = personal;
+        }
+        Ok(records)
+    }
+    pub fn abbreviation_collisions(&self) -> Result<std::collections::BTreeSet<String>> {
+        let mut counts = std::collections::BTreeMap::new();
+        for library in self.libraries()?.iter().filter(|row|row["state"]=="active") { for record in self.effective_records(library["_id"].as_str().unwrap())?.iter().filter(|row|row["state"]=="active") { if let Some(trigger)=record["effective_trigger"].as_str().filter(|value|!value.is_empty()) { *counts.entry(trigger.to_owned()).or_insert(0)+=1; } } }
+        Ok(counts.into_iter().filter(|(_,count)|*count>1).map(|(trigger,_)|trigger).collect())
+    }
     pub fn names(&self) -> Result<Vec<String>> {
         let mut statement = self.connection.prepare("SELECT name FROM libraries WHERE json_extract(data,'$.state')='active' ORDER BY name")?;
         Ok(statement.query_map([], |row| row.get(0))?.collect::<std::result::Result<_, _>>()?)
@@ -291,6 +346,12 @@ impl Database {
     fn scrub(&self, library: &str, snippet: Option<&str>) -> Result<()> {
         for mut record in self.records(library)? {
             if snippet.is_some_and(|id| record["id"] != id) { continue; }
+            let id=record["id"].as_str().unwrap_or("");
+            let mut personal=self.meta("personal_abbreviations")?.unwrap_or(json!([]));
+            if let Some(rows)=personal.as_array_mut() { rows.retain(|row|row["snippet"]!=id); }
+            self.set_meta("personal_abbreviations", &personal)?;
+            self.connection.execute("DELETE FROM meta WHERE key=?1", [format!("personal_rejected:{id}")])?;
+            for (seq, operation) in self.pending()? { if operation["kind"]=="personal" && operation["snippet"]==id { self.connection.execute("DELETE FROM outbox WHERE seq=?1", [seq])?; } }
             record = json!({"id":record["id"],"state":"purged","revision":record["revision"].as_i64().unwrap_or(0)+1});
             self.put_record(library, &record)?;
         }
@@ -388,6 +449,7 @@ impl Database {
     }
     pub fn recover_operation(&self, operation: &Value) -> Result<()> {
         let library = operation["library"].as_str().unwrap_or("");
+        if operation["kind"]=="personal" { self.set_meta(&format!("personal_rejected:{}", operation["snippet"].as_str().unwrap_or("")), &operation["body"])?; return Ok(()); }
         if operation["kind"] == "batch" {
             if let Some(items) = operation["body"]["items"].as_array() { for item in items {
                 let purged: bool = self.connection.query_row("SELECT EXISTS(SELECT 1 FROM snippets WHERE id=?1 AND json_extract(data,'$.state')='purged')", [item["id"].as_str().unwrap_or("")], |row|row.get(0))?;
@@ -469,7 +531,7 @@ impl Database {
             for record in records { self.put_record(&id, &serde_json::from_str(&record)?)?; }
         }
         for (seq, operation) in self.pending()? {
-			if matches!(operation["kind"].as_str(),Some("merge_local"|"merge_synced")){continue;}
+			if matches!(operation["kind"].as_str(),Some("merge_local"|"merge_synced"|"personal")){continue;}
             let id = operation["library"].as_str().context("Missing operation library")?;
             let Ok(mut library) = self.library(id) else { continue; };
             if library["state"] == "purged" {
@@ -537,6 +599,12 @@ impl Database {
         self.set_meta("staged", response)?;
         let transaction = self.connection.unchecked_transaction()?;
 		let mut merged_source=None;
+        if let Some(rows)=response["personal_abbreviations"].as_array() {
+            let mut stored=self.meta("personal_abbreviations")?.and_then(|value|value.as_array().cloned()).unwrap_or_default();
+            for row in rows { let purged:bool=self.connection.query_row("SELECT EXISTS(SELECT 1 FROM snippets WHERE id=?1 AND json_extract(data,'$.state')='purged')",[row["snippet"].as_str().unwrap_or("")],|row|row.get(0))?; if purged { continue; } if let Some(old)=stored.iter_mut().find(|old|old["snippet"]==row["snippet"]) { if old["revision"].as_i64().unwrap_or(0)<=row["revision"].as_i64().unwrap_or(0) { *old=row.clone(); } } else { stored.push(row.clone()); } }
+            self.set_meta("personal_abbreviations", &json!(stored))?;
+        }
+        if response["capabilities"]["personal_abbreviations"]==1 { self.set_meta("personal_capability", &json!(1))?; }
         if let Some((seq, operation)) = ack {
             if response["conflicts"].as_array().is_some_and(|rows| !rows.is_empty())
                 && let Some(changes) = operation["body"]["changes"].as_array() { for change in changes { self.recover(operation["library"].as_str().unwrap_or(""), change["id"].as_str(), &change["value"])?; } }
@@ -596,7 +664,7 @@ impl Database {
             self.connection.execute("INSERT OR IGNORE INTO departures(library,id) VALUES(?1,?2)", params![item["library"].as_str(),item["id"].as_str()])?;
         } }
         self.overlay()?;
-        self.validate_transaction()?;
+        self.validated_snapshot()?;
         if let Some(conflicts) = response.get("conflicts") && conflicts.as_array().is_some_and(|rows| rows.is_empty() || rows[0].is_object()) { self.set_meta("conflicts", conflicts)?; }
         if let Some(cursor) = response.get("cursor") { self.set_meta("cursor", cursor)?; }
         self.set_meta("staged", &Value::Null)?;
@@ -631,7 +699,7 @@ impl Database {
         self.accept_library(remote)?;
         if !changes.is_empty() { self.queue(&json!({"kind":"edit","library":id,"body":{"operation_id":Uuid::new_v4().to_string(),"base_revision":remote["revision"],"changes":changes}}))?; }
         self.overlay()?;
-        self.validate_transaction()?;
+        self.validated_snapshot()?;
         self.set_meta("legacy_pending", &Value::Null)?;
         transaction.commit()?;
         Ok(())
@@ -735,6 +803,69 @@ impl DatabaseSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn personal_abbreviations_are_offline_overlays_with_independent_revisions() {
+        let fixture=Fixture::new(); let db=fixture.db();
+        let file=db.import("Shared", "matches: [{trigger: tw, replace: Shared}, {trigger: other, replace: Other}]").unwrap();
+        let mut library=db.library(&file.id).unwrap(); library["shared"]=json!(true); library["records"]=json!(db.records(&file.id).unwrap());
+        db.apply(&json!({"libraries":[library],"capabilities":{"personal_abbreviations":1},"personal_abbreviations":[]}),None).unwrap();
+        let id=&file.ids[0]; let original=db.records(&file.id).unwrap();
+        let mut live=DatabaseSnapshot::open(&fixture.directory).unwrap();
+        db.personal_edit(&file.id,id,Some(";mine"),0,None).unwrap();
+        assert!(live.reload().unwrap().is_some());
+        assert_eq!(db.records(&file.id).unwrap(),original);
+        assert_eq!(db.editor("Shared").unwrap().entries[0].trigger,"tw");
+        let reopened=fixture.db(); assert_eq!(reopened.personal(id).unwrap()["pending"],true);
+        let mut engine=typerelay_core::Engine::new(reopened.snapshot().unwrap());
+        for c in ";mine".chars() { engine.feed(typerelay_core::Input::Character(c)); }
+        assert_eq!(engine.feed(typerelay_core::Input::Space).unwrap().text,"Shared");
+        for c in ";tw".chars() { engine.feed(typerelay_core::Input::Character(c)); }
+        assert!(engine.feed(typerelay_core::Input::Space).is_none());
+        let (seq,operation)=db.pending().unwrap().remove(0);
+        db.apply(&json!({"personal_abbreviations":[{"snippet":id,"trigger":"mine","revision":1,"conflicts":[]}]}),Some((seq,&operation))).unwrap();
+        assert!(db.pending().unwrap().is_empty());
+        db.apply(&json!({"personal_abbreviations":[{"snippet":id,"trigger":"stale","revision":0,"conflicts":[]}]}),None).unwrap();
+        assert_eq!(db.personal(id).unwrap()["trigger"],"mine");
+        assert!(db.personal_edit(&file.id,id,Some("other"),1,None).is_err());
+        db.personal_edit(&file.id,id,None,1,None).unwrap();
+        assert_eq!(db.effective_records(&file.id).unwrap()[0]["effective_trigger"],"tw");
+    }
+    #[test]
+    fn personal_collision_preserves_search_and_content_and_suspends_only_automatic_matching() {
+        let fixture=Fixture::new(); let db=fixture.db();
+        let file=db.import("Shared", "matches: [{trigger: tw, replace: Shared}, {trigger: other, replace: Other}]").unwrap();
+        let mut library=db.library(&file.id).unwrap(); library["shared"]=json!(true); library["records"]=json!(db.records(&file.id).unwrap());
+        let id=&file.ids[0];
+        db.apply(&json!({"libraries":[library],"personal_abbreviations":[{"snippet":id,"trigger":"other","revision":1,"conflicts":[]}]}),None).unwrap();
+        assert!(db.snapshot().unwrap().is_empty());
+        assert_eq!(crate::panel::Panel::search(&fixture.directory,"other").unwrap().len(),2);
+        assert_eq!(db.records(&file.id).unwrap()[0]["content"]["text"],"Shared");
+        library["permissions"]["edit"]=json!(false);
+        db.apply(&json!({"libraries":[library]}),None).unwrap();
+        assert_eq!(db.effective_records(&file.id).unwrap()[0]["effective_trigger"],"other");
+        assert!(db.personal_edit(&file.id,id,None,1,None).is_err());
+        library["shared"]=json!(false);
+        db.apply(&json!({"libraries":[library]}),None).unwrap();
+        assert_eq!(db.snapshot().unwrap().len(),2);
+        assert_eq!(db.effective_records(&file.id).unwrap()[0]["effective_trigger"],"tw");
+        library["shared"]=json!(true);
+        db.apply(&json!({"libraries":[library]}),None).unwrap();
+        assert!(db.snapshot().unwrap().is_empty());
+        db.apply(&json!({"tombstones":[{"library":file.id,"id":id,"revision":2}]}),None).unwrap();
+        assert_eq!(db.personal(id).unwrap()["revision"],0);
+        assert_eq!(db.snapshot().unwrap().len(),1);
+    }
+    #[test]
+    fn shared_download_collisions_do_not_block_sync_and_an_override_can_disambiguate() {
+        let fixture=Fixture::new(); let db=fixture.db();
+        let library=|id:&str,name:&str|json!({"_id":id,"name":name,"shared":true,"state":"active","revision":1,"permissions":{"read":true,"edit":true},"records":[{"id":format!("{id}-snippet"),"trigger":"same","title":name,"content":{"version":1,"type":"plain_text","text":name},"revision":1,"state":"active","position":0}]});
+        db.apply(&json!({"libraries":[library("first","First"),library("second","Second")],"capabilities":{"personal_abbreviations":1},"personal_abbreviations":[]}),None).unwrap();
+        assert!(db.snapshot().unwrap().is_empty());
+        assert_eq!(crate::panel::Panel::search(&fixture.directory,"same").unwrap().len(),2);
+        db.personal_edit("first","first-snippet",Some("mine"),0,None).unwrap();
+        assert_eq!(db.snapshot().unwrap().len(),2);
+        assert_eq!(db.records("first").unwrap()[0]["trigger"],"same");
+    }
     struct Fixture { _temp: tempfile::TempDir, directory: PathBuf }
     impl Fixture {
         fn new() -> Self { let temp = tempfile::tempdir().unwrap(); let directory = temp.path().join("snippets"); fs::create_dir_all(&directory).unwrap(); Self { _temp: temp, directory } }

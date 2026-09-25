@@ -1,13 +1,16 @@
-article.snippet(tabindex="0" role="group" aria-label="Snippet " + (snippet.title || snippet.trigger || 'Untitled snippet') + " — Enter to edit" data-snippet=snippet.id data-revision=snippet.revision)
+- const effectiveTrigger = snippet.effective_trigger === undefined ? snippet.trigger : snippet.effective_trigger;
+article.snippet(tabindex="0" role="group" aria-label="Snippet " + (snippet.title || effectiveTrigger || 'Untitled snippet') + " — Enter to edit" data-snippet=snippet.id data-revision=snippet.revision)
 	.d-flex.align-items-center.justify-content-between.mb-3
 		.snippet-selection.d-flex.align-items-center.gap-3
 			label.d-flex.align-items-center.mb-0
-				input.form-check-input.m-0(type="checkbox" data-select-snippet=snippet.id disabled=!library.permissions.edit aria-label="Select " + (snippet.title || snippet.trigger || 'Untitled snippet'))
-			h3.h6.mb-0.fw-bold= (snippet.title || snippet.trigger || 'Untitled snippet')
-			if snippet.title && snippet.trigger
-				span.small.text-muted= snippet.trigger
+				input.form-check-input.m-0(type="checkbox" data-select-snippet=snippet.id disabled=!library.permissions.edit aria-label="Select " + (snippet.title || effectiveTrigger || 'Untitled snippet'))
+			h3.h6.mb-0.fw-bold= (snippet.title || effectiveTrigger || 'Untitled snippet')
+			if snippet.title && effectiveTrigger
+				span.small.text-muted= effectiveTrigger
 		.d-flex.align-items-center
 			button.btn.btn-outline-secondary.btn-sm.ms-3(type="button" data-copy-snippet=snippet.id)= snippet.content && ['template', 'rich_text'].includes(snippet.content.type) && Object.keys(snippet.content.variables || {}).length ? 'Fill and copy' : 'Copy'
+			if library.shared && library.permissions.edit
+				button.btn.btn-outline-secondary.btn-sm.ms-3(type="button" data-personal-snippet=snippet.id) My abbreviation
 			if library.permissions.edit
 				button.btn.btn-outline-secondary.btn-sm.ms-3(data-edit-snippet=snippet.id) Edit
 				button.btn.btn-outline-danger.btn-sm.ms-3(data-delete-snippet=snippet.id) Trash
@@ -15,3 +18,8 @@ article.snippet(tabindex="0" role="group" aria-label="Snippet " + (snippet.title
 		.rich-snippet-preview!= snippet.rich_html || ''
 	else
 		pre.mb-0.snippet-expansion= snippet.replace
+
+	if snippet.abbreviation_collision
+		p.text-warning.mb-0 Abbreviation paused: another snippet uses the same abbreviation.
+	if snippet.personal && snippet.personal.conflicts && snippet.personal.conflicts.length
+		p.text-warning.mb-0 Personal abbreviation conflict — choose My abbreviation to resolve.

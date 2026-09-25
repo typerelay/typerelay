@@ -12,7 +12,7 @@ export class Items {
    const parser = new list.ownerDocument.defaultView!.DOMParser();
    const element = parser.parseFromString(render({ library, snippet }), 'text/html').body.firstElementChild as HTMLElement;
    element.dataset.key = key; element.dataset.signature = signature;
-   element.dataset.search = `${snippet.title || ''} ${snippet.trigger || ''} ${snippet.content.text || snippet.content.markdown || ''} ${library.name}`.toLocaleLowerCase();
+   element.dataset.search = `${snippet.title || ''} ${snippet.effective_trigger ?? snippet.trigger ?? ''} ${snippet.content.text || snippet.content.markdown || ''} ${library.name}`.toLocaleLowerCase();
    if (existing) {
     const active = list.ownerDocument.activeElement as HTMLElement | null;
     const focus = active && existing.contains(active) ? active.hasAttribute('data-edit') ? '[data-edit]' : '[data-use]' : null;
