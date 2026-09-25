@@ -95,10 +95,11 @@ if kind === 'snippet' || kind === 'conflict'
 		pre= JSON.stringify(current, null, 2)
 if kind === 'snippetslab' || kind === 'import'
 	label.form-label.fw-bold(for="import-file")= importFormat.name + ' export'
-	input#import-file.form-control.form-control-sm.mb-3(type="file" accept=importFormat.accept)
+	.input-group.input-group-sm.mb-3
+		input#import-file.form-control.form-control-sm(type="file" accept=importFormat.accept)
+		button#preview-import.btn.btn-outline-secondary.btn-sm(type="button")= importFormat.name === 'TypeRelay bundle' ? 'Import bundle' : 'Preview import'
 	p.small.text-muted= importFormat.instructions
 	if importFormat.beta
 		p.small.text-muted Beta: export layouts may vary between app versions. Review the preview before importing.
 	p.small.text-muted Imported libraries are private. Existing libraries are never replaced.
-	button#preview-import.btn.btn-outline-secondary.btn-sm.mb-3(type="button")= importFormat.name === 'TypeRelay bundle' ? 'Import bundle' : 'Preview import'
 	#import-preview
