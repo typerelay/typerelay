@@ -52,7 +52,9 @@ function results() {
 
 async function refresh() {
 	const state = await send({ type: 'status' });
-	if (!state.connected) { $('#signed-out').hidden = false; $('#signed-in').hidden = true; status(state.authError || 'Sign in from settings.'); await openSettings(); return; }
+	$('#open-app').href = `${state.origin}/`;
+	$('#open-app').hidden = !state.origin;
+	if (!state.connected) { $('#signed-out').hidden = false; $('#signed-in').hidden = true; status(state.authError || 'Sign in from options.'); await openSettings(); return; }
 	$('#signed-out').hidden = true;
 	$('#signed-in').hidden = false;
 	status(state.authError || (state.bridgeVerified ? '' : 'Desktop update needed'));

@@ -3,14 +3,14 @@ html(lang="en")
 	head
 		meta(charset="utf-8")
 		meta(name="viewport" content="width=device-width, initial-scale=1")
-		title Type Relay settings
+		title Typerelay options
 		link(rel="stylesheet" href="options.css")
 	body
 		main
 			header
 				img(src="icon.png" alt="" width="48" height="48")
 				div
-					h1 Type Relay settings
+					h1 Typerelay options
 					p Connect your snippets and choose how typing expands them.
 			section
 				h2 Account
@@ -37,21 +37,23 @@ html(lang="en")
 					span#sync-status(role="status")
 			section
 				h2 Trigger prefix
-				label(for="prefix") Character before a snippet abbreviation
-				select#prefix
-					option(value=";") ;
-					option(value=",") ,
-					option(value=".") .
-					option(value="/") /
-					option(value="'") '
-					option(value="[") [
-					option(value="]") ]
-					option(value="\\") \
-					option(value="`") `
-					option(value="=") =
+				div.prefix-group
+					select#prefix
+						option(value=";") ;
+						option(value=",") ,
+						option(value=".") .
+						option(value="/") /
+						option(value="'") '
+						option(value="[") [
+						option(value="]") ]
+						option(value="\\") \
+						option(value="`") `
+						option(value="=") =
+					label(for="prefix") Character before a snippet abbreviation
 				p#prefix-status(role="status")
 			section
 				h2 Snippets
-				p Create and edit snippets in the Type Relay app.
-				a#edit(target="_blank" rel="noopener noreferrer") Open Type Relay
+				div.status-row
+					p Create and edit snippets in the Typerelay app.
+					a#edit.button.button-sm(target="_blank" rel="noopener noreferrer") Open Typerelay
 		script(type="module" src="options.js")

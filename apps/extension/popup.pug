@@ -3,17 +3,18 @@ html(lang="en")
 	head
 		meta(charset="utf-8")
 		meta(name="viewport" content="width=device-width, initial-scale=1")
-		title Type Relay
+		title Typerelay
 		link(rel="stylesheet" href="popup.css")
 	body
 		main
 			header
 				img(src="icon.png" alt="" width="32" height="32")
-				h1 Type Relay
-				button#settings(type="button") Settings
+				h1 Typerelay
+				button#settings(type="button") Options
+				a#open-app.button(target="_blank" rel="noopener noreferrer" title="Open Typerelay" aria-label="Open Typerelay" hidden) ↗
 			p#status(role="status" hidden)
 			section#signed-out(hidden)
-				p Sign in from settings to search your snippets.
+				p Sign in from options to search your snippets.
 			section#signed-in(hidden)
 				label(for="search") Search snippets
 				input#search(type="search" autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="results" aria-expanded="false")
