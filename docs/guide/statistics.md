@@ -1,3 +1,8 @@
+---
+title: "TypeRelay usage statistics"
+description: "Track personal and team snippet usage in TypeRelay, estimate time and money saved, and export reports with privacy-aware statistics."
+---
+
 # Statistics
 
 Open the chart button beside **New library** in the web app. Desktop settings, browser extension settings, and mobile settings link to the same report.
