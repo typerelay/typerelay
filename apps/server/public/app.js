@@ -428,7 +428,8 @@ class TypeRelay {
 			}
 			if (form.id === 'account-form') {
 				await this.request('account', 'PATCH', { name: data.get('name') });
-				document.querySelector('#account-switch').selectedOptions[0].textContent = data.get('name');
+				const selectedAccount = document.querySelector('#account-switch')?.selectedOptions[0];
+				if (selectedAccount) selectedAccount.textContent = data.get('name');
 				this.toast('Account saved');
 			}
 			if (form.id === 'team-member-form') {

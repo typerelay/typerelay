@@ -4,10 +4,17 @@ block content
 		.row#workspace-content
 			aside.col-md-4
 				.library-controls.d-flex.align-items-center.gap-3.mb-3
-					select#account-switch.form-select.form-select-sm(aria-label="Account")
-						each item in accounts
-							option(value=item._id selected=String(item._id) === String(account._id))= item.name
-					button#new-library.btn.btn-primary.btn-sm New library
+					if accounts.length > 1
+						select#account-switch.form-select.form-select-sm(aria-label="Team")
+							each item in accounts
+								option(value=item._id selected=String(item._id) === String(account._id))= item.name
+					button#new-library.btn.btn-primary.btn-sm.library-icon-button(type="button" aria-label="New library" title="New library")
+						svg.rich-toolbar-icon(viewBox="0 0 16 16" aria-hidden="true" focusable="false")
+							path(d="M2 2h3v12H2zM7 2h3v12H7zM11 3l2-.5L16 13l-2 .5zM2 5h3M7 5h3")
+					span.d-inline-flex(title="Statistics — coming soon" tabindex="0" aria-label="Statistics — coming soon")
+						button#statistics.btn.btn-outline-secondary.btn-sm.library-icon-button(type="button" disabled aria-label="Statistics" title="Statistics — coming soon")
+							svg.rich-toolbar-icon(viewBox="0 0 16 16" aria-hidden="true" focusable="false")
+								path(d="M2 2v12h12M5 11V8M9 11V5M13 11V2")
 				- var selectedLibrary = libraries.length ? String(libraries[0]._id) : null
 				#libraries
 					each library in libraries
