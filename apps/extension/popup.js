@@ -31,7 +31,7 @@ function select(index, scroll = false) {
 function results() {
 	const query = $('#search').value.trim().toLowerCase();
 	const list = $('#results');
-	if (!query) { matches = []; list.replaceChildren(); list.hidden = true; $('#search').setAttribute('aria-expanded', 'false'); $('#search-message').hidden = false; $('#search-message').textContent = 'Type to search snippets.'; select(-1); return; }
+	if (!query) { matches = []; list.replaceChildren(); list.hidden = true; $('#search').setAttribute('aria-expanded', 'false'); $('#search-message').hidden = true; $('#search-message').textContent = ''; select(-1); return; }
 	matches = items.filter(item => [item.trigger, item.title, item.library].some(value => value?.toLowerCase().includes(query))).slice(0, 20);
 	const fragment = document.createDocumentFragment();
 	for (const item of matches) {
