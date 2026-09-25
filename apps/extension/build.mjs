@@ -19,6 +19,7 @@ copyFileSync(new URL('../../target/wasm32-unknown-unknown/release/typerelay_temp
 copyFileSync(new URL('../desktop/src-tauri/icons/icon.png', import.meta.url), new URL('icon.png', `file://${dist}/`));
 for (const name of ['popup', 'options', 'prompt', 'notice']) writeFileSync(new URL(`${name}.html`, `file://${dist}/`), pug.renderFile(fileURLToPath(new URL(`${name}.pug`, import.meta.url)), { pretty: true }));
 const manifest = JSON.parse(readFileSync(new URL('manifest.json', import.meta.url), 'utf8'));
+if (packaging) delete manifest.key;
 manifest.host_permissions = [`${origin}/*`];
 writeFileSync(new URL('manifest.json', `file://${dist}/`), JSON.stringify(manifest, null, 2));
 const worker = readFileSync(new URL('worker.js', import.meta.url), 'utf8').replace('https://app.typerelay.com', origin);
