@@ -431,6 +431,65 @@ test('shared import commit corrects abbreviations, stays private, retries and ro
 	await assert.rejects(Libraries.get(admin, libraries[0]._id), /not found/);
 });
 
+test('Raycast preview maps fields, preserves text and flags placeholders', async () => {
+	const source = [{ name: 'Greeting', text: '\t Héllo\r\n世界  \n', keyword: ';greeting' }, { name: 'No keyword', text: 'Copy only' }, ...['{clipboard}', '{CURSOR}', '{argument name="Name"}', '{Argument name="Animal" options="cat,dog"}'].map(text => ({ name: 'Dynamic', text, keyword: ';dynamic' }))];
+	const body = { source: JSON.stringify(source), filename: 'Raycast export.json' };
+	const preview = await Libraries.previewImport('raycast', body);
+	assert.equal(preview.entries.length, 6);
+	assert.equal(preview.entries[0].name, 'Raycast export');
+	assert.equal(preview.entries[0].title, 'Greeting');
+	assert.equal(preview.entries[0].original_trigger, ';greeting');
+	assert.equal(preview.entries[0].trigger, 'greeting');
+	assert.equal(preview.entries[0].content.text, '\t Héllo\n世界  \n');
+	assert.equal(preview.entries[0].content.type, 'plain_text');
+	assert.equal(preview.entries[1].trigger, null);
+	assert.ok(preview.entries.every(entry => !entry.error));
+	for (const [index, entry] of preview.entries.slice(2).entries()) {
+		assert.equal(entry.content.text, source[index + 2].text);
+		assert.equal(entry.content.type, 'code');
+		assert.equal(entry.title, 'Dynamic (Needs review)');
+		assert.equal(entry.review, true);
+		assert.equal(entry.trigger, null);
+		assert.ok(entry.warnings.length);
+	}
+	assert.deepEqual(await Libraries.previewImport('raycast', { ...body, source }), preview);
+	const literal = await Libraries.previewImport('raycast', { source: [{ name: 'RTF source', text: '{\\rtf1 Literal source}', keyword: ';UPPER' }] });
+	assert.equal(literal.entries[0].content.text, '{\\rtf1 Literal source}');
+	assert.equal(literal.entries[0].content.type, 'plain_text');
+	assert.ok(literal.entries[0].trigger_error);
+	await assert.rejects(Libraries.previewImport('raycast', { source: '{bad' }), /Invalid Raycast export/);
+	await assert.rejects(Libraries.previewImport('raycast', { source: { snippets: source } }), /JSON array/);
+	for (const record of [null, {}, { name: 1, text: 'Text' }, { name: 'Name', text: 1 }, { name: 'Name', text: 'Text', keyword: null }]) await assert.rejects(Libraries.previewImport('raycast', { source: [record] }), /Invalid Raycast record/);
+	await assert.rejects(Libraries.previewImport('raycast', { source: [] }), /No snippets/);
+	await assert.rejects(Libraries.previewImport('raycast', { source: Array(1001).fill(source[0]) }), /1000 snippets/);
+	await assert.rejects(Libraries.previewImport('raycast', { source: 'x'.repeat(8 * 1048576) }), /8 MiB/);
+});
+
+test('Raycast commits selection privately, enforces review, retries and rolls back duplicate abbreviations', async () => {
+	const owner = await Fixture.user('owner', (await Account.create({ name: 'Raycast import' }))._id);
+	const source = [{ name: 'Greeting', text: 'Hello', keyword: ';hello' }, { name: 'Argument', text: '{argument name="Name"}', keyword: ';arg' }, { name: 'Copy', text: 'No keyword' }, { name: 'Skipped', text: 'Skip', keyword: ';skip' }];
+	const body = { source, filename: 'Raycast.json', selected: [{ key: '0:0', trigger: 'corrected' }, { key: '0:1', trigger: 'must-not-activate' }, { key: '0:2' }] };
+	const operation = randomUUID();
+	const run = () => Libraries.mutate(owner, operation, body, (ctx, session) => Libraries.commitImport(ctx, 'raycast', body, session));
+	const { libraries: [library] } = await run();
+	assert.equal(library.name, 'Raycast');
+	assert.equal(library.shared, false);
+	assert.equal(library.snippets.length, 3);
+	assert.equal(library.snippets.find(entry => entry.title === 'Greeting').trigger, 'corrected');
+	assert.equal(library.snippets.find(entry => entry.content.type === 'code').trigger, null);
+	assert.equal(library.snippets.find(entry => entry.title === 'Copy').trigger, null);
+	assert.equal((await run()).libraries[0]._id, library._id);
+	const before = await Library.countDocuments({ account: owner.account });
+	await assert.rejects(Libraries.mutate(owner, randomUUID(), body, (ctx, session) => Libraries.commitImport(ctx, 'raycast', body, session)), /Duplicate/);
+	assert.equal(await Library.countDocuments({ account: owner.account }), before);
+	const cleared = { ...body, selected: [{ key: '0:0', trigger: '' }] };
+	const next = await Libraries.mutate(owner, randomUUID(), cleared, (ctx, session) => Libraries.commitImport(ctx, 'raycast', cleared, session));
+	assert.equal(next.libraries[0].name, 'Raycast (2)');
+	assert.equal(next.libraries[0].snippets[0].trigger, null);
+	const admin = await Fixture.user('admin', owner.account);
+	await assert.rejects(Libraries.get(admin, library._id), /not found/);
+});
+
 test('template metadata survives imports, edits, conflicts, moves and Trash', async () => {
 	const ctx = await Fixture.user('owner', (await Account.create({ name: 'Template tests' }))._id);
 	const content = { version: 1, type: 'template', text: 'Hi {{name}} {{date}}{{key:enter}}', variables: { name: { label: 'Customer', default: 'Nitai', required: true, multiline: false }, date: { timezone: 'utc', format: 'DD/MM/YYYY' } } };

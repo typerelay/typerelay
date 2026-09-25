@@ -1,6 +1,6 @@
 ---
 title: "Import and export TypeRelay snippets"
-description: "Import and export TypeRelay libraries with YAML, bundles, SnippetsLab, TextExpander, Text Blaze, and TypeIt4Me while preserving supported content."
+description: "Import and export TypeRelay libraries with YAML, bundles, SnippetsLab, Raycast, TextExpander, Text Blaze, and TypeIt4Me while preserving supported content."
 ---
 
 # Import and export
@@ -16,6 +16,7 @@ Imports always create private libraries and never replace a matching name. A num
 | TypeRelay bundle | Supported | ZIP manifest plus deduplicated images; preserves rich Markdown, raw HTML, variables, asset hashes and remote-source metadata |
 | TypeRelay YAML | Supported | Preserves Text, Rich text without images, Code, Template variables, titles, abbreviations and code language |
 | SnippetsLab JSON library export | Supported | Folders become libraries; fragments become separate snippets; tags, smart groups, shortcuts, pinning and notes are omitted with warnings |
+| Raycast JSON | Supported | Names, text and optional keywords; placeholders remain literal Code marked Needs review, without an abbreviation |
 | TextExpander CSV | Beta | Requires `abbreviation` and `snippet` headers; optional `label`; native `.textexpander` files are unsupported |
 | Text Blaze JSON | Beta | Recognized folder exports; supported HTML becomes Rich text and remote images are cached when committed |
 | TypeIt4Me XML | Beta | Recognized XML/plist sets; embedded RTF formatting and PNG/JPEG pictures become Rich text; binary archives remain unsupported |

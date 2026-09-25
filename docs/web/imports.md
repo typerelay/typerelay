@@ -1,20 +1,28 @@
 # Importers
 
-The web Import dropdown is below the library list. It contains TypeRelay YAML, SnippetsLab, TextExpander (Beta), Text Blaze (Beta) and TypeIt4Me (Beta). Imports create private libraries and never replace existing names. The existing YAML option in New Library remains available.
+The web Import dropdown is below the library list. It contains TypeRelay YAML, SnippetsLab, Raycast, TextExpander (Beta), Text Blaze (Beta) and TypeIt4Me (Beta). Imports create private libraries and never replace existing names. The existing YAML option in New Library remains available.
 
 ## API and shared behavior
 
-`POST /api/v2/import/:format/preview` accepts `{source, filename?}` and returns `{entries,warnings,html}`. Format keys: `yaml`, `snippetslab`, `textexpander`, `textblaze`, `typeit4me`. Source is file text; JSON formats also accept parsed objects for compatibility.
+`POST /api/v2/import/:format/preview` accepts `{source, filename?}` and returns `{entries,warnings,html}`. Format keys: `yaml`, `snippetslab`, `raycast`, `textexpander`, `textblaze`, `typeit4me`. Source is file text; JSON formats also accept parsed objects for compatibility.
 
 `POST /api/v2/import/:format` accepts `{operation_id,source,filename?,selected:[{key,trigger?}]}`. The server reparses and validates all selected entries. A single existing MongoDB mutation transaction creates libraries, snippets, change events and the idempotency receipt. Failed validation rolls back the batch. Names receive numeric suffixes on collision. Existing SnippetsLab URLs and service methods continue to work; `/api/v2/import/preview` remains the existing YAML validation endpoint.
 
-The shared preview shows original/proposed abbreviations and source warnings. Comma prefixes are removed; invalid abbreviations must be corrected or cleared. Unselected rows do not block form validation. Commands detected in imported source become literal Code, with no abbreviation, and `(Needs review)` appended to the title. Import requests cannot activate those review entries by supplying an abbreviation. Users may review and assign an abbreviation later. Nothing is executed or translated into TypeRelay variables.
+The shared preview shows original/proposed abbreviations and source warnings. Comma and semicolon prefixes are removed; invalid abbreviations must be corrected or cleared. Unselected rows do not block form validation. Commands detected in imported source become literal Code, with no abbreviation, and `(Needs review)` appended to the title. Import requests cannot activate those review entries by supplying an abbreviation. Users may review and assign an abbreviation later. Nothing is executed or translated into TypeRelay variables.
 
 Review detection is conservative, covering TextExpander percent macros, Text Blaze command/form/formula delimiters, TypeIt4Me dynamic delimiters, TypeRelay-style template markers, and explicit script/macro record types. It is not a complete interpreter or compatibility guarantee. All source commands must be reviewed in beta.
 
 Import limits remain 8 MiB of serialized source, 1000 entries, 256 libraries/folders and 20 folder levels, plus existing snippet/engine limits. HTML conversion uses a parser without a browser, resource loading or execution; scripts/styles/images are omitted. Readable text and line breaks are retained. TypeIt4Me rejects arbitrary DTD/entity declarations; the standard Apple plist public declaration is removed without resolving its URL.
 
 ## Supported layouts and confidence
+
+### Raycast — JSON
+
+Accepts a root array of records with string `name`, string `text`, and optional string `keyword`. Names become titles; text and line breaks are retained (CRLF normalizes to LF). Keywords use the existing abbreviation normalization, including removal of leading semicolons. Missing keywords import without an abbreviation. The filename names the new private library.
+
+Raycast placeholders, including `{clipboard}`, `{cursor}`, and parameterized `{argument ...}`, remain literal Code marked `(Needs review)` with no abbreviation. Detection is case-insensitive and also uses the existing conservative command checks. No placeholder translation or execution occurs.
+
+The parser was checked against a customer-provided 52-snippet export. Automated fixtures use synthetic content; the customer export is not stored in the repository.
 
 ### TextExpander — CSV
 
@@ -55,4 +63,4 @@ TypeRelay YAML and SnippetsLab retain their existing content/language semantics,
 
 Synthetic fixture tests cover quoted multiline CSV/BOM, mixed whitespace, nested JSON folders, HTML conversion, review-only commands, XML/plist decoding, entity rejection and unknown formats. Transaction tests cover abbreviation corrections/clearing, private access, retry idempotency, duplicate rollback and name suffixes. The DOM integration test verifies dropdown placement, preview edits, unselected invalid rows and item-level library insertion without replacing the editor. Existing YAML/SnippetsLab and two-desktop sync tests are rerun.
 
-No customer exports were available. Customer compatibility testing remains part of beta. No analytics or automatic upload of customer files has been added.
+Other beta vendor formats still require customer compatibility testing. No analytics or automatic upload of customer files has been added.

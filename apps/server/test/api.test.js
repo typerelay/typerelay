@@ -43,6 +43,17 @@ test('public authentication is separate from desktop and scope-limited; no token
 	const metadata = await (await fetch(ApiFixture.base + '/.well-known/oauth-authorization-server')).json(); assert.deepEqual(metadata.token_endpoint_auth_methods_supported, ['none', 'client_secret_post']);
 	assert.equal(Auth.oauthConfig().resource_metadata_url, new URL(Auth.mcpResource()).origin + '/.well-known/oauth-protected-resource/mcp');
 });
+test('public API advertises and accepts Raycast imports', async () => {
+	const format = spec.paths['/imports/{format}/preview'].post.parameters.find(parameter => parameter.name === 'format');
+	assert.ok(format.schema.enum.includes('raycast'));
+	const source = [{ name: 'API Raycast', text: 'Hello from Raycast', keyword: ';raycast-api' }];
+	const preview = await ApiFixture.request('/imports/raycast/preview', 'POST', { source });
+	assert.equal(preview.status, 200);
+	assert.equal(preview.value.entries[0].trigger, 'raycast-api');
+	const imported = await ApiFixture.request('/imports/raycast', 'POST', { operation_id: randomUUID(), source, filename: 'API Raycast.json', selected: [{ key: '0:0' }] });
+	assert.equal(imported.status, 200);
+});
+
 test('personal tokens are full access, non-expiring, hashed and revocable', async () => {
 	const before = (await AdminAccounts.counts([new mongoose.Types.ObjectId(ApiFixture.owner.account)])).get(ApiFixture.owner.account).integrations;
 	const { token, grant } = await Auth.createIntegration(ApiFixture.owner, { name: 'Mailtwine parity', days: 1, scopes: ['content:read'] });

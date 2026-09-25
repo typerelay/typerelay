@@ -61,6 +61,7 @@ export class Libraries {
 		typerelay: { name: 'TypeRelay bundle', accept: '.typerelay.zip,.zip', instructions: 'Choose a TypeRelay bundle containing snippets.yml and its deduplicated image assets.', beta: false },
 		yaml: { name: 'TypeRelay YAML', accept: '.yml,.yaml', instructions: 'Choose a TypeRelay YAML export.', beta: false },
 		snippetslab: { name: 'SnippetsLab', accept: '.json', instructions: 'In SnippetsLab, use Library → Export → JSON.', beta: false },
+		raycast: { name: 'Raycast', accept: '.json', instructions: 'Choose a Raycast snippets JSON export. Placeholders are preserved literally and marked Needs review without an abbreviation.', beta: false },
 		textexpander: { name: 'TextExpander', accept: '.csv', instructions: 'On TextExpander.com, open Import/Export → Export and download a group as CSV. Native .textexpander files are not supported.', beta: true },
 		textblaze: { name: 'Text Blaze', accept: '.json', instructions: 'Open the Text Blaze dashboard’s Import/Export page and export folders as JSON.', beta: true },
 		typeit4me: { name: 'TypeIt4Me', accept: '.typeit4me', instructions: 'Choose a .typeit4me snippet set from Finder. Beta supports recognized XML set and XML property-list layouts; binary files are not supported.', beta: true },
@@ -133,6 +134,12 @@ export class Libraries {
 			let source;
 			try { source = format === 'typeit4me' ? Libraries.xmlSet(body.source) : (typeof body.source === 'string' ? JSON.parse(body.source) : body.source); } catch (error) { Support.assert(false, error.status ? error.message : 'Invalid ' + Libraries.importFormats[format].name + ' export'); }
 			Support.assert(source && typeof source === 'object', 'Unrecognized export structure');
+			if (format === 'raycast') {
+				Support.assert(Array.isArray(source), 'Choose a Raycast snippets JSON array');
+				Support.assert(source.length <= 1000, 'Import exceeds 1000 snippets');
+				Support.assert(source.every(record => record && typeof record.name === 'string' && typeof record.text === 'string' && (!Object.hasOwn(record, 'keyword') || typeof record.keyword === 'string')), 'Invalid Raycast record: expected name, text and optional keyword strings');
+				source = { name, snippets: source.map(record => ({ title: record.name, text: record.text, trigger: record.keyword })) };
+			}
 			if (Array.isArray(source) && source.length && source.every(record => record && typeof record === 'object' && ['text', 'body', 'snippet', 'replace', 'plainText', 'content', 'clip'].some(key => typeof record[key] === 'string'))) source = { name, snippets: source };
 			const rows = Array.isArray(source) ? source : source.folders || source.sets;
 			if (rows) {
@@ -163,9 +170,9 @@ export class Libraries {
 				const entry = { key: groupIndex + ':' + index, folder: String(groupIndex), name: group.name.replaceAll('/', '∕').replaceAll('\\', '∖').slice(0, 85), title: record.title ?? record.name ?? record.label ?? '', original_trigger: original, trigger: Abbreviation.normalize(original) || null, warnings: [] };
 				let text = record.text ?? record.body ?? record.snippet ?? record.replace ?? record.plainText ?? record.content ?? record.clip;
 				if (record.html && format === 'textblaze') { const rich = RichText.content({ version: 2, type: 'rich_text', markdown: record.html, variables: {} }); text = rich.text; entry.content = rich; entry.warnings.push('Imported HTML as rich text; remote images are cached when the import is committed.'); }
-				if (typeof text === 'string' && /^\{\\rtf/i.test(text)) { const rich = RichText.content({ version: 2, type: 'rich_text', markdown: RichText.rtf(text), variables: {} }); text = rich.text; entry.content = rich; entry.warnings.push('Imported RTF as rich text; embedded images are cached when committed.'); }
+				if (format !== 'raycast' && typeof text === 'string' && /^\{\\rtf/i.test(text)) { const rich = RichText.content({ version: 2, type: 'rich_text', markdown: RichText.rtf(text), variables: {} }); text = rich.text; entry.content = rich; entry.warnings.push('Imported RTF as rich text; embedded images are cached when committed.'); }
 				if (typeof text !== 'string') { entry.error = 'No readable text found; images/binary content cannot be imported.'; text = ''; }
-				const dynamic = format !== 'yaml' && (/\{(?:[a-z][a-z0-9_-]*(?=[:;}])|=)/i.test(text) || /%[A-Za-z]|%\{|[⊢⊣]|\{\{|\$\|\$/.test(text) || /script|macro/i.test(String(record.type || record.kind || '')));
+				const dynamic = format !== 'yaml' && (/\{(?:[a-z][a-z0-9_-]*(?=[:;}])|=)/i.test(text) || /%[A-Za-z]|%\{|[⊢⊣]|\{\{|\$\|\$/.test(text) || /script|macro/i.test(String(record.type || record.kind || '')) || (format === 'raycast' && /\{(?:argument|clipboard|cursor)\b[^}]*\}/i.test(text)));
 				entry.review = dynamic;
 				if (dynamic) { entry.title = (entry.title || original || 'Imported snippet') + ' (Needs review)'; entry.trigger = null; entry.warnings.push('Unsupported commands preserved literally. No abbreviation is assigned.'); }
 				entry.content ||= format === 'yaml' ? Libraries.content(record) : { version: 1, type: dynamic ? 'code' : 'plain_text', text: text.replaceAll('\r\n', '\n'), ...(dynamic ? { language: 'plain_text' } : {}) };
