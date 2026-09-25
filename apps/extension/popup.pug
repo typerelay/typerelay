@@ -21,6 +21,18 @@ html(lang="en")
 				ul#results(role="listbox" hidden)
 				template#result-template
 					li(role="option" tabindex="-1" aria-selected="false")
-						strong
-						small
+						div.result-heading
+							div.result-summary
+								strong
+								small
+							button.detail(type="button" aria-expanded="false") Detail
+						div.preview(hidden)
+							p.preview-status(role="status")
+							pre.preview-text(hidden)
+							iframe.preview-rich(title="Snippet preview" sandbox="" referrerpolicy="no-referrer" hidden)
+				template#preview-shell
+					meta(http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'")
+					style
+						include preview.css
+					div#preview-content
 		script(type="module" src="popup.js")

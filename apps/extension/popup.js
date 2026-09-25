@@ -39,7 +39,43 @@ function results() {
 		row.id = 'result-' + item.id;
 		row.querySelector('strong').textContent = item.title || item.trigger || 'Untitled snippet';
 		row.querySelector('small').textContent = item.library + ' · ' + (item.trigger || 'Search only');
-		row.addEventListener('click', () => void insert(item));
+		row.querySelector('.result-summary').addEventListener('click', () => void insert(item));
+		const detail = row.querySelector('.detail');
+		const preview = row.querySelector('.preview');
+		preview.id = 'preview-' + item.id;
+		detail.setAttribute('aria-controls', preview.id);
+		let previewSerial = 0;
+		detail.addEventListener('click', async () => {
+			select(matches.findIndex(match => match.id === item.id));
+			$('#search').focus({ preventScroll: true });
+			const serial = ++previewSerial;
+			preview.hidden = !preview.hidden;
+			detail.setAttribute('aria-expanded', String(!preview.hidden));
+			if (preview.hidden) return;
+			const message = preview.querySelector('.preview-status');
+			const plain = preview.querySelector('.preview-text');
+			const rich = preview.querySelector('.preview-rich');
+			message.textContent = 'Loading…';
+			message.hidden = false;
+			plain.hidden = true;
+			rich.hidden = true;
+			try {
+				const result = await send({ type: 'prepare', id: item.id, preview: true });
+				if (!row.isConnected || serial !== previewSerial) return;
+				if (result.item.content.type === 'rich_text' && result.rendered.html) {
+					const parser = new window.DOMParser();
+					const shell = parser.parseFromString($('#preview-shell').innerHTML, 'text/html');
+					const content = document.createElement('template');
+					content.innerHTML = result.rendered.html;
+					for (const element of content.content.querySelectorAll('script, style, meta, link, base, iframe, object, embed, form')) element.remove();
+					for (const element of content.content.querySelectorAll('*')) for (const attribute of [...element.attributes]) if (!['src', 'alt', 'width', 'height', 'colspan', 'rowspan'].includes(attribute.name) || (attribute.name === 'src' && (element.tagName !== 'IMG' || !/^data:image\//i.test(attribute.value)))) element.removeAttribute(attribute.name);
+					shell.querySelector('#preview-content').replaceChildren(...content.content.childNodes);
+					rich.srcdoc = shell.documentElement.outerHTML;
+					rich.hidden = false;
+				} else { plain.textContent = result.rendered.text; plain.hidden = false; }
+				message.hidden = true;
+			} catch (error) { if (row.isConnected && serial === previewSerial) message.textContent = error.message; }
+		});
 		fragment.append(row);
 	}
 	list.replaceChildren(fragment);

@@ -61,7 +61,7 @@ test('options page updates account, sync and prefix controls in place', async ()
 	page('options');
 	let state = { connected: false, authPending: false, count: 0, prefix: ';', origin: 'https://tr.n.lan' };
 	let changed;
-	globalThis.chrome = { permissions: { request: async ({ origins }) => { assert.deepEqual(origins, ['https://custom.example.com/*']); return true; } }, storage: { onChanged: { addListener: listener => { changed = listener; } } }, runtime: { getManifest: () => ({ version: '1.1.1' }), sendMessage: async message => {
+	globalThis.chrome = { permissions: { request: async ({ origins }) => { assert.deepEqual(origins, ['https://custom.example.com/*']); return true; } }, storage: { onChanged: { addListener: listener => { changed = listener; } } }, runtime: { getManifest: () => ({ version: '1.2.0' }), sendMessage: async message => {
 		if (message.type === 'prefix' && message.value === '.') return { ok: false, error: 'Save failed' };
 		if (message.type === 'connect') state = { ...state, authPending: true, origin: message.origin };
 		if (message.type === 'sync') state = { ...state, count: 4, lastSync: Date.now() };
@@ -71,6 +71,8 @@ test('options page updates account, sync and prefix controls in place', async ()
 	} } };
 	await import('../options.js?ui=' + randomUUID());
 	await tick();
+	assert.equal(document.querySelector('#version').textContent, 'Typerelay Extension Version 1.2.0');
+	assert.equal(document.querySelector('a[href="mailto:hi@typerelay.com"]').textContent, 'Email');
 	const accountSection = document.querySelector('section');
 	const prefix = document.querySelector('#prefix');
 	assert.equal(document.querySelector('#server-form').hidden, false);
@@ -107,4 +109,71 @@ test('options page updates account, sync and prefix controls in place', async ()
 	await tick();
 	assert.equal(document.querySelector('section'), accountSection);
 	assert.equal(document.querySelector('#account-state').textContent, 'Signed out');
+});
+
+test('Detail previews toggle independently without inserting and ignore stale responses', async () => {
+	const dom = page('popup');
+	const inserted = [];
+	const pending = [];
+	const items = [{ id: 'one', title: 'One', library: 'Mine' }, { id: 'two', title: 'Two', library: 'Mine' }];
+	dom.window.close = () => {};
+	globalThis.chrome = { runtime: { sendMessage: async message => {
+		if (message.type === 'status') return { ok: true, value: { connected: true, bridgeVerified: true, origin: 'https://custom.example.com' } };
+		if (message.type === 'snapshot') return { ok: true, value: { items } };
+		if (message.type === 'prepare') { assert.equal(message.preview, true); return new Promise(resolve => pending.push(resolve)); }
+		if (message.type === 'insert') inserted.push(message.id);
+		return { ok: true, value: {} };
+	} } };
+	await import('../popup.js?ui=' + randomUUID());
+	await tick();
+	const search = document.querySelector('#search');
+	const results = document.querySelector('#results');
+	search.value = 'Mine';
+	search.dispatchEvent(new dom.window.Event('input'));
+	const [one, two] = results.children;
+	results.scrollTop = 15;
+	one.querySelector('.detail').click();
+	assert.equal(document.activeElement, search);
+	assert.equal(one.querySelector('.preview-status').textContent, 'Loading…');
+	pending.shift()({ ok: true, value: { item: { content: { type: 'rich_text' } }, rendered: { html: '<p><strong>Bold</strong><a href="https://example.com">Link</a><img src="data:image/png;base64,AQID"><img src="https://example.com/track"><script>alert(1)</script></p>' } } });
+	await tick();
+	const frame = one.querySelector('iframe');
+	assert.equal(frame.hidden, false);
+	assert.equal(frame.getAttribute('sandbox'), '');
+	assert.match(frame.srcdoc, /default-src 'none'/);
+	assert.match(frame.srcdoc, /<strong>Bold<\/strong>/);
+	assert.match(frame.srcdoc, /data:image\/png/);
+	assert.doesNotMatch(frame.srcdoc, /href=|https:\/\/example.com|<script/);
+	one.querySelector('.preview').click();
+	assert.deepEqual(inserted, []);
+	two.querySelector('.detail').click();
+	pending.shift()({ ok: true, value: { item: { content: { type: 'template' } }, rendered: { text: 'Hello\n[name]' } } });
+	await tick();
+	assert.equal(two.querySelector('pre').textContent, 'Hello\n[name]');
+	assert.equal(one.querySelector('.preview').hidden, false);
+	assert.equal(two.querySelector('.preview').hidden, false);
+	assert.equal(results.children[0], one);
+	assert.equal(results.scrollTop, 15);
+	search.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter' }));
+	await tick();
+	assert.deepEqual(inserted, ['two']);
+	one.querySelector('.detail').click();
+	assert.equal(one.querySelector('.preview').hidden, true);
+	one.querySelector('.detail').click();
+	pending.shift()({ ok: false, error: 'Preview failed' });
+	await tick();
+	assert.equal(one.querySelector('.preview-status').textContent, 'Preview failed');
+	one.querySelector('.detail').click();
+	one.querySelector('.detail').click();
+	const stale = pending.shift();
+	search.value = 'Two';
+	search.dispatchEvent(new dom.window.Event('input'));
+	stale({ ok: true, value: { item: { content: { type: 'plain_text' } }, rendered: { text: 'Stale preview' } } });
+	await tick();
+	assert.equal(results.children.length, 1);
+	assert.equal(results.querySelector('.preview').hidden, true);
+	assert.doesNotMatch(results.textContent, /Stale preview/);
+	results.querySelector('.result-summary').click();
+	await tick();
+	assert.deepEqual(inserted, ['two', 'two']);
 });
