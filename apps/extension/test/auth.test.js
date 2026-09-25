@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-test('browser sign-in captures the Magic Link callback and syncs images using HTTPS cache keys', async () => {
+for (const custom of [false, true]) test(`browser sign-in captures callbacks and syncs images on the ${custom ? 'custom' : 'default'} server`, async () => {
 	const values = () => {
 		const data = {};
 		return { get: async keys => Object.fromEntries((typeof keys === 'string' ? [keys] : keys).map(key => [key, data[key]])), set: async entries => Object.assign(data, entries), remove: async keys => { for (const key of typeof keys === 'string' ? [keys] : keys) delete data[key]; } };
@@ -16,8 +16,8 @@ test('browser sign-in captures the Magic Link callback and syncs images using HT
 	let updateListener;
 	let installedListener;
 	let optionsOpened = 0;
-	const origin = 'https://app.typerelay.com';
-	globalThis.chrome = { storage: { local, session }, runtime: { onMessage: { addListener: listener => { messageListener = listener; } }, onInstalled: { addListener: listener => { installedListener = listener; } }, onStartup: { addListener: () => {} }, openOptionsPage: async () => { optionsOpened++; }, getPlatformInfo: async () => ({ os: 'cros' }) }, tabs: { create: async details => { tabs.push({ id: 10, ...details }); return tabs[0]; }, query: async () => tabs.filter(tab => tab.url.startsWith(`${origin}/oauth/browser-callback`)), remove: async id => { removed.push(id); tabs.splice(tabs.findIndex(tab => tab.id === id), 1); }, onUpdated: { addListener: listener => { updateListener = listener; } } }, alarms: { create: () => {}, onAlarm: { addListener: () => {} } } };
+	const origin = custom ? 'https://custom.example.com' : 'https://app.typerelay.com';
+	globalThis.chrome = { permissions: { contains: async ({ origins }) => origins[0] === `${origin}/*` }, storage: { local, session }, runtime: { onMessage: { addListener: listener => { messageListener = listener; } }, onInstalled: { addListener: listener => { installedListener = listener; } }, onStartup: { addListener: () => {} }, openOptionsPage: async () => { optionsOpened++; }, getPlatformInfo: async () => ({ os: 'cros' }) }, tabs: { create: async details => { tabs.push({ id: 10, ...details }); return tabs[0]; }, query: async () => tabs.filter(tab => tab.url.startsWith(`${origin}/oauth/browser-callback`)), remove: async id => { removed.push(id); tabs.splice(tabs.findIndex(tab => tab.id === id), 1); }, onUpdated: { addListener: listener => { updateListener = listener; } } }, alarms: { create: () => {}, onAlarm: { addListener: () => {} } } };
 	globalThis.caches = { open: async () => ({ match: async key => cached.get(key), put: async (key, value) => { assert.match(new URL(key).protocol, /^https?:$/); cached.set(key, value); }, keys: async () => [...cached.keys()].map(url => ({ url })), delete: async key => cached.delete(key) }), delete: async () => true };
 	globalThis.fetch = async url => {
 		if (url === `${origin}/oauth/token`) return Response.json({ access_token: 'access', refresh_token: 'refresh', expires_in: 900, account: 'account' });
@@ -26,12 +26,15 @@ test('browser sign-in captures the Magic Link callback and syncs images using HT
 		throw new Error(`Unexpected request: ${url}`);
 	};
 	await import(`../worker.js?auth-test=${Date.now()}`);
-	const send = type => new Promise(resolve => messageListener({ type }, {}, resolve));
+	const send = (type, data = {}) => new Promise(resolve => messageListener({ type, ...data }, {}, resolve));
 	await installedListener({ reason: 'install' });
 	assert.equal(optionsOpened, 1);
 	await installedListener({ reason: 'update' });
 	assert.equal(optionsOpened, 2);
-	assert.deepEqual((await send('connect')).value, { pending: true });
+	assert.equal((await send('connect', { origin: 'http://unsafe.example.com' })).ok, false);
+	assert.equal((await send('connect', { origin: 'https://denied.example.com' })).ok, false);
+	assert.deepEqual((await send('connect', { origin })).value, { pending: true });
+	if (custom) assert.equal((await local.get('origin')).origin, origin);
 	assert.equal(tabs.length, 1);
 	const authorize = new URL(tabs[0].url);
 	assert.equal(authorize.origin, origin);
@@ -48,6 +51,8 @@ test('browser sign-in captures the Magic Link callback and syncs images using HT
 	updateListener(11, { url: callback });
 	const status = await send('status');
 	assert.equal(status.value.connected, true);
+	assert.equal(status.value.origin, origin);
+	assert.equal((await send('connect', { origin: 'https://another.example.com' })).ok, false);
 	assert.equal(status.value.count, 1);
 	assert.equal((await local.get('tokens')).tokens.access_token, 'access');
 	assert.equal((await send('snapshot')).value.items[0].title, 'Test result');
@@ -57,4 +62,6 @@ test('browser sign-in captures the Magic Link callback and syncs images using HT
 	assert.equal((await session.get('browserAuth')).browserAuth, undefined);
 	await installedListener({ reason: 'update' });
 	assert.equal(optionsOpened, 2);
+	await import(`../worker.js?restart=${custom}-${Date.now()}`);
+	assert.equal((await send('status')).value.origin, origin);
 });

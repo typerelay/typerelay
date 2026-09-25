@@ -6,6 +6,7 @@ let connected = false;
 let syncBusy = false;
 let connectBusy = false;
 let refreshSerial = 0;
+let serverLoaded = false;
 
 async function refresh() {
 	const serial = ++refreshSerial;
@@ -15,7 +16,8 @@ async function refresh() {
 	$('#account-state').textContent = state.connected ? `Signed in to ${state.origin}` : state.authPending ? 'Finish sign-in in the Chrome tab.' : 'Signed out';
 	$('#auth-error').textContent = state.authError || '';
 	$('#auth-error').hidden = !state.authError;
-	$('#connect').hidden = state.connected || !!state.authPending;
+	$('#server-form').hidden = state.connected || !!state.authPending;
+	if (!serverLoaded) { $('#server').value = new URL(state.origin).host; serverLoaded = true; }
 	$('#connect').disabled = connectBusy;
 	$('#restart-connect').hidden = state.connected || !state.authPending;
 	$('#restart-connect').disabled = connectBusy;
@@ -28,7 +30,23 @@ async function refresh() {
 	$('#edit').href = `${state.origin}/`;
 }
 
-$('#connect').addEventListener('click', async () => { connectBusy = true; $('#connect').disabled = true; try { $('#auth-error').hidden = true; await send({ type: 'connect' }); await refresh(); } catch (error) { $('#auth-error').textContent = error.message; $('#auth-error').hidden = false; } finally { connectBusy = false; $('#connect').disabled = false; } });
+$('#server-form').addEventListener('submit', async event => {
+	event.preventDefault();
+	connectBusy = true;
+	$('#connect').disabled = true;
+	try {
+		$('#auth-error').hidden = true;
+		const value = $('#server').value.trim().replace(/^https:\/\//i, '');
+		const server = new URL(`https://${value}`);
+		if (!value || server.username || server.password || server.pathname !== '/' || server.search || server.hash || /[\s\\/?#@]/.test(value)) throw new Error('Enter a server hostname, without a path.');
+		if (!await chrome.permissions.request({ origins: [`${server.origin}/*`] })) throw new Error('Allow access to this server to sign in.');
+		await send({ type: 'connect', origin: server.origin });
+		$('#server').value = server.host;
+		await refresh();
+	} catch (error) { $('#auth-error').textContent = error.message; $('#auth-error').hidden = false; }
+	finally { connectBusy = false; $('#connect').disabled = false; }
+});
+$('#reset-server').addEventListener('click', () => { $('#server').value = 'app.typerelay.com'; $('#server').focus(); });
 $('#restart-connect').addEventListener('click', async () => { connectBusy = true; $('#restart-connect').disabled = true; try { await send({ type: 'cancel-connect' }); await send({ type: 'connect' }); await refresh(); } catch (error) { $('#auth-error').textContent = error.message; $('#auth-error').hidden = false; } finally { connectBusy = false; $('#restart-connect').disabled = false; } });
 $('#disconnect').addEventListener('click', async () => { const button = $('#disconnect'); button.disabled = true; try { await send({ type: 'disconnect' }); await refresh(); } catch (error) { $('#auth-error').textContent = error.message; $('#auth-error').hidden = false; } finally { button.disabled = false; } });
 $('#sync').addEventListener('click', async () => { syncBusy = true; $('#sync').disabled = true; $('#sync-status').textContent = 'Syncing…'; try { await send({ type: 'sync' }); await refresh(); $('#sync-status').textContent = 'Synced'; } catch (error) { $('#sync-status').textContent = error.message; } finally { syncBusy = false; $('#sync').disabled = !connected; } });

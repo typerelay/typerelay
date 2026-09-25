@@ -16,8 +16,14 @@ html(lang="en")
 				h2 Account
 				p#account-state(role="status") Checking connection…
 				p#auth-error.error(role="alert" hidden)
+				form#server-form(hidden)
+					label(for="server") Server
+					div.server-group
+						span https://
+						input#server(type="text" value="app.typerelay.com" required autocapitalize="none" spellcheck="false")
+						button#connect(type="submit") Sign in
+					button#reset-server(type="button") reset
 				div.actions
-					button#connect(type="button" hidden) Sign in
 					button#restart-connect(type="button" hidden) Start over
 					button#disconnect(type="button" hidden) Sign out
 			section

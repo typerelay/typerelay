@@ -61,9 +61,9 @@ test('options page updates account, sync and prefix controls in place', async ()
 	page('options');
 	let state = { connected: false, authPending: false, count: 0, prefix: ';', origin: 'https://tr.n.lan' };
 	let changed;
-	globalThis.chrome = { storage: { onChanged: { addListener: listener => { changed = listener; } } }, runtime: { sendMessage: async message => {
+	globalThis.chrome = { permissions: { request: async ({ origins }) => { assert.deepEqual(origins, ['https://custom.example.com/*']); return true; } }, storage: { onChanged: { addListener: listener => { changed = listener; } } }, runtime: { sendMessage: async message => {
 		if (message.type === 'prefix' && message.value === '.') return { ok: false, error: 'Save failed' };
-		if (message.type === 'connect') state = { ...state, authPending: true };
+		if (message.type === 'connect') state = { ...state, authPending: true, origin: message.origin };
 		if (message.type === 'sync') state = { ...state, count: 4, lastSync: Date.now() };
 		if (message.type === 'prefix') state = { ...state, prefix: message.value };
 		if (message.type === 'disconnect') state = { ...state, connected: false, count: 0 };
@@ -73,11 +73,17 @@ test('options page updates account, sync and prefix controls in place', async ()
 	await tick();
 	const accountSection = document.querySelector('section');
 	const prefix = document.querySelector('#prefix');
-	assert.equal(document.querySelector('#connect').hidden, false);
+	assert.equal(document.querySelector('#server-form').hidden, false);
+	assert.equal(document.querySelector('#server').value, 'tr.n.lan');
+	document.querySelector('#reset-server').click();
+	assert.equal(document.querySelector('#server').value, 'app.typerelay.com');
+	document.querySelector('#server').value = 'custom.example.com';
 	assert.equal(document.querySelector('#sync').disabled, true);
 	document.querySelector('#connect').click();
 	await tick();
 	assert.equal(document.querySelector('#restart-connect').hidden, false);
+	assert.equal(state.origin, 'https://custom.example.com');
+	assert.equal(document.querySelector('section'), accountSection);
 	state = { ...state, connected: true, authPending: false, count: 3 };
 	changed({ tokens: {} }, 'local');
 	await tick();

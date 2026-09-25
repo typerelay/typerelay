@@ -1,6 +1,7 @@
 import { Runtime } from './runtime.js';
 
-const origin = 'https://app.typerelay.com';
+let origin = 'https://app.typerelay.com';
+const originReady = chrome.storage.local.get('origin').then(data => { origin = data.origin || origin; });
 const client = 'typerelay-browser';
 const callbackPath = '/oauth/browser-callback';
 const assetPath = id => `/api/v2/assets/${id}`;
@@ -40,7 +41,17 @@ async function request(path, options = {}) {
 	return response;
 }
 
-async function connect() {
+async function connect(selectedOrigin) {
+	if (selectedOrigin && selectedOrigin !== origin) {
+		const server = new URL(selectedOrigin);
+		if (server.protocol !== 'https:' || server.origin !== selectedOrigin) throw new Error('Enter a valid HTTPS server.');
+		if ((await chrome.storage.local.get('tokens')).tokens || completionJob) throw new Error('Sign out before changing servers.');
+		if (!await chrome.permissions.contains({ origins: [`${selectedOrigin}/*`] })) throw new Error('Allow access to this server to sign in.');
+		await chrome.storage.session.remove(['browserAuth', 'browserAuthError']);
+		await clear();
+		await chrome.storage.local.set({ origin: selectedOrigin });
+		origin = selectedOrigin;
+	}
 	const { browserAuth } = await chrome.storage.session.get('browserAuth');
 	if (browserAuth?.startedAt > Date.now() - 900000) return { pending: true };
 	const verifier = base64(crypto.getRandomValues(new Uint8Array(48)));
@@ -56,6 +67,7 @@ async function connect() {
 }
 
 async function finishConnect(tabId, url) {
+	await originReady;
 	const { browserAuth } = await chrome.storage.session.get('browserAuth');
 	if (!browserAuth || browserAuth.startedAt <= Date.now() - 900000) return;
 	const callback = new URL(url);
@@ -139,8 +151,9 @@ async function claim(active = true) {
 
 chrome.runtime.onMessage.addListener((message, sender, reply) => {
 	(async () => {
+		await originReady;
 		switch (message.type) {
-			case 'connect': return connect();
+			case 'connect': { if (sender.url && new URL(sender.url).protocol !== 'chrome-extension:') throw new Error('Open extension settings to sign in.'); return connect(message.origin); }
 			case 'disconnect': { await request('/api/v2/connection', { method: 'DELETE' }).catch(() => undefined); await clear(); await chrome.storage.session.remove(['browserAuth', 'browserAuthError']); return { disconnected: true }; }
 			case 'sync': return sync();
 			case 'status': {
@@ -170,5 +183,5 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
 
 chrome.runtime.onInstalled.addListener(async details => { chrome.alarms.create('sync', { periodInMinutes: 2 }); if (['install', 'update'].includes(details.reason) && !(await chrome.storage.local.get('tokens')).tokens) await chrome.runtime.openOptionsPage(); });
 chrome.runtime.onStartup.addListener(() => chrome.alarms.create('sync', { periodInMinutes: 2 }));
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => { if (changeInfo.url?.startsWith(`${origin}${callbackPath}`)) void finishPending(tabId, changeInfo.url); });
-chrome.alarms.onAlarm.addListener(alarm => { if (alarm.name === 'sync') void chrome.storage.local.get('tokens').then(data => data.tokens && sync()).catch(() => undefined); });
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => { if (changeInfo.url) void finishPending(tabId, changeInfo.url); });
+chrome.alarms.onAlarm.addListener(alarm => { if (alarm.name === 'sync') void originReady.then(() => chrome.storage.local.get('tokens')).then(data => data.tokens && sync()).catch(() => undefined); });
