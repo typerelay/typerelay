@@ -25,6 +25,7 @@
     "android:release": "pnpm --filter @typerelay/mobile android:release",
     "android:test": "pnpm --filter @typerelay/mobile test:release",
     "desktop:build": "pnpm --filter typerelay-desktop build",
-    "desktop:test": "pnpm --filter typerelay-desktop test"
+    "desktop:test": "pnpm --filter typerelay-desktop test",
+    "extension:package": "pnpm --filter @typerelay/extension package"
   }
 }
