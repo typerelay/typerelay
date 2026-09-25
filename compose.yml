@@ -48,7 +48,7 @@ x-env: &env
 services:
   mobile:
     image: typerelay-mobile-dev:local
-    command: ["pnpm", "exec", "vite", "--config", "/opt/typerelay/apps/mobile/vite.config.ts", "--host", "0.0.0.0", "--port", "5174", "--strictPort"]
+    command: ["pnpm", "--config.verify-deps-before-run=false", "exec", "vite", "--config", "/opt/typerelay/apps/mobile/vite.config.ts", "--host", "0.0.0.0", "--port", "5174", "--strictPort"]
     build:
       context: .
       dockerfile: apps/server/Dockerfile
