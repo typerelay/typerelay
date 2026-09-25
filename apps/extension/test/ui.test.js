@@ -16,13 +16,14 @@ function page(name) {
 	return dom;
 }
 
-test('popup stays empty until search and Enter inserts the arrow-selected snippet', async () => {
+test('popup stays empty until search and Enter copies the arrow-selected snippet', async () => {
 	const dom = page('popup');
-	const inserted = [];
+	const copied = [];
+	Object.defineProperty(dom.window.navigator, 'clipboard', { value: { writeText: async text => copied.push(text) } });
 	const items = [...Array.from({ length: 101 }, (_, index) => ({ id: 'generic-' + index, title: 'Snippet ' + index, trigger: 'snip' + index, library: 'Mine' })), { id: 'alpha', title: 'Alpha', trigger: 'al', library: 'Mine' }, { id: 'alpine', title: 'Alpine', trigger: 'alp', library: 'Mine' }];
 	let closed = 0;
 	dom.window.close = () => { closed++; };
-	globalThis.chrome = { runtime: { sendMessage: async message => ({ ok: true, value: message.type === 'status' ? { connected: true, bridgeVerified: true } : message.type === 'snapshot' ? { items } : (inserted.push(message.id), {}) }), openOptionsPage: async () => {} } };
+	globalThis.chrome = { runtime: { sendMessage: async message => ({ ok: true, value: message.type === 'status' ? { connected: true, bridgeVerified: true } : message.type === 'snapshot' ? { items } : message.type === 'prepare' ? { item: { content: { type: 'plain_text' } }, rendered: { text: message.id, fields: [] } } : assert.fail('Unexpected request: ' + message.type) }), openOptionsPage: async () => {} } };
 	await import('../popup.js?ui=' + randomUUID());
 	await tick();
 	const search = document.querySelector('#search');
@@ -42,7 +43,7 @@ test('popup stays empty until search and Enter inserts the arrow-selected snippe
 	search.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }));
 	search.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
 	await tick();
-	assert.deepEqual(inserted, ['alpine']);
+	assert.deepEqual(copied, ['alpine']);
 	assert.equal(closed, 1);
 });
 
@@ -155,9 +156,6 @@ test('Detail previews toggle independently without inserting and ignore stale re
 	assert.equal(two.querySelector('.preview').hidden, false);
 	assert.equal(results.children[0], one);
 	assert.equal(results.scrollTop, 15);
-	search.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter' }));
-	await tick();
-	assert.deepEqual(inserted, ['two']);
 	one.querySelector('.detail').click();
 	assert.equal(one.querySelector('.preview').hidden, true);
 	one.querySelector('.detail').click();
@@ -174,9 +172,7 @@ test('Detail previews toggle independently without inserting and ignore stale re
 	assert.equal(results.children.length, 1);
 	assert.equal(results.querySelector('.preview').hidden, true);
 	assert.doesNotMatch(results.textContent, /Stale preview/);
-	results.querySelector('.result-summary').click();
-	await tick();
-	assert.deepEqual(inserted, ['two', 'two']);
+	assert.deepEqual(inserted, []);
 });
 
 for (const url of ['https://docs.google.com/document/d/example/edit', 'about:blank']) test(`Google Docs guard covers ${url}`, () => {
@@ -195,4 +191,117 @@ for (const url of ['https://docs.google.com/document/d/example/edit', 'about:bla
 		assert.equal(sent.includes('prepare'), false);
 		assert.equal(sent.includes('claim'), false);
 	} finally { dom.window.close(); }
+});
+
+async function copyPopup(rendered, type = 'plain_text', write = async () => {}) {
+	const dom = page('popup');
+	const messages = [];
+	const writes = [];
+	let closed = 0;
+	dom.window.close = () => { closed++; };
+	Object.defineProperty(dom.window.navigator, 'clipboard', { value: { writeText: async text => { await write(); writes.push(text); }, write: async items => { await write(); writes.push(items); } } });
+	dom.window.ClipboardItem = class { constructor(data) { this.data = data; } };
+	globalThis.chrome = { runtime: { sendMessage: async message => {
+		messages.push(message);
+		if (message.type === 'status') return { ok: true, value: { connected: true, bridgeVerified: false } };
+		if (message.type === 'snapshot') return { ok: true, value: { items: [{ id: 'copy', title: 'Copy', library: 'Mine' }] } };
+		assert.equal(message.type, 'prepare', 'copy must never send page insertion messages');
+		return { ok: true, value: { item: { content: { type } }, rendered: typeof rendered === 'function' ? rendered(message) : rendered } };
+	} } };
+	await import('../popup.js?ui=' + randomUUID());
+	await tick();
+	const search = document.querySelector('#search');
+	search.value = 'copy';
+	search.dispatchEvent(new dom.window.Event('input'));
+	return { dom, messages, writes, closed: () => closed, click: () => document.querySelector('.result-summary').click() };
+}
+
+test('click copies multiline Unicode text without a desktop bridge and closes only after success', async () => {
+	let finish;
+	const fixture = await copyPopup({ text: 'Hello\n世界 👋', fields: [] }, 'code', () => new Promise(resolve => { finish = resolve; }));
+	fixture.click();
+	fixture.click();
+	await tick();
+	assert.equal(fixture.closed(), 0);
+	assert.equal(fixture.messages.filter(message => message.type === 'prepare').length, 2);
+	finish();
+	await tick();
+	assert.deepEqual(fixture.writes, ['Hello\n世界 👋']);
+	assert.equal(fixture.closed(), 1);
+});
+
+test('rich copy includes HTML with links and images plus plain text in one item', async () => {
+	const html = '<p><strong>Bold</strong><a href="https://example.com">Link</a><img src="data:image/png;base64,AQID"></p>';
+	const fixture = await copyPopup({ text: 'Bold Link', html, fields: [] }, 'rich_text');
+	fixture.click();
+	await tick();
+	assert.equal(fixture.writes[0].length, 1);
+	const data = fixture.writes[0][0].data;
+	assert.equal(await data['text/html'].text(), html);
+	assert.equal(await data['text/plain'].text(), 'Bold Link');
+	assert.equal(fixture.closed(), 1);
+});
+
+test('clipboard failures keep search open and permit retry', async () => {
+	let fail = true;
+	const fixture = await copyPopup({ text: 'Test', fields: [] }, 'plain_text', async () => { if (fail) throw new Error('Clipboard denied'); });
+	fixture.click();
+	await tick();
+	assert.equal(fixture.closed(), 0);
+	assert.deepEqual(fixture.writes, []);
+	assert.equal(document.querySelector('#status').textContent, 'Clipboard denied');
+	fail = false;
+	fixture.click();
+	await tick();
+	assert.equal(fixture.closed(), 1);
+});
+
+test('variable form shares required/default/multiline handling and copies resolved values', async () => {
+	const fixture = await copyPopup(message => message.preview ? { fields: ['name', 'notes'], variables: { name: { label: 'Name', default: 'Sam' }, notes: { multiline: true, required: false } } } : { text: message.values.name + '\n' + message.values.notes }, 'template');
+	fixture.click();
+	await tick();
+	const form = document.querySelector('#copy-prompt form');
+	assert.equal(form.querySelector('[type="submit"]').textContent, 'Copy');
+	assert.equal(form.elements.namedItem('name').value, 'Sam');
+	assert.equal(form.elements.namedItem('name').required, true);
+	assert.equal(form.elements.namedItem('notes').tagName, 'TEXTAREA');
+	assert.equal(form.elements.namedItem('notes').required, false);
+	form.elements.namedItem('notes').value = 'Details';
+	form.dispatchEvent(new fixture.dom.window.Event('submit', { cancelable: true }));
+	await tick();
+	assert.deepEqual(fixture.writes, ['Sam\nDetails']);
+	assert.equal(fixture.closed(), 1);
+});
+
+for (const action of ['cancel', 'escape']) test('variable ' + action + ' returns to search without copying', async () => {
+	const fixture = await copyPopup({ text: '', fields: ['name'] }, 'template');
+	fixture.click();
+	await tick();
+	const panel = document.querySelector('#copy-prompt');
+	if (action === 'cancel') panel.querySelector('[data-cancel]').click();
+	else panel.querySelector('input').dispatchEvent(new fixture.dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+	await tick();
+	assert.deepEqual(fixture.writes, []);
+	assert.equal(fixture.closed(), 0);
+	assert.equal(panel.hidden, true);
+	assert.equal(document.activeElement, document.querySelector('#search'));
+	assert.equal(document.querySelector('#search').value, 'copy');
+});
+
+test('Enter key actions are rejected without writing the clipboard', async () => {
+	const fixture = await copyPopup({ text: 'Test', fields: [], enter_actions: 1 }, 'template');
+	fixture.click();
+	await tick();
+	assert.deepEqual(fixture.writes, []);
+	assert.equal(fixture.closed(), 0);
+	assert.match(document.querySelector('#status').textContent, /Enter key action/);
+});
+
+test('rendering failure leaves the clipboard unchanged and popup open', async () => {
+	const fixture = await copyPopup(() => { throw new Error('Image unavailable offline'); }, 'rich_text');
+	fixture.click();
+	await tick();
+	assert.deepEqual(fixture.writes, []);
+	assert.equal(fixture.closed(), 0);
+	assert.equal(document.querySelector('#status').textContent, 'Image unavailable offline');
 });

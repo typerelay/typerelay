@@ -1,10 +1,12 @@
 import { send } from './messages.js';
+import { promptFields } from './prompt.js';
 
 const $ = selector => document.querySelector(selector);
 let items = [];
 let matches = [];
 let selectedIndex = -1;
 let openingOptions = false;
+let copying = false;
 
 function status(message) { $('#status').textContent = message; $('#status').hidden = !message; }
 
@@ -15,9 +17,34 @@ async function openSettings() {
 	catch (error) { openingOptions = false; status(error.message); }
 }
 
-async function insert(item) {
-	try { await send({ type: 'insert', id: item.id }); window.close(); }
-	catch (error) { status(error.message); }
+async function copy(item) {
+	if (copying) return;
+	copying = true;
+	status('');
+	const row = document.getElementById('result-' + item.id);
+	row?.setAttribute('aria-busy', 'true');
+	try {
+		const preview = await send({ type: 'prepare', id: item.id, preview: true });
+		if (preview.rendered.enter_actions) throw new Error('This snippet uses an Enter key action, which cannot be copied. Clipboard unchanged.');
+		const fields = preview.rendered.fields || [];
+		let values = {};
+		if (fields.length) {
+			const panel = $('#copy-prompt');
+			panel.replaceChildren($('#prompt-template').content.cloneNode(true));
+			$('#signed-in').hidden = true;
+			panel.hidden = false;
+			try { values = await promptFields(panel, fields, preview.rendered.variables, 'Copy'); }
+			finally { panel.hidden = true; panel.replaceChildren(); $('#signed-in').hidden = false; $('#search').focus(); }
+			if (values === null) return;
+		}
+		const result = await send({ type: 'prepare', id: item.id, values, preview: false });
+		if (result.rendered.enter_actions) throw new Error('This snippet uses an Enter key action, which cannot be copied. Clipboard unchanged.');
+		if (result.item.content.type === 'rich_text' && result.rendered.html) {
+			await window.navigator.clipboard.write([new window.ClipboardItem({ 'text/plain': new Blob([result.rendered.text], { type: 'text/plain' }), 'text/html': new Blob([result.rendered.html], { type: 'text/html' }) })]);
+		} else await window.navigator.clipboard.writeText(result.rendered.text);
+		window.close();
+	} catch (error) { status(error.message); }
+	finally { copying = false; row?.removeAttribute('aria-busy'); }
 }
 
 function select(index, scroll = false) {
@@ -39,7 +66,7 @@ function results() {
 		row.id = 'result-' + item.id;
 		row.querySelector('strong').textContent = item.title || item.trigger || 'Untitled snippet';
 		row.querySelector('small').textContent = item.library + ' · ' + (item.trigger || 'Search only');
-		row.querySelector('.result-summary').addEventListener('click', () => void insert(item));
+		row.querySelector('.result-summary').addEventListener('click', () => void copy(item));
 		const detail = row.querySelector('.detail');
 		const preview = row.querySelector('.preview');
 		preview.id = 'preview-' + item.id;
@@ -93,7 +120,7 @@ async function refresh() {
 	if (!state.connected) { $('#signed-out').hidden = false; $('#signed-in').hidden = true; status(state.authError || 'Sign in from options.'); await openSettings(); return; }
 	$('#signed-out').hidden = true;
 	$('#signed-in').hidden = false;
-	status(state.authError || (state.bridgeVerified ? '' : 'Desktop update needed'));
+	status(state.authError || '');
 	items = (await send({ type: 'snapshot' })).items;
 	results();
 	$('#search').focus();
@@ -104,6 +131,6 @@ $('#search').addEventListener('input', results);
 $('#search').addEventListener('keydown', event => {
 	if (event.key === 'ArrowDown' && matches.length) { event.preventDefault(); select(selectedIndex + 1, true); }
 	if (event.key === 'ArrowUp' && matches.length) { event.preventDefault(); select(selectedIndex - 1, true); }
-	if (event.key === 'Enter' && selectedIndex >= 0) { event.preventDefault(); void insert(matches[selectedIndex]); }
+	if (event.key === 'Enter' && !event.isComposing && !event.repeat && selectedIndex >= 0) { event.preventDefault(); void copy(matches[selectedIndex]); }
 });
 void refresh().catch(error => status(error.message));

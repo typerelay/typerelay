@@ -75,31 +75,11 @@ async function promptFields(fields, variables) {
 	const panel = document.createElement('div');
 	panel.innerHTML = html;
 	shadow.append(panel);
-	const form = shadow.querySelector('form');
-	const container = shadow.querySelector('[data-fields]');
-	const answers = {};
-	for (const [index, name] of fields.entries()) {
-		const variable = variables?.[name] || {};
-		const template = shadow.querySelector(variable.multiline ? '[data-multiline]' : '[data-single]');
-		const row = template.content.cloneNode(true);
-		const label = row.querySelector('label');
-		const input = row.querySelector('input, textarea');
-		label.textContent = variable.label || name;
-		label.htmlFor = `typerelay-field-${index}`;
-		input.id = label.htmlFor;
-		input.name = name;
-		input.value = variable.default || '';
-		input.required = variable.required !== false;
-		container.append(row);
-	}
 	document.documentElement.append(host);
-	return new Promise(resolve => {
-		const finish = value => { host.remove(); promptOpen = false; resolve(value); };
-		form.addEventListener('submit', event => { event.preventDefault(); for (const field of fields) answers[field] = new FormData(form).get(field) || ''; finish(answers); });
-		shadow.querySelector('[data-cancel]').addEventListener('click', () => finish(null));
-		host.addEventListener('keydown', event => { if (event.key === 'Escape') finish(null); });
-		form.querySelector('input, textarea')?.focus();
-	});
+	try {
+		const { promptFields } = await import(chrome.runtime.getURL('prompt.js'));
+		return await promptFields(shadow, fields, variables);
+	} finally { host.remove(); promptOpen = false; }
 }
 
 function insert(editor, saved, expected, erase, rendered, rich) {
