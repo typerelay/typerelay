@@ -1,4 +1,5 @@
 use anyhow::Result;
+#[cfg(target_os="linux")]
 use tauri::Manager;
 use crate::Runtime;
 #[cfg(target_os="linux")]
@@ -20,7 +21,18 @@ pub fn install(app:&tauri::AppHandle)->Result<()> {
 		let sync=MenuItem::with_id(app,"sync","Sync now",true,None::<&str>)?;let settings=MenuItem::with_id(app,"settings","Settings",true,None::<&str>)?;let updates=MenuItem::with_id(app,"updates","Check for updates",true,None::<&str>)?;let quit=MenuItem::with_id(app,"quit","Quit",true,None::<&str>)?;
 		let menu=MenuBuilder::new(app).item(&sync).item(&settings).separator().item(&updates).item(&quit).build()?;
         let icon: &[u8]=if cfg!(target_os="macos"){include_bytes!("../icons/tray-template.png")}else{include_bytes!("../icons/icon.png")};
-		TrayIconBuilder::with_id("typerelay").icon(tauri::image::Image::from_bytes(icon)?).icon_as_template(cfg!(target_os="macos")).tooltip("TypeRelay").menu(&menu).show_menu_on_left_click(false).on_menu_event(|app,event|match event.id.as_ref(){"sync"=>{let _=crate::sync_now(app.clone());},"updates"=>crate::update::check(app.clone(),true),"settings"=>Runtime::open(app,true),"quit"=>Runtime::quit(app),_=>()}).on_tray_icon_event(|tray,event|{if matches!(event,TrayIconEvent::Click{button:MouseButton::Left,button_state:MouseButtonState::Up,..}){Runtime::open(tray.app_handle(),false);}}).build(app)?;
+		let tray=TrayIconBuilder::with_id("typerelay").icon(tauri::image::Image::from_bytes(icon)?).icon_as_template(cfg!(target_os="macos")).tooltip("TypeRelay").menu(&menu).show_menu_on_left_click(false).on_menu_event(|app,event|match event.id.as_ref(){"sync"=>{let _=crate::sync_now(app.clone());},"updates"=>crate::update::check(app.clone(),true),"settings"=>Runtime::open(app,true),"quit"=>Runtime::quit(app),_=>()}).on_tray_icon_event(move|tray,event|{if matches!(event,TrayIconEvent::Click{button:MouseButton::Left,button_state:MouseButtonState::Up,..}){Runtime::open(tray.app_handle(),false);}
+            #[cfg(target_os="macos")]
+            if matches!(event,TrayIconEvent::Click{button:MouseButton::Right,button_state:MouseButtonState::Down,..}) {
+                // macOS 27 swallows left clicks while NSStatusItem has a menu attached.
+                // Attach only while presenting, matching tray-icon's upstream fix #365.
+                if let Err(error)=tray.set_menu(Some(menu.clone())).and_then(|_|tray.with_inner_tray_icon(|inner|{inner.show_menu();if let Some(status)=inner.ns_status_item(){status.setMenu(None);}})){eprintln!("TypeRelay tray menu failed: {error}");}
+            }
+        }).build(app)?;
+        #[cfg(target_os="macos")]
+        tray.with_inner_tray_icon(|inner|{inner.set_show_menu_on_right_click(false);if let Some(status)=inner.ns_status_item(){status.setMenu(None);}})?;
+        #[cfg(not(target_os="macos"))]
+        let _=tray;
     }
     Ok(())
 }
