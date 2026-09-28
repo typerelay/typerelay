@@ -7,7 +7,11 @@ use anyhow::ensure;
 #[path = "platform_macos.rs"] mod native;
 #[cfg(target_os = "windows")]
 #[path = "platform_windows.rs"] mod native;
-pub use native::{Target,fallback_allowed};
+pub use native::Target;
+#[cfg(not(target_os="linux"))]
+impl Target {
+	pub fn for_panel(captured:Result<Self>,last:Option<Self>)->Result<Option<Self>> {match captured {Ok(target)=>Ok(Some(target)),Err(_) if native::fallback_allowed()=>Ok(last),Err(error)=>Err(error)}}
+}
 #[cfg(target_os="macos")]
 pub use native::NativeNotifications;
 #[cfg(any(target_os = "windows",target_os = "macos"))]
