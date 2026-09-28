@@ -43,6 +43,6 @@ The Windows uninstaller removes the startup entry and TUI shortcut but preserves
 
 ## Upgrade and uninstall behavior
 
-The app checks for updates automatically and offers to download and restart. On Omarchy, a managed update replaces the engine, TUI and panel together and rolls back on failure. Do not mix standalone binaries from different releases.
+The app silently downloads and verifies signed updates, then asks once: **Install and restart** or **Later**. Choosing **Later** keeps the download ready and pauses automatic reminders for that version until the next launch. Use **Install update…** in the tray/menu-bar menu to reopen the prompt anytime. Cached downloads are verified again before reuse. Operating-system permission dialogs may still appear. On Omarchy, a managed update replaces the engine, TUI and panel together and rolls back on failure. Do not mix standalone binaries from different releases.
 
 Uninstalling preserves snippets, settings and sync credentials unless you remove the platform data directory yourself. Back up or export important libraries before deleting that directory.
