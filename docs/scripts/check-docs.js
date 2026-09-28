@@ -26,6 +26,17 @@ for (const [title, paths] of titles) if (paths.length > 1) metadataErrors.push(`
 for (const [description, paths] of descriptions) if (paths.length > 1) metadataErrors.push(`duplicate description "${description}": ${paths.join(', ')}`);
 if (metadataErrors.length) throw new Error('Documentation metadata validation failed:\n' + metadataErrors.join('\n'));
 
+// Ensure authored guidance survives dynamic route generation and Markdown includes.
+for (const name of readdirSync('api/usage').filter(name => name.endsWith('.md'))) {
+ const operationId = name.slice(0, -3);
+ if (!ids.has(operationId)) throw new Error('Usage guide has no API operation: ' + name);
+ const html = readFileSync(resolve(distRoot, 'api/operations/' + operationId + '.html'), 'utf8');
+ const headings = [...readFileSync('api/usage/' + name, 'utf8').matchAll(/^## (.+)$/gm)];
+ for (const [, heading] of headings) if (!html.includes(heading)) throw new Error('Missing rendered API guidance: ' + operationId + ': ' + heading);
+}
+const toolsHtml = readFileSync(resolve(distRoot, 'mcp/tools.html'), 'utf8');
+if (!toolsHtml.includes('Choose a tool for the task') || !toolsHtml.includes('list_libraries')) throw new Error('MCP guidance or generated tool list is missing');
+
 const docsRoot = resolve('.');
 const repoRoot = resolve('..');
 const markdown = [resolve(repoRoot, 'README.md')];

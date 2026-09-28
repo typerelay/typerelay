@@ -12,3 +12,5 @@ const operationId = route.data.params.operationId
 </script>
 
 <OAOperation :operationId="operationId" />
+
+<!-- @content -->

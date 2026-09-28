@@ -28,3 +28,19 @@ Read [Getting started](./getting-started) for the complete first-use path.
 | API and MCP | Approved integrations and agents | Yes |
 
 All desktop content is stored in SQLite. YAML is import/export only; editing an exported file does not change TypeRelay.
+
+## Decide what belongs in a snippet
+
+A useful first collection contains wording you repeat and want to keep accurate. Examples include contact details, a support response, a meeting confirmation or a frequently used code block. Save the reusable part and leave recipient-specific details for [template variables](./templates). Give each entry a title that will make sense when you search for it later.
+
+Choose the content type deliberately. Text inserts literal wording, Code preserves code as text, and Rich text supports formatting, links and images. The [snippet guide](./snippets) explains abbreviations, size limits and the behavior of each type. For more examples, read [typing shortcuts for reusable replies](https://typerelay.com/blog/typing-shortcuts-for-reusable-replies-signatures-and-phrases/).
+
+## Separate personal and shared content
+
+Keep personal shortcuts in a private library. Put approved team wording in a shared library and choose who may edit it. Sharing a library is a permission decision, so check its audience before moving content into it. The [teams guide](./teams) explains account roles, while [libraries and sharing](./libraries) covers content access.
+
+Our article on [shared snippet libraries](https://typerelay.com/blog/shared-snippet-library-for-teams-one-source-always-current/) describes an ownership workflow for maintaining recurring replies. Start with a small collection that someone is responsible for reviewing.
+
+## Bring existing content with you
+
+Use [import and export](./imports) to choose a supported transfer format and review imported abbreviations. Use [Trash](./trash) for recoverable removal. When you add another device, follow [sync and offline use](./sync) so you understand which content stays local and which libraries travel with your account.
