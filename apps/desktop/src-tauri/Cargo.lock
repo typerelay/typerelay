@@ -6336,6 +6336,7 @@ name = "typerelay-panel"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "block2",
  "clipboard-rs",
  "clipboard-win",
@@ -6347,6 +6348,7 @@ dependencies = [
  "fs2",
  "ksni",
  "libc",
+ "minisign-verify",
  "notify-rust",
  "objc2",
  "objc2-app-kit",

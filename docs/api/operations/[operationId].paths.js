@@ -1,3 +1,4 @@
+import { existsSync, readFileSync } from 'node:fs';
 import { usePaths } from 'vitepress-openapi';
 import spec from '../../.vitepress/data/openapi.json' with { type: 'json' };
 
@@ -11,7 +12,10 @@ export default {
         return operations.map(({ operationId, path, verb, summary }) => {
             const disambiguator = summaryCounts.get(summary) > 1 ? ` (${verb.toUpperCase()} ${path})` : '';
 
+            const guide = new URL(`../usage/${operationId}.md`, import.meta.url);
+
             return {
+                content: existsSync(guide) ? readFileSync(guide, 'utf8') : '',
                 params: {
                     operationId,
                     pageTitle: `${summary}${disambiguator} | TypeRelay API`,

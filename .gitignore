@@ -53,3 +53,6 @@ credentials*.json
 /apps/mobile/android/local.properties
 
 /apps/extension/releases/
+
+/docs/mcp/tools-list.md
+/.seo-cache/

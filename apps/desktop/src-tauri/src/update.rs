@@ -1,34 +1,107 @@
-use anyhow::Result;
-#[cfg(target_os="linux")]
-use anyhow::Context;
+use anyhow::{Context, Result};
+use base64::{Engine, engine::general_purpose::STANDARD};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::sync::{Mutex, atomic::{AtomicBool, Ordering}};
+use std::{fs, io::Write, path::Path, sync::Mutex};
+#[cfg(any(target_os="linux",test))]
+use std::path::PathBuf;
 #[cfg(target_os="linux")]
-use std::{collections::BTreeSet, fs, io::Cursor, path::PathBuf, process::Command};
-#[cfg(target_os="linux")]
-use std::process::Stdio;
+use std::{collections::BTreeSet, io::Cursor, process::{Command, Stdio}};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
-pub struct UpdateState { checking: AtomicBool, installing: AtomicBool, available: Mutex<Option<String>> }
+#[derive(Clone, Copy, Default, PartialEq, Debug, Serialize)]
+#[serde(rename_all="lowercase")]
+enum Phase { #[default] Idle, Checking, Downloading, Ready, Prompting, Installing }
 
-impl Default for UpdateState {
-    fn default() -> Self { Self { checking: AtomicBool::new(false), installing: AtomicBool::new(false), available: Mutex::new(None) } }
+#[derive(Default)]
+struct Status { busy: bool, phase: Phase, version: Option<String>, prompted: Option<String> }
+
+impl Status {
+    fn begin(&mut self) -> bool { if self.busy { return false; } self.busy=true; self.phase=Phase::Checking; true }
+    fn offer(&mut self, manual: bool) -> bool {
+        if self.phase!=Phase::Ready || self.version.is_none() || !manual && self.prompted==self.version { return false; }
+        self.prompted=self.version.clone(); self.phase=Phase::Prompting; true
+    }
+    fn finish(&mut self, ready: bool) { self.busy=false; self.phase=if ready { Phase::Ready } else { Phase::Idle }; }
+    fn menu(&self) -> (&'static str, bool) {
+        match self.phase {
+            Phase::Downloading => ("Downloading update…", false),
+            Phase::Installing => ("Installing update…", false),
+            Phase::Checking => ("Checking for updates…", false),
+            Phase::Prompting => ("Install update…", false),
+            Phase::Ready => ("Install update…", !self.busy),
+            Phase::Idle => ("Check for updates", true),
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct UpdateState { status: Mutex<Status>, ready: Mutex<Option<Update>> }
+
+// Metadata and payload live in one atomically published file, never a partially written pair.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct Package { version: String, target: String, url: String, signature: String }
+
+impl Package {
+    fn from_update(update: &Update) -> Self { Self { version:update.version.clone(), target:format!("{}-{}",update.target,std::env::consts::ARCH), url:update.download_url.to_string(), signature:update.signature.clone() } }
+    fn verify(&self, bytes: &[u8], pubkey: &str) -> Result<()> {
+        let key=String::from_utf8(STANDARD.decode(pubkey)?)?; let signature=String::from_utf8(STANDARD.decode(&self.signature)?)?;
+        minisign_verify::PublicKey::decode(&key)?.verify(bytes, &minisign_verify::Signature::decode(&signature)?, true)?; Ok(())
+    }
+    fn clear(root: &Path) -> Result<()> {
+        match fs::remove_file(root.join("ready")) { Ok(())=>Ok(()), Err(error) if error.kind()==std::io::ErrorKind::NotFound=>Ok(()), Err(error)=>Err(error.into()) }
+    }
+    fn load(&self, root: &Path, pubkey: &str) -> Result<Option<Vec<u8>>> {
+        let data=match fs::read(root.join("ready")) { Ok(data)=>data, Err(error) if error.kind()==std::io::ErrorKind::NotFound=>return Ok(None), Err(error)=>return Err(error.into()) };
+        let valid=(||->Result<Vec<u8>> { let split=data.iter().position(|byte| *byte==b'\n').context("Invalid cached update")?; let metadata:Self=serde_json::from_slice(&data[..split])?; anyhow::ensure!(metadata==*self,"Cached update metadata changed"); let bytes=&data[split+1..]; self.verify(bytes,pubkey)?; Ok(bytes.to_vec()) })();
+        match valid { Ok(bytes)=>Ok(Some(bytes)), Err(_)=>{Self::clear(root)?;Ok(None)} }
+    }
+    fn save(&self, root: &Path, bytes: &[u8], pubkey: &str) -> Result<()> {
+        self.verify(bytes,pubkey)?; fs::create_dir_all(root)?;
+        let temporary=root.join(format!("pending-{}",uuid::Uuid::new_v4()));
+        let result=(||->Result<()> { let mut file=fs::OpenOptions::new().write(true).create_new(true).open(&temporary)?; serde_json::to_writer(&mut file,self)?; file.write_all(b"\n")?; file.write_all(bytes)?; file.sync_all()?; drop(file); Self::clear(root)?; fs::rename(&temporary,root.join("ready"))?; Ok(()) })();
+        let _=fs::remove_file(&temporary); result
+    }
+    async fn prepare(&self, root: &Path, pubkey: &str, download: impl std::future::Future<Output=Result<Vec<u8>>>) -> Result<Vec<u8>> {
+        if let Some(bytes)=self.load(root,pubkey)? { return Ok(bytes); }
+        let bytes=download.await?; self.save(root,&bytes,pubkey)?; Ok(bytes)
+    }
 }
 
 impl UpdateState {
-    pub fn value(&self) -> Value { json!({"checking":self.checking.load(Ordering::SeqCst),"installing":self.installing.load(Ordering::SeqCst),"version":*self.available.lock().unwrap()}) }
+    pub fn value(&self) -> Value { let status=self.status.lock().unwrap(); json!({"checking":status.busy,"installing":status.phase==Phase::Installing,"version":status.version,"phase":status.phase}) }
+    pub fn menu(&self) -> (&'static str, bool) { self.status.lock().unwrap().menu() }
+    fn phase(&self, app: &AppHandle, phase: Phase) { self.status.lock().unwrap().phase=phase; emit(app); }
+    async fn run(&self, app: &AppHandle, manual: bool) -> Result<()> {
+        let root=app.path().app_cache_dir()?.join("updates");
+        // A tray action can use the feed-validated package already offered this session, even offline.
+        let ready=if manual { self.ready.lock().unwrap().clone() } else { None };
+        let update=match ready { Some(update)=>Some(update), None=>app.updater()?.check().await? };
+        let Some(update)=update else {
+            *self.ready.lock().unwrap()=None; self.status.lock().unwrap().version=None; Package::clear(&root)?;
+            if manual { let app=app.clone(); tauri::async_runtime::spawn_blocking(move||message(&app,"Typerelay is up to date","You already have the latest version.",MessageDialogButtons::Ok)).await?; }
+            return Ok(());
+        };
+        *self.ready.lock().unwrap()=None; self.status.lock().unwrap().version=Some(update.version.clone());
+        self.phase(app,Phase::Downloading);
+        let pubkey=app.config().plugins.0.get("updater").and_then(|config|config.get("pubkey")).and_then(Value::as_str).context("Missing updater public key")?;
+        let package=Package::from_update(&update);
+        let bytes=package.prepare(&root,pubkey,async { Ok(update.download(|_,_|{},||{}).await?) }).await?;
+        *self.ready.lock().unwrap()=Some(update.clone()); self.phase(app,Phase::Ready);
+        if !self.status.lock().unwrap().offer(manual) { return Ok(()); }
+        emit(app);
+        let accepted=tauri::async_runtime::spawn_blocking({ let app=app.clone(); let version=update.version.clone(); move||message(&app,"Typerelay update ready",format!("Typerelay {version} is ready. Install and restart?"),MessageDialogButtons::OkCancelCustom("Install and restart".into(),"Later".into())) }).await?;
+        if accepted { self.phase(app,Phase::Installing); install(app.clone(),update,bytes).await?; }
+        Ok(())
+    }
 }
 
-fn emit(app: &AppHandle) { let _ = app.emit("update-status", app.state::<UpdateState>().value()); }
+fn emit(app: &AppHandle) { let _=app.emit("update-status",app.state::<UpdateState>().value()); crate::tray::Tray::update(app); }
 
 fn message(app: &AppHandle, title: &str, body: impl Into<String>, buttons: MessageDialogButtons) -> bool {
     app.dialog().message(body).title(title).buttons(buttons).blocking_show()
-}
-
-fn notify_available(app: &AppHandle, version: &str) {
-    let app=app.clone();let message=format!("TypeRelay {version} is available. Use the tray menu to install it.");std::thread::spawn(move||crate::Runtime::notice(&app,&message,false));
 }
 
 #[cfg(target_os="linux")]
@@ -39,33 +112,34 @@ fn unpack_linux(bytes: &[u8], version: &str) -> Result<PathBuf> {
     Ok(root)
 }
 
-async fn install(app: AppHandle, update: Update) -> Result<()> {
-    let state=app.state::<UpdateState>();if state.installing.swap(true,Ordering::SeqCst){return Ok(());}emit(&app);
-    let result=async {
-        let bytes=update.download(|_,_|{},||{}).await?;
-        let ready=tauri::async_runtime::spawn_blocking({let app=app.clone();let version=update.version.clone();move||message(&app,"TypeRelay update ready",format!("TypeRelay {version} is downloaded. Restart and install it now?"),MessageDialogButtons::OkCancelCustom("Restart now".into(),"Later".into()))}).await?;
-        if !ready{return Ok(());}
-		#[cfg(target_os="linux")]
-		{let directory=unpack_linux(&bytes,&update.version)?;let engine=directory.join("typerelay");Command::new(engine).arg("update").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;app.exit(0);Ok(())}
-		#[cfg(target_os="windows")]
-		{update.install(bytes)?;Ok(())}
-		#[cfg(target_os="macos")]
-		{update.install(bytes)?;app.restart();}
-    }.await;
-    state.installing.store(false,Ordering::SeqCst);emit(&app);result
+async fn install(app: AppHandle, update: Update, bytes: Vec<u8>) -> Result<()> {
+    tauri::async_runtime::spawn_blocking(move||->Result<()> {
+        #[cfg(target_os="linux")]
+        {let directory=unpack_linux(&bytes,&update.version)?;let engine=directory.join("typerelay");if let Err(error)=Command::new(engine).arg("update").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn(){let _=fs::remove_dir_all(directory);return Err(error.into());}app.exit(0);Ok(())}
+        #[cfg(target_os="windows")]
+        {let _=app;update.install(bytes)?;Ok(())}
+        #[cfg(target_os="macos")]
+        {update.install(bytes)?;app.restart();}
+    }).await?
 }
 
 pub fn check(app: AppHandle, manual: bool) {
-    let state=app.state::<UpdateState>();if state.checking.swap(true,Ordering::SeqCst){return;}emit(&app);
+    if !app.state::<UpdateState>().status.lock().unwrap().begin() { return; }
+    // Linux menu callbacks run on the tray thread; emit only after dispatch to avoid a tray update deadlock.
     tauri::async_runtime::spawn(async move {
-        let result=async {Ok::<_,anyhow::Error>(app.updater()?.check().await?)}.await;
-        match result {
-			Ok(Some(update))=>{let changed=app.state::<UpdateState>().available.lock().unwrap().replace(update.version.clone()).as_deref()!=Some(update.version.as_str());emit(&app);if manual {let download=tauri::async_runtime::spawn_blocking({let app=app.clone();let version=update.version.clone();move||message(&app,"TypeRelay update available",format!("TypeRelay {version} is available. Download it now?"),MessageDialogButtons::OkCancelCustom("Download".into(),"Later".into()))}).await.unwrap_or(false);if download&&let Err(error)=install(app.clone(),update).await{let text=error.to_string();let app2=app.clone();let _=tauri::async_runtime::spawn_blocking(move||message(&app2,"Update failed",text,MessageDialogButtons::Ok)).await;}}else if changed{notify_available(&app,&update.version);}},
-            Ok(None)=>{*app.state::<UpdateState>().available.lock().unwrap()=None;if manual{let app2=app.clone();let _=tauri::async_runtime::spawn_blocking(move||message(&app2,"TypeRelay is up to date","You already have the latest version.",MessageDialogButtons::Ok)).await;}},
-            Err(error)=>if manual{let app2=app.clone();let text=error.to_string();let _=tauri::async_runtime::spawn_blocking(move||message(&app2,"Update check failed",text,MessageDialogButtons::Ok)).await;},
+        emit(&app);
+        let state=app.state::<UpdateState>(); let result=state.run(&app,manual).await;
+        let interactive=manual || matches!(state.status.lock().unwrap().phase,Phase::Prompting|Phase::Installing);
+        if let Err(error)=result {
+            eprintln!("Typerelay update failed: {error:#}");
+            if interactive { let app=app.clone(); let text=format!("{error}\nTry again from the update menu."); let _=tauri::async_runtime::spawn_blocking(move||message(&app,"Update failed",text,MessageDialogButtons::Ok)).await; }
         }
-        app.state::<UpdateState>().checking.store(false,Ordering::SeqCst);emit(&app);
+        let ready=state.ready.lock().unwrap().is_some(); state.status.lock().unwrap().finish(ready); emit(&app);
     });
 }
 
 pub fn schedule(app: AppHandle) {std::thread::spawn(move||{std::thread::sleep(std::time::Duration::from_secs(15));loop{check(app.clone(),false);std::thread::sleep(std::time::Duration::from_secs(6*60*60));}});}
+
+#[cfg(test)]
+#[path="update_tests.rs"]
+mod tests;

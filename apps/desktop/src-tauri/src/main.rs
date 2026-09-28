@@ -13,8 +13,26 @@ use tauri_plugin_dialog::DialogExt;
 #[cfg(not(target_os="linux"))]
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
-struct Runtime { root:PathBuf, target:Mutex<Option<platform::Target>>, last:Mutex<Option<platform::Target>>, erase:Mutex<usize>, busy:AtomicBool, syncing:AtomicBool, authenticating:AtomicBool, cancel_auth:AtomicBool, auth_error:Mutex<String>, prompting:AtomicBool, prompt_hit:Mutex<Option<Hit>>, settings:AtomicBool, status:Mutex<String>, #[cfg(any(target_os="windows",target_os="macos"))] expansion_started:AtomicBool, #[cfg(target_os="linux")] registration:Mutex<Option<typerelay_client::desktop::Registration>> }
+#[derive(Default)]
+struct Runtime { root:PathBuf, target:Mutex<Option<platform::Target>>, last:Mutex<Option<platform::Target>>, erase:Mutex<usize>, busy:AtomicBool, syncing:AtomicBool, authenticating:AtomicBool, cancel_auth:AtomicBool, auth_error:Mutex<String>, prompting:AtomicBool, prompt_hit:Mutex<Option<Hit>>, settings:AtomicBool, status:Mutex<String>, capture_status:Mutex<String>, #[cfg(any(target_os="windows",target_os="macos"))] expansion_started:AtomicBool, #[cfg(target_os="linux")] registration:Mutex<Option<typerelay_client::desktop::Registration>> }
 impl Runtime {
+	fn update_capture(&self,captured:Result<Option<platform::Target>>) {
+		let (target,message)=match captured {
+			Ok(target)=>(target,String::new()),
+			Err(error)=>{
+				eprintln!("Typerelay panel target capture failed: {error:#}");
+				let message=error.to_string();
+				#[cfg(target_os="macos")]
+				let message={let (accessibility,input_monitoring)=Self::permissions();Self::permission_message(accessibility,input_monitoring).unwrap_or(&message).to_owned()};
+				(None,message)
+			},
+		};
+		*self.target.lock().unwrap()=target;
+		*self.capture_status.lock().unwrap()=message;
+	}
+	fn status_message(&self)->String {let status=self.status.lock().unwrap();let capture=self.capture_status.lock().unwrap();[status.as_str(),capture.as_str()].into_iter().filter(|message|!message.is_empty()).collect::<Vec<_>>().join("\n")}
+	fn insertion_target(&self)->std::result::Result<platform::Target,String> {self.target.lock().unwrap().clone().ok_or_else(||"Focus an application, reopen search, then insert—or use Copy.".into())}
+
 	fn callback_argument(args:&[String])->Option<&str>{args.iter().find(|arg|arg.starts_with("typerelay://oauth/callback?code=")).map(String::as_str)}
 	fn receive_callback(args:&[String])->bool{let Some(url)=Self::callback_argument(args)else{return false;};Paths::config_dir().and_then(|root|Sync::receive_callback(&root,url).map(|_|())).is_ok()}
 	#[cfg(target_os="macos")]
@@ -48,15 +66,7 @@ impl Runtime {
         if state.prompting.load(Ordering::SeqCst) && window.is_visible().unwrap_or(false) { let _=window.set_focus(); return; }
         if !window.is_visible().unwrap_or(false) {
             let captured=platform::Target::capture();
-            let target=captured.as_ref().ok().cloned().or_else(||if platform::fallback_allowed(){state.last.lock().unwrap().clone()}else{None});
-            if target.is_none(){
-                let message=captured.err().map(|e|e.to_string()).unwrap_or("Choose an application to insert into".into());
-                #[cfg(target_os="macos")]
-                {let (accessibility,input_monitoring)=Runtime::permissions();*state.status.lock().unwrap()=Runtime::permission_message(accessibility,input_monitoring).unwrap_or(&message).into();}
-                #[cfg(not(target_os="macos"))]
-                {*state.status.lock().unwrap()=message;}
-            }
-            *state.target.lock().unwrap()=target;
+            state.update_capture(platform::Target::for_panel(captured,state.last.lock().unwrap().clone()));
         }
         state.settings.store(settings,Ordering::SeqCst);
         if let Some(target)=state.target.lock().unwrap().as_ref() {
@@ -68,7 +78,7 @@ impl Runtime {
             else {let _=window.center();}
         } else {let _=window.center();}
         let _=window.show(); let _=window.set_focus();
-        let _=app.emit("panel-open",json!({"prompt":state.prompt_hit.lock().unwrap().clone(),"settings":settings,"status":*state.status.lock().unwrap(),"theme":Self::theme()}));
+        let _=app.emit("panel-open",json!({"prompt":state.prompt_hit.lock().unwrap().clone(),"settings":settings,"status":state.status_message(),"theme":Self::theme()}));
         #[cfg(target_os="linux")]
         {
             let app=app.clone(); std::thread::spawn(move || {
@@ -180,7 +190,7 @@ fn initialize(app:tauri::AppHandle)->std::result::Result<Value,String> {
 		#[cfg(not(target_os="macos"))]
 		let notifications:Option<bool>=None;
 		let connected=state.root.join("sync/credentials.json").exists();let authenticating=state.authenticating.load(Ordering::SeqCst);
-		Ok(json!({"config":settings,"prompt":state.prompt_hit.lock().unwrap().clone(),"server":typerelay_client::settings::SettingsStore::open(state.root.join("settings.yml")).ok().map(|s|s.settings.sync_url).unwrap_or_default(),"connected":connected,"connection_state":if authenticating{"authenticating"}else if connected{"connected"}else{"disconnected"},"auth_error":*state.auth_error.lock().unwrap(),"theme":Runtime::theme(),"settings":state.settings.load(Ordering::SeqCst),"status":*state.status.lock().unwrap(),"update":app.state::<update::UpdateState>().value(),"accessibility":accessibility,"input_monitoring":input_monitoring,"notifications":notifications,"empty":empty,"version":app.package_info().version.to_string()}))
+		Ok(json!({"config":settings,"prompt":state.prompt_hit.lock().unwrap().clone(),"server":typerelay_client::settings::SettingsStore::open(state.root.join("settings.yml")).ok().map(|s|s.settings.sync_url).unwrap_or_default(),"connected":connected,"connection_state":if authenticating{"authenticating"}else if connected{"connected"}else{"disconnected"},"auth_error":*state.auth_error.lock().unwrap(),"theme":Runtime::theme(),"settings":state.settings.load(Ordering::SeqCst),"status":state.status_message(),"update":app.state::<update::UpdateState>().value(),"accessibility":accessibility,"input_monitoring":input_monitoring,"notifications":notifications,"empty":empty,"version":app.package_info().version.to_string()}))
 }
 #[tauri::command]
 async fn search(app:tauri::AppHandle,query:String)->std::result::Result<Value,String> {
@@ -206,10 +216,9 @@ async fn personal_abbreviation(app:tauri::AppHandle,hit:Hit,change:Option<Value>
 #[tauri::command]
 async fn insert(app:tauri::AppHandle,hit:Hit,values:Option<std::collections::BTreeMap<String,String>>)->std::result::Result<(),String> {
     let state=app.state::<Runtime>(); if state.busy.swap(true,Ordering::SeqCst){return Err("Insertion already in progress".into());}
-    let target=state.target.lock().unwrap().clone(); let directory=state.root.join("snippets");
+    let target=match state.insertion_target(){Ok(target)=>target,Err(error)=>{state.busy.store(false,Ordering::SeqCst);return Err(error);}}; let directory=state.root.join("snippets");
     #[cfg(not(target_os="linux"))]
     let erase=*state.erase.lock().unwrap();
-    let Some(target)=target else{state.busy.store(false,Ordering::SeqCst);return Err("No original window; use Copy".into());};
     let clock=typerelay_client::templates::Templates::clock();
     Runtime::hide(&app);
     let result=tauri::async_runtime::spawn_blocking(move || -> Result<()> {
@@ -288,6 +297,8 @@ fn save_settings(app:tauri::AppHandle,config:PanelSettings)->std::result::Result
 #[tauri::command]
 async fn connect(app:tauri::AppHandle,url:String)->std::result::Result<(),String> {
 	let state=app.state::<Runtime>();if state.authenticating.swap(true,Ordering::SeqCst){return Err("Authentication is already in progress".into());}state.cancel_auth.store(false,Ordering::SeqCst);state.auth_error.lock().unwrap().clear();let _=app.emit("auth-state",json!({"state":"authenticating","message":"Complete sign-in in any browser."}));
+	#[cfg(target_os="windows")]
+	Runtime::hide(&app);
 	let root=state.root.clone();let worker=app.clone();let result=match tauri::async_runtime::spawn_blocking(move||Sync::new(root.clone(),root.join("snippets")).and_then(|sync|sync.connect_cancellable(&url,true,true,&worker.state::<Runtime>().cancel_auth)).map_err(|error|error.to_string())).await{Ok(result)=>result,Err(error)=>Err(error.to_string())};
 	let state=app.state::<Runtime>();state.authenticating.store(false,Ordering::SeqCst);let connected=state.root.join("sync/credentials.json").exists();if let Err(error)=&result{*state.auth_error.lock().unwrap()=error.clone();}let _=app.emit("auth-state",json!({"state":if connected{"connected"}else{"disconnected"},"message":result.as_ref().map(|_|"Connected").unwrap_or_else(|error|error.as_str())}));result
 }
@@ -351,7 +362,7 @@ fn main() {
         {use tauri_plugin_deep_link::DeepLinkExt;#[cfg(target_os="linux")]app.deep_link().register_all()?;let callback_root=root.clone();app.deep_link().on_open_url(move|event|for url in event.urls(){let _=Sync::receive_callback(&callback_root,url.as_str());});if let Some(urls)=app.deep_link().get_current()?{for url in urls{let _=Sync::receive_callback(&root,url.as_str());}}}
         Sync::worker(root.clone(),root.join("snippets"));
         let config=Panel::settings(&root)?;
-		app.manage(Runtime{root:root.clone(),target:Mutex::new(None),last:Mutex::new(None),erase:Mutex::new(0),busy:AtomicBool::new(false),syncing:AtomicBool::new(false),authenticating:AtomicBool::new(false),cancel_auth:AtomicBool::new(false),auth_error:Mutex::new(String::new()),prompting:AtomicBool::new(false),prompt_hit:Mutex::new(None),settings:AtomicBool::new(false),status:Mutex::new(String::new()),#[cfg(any(target_os="windows",target_os="macos"))] expansion_started:AtomicBool::new(false),#[cfg(target_os="linux")] registration:Mutex::new(None)});
+		app.manage(Runtime{root:root.clone(),target:Mutex::new(None),last:Mutex::new(None),erase:Mutex::new(0),busy:AtomicBool::new(false),syncing:AtomicBool::new(false),authenticating:AtomicBool::new(false),cancel_auth:AtomicBool::new(false),auth_error:Mutex::new(String::new()),prompting:AtomicBool::new(false),prompt_hit:Mutex::new(None),settings:AtomicBool::new(false),status:Mutex::new(String::new()),capture_status:Mutex::new(String::new()),#[cfg(any(target_os="windows",target_os="macos"))] expansion_started:AtomicBool::new(false),#[cfg(target_os="linux")] registration:Mutex::new(None)});
 		app.manage(update::UpdateState::default());
 		#[cfg(target_os="macos")]
 		let missing_permissions={let (accessibility,input_monitoring)=Runtime::permissions();app.state::<Runtime>().update_permission_status(accessibility,input_monitoring);if accessibility&&input_monitoring&&let Err(error)=Runtime::start_expansion(app.handle()){*app.state::<Runtime>().status.lock().unwrap()=format!("TypeRelay could not start Input Monitoring: {error:#}");}!(accessibility&&input_monitoring)};

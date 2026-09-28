@@ -122,11 +122,11 @@ export class PanelRelease {
 		const options = PanelRelease.options([...args]);
 		const working = path.join(PanelRelease.root, 'apps/desktop');
 		let target = path.join(PanelRelease.root, 'target/desktop-releases', options.mode);
-		const build = options.mode === 'windows' ? ['tauri', 'bundle', '--target', options.target, '--bundles', 'nsis', '--config', 'src-tauri/tauri.windows.conf.json'] : ['tauri', 'build', '--target', options.target, '--bundles', options.mode === 'linux' ? 'deb,appimage' : 'app,dmg', '--', '--locked'];
+		const build = options.mode === 'windows' ? ['tauri', 'bundle', '--target', options.target, '--bundles', 'nsis', '--config', 'src-tauri/tauri.windows.conf.json'] : ['tauri', 'build', '--target', options.target, '--bundles', options.mode === 'linux' ? 'deb,appimage,rpm' : 'app,dmg', '--', '--locked'];
 		const compile = options.mode === 'windows' ? ['xwin', 'build', '--manifest-path', 'src-tauri/Cargo.toml', '--release', '--target', options.target, '--locked'] : null;
 		if (options.dry) { console.log(JSON.stringify({ source: 'clean develop + git pull --ff-only', platform: options.mode, target: options.target, install: ['pnpm', 'install', '--frozen-lockfile'], nativeTools: ['windows', 'macos'].includes(options.mode) ? NativeTools.plans(options.target).map(plan => [plan.command, ...plan.args]) : null, compile: compile ? ['cargo', ...compile] : null, build: ['pnpm', ...build], signing: options.mode === 'windows' ? 'Shared Helpmonks YubiKey signer via private socket; hidden PIN and touch in local terminal' : options.mode === 'macos' ? 'Local Developer ID, Apple notarization and Tauri updater signature' : 'Tauri updater signature for the verified engine, TUI and panel bundle', output: target, publish: false }, null, 2)); return; }
 		if (Number(process.versions.node.split('.')[0]) < 24) throw new Error('Node.js 24 or newer is required');
-		await PanelRelease.requireCommands(['git', 'pnpm', 'cargo', 'rustup', 'tar', 'file', ...(options.mode === 'windows' ? ['cargo-xwin', 'clang', 'lld-link', 'llvm-rc', 'makensis', 'wine'] : options.mode === 'macos' ? ['security', 'codesign', 'spctl', 'xcrun', 'lipo'] : [])]);
+		await PanelRelease.requireCommands(['git', 'pnpm', 'cargo', 'rustup', 'tar', 'file', ...(options.mode === 'windows' ? ['cargo-xwin', 'clang', 'lld-link', 'llvm-rc', 'makensis', 'wine'] : options.mode === 'macos' ? ['security', 'codesign', 'spctl', 'xcrun', 'lipo'] : ['rpm'])]);
 		if (!process.env.TAURI_SIGNING_PRIVATE_KEY) throw new Error('TAURI_SIGNING_PRIVATE_KEY is required');
 		const commit = await PanelRelease.repository();
 		const config = await DesktopVersion.config();
@@ -189,8 +189,7 @@ export class PanelRelease {
 				await PanelRelease.run('codesign', ['--verify', '--deep', '--strict', '--verbose=2', apps[0]]);
 				await PanelRelease.run('spctl', ['--assess', '--type', 'execute', '--verbose=2', apps[0]]);
 				await PanelRelease.run('xcrun', ['stapler', 'validate', apps[0]]);
-				await PanelRelease.run('lipo', [path.join(apps[0], 'Contents/MacOS/typerelay-panel'), '-verify_arch', ...targets.map(value => value.startsWith('aarch64') ? 'arm64' : 'x86_64')]);
-				await PanelRelease.run('lipo', [tui, '-verify_arch', ...targets.map(value => value.startsWith('aarch64') ? 'arm64' : 'x86_64')]);
+				for (const file of [path.join(apps[0], 'Contents/MacOS/typerelay-panel'), tui]) for (const target of targets) await PanelRelease.run('lipo', [file, '-verify_arch', target.startsWith('aarch64') ? 'arm64' : 'x86_64']);
 				const dmgs = await PanelRelease.files(path.join(release, 'bundle/dmg'), '.dmg'); const archives = await PanelRelease.files(path.join(release, 'bundle/macos'), '.app.tar.gz'); const signatures = await PanelRelease.files(path.join(release, 'bundle/macos'), '.sig');
 				if (dmgs.length !== 1 || archives.length !== 1 || signatures.length !== 1) throw new Error('Expected one macOS DMG and signed updater archive');
 				const macArchitecture = options.target.startsWith('aarch64') ? 'aarch64' : options.target.startsWith('x86_64') ? 'x64' : 'universal'; const archive = path.join(path.dirname(archives[0]), `TypeRelay_${config.version}_${macArchitecture}.app.tar.gz`); const signature = `${archive}.sig`;
@@ -201,10 +200,12 @@ export class PanelRelease {
 				for (const [name, file] of [['typerelay', engine], ['typerelay-tui', tui], ['typerelay-panel', panel]]) { const version = await PanelRelease.run(file, ['--version'], { capture: true }); if (version !== `${name} ${config.version}`) throw new Error(`${name} version does not match ${config.version}`); const type = await PanelRelease.run('file', ['--brief', file], { capture: true }); if (!/ELF 64-bit.*x86-64/i.test(type)) throw new Error(`${name} is not an x86-64 ELF binary`); }
 				const bundle = path.join(release, 'bundle/omarchy'); await fs.mkdir(bundle, { recursive: true }); for (const file of [engine, tui, panel]) await fs.copyFile(file, path.join(bundle, path.basename(file)));
 				const archive = path.join(release, 'bundle', `TypeRelay-Omarchy-${config.version}-x86_64.tar.gz`); await PanelRelease.run('tar', ['-czf', archive, '-C', bundle, 'typerelay', 'typerelay-tui', 'typerelay-panel']); await PanelRelease.run('pnpm', ['tauri', 'signer', 'sign', archive], { cwd: working, environment });
-				const appImages = await PanelRelease.files(path.join(release, 'bundle/appimage'), '.AppImage'); const debs = await PanelRelease.files(path.join(release, 'bundle/deb'), '.deb');
-				if (appImages.length !== 1 || debs.length !== 1) throw new Error('Expected one Linux AppImage and DEB');
+				const appImages = await PanelRelease.files(path.join(release, 'bundle/appimage'), '.AppImage'); const debs = await PanelRelease.files(path.join(release, 'bundle/deb'), '.deb'); const rpms = await PanelRelease.files(path.join(release, 'bundle/rpm'), '.rpm');
+				if (appImages.length !== 1 || debs.length !== 1 || rpms.length !== 1) throw new Error('Expected one Linux AppImage, DEB and RPM');
+				const rpmMetadata = await PanelRelease.run('rpm', ['-qp', '--queryformat', '%{VERSION} %{ARCH}', rpms[0]], { capture: true });
+				if (rpmMetadata !== `${config.version} x86_64`) throw new Error('Linux RPM version or architecture does not match');
 				const type = await PanelRelease.run('file', ['--brief', appImages[0]], { capture: true }); if (!/ELF 64-bit.*x86-64/i.test(type)) throw new Error('AppImage is not x86-64');
-				artifacts = [...appImages, ...debs, archive, `${archive}.sig`]; updater = { target: 'linux-x86_64', file: archive, signature: `${archive}.sig` };
+				artifacts = [...appImages, ...debs, ...rpms, archive, `${archive}.sig`]; updater = { target: 'linux-x86_64', file: archive, signature: `${archive}.sig` };
 			}
 			if (await PanelRelease.run('git', ['status', '--porcelain'], { capture: true })) throw new Error('Build changed tracked source; do not distribute');
 			const report = { product: 'TypeRelay', version: config.version, commit, platform: options.mode, target: options.target, verified: true, directory: target, updater: { target: updater.target, file: path.relative(target, updater.file), signature: (await fs.readFile(updater.signature, 'utf8')).trim() }, artifacts: await Promise.all(artifacts.map(async file => ({ file: path.relative(target, file), size: (await fs.stat(file)).size, sha256: createHash('sha256').update(await fs.readFile(file)).digest('hex') }))) };

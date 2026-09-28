@@ -7,24 +7,22 @@ description: "Reference TypeRelay MCP tools for libraries, snippets, rich-text a
 
 Tools call the public API and preserve its permissions and revisions.
 
-- [list_libraries](/api/operations/list_libraries) — List libraries (`content:read`).
-- [get_library](/api/operations/get_library) — Get library (`content:read`).
-- [create_library](/api/operations/create_library) — Create private library (`content:write`).
-- [update_library](/api/operations/update_library) — Rename library or update sharing (`sharing:write`).
-- [list_snippets](/api/operations/list_snippets) — List snippets (`content:read`).
-- [get_snippet](/api/operations/get_snippet) — Get snippet (`content:read`).
-- [create_snippet](/api/operations/create_snippet) — Create snippet (`content:write`).
-- [update_snippet](/api/operations/update_snippet) — Edit snippet (`content:write`).
-- [batch_snippets](/api/operations/batch_snippets) — Move or trash snippets atomically (`content:write`).
-- [search_snippets](/api/operations/search_snippets) — Search accessible snippets (`content:read`).
-- [get_asset_metadata](/api/operations/get_asset_metadata) — Get rich-text asset metadata (`content:read`).
-- [export_library](/api/operations/export_library) — Export library as YAML (`content:read`).
-- [preview_import](/api/operations/preview_import) — Preview import (`content:write`).
-- [commit_import](/api/operations/commit_import) — Import into new private libraries (`content:write`).
-- [list_trash](/api/operations/list_trash) — List accessible Trash (`content:read`).
-- [change_trash](/api/operations/change_trash) — Trash or restore an item (`content:write`).
-- [purge_item](/api/operations/purge_item) — Permanently purge a trashed item (`trash:purge`).
-- [empty_trash](/api/operations/empty_trash) — Permanently purge an explicit Trash selection (`trash:purge`).
-- [list_conflicts](/api/operations/list_conflicts) — List editable conflicts (`content:write`).
-- [resolve_conflict](/api/operations/resolve_conflict) — Resolve conflict (`content:write`).
-- [get_operation](/api/operations/get_operation) — Get operation receipt (`content:read`).
+## Choose a tool for the task
+
+Start with library discovery and snippet search when an assistant needs approved wording. `list_libraries` identifies the collections available to the connected user, while `search_snippets` finds matching content. Retrieve the selected snippet before using its saved value, especially when the result could be confused with another similarly titled entry.
+
+For edits, use the current library and snippet revisions required by the operation. Save an operation ID with the exact intended mutation before sending it. A timeout does not prove that the edit failed; an identical retry must reuse the original ID. Read [API workflows](../api/workflows) for the sequence and conflict handling.
+
+## Understand scope and permission checks
+
+Each entry below identifies its required scope. Read access does not grant edit access, and content editing does not grant permanent-purge permission. The connected user's library permissions remain in force even when the credential has a broad set of scopes. Consult [MCP setup](./setup) to choose OAuth or a personal token and review [agent configuration](./agents) before enabling changes.
+
+The list is generated from the API operation catalog and contains the operations exposed as MCP content tools. The REST API includes additional endpoints, so an API reference page does not by itself mean a matching MCP tool is available.
+
+## Available content tools
+
+<!--@include: ./tools-list.md-->
+
+## Use recovery tools carefully
+
+Trash and restore are distinct from permanent deletion. Review the selected records and their current revisions before acting, and use the dedicated purge scope only for deliberate permanent removal. The [Trash guide](../guide/trash) explains recovery behavior. For examples of organizing the content an assistant can retrieve, read [shared snippet libraries for teams](https://typerelay.com/blog/shared-snippet-library-for-teams-one-source-always-current/).
