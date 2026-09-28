@@ -189,8 +189,7 @@ export class PanelRelease {
 				await PanelRelease.run('codesign', ['--verify', '--deep', '--strict', '--verbose=2', apps[0]]);
 				await PanelRelease.run('spctl', ['--assess', '--type', 'execute', '--verbose=2', apps[0]]);
 				await PanelRelease.run('xcrun', ['stapler', 'validate', apps[0]]);
-				await PanelRelease.run('lipo', [path.join(apps[0], 'Contents/MacOS/typerelay-panel'), '-verify_arch', ...targets.map(value => value.startsWith('aarch64') ? 'arm64' : 'x86_64')]);
-				await PanelRelease.run('lipo', [tui, '-verify_arch', ...targets.map(value => value.startsWith('aarch64') ? 'arm64' : 'x86_64')]);
+				for (const file of [path.join(apps[0], 'Contents/MacOS/typerelay-panel'), tui]) for (const target of targets) await PanelRelease.run('lipo', [file, '-verify_arch', target.startsWith('aarch64') ? 'arm64' : 'x86_64']);
 				const dmgs = await PanelRelease.files(path.join(release, 'bundle/dmg'), '.dmg'); const archives = await PanelRelease.files(path.join(release, 'bundle/macos'), '.app.tar.gz'); const signatures = await PanelRelease.files(path.join(release, 'bundle/macos'), '.sig');
 				if (dmgs.length !== 1 || archives.length !== 1 || signatures.length !== 1) throw new Error('Expected one macOS DMG and signed updater archive');
 				const macArchitecture = options.target.startsWith('aarch64') ? 'aarch64' : options.target.startsWith('x86_64') ? 'x64' : 'universal'; const archive = path.join(path.dirname(archives[0]), `TypeRelay_${config.version}_${macArchitecture}.app.tar.gz`); const signature = `${archive}.sig`;
