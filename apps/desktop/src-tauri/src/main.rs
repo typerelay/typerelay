@@ -297,6 +297,8 @@ fn save_settings(app:tauri::AppHandle,config:PanelSettings)->std::result::Result
 #[tauri::command]
 async fn connect(app:tauri::AppHandle,url:String)->std::result::Result<(),String> {
 	let state=app.state::<Runtime>();if state.authenticating.swap(true,Ordering::SeqCst){return Err("Authentication is already in progress".into());}state.cancel_auth.store(false,Ordering::SeqCst);state.auth_error.lock().unwrap().clear();let _=app.emit("auth-state",json!({"state":"authenticating","message":"Complete sign-in in any browser."}));
+	#[cfg(target_os="windows")]
+	Runtime::hide(&app);
 	let root=state.root.clone();let worker=app.clone();let result=match tauri::async_runtime::spawn_blocking(move||Sync::new(root.clone(),root.join("snippets")).and_then(|sync|sync.connect_cancellable(&url,true,true,&worker.state::<Runtime>().cancel_auth)).map_err(|error|error.to_string())).await{Ok(result)=>result,Err(error)=>Err(error.to_string())};
 	let state=app.state::<Runtime>();state.authenticating.store(false,Ordering::SeqCst);let connected=state.root.join("sync/credentials.json").exists();if let Err(error)=&result{*state.auth_error.lock().unwrap()=error.clone();}let _=app.emit("auth-state",json!({"state":if connected{"connected"}else{"disconnected"},"message":result.as_ref().map(|_|"Connected").unwrap_or_else(|error|error.as_str())}));result
 }
