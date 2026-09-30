@@ -131,15 +131,15 @@ html(lang="en")
 								p Edit local libraries and snippets in Terminal.
 							button#open-tui.secondary(type="button") Open
 				section#settings-sync.settings-page(hidden)
-					.settings-list
-						form#connect-form.setting-section
-							.row
-								label(for="server") Sync server URL
-								button#disconnect.link-button(type="button" hidden) Disconnect
-							.input-group
-								input#server.form-control-sm(type="url" value="https://app.typerelay.com" required)
-								button#authenticate.primary.btn-sm(type="submit") Authenticate
-							p#connection-status.settings-description(role="status" aria-live="polite") Not connected
+					form#connect-form.settings-list.setting-section
+						.row
+							label(for="server") Sync server URL
+							button#disconnect.link-button(type="button" hidden) Disconnect
+						.input-group
+							input#server.form-control-sm(type="url" value="https://app.typerelay.com" required)
+							button#authenticate.primary.btn-sm(type="submit") Authenticate
+						p#connection-status.settings-description(role="status" aria-live="polite") Not connected
+					#sync-libraries-card.settings-list
 						section#enroll-form.setting-section
 							h3 Libraries on this device
 							p Synced libraries are available offline. Select local-only libraries to upload.
