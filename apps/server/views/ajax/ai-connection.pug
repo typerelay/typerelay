@@ -1,35 +1,14 @@
+include ai-provider-fields
 article.ai-connection.card.p-3.mb-3(data-ai-connection=connection.id data-scope=scope)
-	.d-flex.align-items-center.justify-content-between
+	.d-flex.align-items-center.justify-content-between.flex-wrap.gap-3
 		div
 			h3.h6.mb-1= connection.name
 			span.small.text-muted= providers[connection.provider].name + ' · ' + (connection.key_configured ? 'Key configured' : connection.no_auth ? 'No authentication' : 'Key missing')
 		div.d-flex
-			button.btn.btn-outline-secondary.btn-sm.ms-3(type="button" data-ai-edit-connection=connection.id) Edit
+			button.btn.btn-outline-secondary.btn-sm(type="button" data-ai-edit-connection=connection.id) Edit
 			button.btn.btn-outline-danger.btn-sm.ms-3(type="button" data-ai-delete-connection=connection.id) Remove
-	form.mt-3(data-ai-connection-form data-id=connection.id hidden)
-		input(type="hidden" name="provider" value=connection.provider)
-		.mb-3
-			label.form-label
-				span Connection name
-				input.form-control.form-control-sm(name="name" required maxlength="100" value=connection.name)
-		if connection.provider === 'compatible'
-			.mb-3
-				label.form-label
-					span API base URL
-					input.form-control.form-control-sm(type="url" name="base_url" required value=connection.base_url)
-		.mb-3
-			label.form-label
-				span Replace API key (blank keeps current)
-				input.form-control.form-control-sm(type="password" name="api_key" autocomplete="new-password" data-secret-value)
-		.form-check.mb-3
-			label
-				input.form-check-input.h-20px.w-30px(type="checkbox" name="clear_key")
-				span.ms-3 Clear stored key
-		if connection.provider === 'compatible'
-			.form-check.mb-3
-				label
-					input.form-check-input.h-20px.w-30px(type="checkbox" name="no_auth" checked=connection.no_auth)
-					span.ms-3 Endpoint requires no API key
-		.d-flex.justify-content-between
+	form.mt-4(data-ai-connection-form data-id=connection.id hidden)
+		+aiProviderFields(connection)
+		.d-flex.justify-content-between.align-items-center
 			button.btn.btn-outline-secondary.btn-sm(type="button" data-ai-cancel-connection) Cancel
-			button.btn.btn-primary.btn-sm.ms-3(type="submit") Save connection
+			button.btn.btn-primary.btn-sm.ms-3(type="submit") Save provider

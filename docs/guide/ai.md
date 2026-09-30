@@ -37,10 +37,10 @@ Mobile AI runs in the main app. Native keyboards use their existing snippet work
 
 Manage credentials in web **Settings → AI**. Other apps open that page on the connected server.
 
-1. Add a named connection, provider, and API key.
+1. Open **AI Providers** and add a named provider and API key.
 2. For compatible APIs, enter the full API base URL, including its path. Keyless endpoints can use **Endpoint requires no API key**.
-3. Choose the Authoring connection. Discover models or enter a model ID, then **Verify**.
-4. Save settings. Search inherits Authoring initially; choose a Search connection to use a different model.
+3. Open **AI Defaults** and choose the Authoring provider. Models load automatically into a searchable selector. Choose a model or type a manual model ID, then **Verify**. Use **Refresh models** to retry discovery.
+4. Save AI defaults. Search inherits Authoring initially; choose a Search provider to use a different model. Its models also load automatically.
 
 Private connections belong to your user in the selected account. Owners/admins configure shared team connections. Routing uses private, then team, then installation settings. A configured connection's failure produces an error and does not silently switch providers or credentials.
 
@@ -59,7 +59,7 @@ The API format defaults to **auto**. Override it if your gateway/model requires 
 
 ## Hosted and self-hosted defaults
 
-Installation administrators configure defaults at **Admin → Settings → AI**. Authoring and Search can select different connections/models.
+Installation administrators configure providers and defaults at **Admin → Settings → AI**. **AI Providers** manages credentials and private endpoint approvals. **AI Defaults** manages the installation switch, daily allowance, and Authoring/Search providers and models. Each tab saves its own fields and preserves changes in the other tab.
 
 Hosted Pro/Team, including eligible trials, receive fifty managed actions per user/day by default. The administrator can adjust the limit. Each authoring/search action counts once, including two-call searches. The allowance resets at UTC midnight. Requests rejected before inference do not consume allowance; failures after generation starts can consume it.
 
@@ -67,7 +67,7 @@ Private/team keys work on every plan without consuming managed allowance. Self-h
 
 Saving keys requires the existing **GIT_ENCRYPTION_KEY** deployment setting. No new environment variables are needed.
 
-Hosted compatible endpoints require public HTTPS. Self-hosted admins can approve private HTTP(S) origins for local model servers. The endpoint must be reachable from the Typerelay server.
+Hosted compatible endpoints require public HTTPS. Self-hosted admins can approve private HTTP(S) origins for local model servers in **AI Providers → Private endpoints**, one origin per line. Save endpoint approvals before fetching models or verifying a private provider. The endpoint must be reachable from the Typerelay server.
 
 ## Data and recovery
 

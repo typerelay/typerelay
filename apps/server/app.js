@@ -77,6 +77,7 @@ export class Server {
 		app.use('/vendor/webauthn', express.static('node_modules/@simplewebauthn/browser/dist/bundle'));
 		app.use('/vendor/bootstrap', express.static('node_modules/bootstrap/dist'));
 		app.use('/vendor/sweetalert2', express.static('node_modules/sweetalert2/dist'));
+		app.use('/vendor/tom-select', express.static('node_modules/tom-select/dist'));
 		app.use('/white-label-assets', express.static(WhiteLabel.assetsRoot(), { index: false, maxAge: '7d' }));
 		app.get('/health', (req, res) => res.json({ ok: true }));
 		// Seconds; retain non-rolling cookies and the separate admin/reauthentication deadlines.

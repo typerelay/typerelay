@@ -24,6 +24,8 @@ The authenticated OpenAPI specification is **GET /api/v2/ai/openapi.json**. Web 
 
 Settings/connection mutations accept a **revision**; stale revisions return 409. Missing update IDs return 404 instead of recreating removed connections. Responses contain masked key status.
 
+Settings PATCH requests preserve omitted fields. Installation endpoint approvals can be saved independently from policy, allowance, and workflow defaults; provide **private_endpoints** as a newline-separated string to update them, or an empty string to clear them.
+
 Authoring accepts **request_id**, **action**, **prompt**, snippet **entry**, and optional editable **library**. Apply the proposal to the editor, then save through normal snippet mutations.
 
 Search accepts **request_id**, **query**, optional synced **libraries**, and explicitly selected **local** records. A local record has **id**, **library**, **revision**, and **text**, with optional title, trigger, and library name. Limit local input to 8 MiB and 20,000 records.

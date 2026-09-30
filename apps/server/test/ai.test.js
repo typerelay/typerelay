@@ -99,6 +99,21 @@ test('private/team/installation precedence, masks, isolation and model inheritan
 	await assert.rejects(Ai.save(owner, 'personal', { enabled: true, routes: {}, revision: current.revision }), /changed/);
 });
 
+test('endpoint approvals and defaults save independently without resetting other installation fields', async () => {
+	const initial = await Ai.installation();
+	try {
+		const approvals = await Ai.save(null, 'installation', { revision: initial.revision, private_endpoints: 'http://127.0.0.1:11434\nhttp://127.0.0.1:11434' }, true);
+		assert.deepEqual(approvals.settings.private_endpoints, ['http://127.0.0.1:11434']); assert.equal(approvals.settings.enabled, initial.enabled); assert.equal(approvals.settings.daily_limit, initial.daily_limit); assert.deepEqual(approvals.settings.routes, initial.routes); assert.deepEqual(approvals.settings.connections, Ai.summary(initial).connections);
+		const defaults = await Ai.save(null, 'installation', { revision: approvals.settings.revision, enabled: false, daily_limit: 75, routes: initial.routes }, true);
+		assert.equal(defaults.settings.daily_limit, 75); assert.equal(defaults.settings.enabled, false); assert.deepEqual(defaults.settings.private_endpoints, approvals.settings.private_endpoints);
+		await assert.rejects(Ai.save(null, 'installation', { revision: initial.revision, private_endpoints: '' }, true), /changed/);
+		await assert.rejects(Ai.save(null, 'installation', { daily_limit: 0 }, true), /Daily allowance/);
+		await assert.rejects(Ai.save(null, 'installation', { private_endpoints: ['http://127.0.0.1'] }, true), /one per line/);
+		process.env.TYPERELAY_HOSTED_EDITION = 'true'; await assert.rejects(Ai.save(null, 'installation', { private_endpoints: 'http://127.0.0.1' }, true), /self-hosted/); process.env.TYPERELAY_HOSTED_EDITION = 'false';
+		const cleared = await Ai.save(null, 'installation', { private_endpoints: '' }, true); assert.deepEqual(cleared.settings.private_endpoints, []); assert.equal(cleared.settings.daily_limit, 75); assert.equal(cleared.settings.enabled, false);
+	} finally { process.env.TYPERELAY_HOSTED_EDITION = 'false'; await Ai.save(null, 'installation', { enabled: initial.enabled, daily_limit: initial.daily_limit, routes: initial.routes, private_endpoints: initial.private_endpoints.join('\n') }, true); }
+});
+
 test('authoring yields a validated proposal without changing snippets', async () => {
 	const ctx = await Fixture.context(); await Fixture.configure(ctx); const count = await Snippet.countDocuments();
 	await Fixture.provider(async calls => { const result = await Ai.author(ctx, Fixture.author()); assert.equal(result.proposal.content.text, 'Hello, friend'); assert.equal(result.proposal.trigger, 'hello'); assert.equal(await Snippet.countDocuments(), count); assert.equal(calls[0].connection.key, 'private-test-key'); assert.equal(await AiUsage.countDocuments({ account: ctx.account }), 0); });

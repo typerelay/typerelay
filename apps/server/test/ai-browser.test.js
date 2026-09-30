@@ -10,15 +10,16 @@ import { AiProvider } from '../ai/index.js';
 class BrowserFixture {
 	static status = { identity: { account: 'account', user: 'user' }, revisions: { personal: 0, team: 0, installation: 0 }, enabled: true, personal_enabled: true, team_enabled: true, installation_enabled: true, effective: { authoring: { name: 'Test', model: 'test', managed: false }, search: { name: 'Test', model: 'test', managed: false } } };
 	static settings = { enabled: true, revision: 0, routes: {}, connections: [{ id: 'a', name: 'A', provider: 'openai', key_configured: true }, { id: 'b', name: 'B', provider: 'openai', key_configured: true }], private_endpoints: [] };
-	static create(request) {
+	static create(request, admin = false) {
 		const html = pug.renderFile('views/ajax/ai-settings.pug', { canManageTeam: false });
 		const dom = new JSDOM(html, { url: 'https://example.test', runScripts: 'outside-only', pretendToBeVisual: true }); const window = dom.window;
 		window.structuredClone = structuredClone; window.AbortController = AbortController; window.crypto.randomUUID = randomUUID; window.Swal = { fire: async () => ({ isConfirmed: true }) };
+		window.eval(readFileSync('node_modules/tom-select/dist/js/tom-select.complete.min.js', 'utf8'));
 		window.eval(readFileSync('public/ai.js', 'utf8').replace('export class AiClient', 'class AiClient') + '\nwindow.AiClient = AiClient;');
-		const errors = []; const client = new window.AiClient({ request, identity: () => 'fixture', notify: (message, icon) => { if (icon === 'error') errors.push(message); }, manage: () => {} }); client.acceptStatus(structuredClone(BrowserFixture.status));
+		const errors = []; const client = new window.AiClient({ request, identity: () => 'fixture', notify: (message, icon) => { if (icon === 'error') errors.push(message); }, manage: () => {}, admin }); client.acceptStatus(structuredClone(BrowserFixture.status));
 		return { dom, window, document: window.document, client, errors };
 	}
-	static html(settings) { return pug.renderFile('views/ajax/ai-configuration.pug', { settings, scope: 'personal', providers: AiProvider.catalog, protocols: AiProvider.protocols }); }
+	static html(settings, scope = 'personal') { return pug.renderFile('views/ajax/ai-configuration.pug', { settings, scope, providers: AiProvider.catalog, protocols: AiProvider.protocols }); }
 	static tick() { return new Promise(resolve => setTimeout(resolve, 0)); }
 }
 
@@ -33,6 +34,44 @@ test('connection updates affect one row and preserve other fields, focus and scr
 		const form = b.querySelector('form'); form.hidden = false; form.elements.name.value = 'Changed B'; await fixture.client.submit(form);
 		assert.equal(root.querySelector('[data-ai-connection="a"]'), a); assert.equal(other.value, 'unsaved-other-key'); assert.equal(fixture.document.activeElement, other); assert.equal(root.scrollTop, 175);
 		assert.match(root.querySelector('[data-ai-connection="b"]').textContent, /Changed B/); assert.deepEqual(fixture.errors, []);
+	} finally { fixture.dom.window.close(); }
+});
+
+test('AI tabs preserve forms, focus and configuration nodes without requesting a section reload', async () => {
+	let requests = 0; const fixture = BrowserFixture.create(async () => { requests++; return { settings: BrowserFixture.settings, html: BrowserFixture.html(BrowserFixture.settings), status: BrowserFixture.status }; });
+	try {
+		await fixture.client.loadSettings(fixture.document.querySelector('[data-ai-settings]')); const root = fixture.document.querySelector('[data-ai-configuration]'); const providers = root.querySelector('[data-ai-config-panel="providers"]'); const defaults = root.querySelector('[data-ai-config-panel="defaults"]'); const key = providers.querySelector('[name="api_key"]'); key.value = 'unsaved-key'; root.scrollTop = 120;
+		const tab = root.querySelector('[data-ai-config-tab="defaults"]'); tab.click(); tab.focus(); assert.equal(providers.hidden, true); assert.equal(defaults.hidden, false); assert.equal(fixture.document.activeElement, tab);
+		tab.dispatchEvent(new fixture.window.KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true })); assert.equal(providers.hidden, false); assert.equal(defaults.hidden, true); assert.equal(key.value, 'unsaved-key'); assert.equal(root.scrollTop, 120); assert.equal(requests, 1); assert.equal(root.querySelector('[data-ai-config-panel="providers"]'), providers); assert.equal(root.querySelector('[data-ai-config-panel="defaults"]'), defaults);
+	} finally { fixture.dom.window.close(); }
+});
+
+test('both model selectors discover automatically and discard delayed replies after switching providers', async () => {
+	const pending = []; const fixture = BrowserFixture.create(async (path, method, body, signal) => path === '/models' ? new Promise(resolve => pending.push({ body, signal, resolve })) : { settings: BrowserFixture.settings, html: BrowserFixture.html(BrowserFixture.settings), status: BrowserFixture.status });
+	try {
+		await fixture.client.loadSettings(fixture.document.querySelector('[data-ai-settings]')); const root = fixture.document.querySelector('[data-ai-configuration]'); const author = root.querySelector('[data-ai-route="authoring"]'); const search = root.querySelector('[data-ai-route="search"]'); const model = author.querySelector('[data-ai-model]'); assert.ok(model.tomselect); assert.ok(search.querySelector('[data-ai-model]').tomselect);
+		const provider = author.querySelector('[name="authoring_connection"]'); provider.value = 'a'; provider.dispatchEvent(new fixture.window.Event('change', { bubbles: true })); assert.equal(pending.length, 1);
+		provider.value = 'b'; provider.dispatchEvent(new fixture.window.Event('change', { bubbles: true })); assert.equal(pending.length, 2); assert.equal(pending[0].signal.aborted, true);
+		pending[1].resolve({ models: [{ id: 'b-model', name: 'B model' }] }); await BrowserFixture.tick(); pending[0].resolve({ models: [{ id: 'a-model', name: 'A model' }] }); await BrowserFixture.tick(); assert.ok(model.tomselect.options['b-model']); assert.equal(model.tomselect.options['a-model'], undefined);
+		model.tomselect.createItem('manual-model'); assert.equal(model.value, 'manual-model'); const searchProvider = search.querySelector('[name="search_connection"]'); searchProvider.value = 'a'; searchProvider.dispatchEvent(new fixture.window.Event('change', { bubbles: true })); assert.equal(pending.length, 3); pending[2].resolve({ models: [{ id: 'search-model', name: 'Search model' }] }); await BrowserFixture.tick(); assert.ok(search.querySelector('[data-ai-model]').tomselect.options['search-model']);
+		searchProvider.value = ''; searchProvider.dispatchEvent(new fixture.window.Event('change', { bubbles: true })); assert.equal(search.querySelector('[data-ai-model]').tomselect.isDisabled, true); assert.equal(search.querySelector('[data-ai-models]').disabled, true); assert.deepEqual(fixture.errors, []);
+	} finally { fixture.dom.window.close(); }
+});
+
+test('model discovery failure preserves a saved model and allows refresh without replacing the form', async () => {
+	const settings = { ...BrowserFixture.settings, routes: { authoring: { connection: 'a', model: 'saved-model', protocol: 'auto' } } }; let discoveries = 0;
+	const fixture = BrowserFixture.create(async path => { if (path !== '/models') return { settings, html: BrowserFixture.html(settings), status: BrowserFixture.status }; if (++discoveries === 1) throw Error('Provider unavailable'); return { models: [{ id: 'new-model', name: 'New model' }] }; });
+	try {
+		await fixture.client.loadSettings(fixture.document.querySelector('[data-ai-settings]')); await BrowserFixture.tick(); const root = fixture.document.querySelector('[data-ai-configuration]'); const row = root.querySelector('[data-ai-route="authoring"]'); const model = row.querySelector('[data-ai-model]'); assert.equal(model.value, 'saved-model'); assert.deepEqual(fixture.errors, ['Provider unavailable']);
+		row.querySelector('[data-ai-models]').click(); await BrowserFixture.tick(); assert.equal(model.value, 'saved-model'); assert.ok(model.tomselect.options['new-model']); assert.equal(fixture.document.querySelector('[data-ai-configuration]'), root);
+	} finally { fixture.dom.window.close(); }
+});
+
+test('saving endpoint approvals sends only approvals and preserves unsaved defaults and editor fields', async () => {
+	const settings = { ...BrowserFixture.settings, daily_limit: 50 }; let saved; const fixture = BrowserFixture.create(async (path, method, body) => { if (method === 'PATCH') { saved = body; return { settings: { ...settings, revision: 1, private_endpoints: ['http://127.0.0.1:11434'] } }; } return { settings, html: BrowserFixture.html(settings, 'installation') }; }, true);
+	try {
+		await fixture.client.loadSettings(fixture.document.querySelector('[data-ai-settings]')); const root = fixture.document.querySelector('[data-ai-configuration]'); const quota = root.querySelector('[name="daily_limit"]'); quota.value = '90'; const key = root.querySelector('[name="api_key"]'); key.value = 'unsaved-key'; const form = root.querySelector('[data-ai-endpoints-form]'); form.elements.private_endpoints.value = 'http://127.0.0.1:11434'; await fixture.client.submit(form);
+		assert.deepEqual(JSON.parse(JSON.stringify(saved)), { scope: 'installation', revision: 0, private_endpoints: 'http://127.0.0.1:11434' }); assert.equal(quota.value, '90'); assert.equal(key.value, 'unsaved-key'); assert.equal(fixture.document.querySelector('[data-ai-configuration]'), root); assert.equal(root.dataset.aiTab, 'providers');
 	} finally { fixture.dom.window.close(); }
 });
 

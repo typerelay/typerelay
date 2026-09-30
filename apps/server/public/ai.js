@@ -1,16 +1,17 @@
 export class AiClient {
 	constructor({ request, identity, notify, manage, admin = false }) {
-		this.request = request; this.identity = identity; this.notify = notify; this.manage = manage; this.admin = admin; this.jobs = new Set(); this.bindings = new WeakMap(); this.results = new WeakMap(); this.status = null;
+		this.request = request; this.identity = identity; this.notify = notify; this.manage = manage; this.admin = admin; this.jobs = new Set(); this.modelJobs = new Set(); this.models = new WeakMap(); this.bindings = new WeakMap(); this.results = new WeakMap(); this.status = null;
 		document.addEventListener('change', event => this.change(event).catch(error => this.notify(error.message, 'error')));
 		document.addEventListener('click', event => this.click(event).catch(error => this.notify(error.message, 'error')));
-		document.addEventListener('submit', event => { const form = event.target; if (form.matches('[data-ai-routes-form],[data-ai-connection-form]')) { event.preventDefault(); event.stopImmediatePropagation(); void this.busy(event.submitter, () => this.submit(form)); } });
+		document.addEventListener('submit', event => { const form = event.target; if (form.matches('[data-ai-routes-form],[data-ai-connection-form],[data-ai-endpoints-form]')) { event.preventDefault(); event.stopImmediatePropagation(); void this.busy(event.submitter, () => this.submit(form)); } });
+		document.addEventListener('keydown', event => this.tabKey(event));
 		window.addEventListener('storage', event => { if (event.key === this.localKey()) this.update(); });
 		window.addEventListener('focus', () => { if (!this.admin) void this.refresh().catch(() => {}); });
 	}
 	localKey() { return 'typerelay.ai.enabled'; }
 	localEnabled() { return localStorage.getItem(this.localKey()) !== 'false'; }
 	cancel() { for (const job of this.jobs) job.abort(); this.jobs.clear(); }
-	reset() { this.cancel(); this.status = null; for (const node of document.querySelectorAll('[data-ai-results]')) node.replaceChildren(); for (const node of document.querySelectorAll('[data-ai-proposal]')) node.hidden = true; this.update(); }
+	reset() { this.cancel(); for (const job of this.modelJobs) job.abort(); this.modelJobs.clear(); this.status = null; for (const node of document.querySelectorAll('[data-ai-results]')) node.replaceChildren(); for (const node of document.querySelectorAll('[data-ai-proposal]')) node.hidden = true; this.update(); }
 	update() {
 		const enabled = this.localEnabled() && this.status?.enabled;
 		if (!enabled) this.cancel();
@@ -35,7 +36,7 @@ export class AiClient {
 		if (!control || control.dataset.aiBusy === 'true') return;
 		control.dataset.aiBusy = 'true'; control.disabled = true;
 		try { await action(); } catch (error) { if (error.name !== 'AbortError' && !/cancelled/.test(error.message)) this.notify(error.message, 'error'); }
-		finally { delete control.dataset.aiBusy; if (control.isConnected) control.disabled = false; this.update(); }
+		finally { delete control.dataset.aiBusy; if (control.isConnected) { control.disabled = false; const root = this.config(control); if (root) this.routeControls(root); } this.update(); }
 	}
 	async change(event) {
 		const control = event.target;
@@ -47,8 +48,51 @@ export class AiClient {
 			catch (error) { this.status = previous; this.update(); throw error; } finally { this.pendingPolicy = false; control.disabled = false; }
 		}
 		if (control.matches('[data-ai-configuration] select[name$="_connection"]')) this.routeControls(this.config(control));
+		if (control.matches('[data-ai-model],select[name$="_protocol"]')) { const row = control.closest('[data-ai-route]'); if (row) { if (row.querySelector('[name$="_connection"]').value) row.querySelector('[data-ai-model-status]').textContent = 'Verify this model before saving.'; this.routeControls(this.config(control)); } }
+		if (control.matches('[data-ai-connection-form] select[name="provider"]')) this.providerControls(control.closest('form'));
 	}
-	routeControls(root) { for (const row of root.querySelectorAll('[data-ai-route]')) { const selected = row.querySelector('select[name$="_connection"]').value; for (const control of row.querySelectorAll('input,select[name$="_protocol"],button')) control.disabled = !selected; } }
+	selectTab(root, tab) {
+		root.dataset.aiTab = tab;
+		for (const button of root.querySelectorAll('[data-ai-config-tab]')) { const active = button.dataset.aiConfigTab === tab; button.classList.toggle('active', active); button.setAttribute('aria-selected', String(active)); button.tabIndex = active ? 0 : -1; }
+		for (const panel of root.querySelectorAll('[data-ai-config-panel]')) panel.hidden = panel.dataset.aiConfigPanel !== tab;
+	}
+	tabKey(event) {
+		if (!event.target.matches('[data-ai-config-tab]') || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+		event.preventDefault(); const root = this.config(event.target); const tabs = [...root.querySelectorAll('[data-ai-config-tab]')]; const index = tabs.indexOf(event.target); const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+		this.selectTab(root, tabs[next].dataset.aiConfigTab); tabs[next].focus();
+	}
+	providerControls(form) { const compatible = form.elements.provider.value === 'compatible'; for (const node of form.querySelectorAll('[data-ai-compatible]')) node.hidden = !compatible; const url = form.querySelector('[name="base_url"]'); url.required = compatible; url.disabled = !compatible; form.elements.no_auth.disabled = !compatible; }
+	routeControls(root) {
+		for (const form of root.querySelectorAll('[data-ai-connection-form]')) this.providerControls(form);
+		for (const row of root.querySelectorAll('[data-ai-route]')) {
+			const selected = row.querySelector('select[name$="_connection"]').value; const model = row.querySelector('[data-ai-model]'); const status = row.querySelector('[data-ai-model-status]');
+			if (!model.tomselect) new globalThis.TomSelect(model, { maxItems: 1, create: true, createOnBlur: true, createFilter: value => value.trim().length > 0 && value.trim().length <= 200, sortField: { field: 'text', direction: 'asc' }, maxOptions: 1000 });
+			let state = this.models.get(row);
+			if (!state || state.connection !== selected) {
+				if (state) { state.job?.abort(); model.tomselect.clear(true); model.tomselect.clearOptions(); model.tomselect.wrapper.classList.remove('loading'); model.tomselect.wrapper.removeAttribute('aria-busy'); row.querySelector('[name$="_protocol"]').value = 'auto'; }
+				state = { connection: selected, attempted: false }; this.models.set(row, state);
+				status.textContent = selected ? 'Choose a model or enter its ID.' : row.dataset.aiRoute === 'search' ? 'Uses the authoring provider and model.' : 'Uses the inherited provider and model.';
+			}
+			if (selected) model.tomselect.enable(); else model.tomselect.disable();
+			for (const control of row.querySelectorAll('select[name$="_protocol"],button')) control.disabled = !selected || control.dataset.aiBusy === 'true' || (control.hasAttribute('data-ai-models') && !!state.job) || (control.hasAttribute('data-ai-verify') && !model.value);
+			if (selected && !state.attempted) void this.loadModels(row);
+		}
+	}
+	async loadModels(row) {
+		const state = this.models.get(row); if (!state?.connection) return;
+		state.job?.abort(); const job = new AbortController(); state.job = job; state.attempted = true; this.modelJobs.add(job);
+		const root = this.config(row); const identity = this.identity(); const model = row.querySelector('[data-ai-model]'); const status = row.querySelector('[data-ai-model-status]'); const refresh = row.querySelector('[data-ai-models]');
+		status.textContent = 'Loading models…'; model.tomselect.wrapper.classList.add('loading'); model.tomselect.wrapper.setAttribute('aria-busy', 'true'); refresh.disabled = true;
+		const current = () => !job.signal.aborted && row.isConnected && this.identity() === identity && this.models.get(row) === state && state.job === job && row.querySelector('[name$="_connection"]').value === state.connection;
+		try {
+			const response = await this.request('/models', 'POST', { scope: root.dataset.aiConfiguration, connection: state.connection }, job.signal);
+			if (!current()) return;
+			model.tomselect.clearOptions(); model.tomselect.addOptions(response.models.map(value => ({ value: value.id, text: value.name === value.id ? value.id : value.name + ' · ' + value.id }))); model.tomselect.refreshOptions(false);
+			status.textContent = response.models.length ? 'Choose a model or enter its ID, then Verify.' : 'No models listed. Enter the model ID, then Verify.';
+		} catch (error) { if (current() && error.name !== 'AbortError') { status.textContent = 'Could not load models. Enter an ID or refresh to retry.'; this.notify(error.message, 'error'); } }
+		finally { this.modelJobs.delete(job); if (state.job === job) { state.job = null; if (row.isConnected && this.models.get(row) === state) { model.tomselect.wrapper.classList.remove('loading'); model.tomselect.wrapper.removeAttribute('aria-busy'); refresh.disabled = !state.connection; } } }
+	}
+	destroyConfig(root) { for (const row of root.querySelectorAll('[data-ai-route]')) { this.models.get(row)?.job?.abort(); row.querySelector('[data-ai-model]').tomselect?.destroy(); } }
 	async loadSettings(root) {
 		for (const slot of root.querySelectorAll('[data-ai-configuration-slot]')) {
 			if (slot.firstElementChild) continue;
@@ -74,6 +118,7 @@ export class AiClient {
 			for (const option of [...select.options]) if (option.value && !connections.some(connection => connection.id === option.value)) option.remove();
 			for (const connection of connections) { let option = [...select.options].find(option => option.value === connection.id); if (!option) { option = new Option(connection.name, connection.id); select.add(option); } option.textContent = connection.name; }
 			select.value = connections.some(connection => connection.id === selected) ? selected : '';
+			if (result.id === selected) { const state = this.models.get(select.closest('[data-ai-route]')); if (state) { state.job?.abort(); state.attempted = false; } }
 		}
 		this.routeControls(root);
 		this.update();
@@ -85,11 +130,13 @@ export class AiClient {
 			const result = await this.request('/connections', 'POST', { scope, revision: this.configValue(root).revision, id: form.dataset.id || undefined, name: data.get('name'), provider: data.get('provider'), base_url: data.get('base_url') || '', api_key: data.get('api_key'), clear_key: data.has('clear_key'), no_auth: data.has('no_auth') });
 			this.updateConfig(root, result);
 			if (form.isConnected) form.querySelector('[name="api_key"]').value = '';
-			if (form.isConnected && !form.dataset.id) { form.reset(); form.closest('details').open = false; }
+			if (form.isConnected && !form.dataset.id) { form.reset(); this.providerControls(form); form.closest('details').open = false; }
+		} else if (form.matches('[data-ai-endpoints-form]')) {
+			this.updateConfig(root, await this.request('/settings', 'PATCH', { scope, revision: this.configValue(root).revision, private_endpoints: data.get('private_endpoints') }));
 		} else {
 			const routes = {};
 			for (const workflow of ['authoring', 'search']) if (data.get(workflow + '_connection')) routes[workflow] = { connection: data.get(workflow + '_connection'), model: data.get(workflow + '_model'), protocol: data.get(workflow + '_protocol') };
-			const result = await this.request('/settings', 'PATCH', { scope, enabled: data.has('enabled'), routes, revision: this.configValue(root).revision, ...(this.admin ? { daily_limit: Number(data.get('daily_limit')), private_endpoints: data.get('private_endpoints') } : {}) });
+			const result = await this.request('/settings', 'PATCH', { scope, enabled: data.has('enabled'), routes, revision: this.configValue(root).revision, ...(this.admin ? { daily_limit: Number(data.get('daily_limit')) } : {}) });
 			this.updateConfig(root, result);
 		}
 		this.notify('AI settings saved');
@@ -97,20 +144,20 @@ export class AiClient {
 	async click(event) {
 		const launch = event.target.closest('[data-ai-launch]'); if (launch && (!this.localEnabled() || !this.status?.enabled)) { event.preventDefault(); return; }
 		const button = event.target.closest('button'); if (!button) return;
-		if (button.matches('[data-ai-refresh-scope]')) return this.busy(button, async () => { if (!await this.confirm('Refresh saved AI settings? Unsaved changes in this section will be discarded.', 'Refresh')) return; const root = this.config(button); const result = await this.request(this.admin ? '/settings' : '/settings?scope=' + root.dataset.aiConfiguration); const node = this.fragment(result.html); root.replaceWith(node); this.routeControls(node); if (result.status) this.status = result.status; this.update(); });
+		if (button.matches('[data-ai-config-tab]')) { this.selectTab(this.config(button), button.dataset.aiConfigTab); return; }
+		if (button.matches('[data-ai-refresh-scope]')) return this.busy(button, async () => { if (!await this.confirm('Refresh saved AI settings? Unsaved changes in this section will be discarded.', 'Refresh')) return; const root = this.config(button); const result = await this.request(this.admin ? '/settings' : '/settings?scope=' + root.dataset.aiConfiguration); const node = this.fragment(result.html); const tab = root.dataset.aiTab; this.destroyConfig(root); root.replaceWith(node); this.selectTab(node, tab); this.routeControls(node); this.acceptStatus(result.status); this.update(); });
 		if (button.matches('[data-ai-manage]')) { event.preventDefault(); await this.manage(); return; }
 		if (button.matches('[data-ai-edit-connection]')) { button.closest('[data-ai-connection]').querySelector('form').hidden = false; return; }
-		if (button.matches('[data-ai-cancel-connection]')) { const form = button.closest('form'); form.querySelector('[name="api_key"]').value = ''; form.hidden = true; return; }
+		if (button.matches('[data-ai-cancel-connection]')) { const form = button.closest('form'); form.reset(); this.providerControls(form); if (form.dataset.id) form.hidden = true; else form.closest('details').open = false; return; }
 		if (button.matches('[data-ai-delete-connection]')) {
-			return this.busy(button, async () => { if (!await this.confirm('Remove this AI connection?')) return; this.cancel(); const root = this.config(button); this.updateConfig(root, await this.request('/connections/' + encodeURIComponent(button.dataset.aiDeleteConnection), 'DELETE', { scope: root.dataset.aiConfiguration, revision: this.configValue(root).revision })); });
+			return this.busy(button, async () => { if (!await this.confirm('Remove this AI provider?')) return; this.cancel(); const root = this.config(button); this.updateConfig(root, await this.request('/connections/' + encodeURIComponent(button.dataset.aiDeleteConnection), 'DELETE', { scope: root.dataset.aiConfiguration, revision: this.configValue(root).revision })); });
 		}
-		if (button.matches('[data-ai-models],[data-ai-verify]')) {
+		if (button.matches('[data-ai-models]')) return this.loadModels(button.closest('[data-ai-route]'));
+		if (button.matches('[data-ai-verify]')) {
 			return this.busy(button, async () => {
-				const root = this.config(button); const workflow = button.dataset.aiModels || button.dataset.aiVerify; const form = root.querySelector('[data-ai-routes-form]'); const connection = form.elements[workflow + '_connection'].value; const model = form.elements[workflow + '_model'].value; const protocol = form.elements[workflow + '_protocol'].value;
-				const response = await this.request(button.hasAttribute('data-ai-models') ? '/models' : '/verify', 'POST', { scope: root.dataset.aiConfiguration, connection, model, protocol });
-				const status = root.querySelector('[data-ai-connection-status]');
-				if (response.models) { const list = root.querySelector('#ai-models-' + root.dataset.aiConfiguration + '-' + workflow); list.replaceChildren(...response.models.map(model => new Option(model.name, model.id))); status.textContent = response.models.length ? 'Models loaded. Choose or enter a model ID, then Verify.' : 'Enter the model ID manually, then Verify.'; }
-				else status.textContent = 'Selected model verified.';
+				const root = this.config(button); const row = button.closest('[data-ai-route]'); const workflow = button.dataset.aiVerify; const form = root.querySelector('[data-ai-routes-form]'); const connection = form.elements[workflow + '_connection'].value; const model = form.elements[workflow + '_model'].value; const protocol = form.elements[workflow + '_protocol'].value; const identity = this.identity();
+				await this.request('/verify', 'POST', { scope: root.dataset.aiConfiguration, connection, model, protocol });
+				if (row.isConnected && identity === this.identity() && form.elements[workflow + '_connection'].value === connection && form.elements[workflow + '_model'].value === model && form.elements[workflow + '_protocol'].value === protocol) row.querySelector('[data-ai-model-status]').textContent = 'Selected model verified.';
 			});
 		}
 		if (button.matches('[data-ai-generate],[data-ai-apply],[data-ai-discard]')) {

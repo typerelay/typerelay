@@ -1,0 +1,33 @@
+mixin aiProviderFields(connection)
+	- var prefix = 'ai-' + scope + '-provider-' + (connection ? connection.id : 'new')
+	.row.g-3.mb-3.align-items-center
+		.col-md-6
+			label.form-label(for=prefix + '-name') Provider name
+			input.form-control.form-control-sm(id=prefix + '-name' name="name" required maxlength="100" value=connection ? connection.name : '')
+		.col-md-6
+			label.form-label(for=prefix + '-type') Provider
+			if connection
+				input(type="hidden" name="provider" value=connection.provider)
+				input.form-control.form-control-sm(id=prefix + '-type' value=providers[connection.provider].name disabled)
+			else
+				select.form-select.form-select-sm(id=prefix + '-type' name="provider")
+					each provider, id in providers
+						option(value=id)= provider.name
+	.row.g-3.mb-3.align-items-center
+		.col-md-6
+			label.form-label(for=prefix + '-key')= connection ? 'Replace API key' : 'API key'
+			input.form-control.form-control-sm(id=prefix + '-key' type="password" name="api_key" autocomplete="new-password" data-secret-value)
+			if connection
+				div.form-text Leave blank to keep the current key.
+		.col-md-6(data-ai-compatible hidden=!connection || connection.provider !== 'compatible')
+			label.form-label(for=prefix + '-url') API base URL
+			input.form-control.form-control-sm(id=prefix + '-url' type="url" name="base_url" value=connection ? connection.base_url : '' required=connection && connection.provider === 'compatible')
+	if connection
+		.form-check.mb-3
+			label.d-flex.align-items-center
+				input.form-check-input.h-20px.w-30px.mt-0(type="checkbox" name="clear_key")
+				span.ms-3 Clear stored key
+	.form-check.mb-3(data-ai-compatible hidden=!connection || connection.provider !== 'compatible')
+		label.d-flex.align-items-center
+			input.form-check-input.h-20px.w-30px.mt-0(type="checkbox" name="no_auth" checked=connection && connection.no_auth)
+			span.ms-3 Endpoint requires no API key

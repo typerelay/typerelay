@@ -59,7 +59,8 @@
     "qrcode": "^1.5.4",
     "sharp": "^0.35.5",
     "stripe": "^22.6.2",
-    "sweetalert2": "^11.26.25"
+    "sweetalert2": "^11.26.25",
+    "tom-select": "^2.6.2"
   },
   "devDependencies": {
     "cbor-x": "^1.6.6",

@@ -165,14 +165,17 @@ export class Ai {
 	static async save(ctx, scope, body, installation = false) {
 		const current = installation ? await Ai.installation() : await Ai.setting(ctx, scope);
 		Support.assert(body.revision == null || body.revision === current.revision, 'AI settings changed; reopen settings', 409);
-		Support.assert(typeof body.enabled === 'boolean', 'Choose whether AI is enabled');
-		const routes = Ai.routes(body.routes || current.routes, current.connections);
-		const value = { ...current, enabled: body.enabled, routes };
+		Support.assert(body.enabled === undefined || typeof body.enabled === 'boolean', 'Choose whether AI is enabled');
+		const routes = Ai.routes(body.routes ?? current.routes, current.connections);
+		const value = { ...current, enabled: body.enabled ?? current.enabled, routes };
 		if (installation) {
-			Support.assert(Number.isSafeInteger(body.daily_limit) && body.daily_limit >= 1 && body.daily_limit <= 10000, 'Daily allowance must be between 1 and 10,000');
-			const origins = String(body.private_endpoints || '').split(/\r?\n/).map(item => item.trim()).filter(Boolean).map(AiProvider.privateOrigin);
-			Support.assert(!Billing.hosted() || !origins.length, 'Private AI endpoints are available only on self-hosted installations');
-			value.daily_limit = body.daily_limit; value.private_endpoints = [...new Set(origins)];
+			if (body.daily_limit !== undefined) { Support.assert(Number.isSafeInteger(body.daily_limit) && body.daily_limit >= 1 && body.daily_limit <= 10000, 'Daily allowance must be between 1 and 10,000'); value.daily_limit = body.daily_limit; }
+			if (body.private_endpoints !== undefined) {
+				Support.assert(typeof body.private_endpoints === 'string', 'Enter private endpoint origins, one per line');
+				const origins = body.private_endpoints.split(/\r?\n/).map(item => item.trim()).filter(Boolean).map(AiProvider.privateOrigin);
+				Support.assert(!Billing.hosted() || !origins.length, 'Private AI endpoints are available only on self-hosted installations');
+				value.private_endpoints = [...new Set(origins)];
+			}
 		}
 		await Ai.persist(ctx, scope, value, current.revision, installation);
 		return installation ? { settings: Ai.summary(value) } : { settings: Ai.summary(value), status: await Ai.status(ctx) };
