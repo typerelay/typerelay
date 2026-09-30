@@ -3,9 +3,10 @@ use crate::clipboard::{PasteJob, Progress};
 use anyhow::{Context, Result, bail};
 use evdev::{Device, EventType, InputEvent, KeyCode, InputId, BusType, uinput::VirtualDevice};
 use fs2::FileExt;
-use std::{collections::{BTreeSet, VecDeque}, fs, io::Read, os::unix::net::UnixStream, path::PathBuf, process::Command, sync::{Arc, atomic::{AtomicBool, Ordering}}, thread, time::{Duration, Instant}};
+use std::{collections::{BTreeSet, VecDeque}, fs, io::Read, os::unix::net::UnixStream, path::PathBuf, process::Command, sync::{Arc, atomic::{AtomicBool, AtomicU64, Ordering}}, thread, time::{Duration, Instant}};
 use typerelay_core::{Engine, Input, Expansion, FeedResult};
 use typerelay_client::{settings::SettingsStore, editor::Paths, browser_lease::BrowserLease};
+use typerelay_client::installation::Installer;
 
 pub struct Session;
 
@@ -18,7 +19,7 @@ impl std::fmt::Display for Interference {
 
 impl std::error::Error for Interference {}
 
-struct TemplateWait { done: std::sync::mpsc::Receiver<std::result::Result<(),String>>, target:String, started:bool, generation:u64 }
+struct TemplateWait { done: std::sync::mpsc::Receiver<std::result::Result<(),String>>, target:String, started:bool, generation:u64, deadline:Instant }
 
 struct PasteState {
     job: PasteJob,
@@ -44,9 +45,7 @@ impl ContextWatch {
         let stream = UnixStream::connect(Hyprland::socket(".socket2.sock")?)?;
         stream.set_nonblocking(true)?;
         let mut pointers = Vec::new();
-        for (path, _) in Session::devices()? {
-            let props = Command::new("udevadm").args(["info", "--query=property", "--name"]).arg(&path).output()?;
-            let props = String::from_utf8_lossy(&props.stdout);
+        for (_, path, props) in Installer::devices()? {
             if props.lines().any(|p| p == "ID_INPUT_MOUSE=1" || p == "ID_INPUT_TOUCHPAD=1" || p == "ID_INPUT_TOUCHSCREEN=1") {
                 let device = Device::open(&path).with_context(|| format!("Pointer access needed for click cancellation: {}", path.display()))?;
                 device.set_nonblocking(true)?;
@@ -185,16 +184,20 @@ impl Session {
         }
     }
 
-    fn devices() -> Result<Vec<(PathBuf, String)>> {
-        let mut devices = Vec::new();
-        for entry in fs::read_dir("/sys/class/input")? {
-            let entry = entry?;
-            let name = entry.file_name();
-            if name.to_string_lossy().starts_with("event") {
-                devices.push((PathBuf::from("/dev/input").join(name), fs::read_to_string(entry.path().join("device/name"))?.trim().into()));
+    fn guard_relay(active: Arc<AtomicBool>, progress: Arc<AtomicU64>) {
+        thread::spawn(move || {
+            let mut previous=progress.load(Ordering::SeqCst);let mut advanced=Instant::now();
+            while active.load(Ordering::SeqCst) {
+                thread::sleep(Duration::from_millis(100));
+                let current=progress.load(Ordering::SeqCst);
+                if current!=previous {previous=current;advanced=Instant::now();}
+                else if active.load(Ordering::SeqCst) && advanced.elapsed()>=Duration::from_secs(5) {
+                    // Closing the process releases every evdev grab even if the relay thread is stuck.
+                    let message=b"TypeRelay input forwarding stalled; keyboard released. Restart TypeRelay to resume expansion.\n";
+                    unsafe {libc::write(libc::STDERR_FILENO,message.as_ptr().cast(),message.len());libc::_exit(1);}
+                }
             }
-        }
-        Ok(devices)
+        });
     }
 
     fn target() -> Result<Option<String>> {
@@ -208,7 +211,7 @@ impl Session {
         println!("Wayland: {}", std::env::var("WAYLAND_DISPLAY").unwrap_or_default());
         println!("Hyprland reachable: {}", Hyprland::query("locked").is_ok());
         println!("uinput writable: {}", fs::OpenOptions::new().write(true).open("/dev/uinput").is_ok());
-        for (path, name) in Self::devices()? {
+        for (name, path, _) in Installer::devices()? {
             println!("Input: {} ({name}), readable: {}", path.display(), Device::open(&path).is_ok());
         }
         println!("Pointer/context access: {}", ContextWatch::connect().is_ok());
@@ -290,9 +293,10 @@ impl Session {
         let keyboards = devices["keyboards"].as_array().context("No Hyprland keyboard information")?;
         if keyboards.iter().any(|k| k["layout"].as_str() != Some("us") || k["capsLock"].as_bool() == Some(true)) { bail!("POC requires US-only layouts and Caps Lock off"); }
         Self::check_interference(&devices)?;
-        let selected: Vec<_> = Self::devices()?.into_iter().filter(|(_, n)| n == device_name).collect();
+        let inputs=Installer::devices()?;
+        let selected: Vec<_> = Installer::keyboard_devices(&inputs).into_iter().filter(|(name, _, _)| name == device_name).collect();
         if selected.len() != 1 { bail!("Expected exactly one keyboard named {device_name}"); }
-        let mut keyboard = Device::open(&selected[0].0).context("Keyboard unavailable; use the session access setup")?;
+        let mut keyboard = Device::open(&selected[0].1).context("Keyboard unavailable; allow keyboard access in TypeRelay")?;
         keyboard.set_nonblocking(true)?;
         let mut context = ContextWatch::connect()?;
         // keyd reserves vendor 0x0fac for virtual devices and ignores them, preventing feedback.
@@ -325,6 +329,7 @@ impl Session {
         let running = Arc::new(AtomicBool::new(true));
         let signal = running.clone();
         ctrlc::set_handler(move || signal.store(false, Ordering::SeqCst))?;
+        let progress=Arc::new(AtomicU64::new(0));let guarded=Arc::new(AtomicBool::new(true));Self::guard_relay(guarded.clone(),progress.clone());
         let mut settings = SettingsStore::open(Paths::config_dir()?.join("settings.yml"))?;
         let mut engine = Engine::new(store.snapshot.clone());
         engine.set_prefix(&settings.settings.trigger_prefix).map_err(anyhow::Error::msg)?;
@@ -347,6 +352,7 @@ impl Session {
         let mut last_conflict_check = Instant::now();
         eprintln!("TypeRelay running: {} snippets; configured prefix + abbreviation + Space. Ctrl+C stops. No keystrokes are logged.", store.snapshot.len());
         while running.load(Ordering::SeqCst) {
+            progress.fetch_add(1,Ordering::SeqCst);
             if last_conflict_check.elapsed() >= Duration::from_secs(2) {
                 let devices = Hyprland::query("devices")?;
                 Self::check_interference(&devices)?;
@@ -390,6 +396,7 @@ impl Session {
             if paste.is_none() && insertion.is_empty() && pressed.is_empty() && (buffered.is_empty() || template_wait.is_some()) && !Self::modifiers_down(&keys_down, caps_control) && let Ok(request) = panel_requests.try_recv() {
                     if template_wait.as_ref().is_none_or(|wait|request.generation==Some(wait.generation)) && Instant::now() < request.deadline && request.generation.is_none_or(|expected| expected == input_generation) && Self::target()? == Some(request.target.clone()) {
                         engine.feed(Input::Cancel); last_input=Instant::now();
+                        if let Some(wait)=&mut template_wait {wait.deadline=Instant::now()+Duration::from_secs(5);}
                         match request.step {
 							typerelay_client::clipboard_payload::ClipboardStep::Payload(payload) if !payload.plain.is_empty()||payload.html.is_some()=>{let text=payload.plain.clone();paste=Some(PasteState{job:PasteJob::start_payload(payload),expansion:Expansion{identity:None,template:None,erase:request.erase,text},target:Some(request.target),reply:Some(request.reply),generation:input_generation,started:false,sent:false,cancelled:false});}
                             step => {
@@ -448,7 +455,8 @@ impl Session {
             if let Some(wait)=&template_wait {
                 match wait.done.try_recv() {
                     Ok(result)=>{if result.is_err()&&!wait.started&&Self::target()?==Some(wait.target.clone()){output.emit(&Self::stroke(KeyCode::KEY_SPACE,false))?;}template_wait=None;},
-                    Err(std::sync::mpsc::TryRecvError::Empty)=>{thread::sleep(Duration::from_millis(1));continue;},
+                    Err(std::sync::mpsc::TryRecvError::Empty) if Instant::now()<wait.deadline=>{thread::sleep(Duration::from_millis(1));continue;},
+                    Err(std::sync::mpsc::TryRecvError::Empty)=>{if !wait.started&&Self::target()?==Some(wait.target.clone()){output.emit(&Self::stroke(KeyCode::KEY_SPACE,false))?;}input_generation=input_generation.wrapping_add(1);template_wait=None;insertion.clear();paste=None;eprintln!("Template insertion timed out; releasing buffered typing");},
                     Err(std::sync::mpsc::TryRecvError::Disconnected)=>{template_wait=None;}
                 }
             }
@@ -494,7 +502,7 @@ impl Session {
                                     let hit = typerelay_client::panel::Hit { id: identity.id.clone(), library: identity.library.clone(), revision: identity.revision, library_name: String::new(), title: template.abbreviation.clone(), abbreviation: template.abbreviation.clone(), preview: String::new() };
                                     let accepted = if template.prompted { typerelay_client::panel_ipc::PanelIpc::prompt(typerelay_client::panel_ipc::Prompt { hit, target: destination, erase: expansion.erase, generation:input_generation, created_ms:std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis() }) } else {
                                         let tx=template_tx.clone(); let erase=expansion.erase; let generation=input_generation; let started=Instant::now();
-											let (done,completion)=std::sync::mpsc::channel();template_wait=Some(TemplateWait{done:completion,target:destination.clone(),started:false,generation});
+											let (done,completion)=std::sync::mpsc::channel();template_wait=Some(TemplateWait{done:completion,target:destination.clone(),started:false,generation,deadline:Instant::now()+Duration::from_secs(5)});
 											std::thread::spawn(move || { let result=(||->Result<()>{ let steps=typerelay_client::panel::Panel::steps_at(&Paths::config_dir()?.join("snippets"),&hit,Default::default(),false,typerelay_client::templates::Templates::clock())?; anyhow::ensure!(started.elapsed()<Duration::from_secs(2),"Template preparation expired");typerelay_client::panel_ipc::PanelIpc::execute(&tx,&hit,&destination,steps,erase,Some(generation)) })().map_err(|error|error.to_string()); if let Err(error)=&result { eprintln!("Template insertion cancelled: {error}"); }let _=done.send(result); }); true
                                     };
                                     if accepted { target=None; break; }
@@ -516,9 +524,10 @@ impl Session {
             }
             thread::sleep(Duration::from_millis(1));
         }
-        drop(paste);
+        running.store(false,Ordering::SeqCst);drop(paste);
         for code in pressed { output.emit(&[InputEvent::new(EventType::KEY.0, code, 0)])?; }
         keyboard.ungrab()?;
+        guarded.store(false,Ordering::SeqCst);
         eprintln!("TypeRelay stopped");
         Ok(())
     }
@@ -527,6 +536,25 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn relay_guard_child() {
+        let Some(path)=std::env::var_os("TYPERELAY_RELAY_GUARD_TEST") else{return;};
+        let lock=fs::OpenOptions::new().read(true).write(true).open(&path).unwrap();lock.lock_exclusive().unwrap();
+        Session::guard_relay(Arc::new(AtomicBool::new(true)),Arc::new(AtomicU64::new(0)));
+        fs::write(PathBuf::from(path).with_extension("ready"),b"ready").unwrap();
+        loop{thread::park();}
+    }
+    #[test]
+    fn stalled_relay_exits_and_releases_exclusive_resources() {
+        let directory=tempfile::tempdir().unwrap();let path=directory.path().join("relay.lock");fs::write(&path,b"").unwrap();
+        let mut child=Command::new(std::env::current_exe().unwrap()).args(["--exact","omarchy::tests::relay_guard_child","--nocapture"]).env("TYPERELAY_RELAY_GUARD_TEST",&path).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped()).spawn().unwrap();
+        let deadline=Instant::now()+Duration::from_secs(10);
+        while child.try_wait().unwrap().is_none() && !path.with_extension("ready").exists() && Instant::now()<deadline{thread::sleep(Duration::from_millis(20));}
+        let lock=fs::OpenOptions::new().read(true).write(true).open(&path).unwrap();assert!(path.with_extension("ready").exists());assert!(lock.try_lock_exclusive().is_err());
+        while child.try_wait().unwrap().is_none() && Instant::now()<deadline{thread::sleep(Duration::from_millis(20));}
+        if child.try_wait().unwrap().is_none(){child.kill().unwrap();panic!("Stalled relay did not release its resources");}
+        let output=child.wait_with_output().unwrap();assert_eq!(output.status.code(),Some(1));assert!(String::from_utf8_lossy(&output.stderr).contains("keyboard released"));assert!(lock.try_lock_exclusive().is_ok());
+    }
     #[test]
     fn pointer_motion_and_scroll_keep_candidates_but_clicks_cancel() {
         assert!(!ContextWatch::invalidates(&InputEvent::new(EventType::RELATIVE.0,0,1)));

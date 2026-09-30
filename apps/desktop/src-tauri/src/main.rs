@@ -14,12 +14,14 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 #[derive(Default)]
-struct Runtime { root:PathBuf, target:Mutex<Option<platform::Target>>, last:Mutex<Option<platform::Target>>, erase:Mutex<usize>, busy:AtomicBool, syncing:AtomicBool, authenticating:AtomicBool, cancel_auth:AtomicBool, auth_error:Mutex<String>, prompting:AtomicBool, prompt_hit:Mutex<Option<Hit>>, settings:AtomicBool, status:Mutex<String>, capture_status:Mutex<String>, #[cfg(any(target_os="windows",target_os="macos"))] expansion_started:AtomicBool, #[cfg(target_os="linux")] registration:Mutex<Option<typerelay_client::desktop::Registration>>, #[cfg(target_os="linux")] engine:Mutex<Option<std::process::Child>>, #[cfg(target_os="linux")] closing:AtomicBool }
+struct Runtime { root:PathBuf, target:Mutex<Option<platform::Target>>, last:Mutex<Option<platform::Target>>, erase:Mutex<usize>, busy:AtomicBool, syncing:AtomicBool, authenticating:AtomicBool, cancel_auth:AtomicBool, auth_error:Mutex<String>, prompting:AtomicBool, prompt_hit:Mutex<Option<Hit>>, settings:AtomicBool, status:Mutex<String>, capture_status:Mutex<String>, #[cfg(any(target_os="windows",target_os="macos"))] expansion_started:AtomicBool, #[cfg(target_os="linux")] registration:Mutex<Option<typerelay_client::desktop::Registration>>, #[cfg(target_os="linux")] engine:Mutex<Option<std::process::Child>>, #[cfg(target_os="linux")] closing:AtomicBool, #[cfg(target_os="linux")] linux_setup:AtomicBool }
 impl Runtime {
 	#[cfg(target_os="linux")]
 	fn setup_linux(app: tauri::AppHandle) {
 		let bundle=tauri::utils::platform::bundle_type();
 		if bundle.is_none() { update::schedule(app); return; }
+		if app.state::<Runtime>().linux_setup.swap(true,Ordering::SeqCst) { return; }
+		app.state::<Runtime>().closing.store(false,Ordering::SeqCst);
 		std::thread::spawn(move || {
 			let result=(||->Result<()> {
 				use typerelay_client::installation::Installer;
@@ -41,15 +43,17 @@ impl Runtime {
 				Installer::prepare_package_service(package)?;
 				if !package {
 					let mut child=std::process::Command::new(&engine).args(["run","--device-name",&keyboard]).arg("--dir").arg(app.state::<Runtime>().root.join("snippets")).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped()).spawn()?;
-					let errors=child.stderr.take().context("Engine diagnostics are unavailable")?;
+					let errors=child.stderr.take().context("Engine diagnostics are unavailable")?;let pid=child.id();
 					let state=app.state::<Runtime>();let mut running=state.engine.lock().unwrap();
 					if state.closing.load(Ordering::SeqCst){unsafe{libc::kill(child.id() as i32,libc::SIGINT);}let _=child.wait();return Ok(());}
 					*running=Some(child);drop(running);
-					let handle=app.clone();std::thread::spawn(move||{use std::io::BufRead;let mut lines=std::collections::VecDeque::new();for line in std::io::BufReader::new(errors).lines().map_while(Result::ok){if lines.len()==32{lines.pop_front();}lines.push_back(line);}let message=lines.into_iter().collect::<Vec<_>>().join("\n");if !handle.state::<Runtime>().closing.load(Ordering::SeqCst)&&!message.trim().is_empty(){*handle.state::<Runtime>().status.lock().unwrap()=message.clone();let _=handle.emit("panel-error",message);}});
+					let handle=app.clone();std::thread::spawn(move||{use std::io::BufRead;let mut lines=std::collections::VecDeque::new();for line in std::io::BufReader::new(errors).lines().map_while(Result::ok){if lines.len()==32{lines.pop_front();}lines.push_back(line);}let message=lines.into_iter().collect::<Vec<_>>().join("\n");let state=handle.state::<Runtime>();if !state.closing.load(Ordering::SeqCst)&&state.engine.lock().unwrap().as_ref().is_some_and(|child|child.id()==pid)&&!message.trim().is_empty(){*state.status.lock().unwrap()=message.clone();let _=handle.emit("panel-error",message);}});
 				}
+				app.state::<Runtime>().status.lock().unwrap().clear();
 				Ok(())
 			})();
 			if let Err(error)=result { *app.state::<Runtime>().status.lock().unwrap()=error.to_string(); let _=app.emit("panel-error",error.to_string()); }
+			app.state::<Runtime>().linux_setup.store(false,Ordering::SeqCst);
 			update::schedule(app);
 		});
 	}
@@ -233,8 +237,12 @@ fn initialize(app:tauri::AppHandle)->std::result::Result<Value,String> {
 		let notifications=platform::NativeNotifications::allowed();
 		#[cfg(not(target_os="macos"))]
 		let notifications:Option<bool>=None;
+		#[cfg(target_os="linux")]
+		let keyboards={use typerelay_client::installation::Installer;let devices=Installer::devices().map_err(|error|error.to_string())?;let devices=Installer::keyboard_devices(&devices);let keyd=devices.iter().any(|(name,_,_)|name=="keyd virtual keyboard");devices.iter().filter(|(name,_,_)|if keyd{name=="keyd virtual keyboard"}else{!name.to_lowercase().contains("virtual")}).map(|(name,_,_)|name.clone()).collect::<std::collections::BTreeSet<_>>()};
+		#[cfg(not(target_os="linux"))]
+		let keyboards:Vec<String>=Vec::new();
 		let connected=state.root.join("sync/credentials.json").exists();let authenticating=state.authenticating.load(Ordering::SeqCst);
-		Ok(json!({"config":settings,"prompt":state.prompt_hit.lock().unwrap().clone(),"server":typerelay_client::settings::SettingsStore::open(state.root.join("settings.yml")).ok().map(|s|s.settings.sync_url).unwrap_or_default(),"connected":connected,"connection_state":if authenticating{"authenticating"}else if connected{"connected"}else{"disconnected"},"auth_error":*state.auth_error.lock().unwrap(),"theme":Runtime::theme(),"settings":state.settings.load(Ordering::SeqCst),"status":state.status_message(),"update":app.state::<update::UpdateState>().value(),"accessibility":accessibility,"input_monitoring":input_monitoring,"notifications":notifications,"empty":empty,"version":app.package_info().version.to_string()}))
+		Ok(json!({"config":settings,"keyboards":keyboards,"prompt":state.prompt_hit.lock().unwrap().clone(),"server":typerelay_client::settings::SettingsStore::open(state.root.join("settings.yml")).ok().map(|s|s.settings.sync_url).unwrap_or_default(),"connected":connected,"connection_state":if authenticating{"authenticating"}else if connected{"connected"}else{"disconnected"},"auth_error":*state.auth_error.lock().unwrap(),"theme":Runtime::theme(),"settings":state.settings.load(Ordering::SeqCst),"status":state.status_message(),"update":app.state::<update::UpdateState>().value(),"accessibility":accessibility,"input_monitoring":input_monitoring,"notifications":notifications,"empty":empty,"version":app.package_info().version.to_string()}))
 }
 #[tauri::command]
 async fn search(app:tauri::AppHandle,query:String)->std::result::Result<Value,String> {
@@ -353,10 +361,15 @@ fn sync_now(app:tauri::AppHandle)->std::result::Result<(),String>{
 fn save_settings(app:tauri::AppHandle,config:PanelSettings)->std::result::Result<(),String> {
     let root=&app.state::<Runtime>().root;
     let old=Panel::settings(root).map_err(|e|e.to_string())?;
+	#[cfg(target_os="linux")]
+	if config.keyboard!=old.keyboard {if app.state::<Runtime>().linux_setup.load(Ordering::SeqCst){return Err("Keyboard setup is running; finish it before changing keyboards".into());}typerelay_client::installation::Installer::select_keyboard(&typerelay_client::installation::Installer::devices().map_err(|error|error.to_string())?,if config.keyboard.is_empty(){None}else{Some(&config.keyboard)}).map_err(|error|error.to_string())?;}
     Runtime::shortcut(&app,Some(&old.shortcut),&config.shortcut).map_err(|e|e.to_string())?;
     let result=(||->Result<()>{if config.launch_at_login{app.autolaunch().enable()?;}else{app.autolaunch().disable()?;} Panel::save_settings(root,&config)})();
     if result.is_err(){let _=Runtime::shortcut(&app,Some(&config.shortcut),&old.shortcut);if old.launch_at_login{let _=app.autolaunch().enable();}else{let _=app.autolaunch().disable();}}
-    result.map_err(|e|e.to_string())
+    result.map_err(|e|e.to_string())?;
+	#[cfg(target_os="linux")]
+	if config.keyboard!=old.keyboard {app.state::<Runtime>().stop_engine();Runtime::setup_linux(app);}
+	Ok(())
 }
 #[tauri::command]
 async fn connect(app:tauri::AppHandle,url:String)->std::result::Result<(),String> {
@@ -430,7 +443,7 @@ fn main() {
         {use tauri_plugin_deep_link::DeepLinkExt;#[cfg(target_os="linux")]app.deep_link().register_all()?;let callback_root=root.clone();app.deep_link().on_open_url(move|event|for url in event.urls(){let _=Sync::receive_callback(&callback_root,url.as_str());});if let Some(urls)=app.deep_link().get_current()?{for url in urls{let _=Sync::receive_callback(&root,url.as_str());}}}
         Sync::worker(root.clone(),root.join("snippets"));
         let config=Panel::settings(&root)?;
-		app.manage(Runtime{root:root.clone(),target:Mutex::new(None),last:Mutex::new(None),erase:Mutex::new(0),busy:AtomicBool::new(false),syncing:AtomicBool::new(false),authenticating:AtomicBool::new(false),cancel_auth:AtomicBool::new(false),auth_error:Mutex::new(String::new()),prompting:AtomicBool::new(false),prompt_hit:Mutex::new(None),settings:AtomicBool::new(false),status:Mutex::new(String::new()),capture_status:Mutex::new(String::new()),#[cfg(any(target_os="windows",target_os="macos"))] expansion_started:AtomicBool::new(false),#[cfg(target_os="linux")] registration:Mutex::new(None),#[cfg(target_os="linux")] engine:Mutex::new(None),#[cfg(target_os="linux")] closing:AtomicBool::new(false)});
+		app.manage(Runtime{root:root.clone(),target:Mutex::new(None),last:Mutex::new(None),erase:Mutex::new(0),busy:AtomicBool::new(false),syncing:AtomicBool::new(false),authenticating:AtomicBool::new(false),cancel_auth:AtomicBool::new(false),auth_error:Mutex::new(String::new()),prompting:AtomicBool::new(false),prompt_hit:Mutex::new(None),settings:AtomicBool::new(false),status:Mutex::new(String::new()),capture_status:Mutex::new(String::new()),#[cfg(any(target_os="windows",target_os="macos"))] expansion_started:AtomicBool::new(false),#[cfg(target_os="linux")] registration:Mutex::new(None),#[cfg(target_os="linux")] engine:Mutex::new(None),#[cfg(target_os="linux")] closing:AtomicBool::new(false),#[cfg(target_os="linux")] linux_setup:AtomicBool::new(false)});
 		app.manage(update::UpdateState::default());
 		#[cfg(target_os="macos")]
 		let missing_permissions={let (accessibility,input_monitoring)=Runtime::permissions();app.state::<Runtime>().update_permission_status(accessibility,input_monitoring);if accessibility&&input_monitoring&&let Err(error)=Runtime::start_expansion(app.handle()){*app.state::<Runtime>().status.lock().unwrap()=format!("TypeRelay could not start Input Monitoring: {error:#}");}!(accessibility&&input_monitoring)};

@@ -23,7 +23,9 @@ Keep the AppImage at its registered path. If you move it, launch the new locatio
 
 ## Keyboard support
 
-Expansion currently requires Hyprland with a US keyboard layout. When keyd is active, TypeRelay uses `keyd virtual keyboard`; stop keyd before selecting a physical keyboard. Otherwise it selects a single built-in keyboard, or a single non-virtual keyboard when no built-in keyboard exists. Ambiguous selection is reported rather than granting access to every keyboard.
+Expansion currently requires Hyprland with a US keyboard layout. When keyd is active, TypeRelay uses `keyd virtual keyboard`; stop keyd before selecting a physical keyboard. Otherwise it selects a single built-in keyboard, or a single non-virtual keyboard when no built-in keyboard exists. If several keyboards qualify, choose **Settings → General → Keyboard** and save. Your choice is retained after restart; changing it updates the expansion engine and prompts for access when necessary. Devices are identified by keyboard capabilities, so a mouse or media interface with the same device name is not grabbed as a keyboard.
+
+If input forwarding stops making progress for five seconds, the engine exits to release its keyboard grab. A stalled template also releases buffered typing after five seconds without progress. Restart TypeRelay to resume expansion after an engine error.
 
 For Caps mapped to Ctrl/Escape, use Hyprland's native `caps:ctrl_modifier` consistently for both the selected keyboard and TypeRelay's virtual keyboard. Caps shortcuts cancel pending abbreviations; expansion resumes after releasing Caps. Other native remappings are not supported.
 

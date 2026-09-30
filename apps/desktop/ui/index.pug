@@ -101,6 +101,16 @@ html(lang="en")
 							label.switch
 								input#autostart(type="checkbox")
 								span.switch-track(aria-hidden="true")
+						.setting-row#keyboard-setting(hidden)
+							.setting-copy
+								h3 Keyboard
+								p Choose the keyboard used for expansion.
+							.setting-control
+								label.visually-hidden(for="keyboard") Keyboard
+								select#keyboard.form-select.form-select-sm
+									option(value="") Automatic selection
+									template#keyboard-option-template
+										option
 						.settings-actions
 							button.primary(type="submit") Save changes
 					.settings-list.mac-only

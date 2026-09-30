@@ -9,8 +9,8 @@ use base64::{Engine as _,engine::general_purpose::STANDARD};
 pub struct Hit { pub id: String, pub library: String, pub library_name: String, pub revision: i64, pub title: String, pub abbreviation: String, pub preview: String }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct PanelSettings { pub shortcut: String, pub launch_at_login: bool }
-impl Default for PanelSettings { fn default() -> Self { Self { shortcut: "Ctrl+Shift+Semicolon".into(), launch_at_login: true } } }
+pub struct PanelSettings { pub shortcut: String, pub launch_at_login: bool, pub keyboard: String }
+impl Default for PanelSettings { fn default() -> Self { Self { shortcut: "Ctrl+Shift+Semicolon".into(), launch_at_login: true, keyboard: String::new() } } }
 pub struct Panel;
 impl Panel {
 	pub fn conflicts(directory:&Path)->Result<serde_json::Value>{let db=Database::open(directory)?;let rows=db.meta("conflicts")?.and_then(|value|value.as_array().cloned()).unwrap_or_default().into_iter().map(|mut conflict|{let name=conflict["library"].as_str().and_then(|id|db.library(id).ok()).and_then(|library|library["name"].as_str().map(str::to_owned)).unwrap_or_else(||"Library".into());conflict["library_name"]=serde_json::json!(name);conflict}).collect::<Vec<_>>();Ok(serde_json::json!(rows))}
@@ -64,7 +64,7 @@ impl Panel {
             if library["state"]!="active" || library["permissions"]["read"]!=true { continue; }
             let Some(record)=db.effective_records(&hit.library)?.into_iter().find(|row|row["id"]==hit.id && row["state"]=="active") else { continue; };
             let mut value=serde_json::to_value(hit)?;
-            value["abbreviation"]=record["effective_trigger"].clone(); value["shared_trigger"]=record["trigger"].clone(); value["personal"]=record["personal"].clone();
+            value["abbreviation"]=serde_json::json!(record["effective_trigger"].as_str().unwrap_or_default()); value["shared_trigger"]=record["trigger"].clone(); value["personal"]=record["personal"].clone();
             value["can_personal"]=serde_json::json!(library["shared"]==true && library["permissions"]["edit"]==true && db.synced(&hit.library)? && db.meta("personal_capability")?==Some(serde_json::json!(1)));
             value["review_personal"]=serde_json::json!(record["personal"]["rejected"].is_object() || record["personal"]["conflicts"].as_array().is_some_and(|rows|!rows.is_empty()));
             value["abbreviation_collision"]=serde_json::json!(collisions.contains(record["effective_trigger"].as_str().unwrap_or("")));
@@ -146,6 +146,22 @@ mod tests {
         let hits = Panel::search(dir.path(), "AbC").unwrap(); assert_eq!(hits.len(),3); assert_eq!(hits[0].abbreviation,"abc"); assert_eq!(hits[1].abbreviation,"abcd"); assert!(hits[2].abbreviation.is_empty());
         assert_eq!(Panel::selected(dir.path(),&hits[0]).unwrap(),"First"); db.edit(&file,Some(0),None).unwrap(); assert!(Panel::selected(dir.path(),&hits[0]).is_err());
         assert_eq!(Panel::search(dir.path(),"abc").unwrap().len(),2);
+    }
+    #[test]
+    fn personal_refresh_preserves_search_hits_without_abbreviations() {
+        let dir=tempfile::tempdir().unwrap();let db=Database::open(dir.path()).unwrap();
+        let file=db.import("Library","matches: [{trigger: '', replace: Searchable body}]").unwrap();
+        db.connection.execute("UPDATE snippets SET data=json_set(data,'$.trigger',NULL) WHERE library=?1",[&file.id]).unwrap();
+        let hits=Panel::search(dir.path(),"Searchable").unwrap();assert_eq!(hits.len(),1);
+        let rows=Panel::personal_rows(dir.path(),&hits).unwrap();let refreshed:Vec<Hit>=serde_json::from_value(rows).unwrap();
+        assert_eq!(refreshed[0].abbreviation,"");assert_eq!(Panel::selected(dir.path(),&refreshed[0]).unwrap(),"Searchable body");
+        assert!(serde_json::from_value::<Vec<Hit>>(Panel::personal_rows(dir.path(),&refreshed).unwrap()).is_ok());
+    }
+    #[test]
+    fn keyboard_settings_migrate_and_survive_restart() {
+        let root=tempfile::tempdir().unwrap();fs::write(root.path().join("panel.json"),br#"{"shortcut":"Ctrl+Shift+Semicolon","launch_at_login":false}"#).unwrap();
+        let mut settings=Panel::settings(root.path()).unwrap();assert!(settings.keyboard.is_empty());settings.keyboard="Any USB keyboard".into();Panel::save_settings(root.path(),&settings).unwrap();
+        let saved=Panel::settings(root.path()).unwrap();assert_eq!(saved.keyboard,"Any USB keyboard");assert_eq!(saved.shortcut,settings.shortcut);assert!(!saved.launch_at_login);
     }
     #[test]
     fn validates_shortcuts() { assert_eq!(PanelSettings::default().shortcut,"Ctrl+Shift+Semicolon");assert_eq!(Panel::shortcut("Ctrl+Shift+Semicolon").unwrap().0,39); for bad in ["Semicolon","Ctrl+Ctrl+A","Ctrl+Unknown", "Fake+A"] { assert!(Panel::shortcut(bad).is_err()); } }

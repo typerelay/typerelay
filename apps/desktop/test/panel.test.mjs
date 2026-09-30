@@ -12,12 +12,26 @@ class Fixture {
   dom.window.HTMLElement.prototype.scrollIntoView=()=>{};
 	  dom.window.Swal={fire:async()=>({isConfirmed:true})};
   dom.window.__TAURI__={core:{invoke:async(name,args)=>{calls.push({name,args});if(name==='initialize')return{config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},theme:{os:'linux'},settings:false,accessibility:false,input_monitoring:false,empty:false,version:'1.2.0'};if(name==='search')return new Promise(resolve=>pending.push({query:args.query,resolve}));if(name==='libraries'||name==='conflicts')return[];if(name==='prepare_template')return{fields:[],steps:[{kind:'text',text:'Literal'}],text:'Literal',enter_actions:0,template:{text:'Literal',variables:{}}};return null;}},event:{listen:(name,callback)=>{callbacks[name]=callback;}}};
-  dom.window.eval((await readFile('ui/panel.js','utf8')).replace('new Panel();','window.panel = new Panel();'));
+  dom.window.eval((await readFile('../server/public/ai.js','utf8')).replace('export class AiClient','window.AiClient = class AiClient'));
+  dom.window.eval((await readFile('ui/panel.js','utf8')).replace("import { AiClient } from './ai.js';",'').replace('new Panel();','window.panel = new Panel();'));
   await new Promise(resolve=>setTimeout(resolve,0));
   return {dom,panel:dom.window.panel,calls,pending,callbacks};
  }
  static hit(id){return{id,library:'one',revision:2,library_name:'Personal',title:'Title '+id,abbreviation:id,preview:'<b>literal</b>\n\tCode'};}
 }
+
+test('keyboard selection saves any device and preserves the settings form and search results',async()=>{
+ const f=await Fixture.create();try{
+  const config={shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false,keyboard:'Composite device'};
+  f.panel.rows=[Fixture.hit('one')];f.panel.configure({config,theme:{os:'linux'},keyboards:['Laptop device','Composite device']});
+  const select=f.dom.window.document.querySelector('#keyboard');const form=f.dom.window.document.querySelector('#settings-form');const result=f.panel.list.firstElementChild;
+  const selected=select.selectedOptions[0];assert.equal(select.value,'Composite device');assert.equal(f.dom.window.document.querySelector('#keyboard-setting').hidden,false);
+  f.panel.configureKeyboard({config,theme:{os:'linux'},keyboards:['Composite device','Another device']});assert.equal(select.selectedOptions[0],selected);assert.equal(f.panel.list.firstElementChild,result);
+  select.value='Another device';f.panel.render=()=>{throw Error('No surrounding view render allowed');};form.dispatchEvent(new f.dom.window.Event('submit',{cancelable:true}));await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(f.calls.find(call=>call.name==='save_settings').args.config.keyboard,'Another device');assert.equal(f.dom.window.document.querySelector('#settings-form'),form);assert.equal(f.panel.list.firstElementChild,result);
+  f.panel.configureKeyboard({config,theme:{os:'macos'},keyboards:[]});assert.equal(f.dom.window.document.querySelector('#keyboard-setting').hidden,true);assert.equal(select.value,'Composite device');
+ }finally{f.dom.window.close();}
+});
 
 test('personal abbreviation save updates the selected result without rebuilding search or other rows',async()=>{
  const {dom,panel,calls}=await Fixture.create();

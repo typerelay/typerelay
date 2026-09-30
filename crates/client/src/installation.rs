@@ -32,8 +32,13 @@ impl Installer {
         Ok(devices)
     }
 
+    pub fn keyboard_devices(devices: &[(String, std::path::PathBuf, String)]) -> Vec<&(String, std::path::PathBuf, String)> {
+        devices.iter().filter(|(_, _, properties)| properties.lines().any(|p| p == "ID_INPUT_KEYBOARD=1")).collect()
+    }
+
     pub fn select_keyboard(devices: &[(String, std::path::PathBuf, String)], requested: Option<&str>) -> Result<String> {
-        let keyboards: Vec<_> = devices.iter().filter(|(_, _, properties)| properties.lines().any(|p| p == "ID_INPUT_KEYBOARD=1")).collect();
+        let keyboards = Self::keyboard_devices(devices);
+        let available=keyboards.iter().map(|(name,_,_)|name.as_str()).collect::<Vec<_>>().join(", ");
         let keyd = keyboards.iter().any(|(name, _, _)| name == "keyd virtual keyboard");
         if keyd && requested.is_some_and(|name| name != "keyd virtual keyboard") { bail!("Stop keyd before selecting a physical keyboard"); }
         let internal = keyboards.iter().any(|(_, _, properties)| properties.lines().any(|p| p == "ID_INTEGRATION=internal"));
@@ -43,11 +48,13 @@ impl Installer {
             else if internal { properties.lines().any(|p| p == "ID_INTEGRATION=internal") }
             else { !name.to_lowercase().contains("virtual") }
         }).collect();
-        ensure!(candidates.len() == 1, "Select exactly one keyboard with --device-name");
+        ensure!(candidates.len() == 1, "Choose your keyboard in Settings → General (terminal: --device-name). Available keyboards: {available}");
         Ok(candidates[0].0.clone())
     }
 
     pub fn keyboard() -> Result<String> {
+        let settings = crate::panel::Panel::settings(&crate::editor::Paths::config_dir()?)?;
+        if !settings.keyboard.is_empty() { return Self::select_keyboard(&Self::devices()?, Some(&settings.keyboard)); }
         // Preserve the keyboard selected by an earlier managed installation.
         let data = std::env::var_os("XDG_DATA_HOME").map(std::path::PathBuf::from).unwrap_or(std::path::PathBuf::from(std::env::var_os("HOME").context("HOME is missing")?).join(".local/share"));
         let state = data.join("typerelay/installation.json");
@@ -57,7 +64,7 @@ impl Installer {
 
     pub fn input_paths(devices: &[(String, std::path::PathBuf, String)], keyboard: &str) -> Vec<(std::path::PathBuf, bool)> {
         let mut paths = vec![(std::path::PathBuf::from("/dev/uinput"), true)];
-        paths.extend(devices.iter().filter(|(name, _, properties)| name == keyboard || properties.lines().any(|p| matches!(p, "ID_INPUT_MOUSE=1" | "ID_INPUT_TOUCHPAD=1" | "ID_INPUT_TOUCHSCREEN=1"))).map(|(_, path, _)| (path.clone(), false)));
+        paths.extend(devices.iter().filter(|(name, _, properties)| properties.lines().any(|p| p == "ID_INPUT_KEYBOARD=1" && name == keyboard || matches!(p, "ID_INPUT_MOUSE=1" | "ID_INPUT_TOUCHPAD=1" | "ID_INPUT_TOUCHSCREEN=1"))).map(|(_, path, _)| (path.clone(), false)));
         paths
     }
 
@@ -147,11 +154,33 @@ impl Installer {
 
     pub fn register_appimage(launcher: &std::path::Path, icon: &[u8]) -> Result<()> {
         let data = std::env::var_os("XDG_DATA_HOME").map(std::path::PathBuf::from).unwrap_or(std::path::PathBuf::from(std::env::var_os("HOME").context("HOME is missing")?).join(".local/share"));
+        Self::register_appimage_at(&data, launcher, icon)
+    }
+
+    fn register_appimage_at(data: &std::path::Path, launcher: &std::path::Path, icon: &[u8]) -> Result<()> {
         let applications = data.join("applications");
         let icons = data.join("icons/hicolor/128x128/apps");
         std::fs::create_dir_all(&applications)?;
         std::fs::create_dir_all(&icons)?;
         std::fs::write(icons.join("typerelay.png"), icon)?;
+        let mut integrated = false;
+        let mut entries=std::fs::read_dir(&applications)?.collect::<std::io::Result<Vec<_>>>()?;entries.sort_by_key(|entry|entry.file_name());
+        for entry in entries {
+            let name = entry.file_name();let name = name.to_string_lossy();
+            if !name.starts_with("appimagekit_") || !name.ends_with("-TypeRelay.desktop") || !entry.file_type()?.is_file() { continue; }
+            let text = std::fs::read_to_string(entry.path())?;
+            if !text.lines().any(|line| line.starts_with("X-AppImage-Identifier=")) { continue; }
+            let current = !integrated && text.lines().any(|line| line.strip_prefix("TryExec=") == launcher.to_str());
+            integrated |= current;
+            let mut main = false;let mut normalized = String::new();
+            for line in text.lines() {
+                if line.starts_with('[') { main = line == "[Desktop Entry]"; }
+                if main && line.starts_with("NoDisplay=") { continue; }
+                normalized.push_str(if main && line.starts_with("Name=") { "Name=Typerelay" } else { line });normalized.push('\n');
+                if line == "[Desktop Entry]" && !current { normalized.push_str("NoDisplay=true\n"); }
+            }
+            let temporary = entry.path().with_extension("desktop.new");std::fs::write(&temporary, normalized)?;std::fs::rename(temporary, entry.path())?;
+        }
         for (name, tui) in [("typerelay-panel.desktop", false), ("typerelay-tui.desktop", true)] {
             let path = applications.join(name);
             if path.exists() {
@@ -159,7 +188,9 @@ impl Installer {
                 ensure!(text.starts_with("# Managed by TypeRelay") || name == "typerelay-panel.desktop" && text.contains("/.local/bin/typerelay-panel"), "An unmanaged desktop launcher exists: {}", path.display());
             }
             let temporary = path.with_extension("desktop.new");
-            std::fs::write(&temporary, Self::desktop_entry(launcher, tui)?)?;
+            let mut text = Self::desktop_entry(launcher, tui)?;
+            if integrated && !tui { text.push_str("NoDisplay=true\n"); }
+            std::fs::write(&temporary, text)?;
             std::fs::rename(temporary, path)?;
         }
         let reference = data.join("typerelay/appimage-path");
@@ -203,6 +234,40 @@ mod tests {
         devices.push(("keyd virtual keyboard".into(), "/dev/input/event3".into(), "ID_INPUT_KEYBOARD=1\n".into()));
         assert_eq!(Installer::select_keyboard(&devices, None).unwrap(), "keyd virtual keyboard");
         assert!(Installer::select_keyboard(&devices, Some("First keyboard")).is_err());
+    }
+    #[test]
+    fn composite_devices_and_multiple_internal_keyboards_use_explicit_selection() {
+        let devices=vec![
+            ("Laptop keyboard".into(),"/dev/input/event1".into(),"ID_INPUT_KEYBOARD=1\nID_INTEGRATION=internal\n".into()),
+            ("Composite USB device".into(),"/dev/input/event2".into(),"ID_INPUT_MOUSE=1\n".into()),
+            ("Composite USB device".into(),"/dev/input/event3".into(),"ID_INPUT_KEYBOARD=1\nID_INTEGRATION=internal\n".into()),
+            ("Composite USB device".into(),"/dev/input/event4".into(),"ID_INPUT_KEY=1\n".into()),
+            ("Security token".into(),"/dev/input/event5".into(),"ID_INPUT_KEYBOARD=1\nID_INTEGRATION=external\n".into()),
+        ];
+        assert!(Installer::select_keyboard(&devices,None).is_err());
+        assert_eq!(Installer::select_keyboard(&devices,Some("Composite USB device")).unwrap(),"Composite USB device");
+        let selected:Vec<_>=Installer::keyboard_devices(&devices).into_iter().filter(|(name,_,_)|name=="Composite USB device").collect();
+        assert_eq!(selected.len(),1);assert_eq!(selected[0].1,std::path::Path::new("/dev/input/event3"));
+        assert_eq!(Installer::input_paths(&devices,"Composite USB device"),vec![("/dev/uinput".into(),true),("/dev/input/event2".into(),false),("/dev/input/event3".into(),false)]);
+    }
+    #[test]
+    fn appimage_registration_uses_one_native_launcher_and_preserves_its_actions() {
+        let data=tempfile::tempdir().unwrap();let applications=data.path().join("applications");std::fs::create_dir_all(&applications).unwrap();
+        let current=applications.join("appimagekit_current-TypeRelay.desktop");let duplicate=applications.join("appimagekit_duplicate-TypeRelay.desktop");let old=applications.join("appimagekit_old-TypeRelay.desktop");
+        std::fs::write(&current,"[Desktop Entry]\nName=TypeRelay (1)\nExec=/apps/current.AppImage\nTryExec=/apps/current.AppImage\nX-AppImage-Identifier=current\n\n[Desktop Action Remove]\nName=Delete this AppImage\nExec=remove current\n").unwrap();
+        std::fs::write(&old,"[Desktop Entry]\nName=TypeRelay\nTryExec=/apps/old.AppImage\nX-AppImage-Identifier=old\n").unwrap();
+        std::fs::write(&duplicate,"[Desktop Entry]\nName=TypeRelay (2)\nTryExec=/apps/current.AppImage\nX-AppImage-Identifier=duplicate\n").unwrap();
+        let launcher=std::path::Path::new("/apps/current.AppImage");
+        for _ in 0..2 {
+            Installer::register_appimage_at(data.path(),launcher,&[]).unwrap();
+            let text=std::fs::read_to_string(&current).unwrap();assert!(text.contains("Name=Typerelay\n"));assert!(!text.contains("NoDisplay=true"));assert!(text.contains("[Desktop Action Remove]\nName=Delete this AppImage\nExec=remove current"));
+            assert!(std::fs::read_to_string(&old).unwrap().contains("NoDisplay=true"));
+            assert!(std::fs::read_to_string(&duplicate).unwrap().contains("NoDisplay=true"));
+            assert!(std::fs::read_to_string(applications.join("typerelay-panel.desktop")).unwrap().contains("NoDisplay=true"));
+            assert!(!std::fs::read_to_string(applications.join("typerelay-tui.desktop")).unwrap().contains("NoDisplay=true"));
+        }
+        std::fs::remove_file(&current).unwrap();std::fs::remove_file(&duplicate).unwrap();Installer::register_appimage_at(data.path(),launcher,&[]).unwrap();
+        assert!(!std::fs::read_to_string(applications.join("typerelay-panel.desktop")).unwrap().contains("NoDisplay=true"));
     }
     #[test]
     fn input_access_survives_device_renumbering_and_repeated_setup() {
