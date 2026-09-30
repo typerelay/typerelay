@@ -40,8 +40,45 @@ pub fn install(app:&tauri::AppHandle)->Result<()> {
 impl Tray {
     pub fn update(app:&tauri::AppHandle) {
         #[cfg(target_os="linux")]
-        if let Some(handle)=app.try_state::<ksni::blocking::Handle<Tray>>() { handle.update(|_|{}); }
+        if let Some(handle)=app.try_state::<ksni::blocking::Handle<Tray>>() { Self::update_linux(handle.inner().clone()); }
         #[cfg(not(target_os="linux"))]
         if let Some(item)=app.try_state::<tauri::menu::MenuItem<tauri::Wry>>() { let (label,enabled)=app.state::<crate::update::UpdateState>().menu(); let _=item.set_text(label); let _=item.set_enabled(enabled); }
+    }
+
+    #[cfg(target_os="linux")]
+    fn update_linux<T: ksni::Tray + Send + 'static>(handle: ksni::blocking::Handle<T>) -> tauri::async_runtime::JoinHandle<()> {
+        // ksni enters its own runtime; neither an async worker nor a tray callback can block here.
+        tauri::async_runtime::spawn_blocking(move|| { handle.update(|_|{}); })
+    }
+}
+
+#[cfg(all(test,target_os="linux"))]
+mod tests {
+    use super::*;
+    use ksni::blocking::TrayMethods;
+    use std::sync::{Arc, atomic::{AtomicUsize,Ordering}};
+
+    struct TestTray(Arc<AtomicUsize>);
+    impl ksni::Tray for TestTray {
+        fn id(&self) -> String { "typerelay-update-test".into() }
+        fn title(&self) -> String { self.0.load(Ordering::SeqCst).to_string() }
+    }
+
+    #[test]
+    #[ignore = "Run with dbus-run-session -- cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked -- --include-ignored"]
+    fn updater_refreshes_linux_tray_from_async_worker() {
+        let phase=Arc::new(AtomicUsize::new(0));
+        let handle=TestTray(phase.clone()).assume_sni_available(true).spawn().unwrap();
+        let result=tauri::async_runtime::block_on(tauri::async_runtime::spawn({ let handle=handle.clone(); async move {
+            for value in [1,2,3,0] {
+                phase.store(value,Ordering::SeqCst);
+                Tray::update_linux(handle.clone()).await?;
+                let observed=tauri::async_runtime::spawn_blocking({ let handle=handle.clone(); move||handle.update(|tray|ksni::Tray::title(tray)) }).await?;
+                assert_eq!(observed,Some(value.to_string()));
+            }
+            Ok::<(),tauri::Error>(())
+        } }));
+        handle.shutdown().wait();
+        result.unwrap().unwrap();
     }
 }

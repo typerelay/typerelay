@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{fs, io::Write, path::Path, sync::Mutex};
+use std::{fs, io::Write, path::Path, sync::Mutex, time::Duration};
 #[cfg(any(target_os="linux",test))]
 use std::path::PathBuf;
 #[cfg(target_os="linux")]
@@ -78,14 +78,16 @@ impl UpdateState {
         let root=app.path().app_cache_dir()?.join("updates");
         // A tray action can use the feed-validated package already offered this session, even offline.
         let ready=if manual { self.ready.lock().unwrap().clone() } else { None };
-        let update=match ready { Some(update)=>Some(update), None=>app.updater()?.check().await? };
-        let Some(update)=update else {
+        let update=match ready { Some(update)=>Some(update), None=>app.updater_builder().timeout(Duration::from_secs(30)).build()?.check().await? };
+        let Some(mut update)=update else {
             *self.ready.lock().unwrap()=None; self.status.lock().unwrap().version=None; Package::clear(&root)?;
-            if manual { let app=app.clone(); tauri::async_runtime::spawn_blocking(move||message(&app,"Typerelay is up to date","You already have the latest version.",MessageDialogButtons::Ok)).await?; }
+            if manual { app.dialog().message("You already have the latest version.").title("Typerelay is up to date").show(|_|{}); }
             return Ok(());
         };
         *self.ready.lock().unwrap()=None; self.status.lock().unwrap().version=Some(update.version.clone());
         self.phase(app,Phase::Downloading);
+        // The updater plugin does not carry the check timeout over to the download.
+        update.timeout=Some(Duration::from_secs(10*60));
         let pubkey=app.config().plugins.0.get("updater").and_then(|config|config.get("pubkey")).and_then(Value::as_str).context("Missing updater public key")?;
         let package=Package::from_update(&update);
         let bytes=package.prepare(&root,pubkey,async { Ok(update.download(|_,_|{},||{}).await?) }).await?;
@@ -130,11 +132,11 @@ pub fn check(app: AppHandle, manual: bool) {
         emit(&app);
         let state=app.state::<UpdateState>(); let result=state.run(&app,manual).await;
         let interactive=manual || matches!(state.status.lock().unwrap().phase,Phase::Prompting|Phase::Installing);
+        let ready=state.ready.lock().unwrap().is_some(); state.status.lock().unwrap().finish(ready); emit(&app);
         if let Err(error)=result {
             eprintln!("Typerelay update failed: {error:#}");
-            if interactive { let app=app.clone(); let text=format!("{error}\nTry again from the update menu."); let _=tauri::async_runtime::spawn_blocking(move||message(&app,"Update failed",text,MessageDialogButtons::Ok)).await; }
+            if interactive { app.dialog().message(format!("{error:#}\nTry again from the update menu.")).title("Update failed").kind(tauri_plugin_dialog::MessageDialogKind::Error).show(|_|{}); }
         }
-        let ready=state.ready.lock().unwrap().is_some(); state.status.lock().unwrap().finish(ready); emit(&app);
     });
 }
 

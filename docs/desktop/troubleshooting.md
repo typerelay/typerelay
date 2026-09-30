@@ -38,4 +38,6 @@ Use **Settings → Connected devices** to confirm the device is still active. A 
 
 Use **Check for updates** to see the immediate error. Verify network access to the configured updater endpoint and install only matching signed artifacts. On Omarchy, never update the engine, TUI or panel independently.
 
+The menu is disabled while a check, download, or installation prompt is active. Checks time out after 30 seconds and downloads after 10 minutes on every desktop platform. An error restores the menu for retry; dismissing an error or an up-to-date message is not required to enable it again.
+
 See [Operating system notes](./platforms) for platform-specific limits and [Sync and offline use](../guide/sync) for queue/recovery behavior.

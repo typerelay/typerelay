@@ -47,3 +47,11 @@ The Omarchy command also builds Linux x86_64 AppImage, DEB, and a signed tar con
 Verified artifacts and a SHA-256/source-commit report go into a fresh commit-prefixed subdirectory of `target/desktop-releases/windows`, `linux`, or `macos`. Each invocation isolates its artifacts and report from previous builds. Failed builds must not be distributed. Bunny publication uploads immutable artifacts and platform metadata first; `latest.json` changes only after all three platforms match the same SemVer and commit.
 
 The commands are covered by non-hardware tests and dry runs. Actual Windows signing still needs the local PIN/touch flow; macOS signing/notarization must be run and verified on the Mac. The Tauri updater public key is committed; the private updater key, Bunny credentials and YubiKey PIN remain outside Git. Existing clients require one manual installation of the first updater-enabled release.
+
+Run the native updater and Linux tray regression tests on an isolated D-Bus session, without opening a desktop window or registering a tray icon in the current desktop:
+
+```fish
+dbus-run-session -- cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked -- --include-ignored
+```
+
+The tray regression exercises updates from an async worker. Linux uses a blocking worker for ksni's blocking API; calling it directly from an async worker panics before the update check and leaves the menu disabled. macOS and Windows use Tauri's native menu API. Native dialog visibility and installation still require manual checks on each OS.
