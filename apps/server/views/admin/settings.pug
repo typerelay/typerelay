@@ -4,8 +4,11 @@ block content
 	h1.mb-5 Settings
 	.row.align-items-start(data-admin-panels="settings")
 		.col-md-3.col-lg-2
-			+panelNavigation('settings', [{key:'managani',name:'Managani'},{key:'custom-code',name:'Custom Code'},{key:'status',name:'Integration status'}])
+			+panelNavigation('settings', [{key:'managani',name:'Managani'},{key:'ai',name:'AI'},{key:'custom-code',name:'Custom Code'},{key:'status',name:'Integration status'}])
 		.col-md-9.col-lg-10.admin-section-content
+			section#settings-panel-ai(role="tabpanel" aria-labelledby="settings-nav-ai" data-admin-panel-content="ai" hidden=true)
+				div(data-ai-settings)
+					div(data-ai-configuration-slot="installation")
 			section#settings-panel-managani(role="tabpanel" aria-labelledby="settings-nav-managani" data-admin-panel-content="managani" hidden=false)
 				h2.h4 Managani
 				form(data-admin-settings="managani")

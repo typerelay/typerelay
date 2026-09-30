@@ -1,11 +1,19 @@
+import { AiClient } from './ai.js';
 class Panel {
 	constructor() {
 		this.fillSequence=0; this.filling=null; this.rows=[]; this.index=0; this.sequence=0; this.busy=false;
 		this.invoke=(name,args={})=>window.__TAURI__.core.invoke(name,args);
+		this.ai=new AiClient({request:(path,method='GET',body)=>this.invoke('ai_request',{path,method,body:body??null}),identity:()=>String(this.ai.status?.identity?.account)+':'+String(this.ai.status?.identity?.user)+':'+document.querySelector('#server')?.value,notify:(message,icon)=>Swal.fire({toast:true,position:"top-end",title:message,icon:icon||"success",timer:4000,showConfirmButton:false}),manage:()=>this.invoke('ai_web',{page:'settings-ai'})});
+		this.ai.bindSearch(document.querySelector('[data-ai-search]'),async()=>this.invoke('ai_inventory',{selected:[...document.querySelectorAll('[data-ai-local-library]:checked')].map(input=>input.value)}),async result=>{const hit=await this.invoke('ai_hit',{result});await this.start(hit,'insert');});
+		document.querySelector('#ai-create').onclick=()=>this.action(()=>this.invoke('ai_web',{page:'ai-create'}));
+		document.querySelector('#ai-edit').onclick=()=>this.action(async()=>{const hit=this.rows[this.index];if(!hit)throw Error('Select a synced snippet to edit.');await this.invoke('ai_web',{page:'ai-edit',library:hit.library,snippet:hit.id});});
+		window.__TAURI__.event.listen('panel-open',()=>{this.ai.cancel();void this.ai.refresh().catch(()=>this.ai.update());void this.aiLibraries().catch(()=>{});});
+		void this.ai.refresh().catch(()=>this.ai.update());void this.aiLibraries().catch(()=>{});
 		this.query=document.querySelector('#query');
 		this.list=document.querySelector('#results');
 		this.query.addEventListener('input',()=>{clearTimeout(this.timer);const sequence=++this.sequence;this.rows=[];this.render();this.timer=setTimeout(()=>this.search(sequence),60);});
 		document.addEventListener('keydown',event=>{
+			if(event.target.closest('[data-ai-search],[data-ai-controls]'))return;
 			if(event.key==='Escape'){event.preventDefault();if(this.personalHit)this.closePersonal();else this.cancel();return;}
 			if(this.personalHit)return;
 			if(this.filling){if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)){event.preventDefault();document.querySelector('#fill-form').requestSubmit();}return;}
@@ -38,7 +46,7 @@ class Panel {
 		document.querySelector('#empty-web').onclick=()=>this.action(()=>this.invoke('open_web_app'));
 		document.querySelector('#empty-tui').onclick=()=>this.action(()=>this.invoke('open_tui'));
 		document.querySelector('#connect-form').onsubmit=event=>{event.preventDefault();void this.authenticate();};
-		document.querySelector('#disconnect').onclick=()=>this.action(async()=>{await this.invoke('disconnect');await this.notify('Disconnected');await this.settings(true);});
+		document.querySelector('#disconnect').onclick=()=>this.action(async()=>{await this.invoke('disconnect');this.ai.reset();await this.notify('Disconnected');await this.settings(true);});
 		document.querySelector('#sync').onclick=()=>this.action(async()=>{await this.invoke('sync_now');});
 		document.querySelector('#upload-selected').onclick=()=>this.action(async()=>{const names=[...document.querySelectorAll('#local-libraries input:checked')].map(input=>input.value);if(!names.length)throw Error('Select local libraries first');await this.invoke('enroll',{names});await this.refreshLibraries();await this.notify('Upload queued');});
 		window.__TAURI__.event.listen('panel-error',event=>this.notify(event.payload,true));
@@ -50,7 +58,8 @@ class Panel {
 	}
 	configure(value){document.querySelector('#shortcut').value=value.config.shortcut;document.querySelector('#autostart').checked=value.config.launch_at_login;if(value.server)document.querySelector('#server').value=value.server;if(value.version)document.querySelector('#app-version').textContent='Version '+value.version;this.connection(value.connection_state||(value.connected?'connected':'disconnected'),value.auth_error);this.empty=!!value.empty;for(const [name,allowed]of[['accessibility',!!value.accessibility],['input-monitoring',!!value.input_monitoring]]){const card=document.querySelector('#'+name+'-card');const state=document.querySelector('#'+name+'-state');state.textContent=allowed?'Approved':'Required';state.dataset.allowed=String(allowed);card.hidden=false;card.querySelector('button').hidden=allowed;}const notifications=document.querySelector('#notifications-state');notifications.textContent=value.notifications===true?'Enabled':value.notifications===false?'Disabled':'Unavailable';notifications.dataset.allowed=String(value.notifications===true);this.render();}
 	connection(state,message=''){this.connectionState=state;const authenticate=document.querySelector('#authenticate');const server=document.querySelector('#server');const status=document.querySelector('#connection-status');authenticate.textContent=state==='authenticating'?'Cancel authentication':'Authenticate';authenticate.disabled=state==='connected';server.disabled=state==='authenticating'||state==='connected';status.textContent=message||(state==='connected'?'Connected':state==='authenticating'?'Waiting for browser sign-in…':'Not connected');status.setAttribute('role',state==='disconnected'&&message?'alert':'status');document.querySelector('#sync').disabled=state!=='connected';}
-	async authenticate(){if(this.connectionState==='authenticating'){await this.invoke('cancel_connect');this.connection('authenticating','Cancelling authentication…');document.querySelector('#authenticate').disabled=true;return;}if(this.connectionState==='connected')return;this.connection('authenticating','Complete sign-in in any browser.');try{await this.invoke('connect',{url:document.querySelector('#server').value});this.connection('connected','Connected');await this.refreshLibraries();await this.notify('Connected');}catch(error){const message=this.statusMessage(error);this.connection('disconnected',message==='Authentication cancelled'?'Authentication cancelled.':message);if(message!=='Authentication cancelled')await this.notify(message,true);}}
+	async authenticate(){if(this.connectionState==='authenticating'){await this.invoke('cancel_connect');this.connection('authenticating','Cancelling authentication…');document.querySelector('#authenticate').disabled=true;return;}if(this.connectionState==='connected')return;this.connection('authenticating','Complete sign-in in any browser.');try{await this.invoke('connect',{url:document.querySelector('#server').value});this.connection('connected','Connected');await this.refreshLibraries();await this.ai.refresh();await this.aiLibraries();await this.notify('Connected');}catch(error){const message=this.statusMessage(error);this.connection('disconnected',message==='Authentication cancelled'?'Authentication cancelled.':message);if(message!=='Authentication cancelled')await this.notify(message,true);}}
+	async aiLibraries(){const libraries=(await this.invoke('libraries')).filter(library=>!library.synced);const container=document.querySelector('[data-ai-local-choices]');const current=new Map([...container.children].map(node=>[node.dataset.id,node]));for(const library of libraries){let node=current.get(library.id);if(!node){node=document.querySelector('#ai-local-library-template').content.firstElementChild.cloneNode(true);node.dataset.id=library.id;node.querySelector('input').value=library.id;container.append(node);}node.querySelector('span').textContent=library.name;current.delete(library.id);}for(const node of current.values())node.remove();document.querySelector('[data-ai-local-libraries]').hidden=!libraries.length;}
 	async notify(value,error=false){const message=this.statusMessage(value);if(!message)return;this.lastStatus=message;try{await this.invoke('notify',{message,error});}catch(failure){console.error('Native notification failed',failure);}}
 	async reportStatus(value){const message=this.statusMessage(value);if(!message){this.lastStatus='';return;}if(message!==this.lastStatus)await this.notify(message,true);}
 	statusMessage(value){const status=String(value||'').replace(/^Error:\s*/, '').trim();return /^Choose (?:another|an) (?:app|application)\b/i.test(status)?'':status;}
@@ -78,7 +87,7 @@ class Panel {
 	activate(mode){this.action(async()=>{const sequence=this.sequence;if(!this.rows.length&&this.query.value){clearTimeout(this.timer);await this.search(sequence);}if(sequence===this.sequence&&this.rows.length)await this.start(this.rows[this.index],mode);});}
 	insert(){this.activate('insert');}
 	copy(){this.activate('copy');}
-	cancel(){this.filling=null;document.querySelector('#fill-fields').replaceChildren();document.querySelector('#fill-preview').textContent='';this.invoke('dismiss');}
+	cancel(){this.ai.cancel();this.filling=null;document.querySelector('#fill-fields').replaceChildren();document.querySelector('#fill-preview').textContent='';this.invoke('dismiss');}
 	answers(){return Object.fromEntries([...document.querySelectorAll('[data-answer]')].map(field=>[field.dataset.answer,field.value]));}
 	async start(hit,mode){
 		if(!hit)return;

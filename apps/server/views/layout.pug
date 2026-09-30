@@ -19,6 +19,7 @@ html(lang="en")
 		script(src="/vendor/webauthn/index.umd.min.js" defer)
 		script(src='/assets/' + assetVersion + '/auth.js' type="module")
 		script(src='/assets/' + assetVersion + '/app.js' type="module")
+		link(rel="stylesheet" href='/assets/' + assetVersion + '/ai.css')
 	body
 		header.app-navbar.container-fluid.py-3.mb-5.d-flex.align-items-center(class=newsEnabled ? 'has-product-updates' : '')
 			a.brand-link.pe-5(href="/")

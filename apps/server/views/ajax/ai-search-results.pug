@@ -1,0 +1,8 @@
+.ai-result-list
+	if !results.length
+		p.text-muted No matching snippets found.
+	each result in results
+		button.ai-result.btn.btn-outline-secondary.btn-sm.text-start.d-block.w-100.mb-3(type="button" data-ai-result data-source=result.source data-library=result.library data-snippet=result.id data-revision=result.revision)
+			strong.d-block= result.title || result.abbreviation || 'Untitled snippet'
+			span.d-block.small.text-muted= result.name
+			span.d-block.ai-result-preview= result.preview

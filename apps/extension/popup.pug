@@ -6,6 +6,9 @@ html(lang="en")
 		title Typerelay
 		link(rel="stylesheet" href="prompt.css")
 		link(rel="stylesheet" href="popup.css")
+		link(rel="stylesheet" href="ai.css")
+		link(rel="stylesheet" href="sweetalert2.min.css")
+		script(src="sweetalert2.all.min.js" defer)
 	body
 		main
 			header
@@ -22,6 +25,8 @@ html(lang="en")
 				p.copy-hint Enter or click to copy, then paste with Ctrl/Cmd+V.
 				p#search-message(role="status" hidden)
 				ul#results(role="listbox" hidden)
+				include ../server/views/ajax/ai-search.pug
+				a#ai-create.button(target="_blank" rel="noopener noreferrer" data-ai-launch) Create with AI
 				template#result-template
 					li(role="option" tabindex="-1" aria-selected="false")
 						div.result-heading

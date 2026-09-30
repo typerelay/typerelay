@@ -1,6 +1,7 @@
 import express from 'express';
 import { Admin } from './admin.js';
 import { AdminSettings } from './services/admin_settings.js';
+import { Ai } from './ai/index.js';
 import { AccountAccess } from './services/account_access.js';
 import pug from 'pug';
 import session from 'express-session';
@@ -149,6 +150,7 @@ export class Server {
 		});
 		if (process.env.NODE_ENV === 'development' && process.env.TYPERELAY_MOBILE_PREVIEW_URL) app.get('/api/v2/mobile-preview/identity', (req, res) => { Support.assert(req.ctx.device, 'Device sign-in required', 401); res.json({ user: req.ctx.user, account: req.ctx.account, device: req.ctx.device }); });
 		PublicApi.mountSettings(app);
+		Ai.mount(app);
 		app.post('/api/v2/statistics/events', async (req, res) => res.json(await Statistics.ingest(req.ctx, req.body)));
 		app.get('/api/v2/statistics', async (req, res) => {
 			const report = await Statistics.report(req.ctx, req.query);

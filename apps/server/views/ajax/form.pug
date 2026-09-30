@@ -74,6 +74,8 @@ if kind === 'snippet' || kind === 'conflict'
 	include template-editor
 	textarea#replace.form-control.form-control-sm.mb-4(name="replace" rows="8")= '\n' + (snippet ? snippet.replace : '')
 	include rich-editor
+	if kind === 'snippet'
+		include ai-author
 	#code-editor.mb-3
 	#code-options.mb-3(hidden=!snippet || (snippet.content && snippet.content.type) !== 'code')
 		.row.align-items-center

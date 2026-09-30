@@ -5,9 +5,10 @@ html(lang="en")
 		meta(name="viewport" content="width=device-width, initial-scale=1")
 		title TypeRelay
 		link(rel="stylesheet" href="panel.css")
+		link(rel="stylesheet" href="ai.css")
 		link(rel="stylesheet" href="sweetalert2.min.css")
 		script(src="sweetalert2.all.min.js" defer)
-		script(src="panel.js" defer)
+		script(src="panel.js" type="module" defer)
 	body
 		main
 			header.titlebar(data-tauri-drag-region)
@@ -18,6 +19,9 @@ html(lang="en")
 					span(aria-hidden="true") ⚙︎
 				button#close.icon-button(type="button" aria-label="Close TypeRelay") ×
 			section#search-view
+				.d-flex.mb-3
+					button#ai-create.secondary(type="button" data-ai-launch) Create with AI
+					button#ai-edit.secondary(type="button" data-ai-launch) Edit with AI
 				.search-field
 					span.search-icon(aria-hidden="true")
 					label.visually-hidden(for="query") Search snippets
@@ -30,6 +34,11 @@ html(lang="en")
 						button#empty-tui.link-button(type="button") TypeRelay TUI
 				p#hint Type an abbreviation or part of a snippet.
 				ul#results(role="listbox" aria-label="Snippets")
+				include ../../server/views/ajax/ai-search.pug
+				template#ai-local-library-template
+					label.ai-local-choice
+						input(type="checkbox" data-ai-local-library)
+						span
 				footer
 					span
 						span.keycap ↑↓
@@ -75,6 +84,7 @@ html(lang="en")
 					button(type="button" data-settings-tab="sync" aria-selected="false") Sync
 					button(type="button" data-settings-tab="about" aria-selected="false") About
 				section#settings-general.settings-page
+					include ../../server/views/ajax/ai-controls.pug
 					form#settings-form.settings-list
 						.setting-row
 							.setting-copy

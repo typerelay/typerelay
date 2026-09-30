@@ -5,6 +5,9 @@ html(lang="en")
 		meta(name="viewport" content="width=device-width, initial-scale=1")
 		title Typerelay options
 		link(rel="stylesheet" href="options.css")
+		link(rel="stylesheet" href="ai.css")
+		link(rel="stylesheet" href="sweetalert2.min.css")
+		script(src="sweetalert2.all.min.js" defer)
 	body
 		main
 			header
@@ -37,6 +40,7 @@ html(lang="en")
 					span#sync-status(role="status")
 			section
 				h2 Trigger prefix
+				include ../server/views/ajax/ai-controls.pug
 				div.prefix-group
 					select#prefix
 						option(value=";") ;

@@ -1,0 +1,72 @@
+section.ai-configuration.mb-5(data-ai-configuration=scope data-settings=JSON.stringify(settings))
+	h2.h5= scope === 'installation' ? 'Installation AI defaults' : scope === 'team' ? 'Team AI' : 'My private AI connections'
+	button.btn.btn-outline-secondary.btn-sm.mb-3(type="button" data-ai-refresh-scope) Refresh settings
+	p.text-muted.small= scope === 'personal' ? 'Private to you in this account. Your connection overrides team and installation defaults.' : scope === 'team' ? 'Shared connections for this account. Disabling team AI also blocks private connections.' : 'Hosted defaults are available to Pro/Team. Self-hosted defaults use your own provider accounts.'
+	form(data-ai-routes-form)
+		.form-check.mb-3
+			label
+				input.form-check-input.h-20px.w-30px(type="checkbox" name="enabled" checked=settings.enabled)
+				span.ms-3= scope === 'personal' ? 'Enable AI for my account' : scope === 'team' ? 'Allow AI for this team' : 'Allow AI on this installation'
+		if scope === 'installation'
+			.mb-3
+				label.form-label
+					span Managed actions per user/day (UTC)
+					input.form-control.form-control-sm(type="number" name="daily_limit" min="1" max="10000" required value=settings.daily_limit)
+			.mb-3
+				label.form-label
+					span Approved private endpoint origins (self-hosted only; one per line)
+					textarea.form-control.form-control-sm(name="private_endpoints" rows="2")= settings.private_endpoints.join('\n')
+		each workflow in ['authoring','search']
+			- var route = settings.routes[workflow] || {}
+			.row.align-items-center.mb-3(data-ai-route=workflow)
+				.col-md-4
+					label.form-label(for='ai-' + scope + '-' + workflow + '-connection')= workflow === 'authoring' ? 'Authoring connection' : 'Search connection'
+					select.form-select.form-select-sm(id='ai-' + scope + '-' + workflow + '-connection' name=workflow + '_connection')
+						option(value="")= workflow === 'search' ? 'Same as authoring / inherit' : 'Inherit'
+						each connection in settings.connections
+							option(value=connection.id selected=route.connection === connection.id)= connection.name
+				.col-md-4
+					label.form-label(for='ai-' + scope + '-' + workflow + '-model') Model ID
+					input.form-control.form-control-sm(id='ai-' + scope + '-' + workflow + '-model' name=workflow + '_model' value=route.model || '' list='ai-models-' + scope + '-' + workflow maxlength="200")
+					datalist(id='ai-models-' + scope + '-' + workflow)
+				.col-md-4
+					label.form-label(for='ai-' + scope + '-' + workflow + '-protocol') API format
+					select.form-select.form-select-sm(id='ai-' + scope + '-' + workflow + '-protocol' name=workflow + '_protocol')
+						each protocol in protocols
+							option(value=protocol selected=(route.protocol || 'auto') === protocol)= protocol
+					.d-flex.mt-3
+						button.btn.btn-outline-secondary.btn-sm(type="button" data-ai-models=workflow) Discover models
+						button.btn.btn-outline-secondary.btn-sm.ms-3(type="button" data-ai-verify=workflow) Verify
+		p.small.text-muted(data-ai-connection-status role="status")
+		.d-flex.justify-content-end
+			button.btn.btn-primary.btn-sm(type="submit") Save AI settings
+	div.mt-4(data-ai-connections)
+		each connection in settings.connections
+			include ai-connection
+	details.mt-3
+		summary.cursor-pointer Add connection
+		form.mt-3(data-ai-connection-form)
+			.mb-3
+				label.form-label
+					span Connection name
+					input.form-control.form-control-sm(name="name" required maxlength="100")
+			.mb-3
+				label.form-label
+					span Provider
+					select.form-select.form-select-sm(name="provider")
+						each provider, id in providers
+							option(value=id)= provider.name
+			.mb-3
+				label.form-label
+					span API base URL (OpenAI-compatible endpoints)
+					input.form-control.form-control-sm(type="url" name="base_url")
+			.mb-3
+				label.form-label
+					span API key
+					input.form-control.form-control-sm(type="password" name="api_key" autocomplete="new-password" data-secret-value)
+			.form-check.mb-3
+				label
+					input.form-check-input.h-20px.w-30px(type="checkbox" name="no_auth")
+					span.ms-3 Compatible endpoint requires no API key
+			.d-flex.justify-content-end
+				button.btn.btn-primary.btn-sm(type="submit") Add connection

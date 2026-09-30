@@ -76,7 +76,7 @@ block content
 						button.btn-close(data-bs-dismiss="modal" aria-label="Close")
 					.modal-body.settings-body.p-0
 						nav.settings-nav.list-group.list-group-flush(role="tablist" aria-label="Settings sections" aria-orientation="vertical")
-							- var settingsSections = {profile: 'Profile', security: 'Security', team: 'My team', devices: 'Connected devices', tokens: 'Apps Access'}
+							- var settingsSections = {profile: 'Profile', security: 'Security', team: 'My team', ai: 'AI', devices: 'Connected devices', tokens: 'Apps Access'}
 							if billingEnabled
 								- settingsSections.subscription = 'Subscription'
 								if ['owner', 'admin'].includes(ctx.role)
@@ -180,6 +180,9 @@ block content
 														input#account-name.form-control.form-control-sm.mb-3(name="name" value=account.name required)
 														.text-end
 															button.btn.btn-primary.btn-sm Save
+							section.settings-pane(id="settings-pane-ai" role="tabpanel" aria-labelledby="settings-tab-ai" hidden=true)
+								- var canManageTeam = ['owner','admin'].includes(ctx.role)
+								include ajax/ai-settings
 							section.settings-pane(id="settings-pane-devices" role="tabpanel" aria-labelledby="settings-tab-devices" hidden=true)
 								h3.h6.fw-bold Connected devices
 								ul#devices.list-group.mb-3
@@ -295,6 +298,7 @@ block content
 					.modal-body
 						p#search-help.text-muted.small Search library names, abbreviations and expansion text.
 						#search-results(aria-live="polite")
+						include ajax/ai-search
 					.modal-footer.justify-content-between
 						span.small.text-muted ↑ ↓ Navigate · Enter Open
 						span.small.text-muted Use Close to dismiss

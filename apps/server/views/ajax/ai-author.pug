@@ -1,0 +1,26 @@
+section.ai-author.mb-5(data-ai-author)
+	h3.h6 Write with AI
+	p.text-muted.small(data-ai-effective="authoring")
+	.row.align-items-center
+		.col-md-4.mb-3
+			label.form-label
+				span Action
+				select.form-select.form-select-sm(data-ai-action)
+					option(value="generate") Generate
+					option(value="improve") Improve
+					option(value="translate") Translate
+					option(value="template") Make a template
+		.col-md-8.mb-3
+			label.form-label
+				span What would you like to write or change?
+				textarea.form-control.form-control-sm(data-ai-prompt rows="2" maxlength="4000")
+	.d-flex.justify-content-end.mb-3
+		button.btn.btn-outline-primary.btn-sm(type="button" data-ai-generate) Generate proposal
+	p.text-muted.small(data-ai-author-status role="status")
+	div(data-ai-proposal hidden)
+		label.form-label
+			span Proposed snippet
+			textarea.form-control.form-control-sm(data-ai-draft rows="8")
+		.d-flex.justify-content-between.mt-3
+			button.btn.btn-outline-secondary.btn-sm(type="button" data-ai-discard) Discard
+			button.btn.btn-primary.btn-sm.ms-3(type="button" data-ai-apply) Use draft

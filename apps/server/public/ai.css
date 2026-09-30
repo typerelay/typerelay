@@ -1,0 +1,13 @@
+.ai-controls label,.ai-author label,.ai-search label,.ai-configuration label { display: block; }
+.ai-controls input[type="checkbox"],.ai-configuration input[type="checkbox"] { cursor: pointer; margin-right: .5rem; }
+.ai-author textarea,.ai-search textarea,.ai-configuration textarea,.ai-configuration input:not([type="checkbox"]),.ai-configuration select { box-sizing: border-box; width: 100%; }
+.ai-author textarea,.ai-search textarea { min-height: 4rem; }
+.ai-author button,.ai-search button,.ai-controls button,.ai-configuration button,.ai-search summary,.ai-configuration summary { cursor: pointer; }
+.ai-controls,.ai-author,.ai-search,.ai-configuration { margin-bottom: 1.5rem; }
+.ai-search details[open],.ai-author { padding: 1rem; border: .0625rem solid color-mix(in srgb,currentColor 20%,transparent); border-radius: .5rem; }
+.ai-result { width: 100%; display: block; text-align: left; margin-bottom: .75rem; padding: .75rem; border: .0625rem solid color-mix(in srgb,currentColor 20%,transparent); border-radius: .5rem; }
+.ai-result strong,.ai-result span { display: block; }
+.ai-result-preview { white-space: pre-wrap; max-height: 6rem; overflow: hidden; }
+.ai-author [hidden],.ai-search [hidden],.ai-controls [hidden],.ai-configuration [hidden] { display: none !important; }
+.ai-local-choice { display: flex; align-items: center; gap: .5rem; margin-bottom: .5rem; }
+[data-ai-launch][aria-disabled="true"] { pointer-events: none; opacity: .5; }

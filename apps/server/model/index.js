@@ -139,3 +139,13 @@ export const UsageEvent = mongoose.model('UsageEvent', usageEventSchema);
 const statisticsPreferenceSchema = new mongoose.Schema({ account: { type: objectid, required: true }, user: { type: objectid, default: null }, wpm: { type: Number, default: 50 }, hourly_rate: { type: Number, default: 30 }, currency: { type: String, default: 'USD' } });
 statisticsPreferenceSchema.index({ account: 1, user: 1 }, { unique: true });
 export const StatisticsPreference = mongoose.model('StatisticsPreference', statisticsPreferenceSchema);
+
+const aiSettingSchema = new mongoose.Schema({ account: { type: objectid, required: true }, user: { type: objectid, default: null }, enabled: { type: Boolean, default: true }, connections: { type: [mixed], default: [], select: false }, routes: { type: mixed, default: {} }, revision: { type: Number, default: 0 } }, { timestamps: true });
+aiSettingSchema.index({ account: 1, user: 1 }, { unique: true });
+export const AiSetting = mongoose.model('AiSetting', aiSettingSchema);
+const aiUsageSchema = new mongoose.Schema({ account: { type: objectid, required: true }, user: { type: objectid, required: true }, day: { type: String, required: true }, count: { type: Number, default: 0 }, expires: { type: Date, expires: 0 } });
+aiUsageSchema.index({ account: 1, user: 1, day: 1 }, { unique: true });
+export const AiUsage = mongoose.model('AiUsage', aiUsageSchema);
+const aiRequestSchema = new mongoose.Schema({ account: { type: objectid, required: true }, user: { type: objectid, required: true }, id: { type: String, required: true }, workflow: String, managed: Boolean, day: String, state: String, expires: { type: Date, expires: 0 } });
+aiRequestSchema.index({ account: 1, user: 1, id: 1 }, { unique: true });
+export const AiRequest = mongoose.model('AiRequest', aiRequestSchema);

@@ -7,6 +7,8 @@ import { Browser } from '@capacitor/browser';
 import { Network } from '@capacitor/network';
 import { RichEditor } from '@server/browser/rich-editor.js';
 import { TemplateEditor } from '@server/public/template-editor.js';
+import { AiClient } from '@server/public/ai.js';
+import '@server/public/ai.css';
 import { Auth } from './auth';
 import { Native } from './native';
 import { Preview } from './preview';
@@ -25,6 +27,7 @@ import 'bootstrap/dist/css/bootstrap.min.css';
 import './style.css';
 
 export class MobileApp {
+ static ai: any;
  static state: State = { generation: '', libraries: [], pending: 0, conflicts: [] };
  static listeners = new Set<() => void>();
  static syncJob: Promise<void> | null = null;
@@ -87,6 +90,7 @@ export class MobileApp {
     try { await Native.call('sync', { server: Auth.server, access_token: await Auth.access() }); }
     catch (error: any) { if (String(error.code) !== '401') throw error; await Native.call('sync', { server: Auth.server, access_token: await Auth.access(true) }); }
     await MobileApp.load();
+    await MobileApp.ai?.refresh().catch(() => MobileApp.ai?.update());
    } catch (error) { await MobileApp.load(); MobileApp.$('sync-status').textContent = `${MobileApp.state.pending} pending · Sync unavailable`; throw error; }
   })().finally(() => { MobileApp.syncJob = null; });
   return MobileApp.syncJob;
@@ -139,6 +143,11 @@ export class MobileApp {
   if (draft) { for (const [id, value] of Object.entries(draft.fields)) MobileApp.input(id).value = String(value); MobileApp.$('template-options').dataset.variables = JSON.stringify(draft.variables || {}); }
   MobileApp.template = new TemplateEditor(MobileApp);
   MobileApp.configureEditor();
+  MobileApp.ai.bindAuthor(MobileApp.$('editor-content').querySelector('[data-ai-author]'), async () => {
+   const type = MobileApp.input('snippet-type').value; const text = MobileApp.richView?.content() ?? MobileApp.input('replace').value; const variables = type === 'code' ? {} : (await MobileApp.template.content()).variables || {};
+   const content = type === 'rich_text' ? { version: 2, type, markdown: text, variables } : { version: 1, type: type === 'plain_text' && Object.keys(variables).length ? 'template' : type, text, ...(type === 'code' ? { language: MobileApp.input('language').value } : { variables }) };
+   return { library: MobileApp.input('edit-library').value, entry: { title: MobileApp.input('title').value, trigger: MobileApp.input('trigger').value, content } };
+  }, async (proposal: any) => { MobileApp.richView?.destroy(); MobileApp.richView = null; MobileApp.input('replace').value = proposal.content.markdown ?? proposal.content.text; MobileApp.input('title').value = proposal.title; MobileApp.template.variables = proposal.content.variables || {}; MobileApp.$('template-options').dataset.variables = JSON.stringify(MobileApp.template.variables); MobileApp.configureEditor(); MobileApp.input('replace').dispatchEvent(new Event('input', { bubbles: true })); MobileApp.scheduleDraft(); });
   const typeLabels: Record<string, string> = { plain_text: 'Text', code: 'Code', rich_text: 'Rich text' };
   const typeButton = MobileApp.$('snippet-type-button'); const typeMenu = MobileApp.$('snippet-type-menu');
   typeButton.onclick = () => MobileApp.toggleAnchoredMenu(MobileApp.$('type-picker'), typeMenu, typeButton);
@@ -231,7 +240,7 @@ export class MobileApp {
   MobileApp.$('logout').onclick = () => { void MobileApp.busy(MobileApp.$('logout') as HTMLButtonElement, async () => {
    const result = await Swal.fire({ title: 'Sign out?', text: 'Cached snippets, pending edits, and drafts will be removed from this device.', icon: 'warning', showCancelButton: true, confirmButtonText: 'Sign out' }); if (!result.isConfirmed) return;
    MobileApp.active = false; await MobileApp.syncJob?.catch(() => undefined); await MobileApp.draftJob.catch(() => undefined); clearTimeout(MobileApp.draftTimer);
-   await Native.call('reset'); await Auth.request('connection','DELETE').catch(() => undefined); await Auth.clear(); MobileApp.assetURLs.clear(); MobileApp.editing = null;
+   MobileApp.ai.reset(); await Native.call('reset'); await Auth.request('connection','DELETE').catch(() => undefined); await Auth.clear(); MobileApp.assetURLs.clear(); MobileApp.editing = null;
    await MobileApp.load(); MobileApp.switchScreen('snippets'); MobileApp.active = true;
   }); };
  }
@@ -295,7 +304,7 @@ export class MobileApp {
  static async start() {
   (globalThis as any).Swal = Swal;
   MobileApp.$('app').replaceChildren(...new DOMParser().parseFromString(shell(), 'text/html').body.childNodes);
-  MobileApp.$('form-modal').addEventListener('hidden.bs.modal', () => { MobileApp.editorCloseJob = MobileApp.editorCloseJob.catch(() => undefined).then(MobileApp.finishEditorClose).catch(MobileApp.error); });
+  MobileApp.$('form-modal').addEventListener('hidden.bs.modal', () => { MobileApp.ai.cancel(); MobileApp.editorCloseJob = MobileApp.editorCloseJob.catch(() => undefined).then(MobileApp.finishEditorClose).catch(MobileApp.error); });
   MobileApp.$('login-form').onsubmit = event => { event.preventDefault(); void MobileApp.busy((event.target as HTMLFormElement).querySelector('button')!, () => Auth.begin(MobileApp.input('server').value)); };
   MobileApp.$('settings-sync').onclick = () => { void MobileApp.busy(MobileApp.$('settings-sync') as HTMLButtonElement, MobileApp.sync); };
   MobileApp.$('profile').onclick = MobileApp.showSettings;
@@ -312,6 +321,8 @@ export class MobileApp {
   MobileApp.$('settings-screen').addEventListener('click', event => { const link = (event.target as HTMLElement).closest<HTMLAnchorElement>('[data-external]'); if (!link) return; event.preventDefault(); void Browser.open({ url: link.href }); });
   MobileApp.$('snippets').onclick = event => { const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-use]'); if (!button) return; const article = button.closest<HTMLElement>('[data-record]')!; const library = MobileApp.library(article.dataset.library!); const snippet = library.records.find(snippet => snippet.id === article.dataset.record)!; void MobileApp.use(library, snippet).catch(MobileApp.error); };
   createRoot(MobileApp.$('controller')).render(createElement(Controller));
+  MobileApp.ai = new AiClient({ request: (path: string, method = 'GET', body?: any) => Auth.request('ai' + path, method, body), identity: () => Auth.server + ':' + MobileApp.ai?.status?.identity?.account + ':' + MobileApp.ai?.status?.identity?.user, notify: (message: string, icon: any) => MobileApp.toast(message, icon), manage: () => { void Browser.open({ url: Auth.server + '/?account=' + encodeURIComponent(MobileApp.ai.status?.identity?.account || '') + '#settings-ai' }); } });
+  MobileApp.ai.bindSearch(document.querySelector('[data-ai-search]'), async () => ({ libraries: MobileApp.input('library').value ? [MobileApp.input('library').value] : MobileApp.state.libraries.map(library => library._id) }), async (result: any) => { await MobileApp.load(); const library = MobileApp.library(result.library); const snippet = library.records.find(item => item.id === result.id); if (!snippet || snippet.revision !== result.revision) throw Error('This snippet changed. Sync and search again.'); await MobileApp.use(library, snippet); });
   Auth.onError = MobileApp.error;
   await Auth.initialize(async () => { await MobileApp.load(); await MobileApp.sync(); });
   if (Auth.server || Preview.enabled) MobileApp.input('server').value = Auth.server || Preview.origin;

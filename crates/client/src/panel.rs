@@ -72,6 +72,24 @@ impl Panel {
         }
         transaction.commit()?; Ok(serde_json::json!(rows))
     }
+	pub fn ai_inventory(directory: &Path, selected: &[String]) -> Result<serde_json::Value> {
+		let db = Database::open(directory)?; let transaction = db.connection.unchecked_transaction()?; let mut libraries = Vec::new(); let mut local = Vec::new();
+		for library in db.libraries()? {
+			if library["state"] != "active" || library["permissions"]["read"] != true { continue; }
+			let id = library["_id"].as_str().context("Missing library ID")?;
+			if db.synced(id)? { libraries.push(id.to_owned()); continue; }
+			if !selected.iter().any(|value| value == id) { continue; }
+			for record in db.effective_records(id)?.into_iter().filter(|record| record["state"] == "active") {
+				let content = &record["content"];
+				local.push(serde_json::json!({"id": record["id"], "library": id, "library_name": library["name"], "revision": record["revision"], "title": record["title"].as_str().unwrap_or(""), "trigger": record["effective_trigger"].as_str().unwrap_or(""), "text": content["text"].as_str().or(content["markdown"].as_str()).context("Missing snippet text")?}));
+			}
+		}
+		transaction.commit()?; Ok(serde_json::json!({"libraries": libraries, "local": local}))
+	}
+	pub fn ai_hit(directory: &Path, result: &serde_json::Value) -> Result<Hit> {
+		let hit = Hit { id: result["id"].as_str().context("Missing snippet ID")?.into(), library: result["library"].as_str().context("Missing library ID")?.into(), library_name: result["name"].as_str().unwrap_or("").into(), revision: result["revision"].as_i64().context("Missing revision")?, title: result["title"].as_str().unwrap_or("").into(), abbreviation: result["abbreviation"].as_str().unwrap_or("").into(), preview: result["preview"].as_str().unwrap_or("").into() };
+		Self::content(directory, &hit)?; Ok(hit)
+	}
     pub fn content(directory: &Path, hit: &Hit) -> Result<serde_json::Value> {
         let db = Database::open(directory)?;
         let transaction = db.connection.unchecked_transaction()?;
@@ -100,6 +118,17 @@ impl Panel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ai_inventory_requires_local_selection_and_rejects_stale_hits() {
+        let dir=tempfile::tempdir().unwrap();let db=Database::open(dir.path()).unwrap();
+        let synced=db.import("Synced","matches: [{trigger: shared, replace: Refund policy}]").unwrap();
+        db.connection.execute("UPDATE libraries SET synced=1 WHERE id=?1",[&synced.id]).unwrap();
+        let local=db.import("Local","matches: [{trigger: local, replace: Local refund secret}]").unwrap();
+        let inventory=Panel::ai_inventory(dir.path(),&[]).unwrap();assert_eq!(inventory["local"].as_array().unwrap().len(),0);assert_eq!(inventory["libraries"],serde_json::json!([synced.id]));
+        let inventory=Panel::ai_inventory(dir.path(),&[local.id.clone()]).unwrap();assert_eq!(inventory["local"].as_array().unwrap().len(),1);assert_eq!(inventory["local"][0]["text"],"Local refund secret");
+        let mut result=inventory["local"][0].clone();result["name"]=serde_json::json!("Local");result["abbreviation"]=serde_json::json!("local");result["preview"]=serde_json::json!("Local refund secret");
+        assert!(Panel::ai_hit(dir.path(),&result).is_ok());db.edit(&local,Some(0),None).unwrap();assert!(Panel::ai_hit(dir.path(),&result).is_err());
+    }
     #[test]
     fn library_inventory_includes_synced_and_local_libraries_with_active_counts() {
         let dir=tempfile::tempdir().unwrap();let db=Database::open(dir.path()).unwrap();

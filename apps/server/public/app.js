@@ -5,6 +5,7 @@ import { TemplateEditor, TemplateFill } from './template-editor.js';
 import { Abbreviation } from './abbreviation.js';
 import { RichTextRuntime } from './rich-text-runtime.js';
 import { PasswordField } from './password-field.js';
+import { AiClient } from './ai.js';
 class TypeRelay {
 	account = document.querySelector('#workspace')?.dataset.account;
 	libraries = new Map();
@@ -27,6 +28,8 @@ class TypeRelay {
 	searchFocus = null;
 	submit = null;
 	constructor() {
+		this.ai = new AiClient({ request: (path, method, body) => this.request('ai' + path, method, body), identity: () => location.origin + ':' + this.account + ':' + document.querySelector('#workspace')?.dataset.user, notify: (message, icon) => this.toast(message, icon), manage: () => { bootstrap.Modal.getOrCreateInstance(document.querySelector('#settings')).show(); this.settingsTab('ai'); } });
+		this.ai.bindSearch(document.querySelector('[data-ai-search]'), async () => ({}), async result => { await this.open(result.library); const snippet = this.libraries.get(result.library)?.snippets.find(item => item.id === result.id); if (!snippet || snippet.revision !== result.revision) throw Error('This snippet changed. Search again.'); bootstrap.Modal.getOrCreateInstance(document.querySelector('#search-modal')).hide(); const node = document.querySelector('[data-snippet="' + CSS.escape(result.id) + '"]'); node?.focus(); node?.scrollIntoView({ block: 'center' }); });
 		this.statistics = new Statistics(this);
 		this.templateEditor = new TemplateEditor(this); this.templateFill = new TemplateFill(this);
 		this.trialCountdown = new TrialCountdown(this);
@@ -62,6 +65,7 @@ class TypeRelay {
 		document.querySelector('#form-modal')?.addEventListener('hidden.bs.modal', () => {
 			const modal = document.querySelector('#form-modal');
 			if (modal.dataset.preserveEditor === 'true') { delete modal.dataset.preserveEditor; return; }
+			this.ai.cancel();
 			this.codeVersion = (this.codeVersion || 0) + 1; this.codeView?.destroy(); this.codeView = null; this.richView?.destroy(); this.richView = null;
 			if (this.returnSettings) { this.returnSettings = false; bootstrap.Modal.getOrCreateInstance(document.querySelector('#settings')).show(); }
 		});
@@ -72,6 +76,10 @@ class TypeRelay {
 		this.updateScrollTop();
 		if (document.querySelector('#team-member-form')) this.rotateTeamPassword(false);
 		if (this.account) {
+			this.ai.refresh().catch(() => this.ai.update());
+			if (location.hash === '#settings-ai') { bootstrap.Modal.getOrCreateInstance(document.querySelector('#settings')).show(); this.settingsTab('ai'); }
+			if (location.hash === '#ai-create') { const library = [...this.libraries.values()].find(item => item.permissions.edit); if (library) this.editSnippet(library, null).catch(error => this.toast(error.message, 'error')); }
+			if (location.hash === '#ai-edit') { const query = new URL(location.href).searchParams; const library = this.libraries.get(query.get('library')); if (library?.permissions.edit) this.editSnippet(library, query.get('snippet')).catch(error => this.toast(error.message, 'error')); }
 			this.poll().catch(error => this.toast(error.message, 'error'));
 			setInterval(() => this.poll().catch(() => {}), 30000);
 			this.devices().catch(() => {});
@@ -220,6 +228,7 @@ class TypeRelay {
 		if (focus) tab.focus();
 		if (id === 'tokens') Promise.all([this.tokens(), this.oauth()]).catch(error => this.toast(error.message, 'error'));
 		if (id === 'devices') this.devices().catch(error => this.toast(error.message, 'error'));
+		if (id === 'ai') this.ai.loadSettings(document.querySelector('#settings-pane-ai')).catch(error => this.toast(error.message, 'error'));
 		if (id === 'whiteLabel') this.refreshWhiteLabel().catch(error => this.toast(error.message, 'error'));
 		if (id === 'subscription') this.refreshBilling().catch(error => this.toast(error.message, 'error'));
 	}
@@ -360,7 +369,9 @@ class TypeRelay {
 				await this.applyBatch(await this.request('snippets/batch', 'POST', { action: 'move', source_library: library._id, destination_library: destination, items: [{ id, base_revision: item.revision, value }] }), false);
 			} else await this.snippet(id, value, library);
 		});
+		if (library.permissions.edit) this.ai.bindAuthor(document.querySelector('[data-ai-author]'), async () => { this.richView?.content(); return { library: library._id, entry: await this.snippetValue(new FormData(document.querySelector('#record-form'))) }; }, async proposal => { this.codeView?.destroy(); this.codeView = null; this.richView?.destroy(); this.richView = null; document.querySelector('#replace').value = proposal.content.markdown ?? proposal.content.text; document.querySelector('#snippet-title').value = proposal.title; this.templateEditor.variables = proposal.content.variables || {}; document.querySelector('#template-options').dataset.variables = JSON.stringify(this.templateEditor.variables); await this.codeEditor(); document.querySelector('#replace').dispatchEvent(new Event('input', { bubbles: true })); });
 		if (!library.permissions.edit) {
+			const author = document.querySelector('[data-ai-author]'); if (author) author.hidden = true;
 			this.codeReadonly = true; this.codeView?.setReadonly(true); this.richView?.setReadonly(true);
 			document.querySelectorAll('[data-vfield],#insert-variable,#variable-kind,#variable-name').forEach(field => field.disabled = true);
 			document.querySelectorAll('#form-fields select').forEach(field => { field.disabled = true; });

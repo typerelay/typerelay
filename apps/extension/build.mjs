@@ -23,6 +23,8 @@ if (packaging) delete manifest.key;
 manifest.host_permissions = [`${origin}/*`];
 writeFileSync(new URL('manifest.json', `file://${dist}/`), JSON.stringify(manifest, null, 2));
 const worker = readFileSync(new URL('worker.js', import.meta.url), 'utf8').replace('https://app.typerelay.com', origin);
+for (const name of ['ai.js','ai.css']) copyFileSync(new URL('../server/public/' + name, import.meta.url), new URL(name, 'file://' + dist + '/'));
+for (const name of ['sweetalert2.all.min.js','sweetalert2.min.css']) copyFileSync(new URL('../server/node_modules/sweetalert2/dist/' + name, import.meta.url), new URL(name, 'file://' + dist + '/'));
 writeFileSync(new URL('worker.js', `file://${dist}/`), worker);
 
 if (packaging) {
