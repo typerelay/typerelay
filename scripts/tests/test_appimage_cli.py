@@ -15,10 +15,11 @@ class AppImageCLITests(unittest.TestCase):
         self.root = pathlib.Path(self.temporary.name)
         self.commands = self.root / "bin"
         self.commands.mkdir()
+        self.registration = self.root / "appimage-type2"
         script = pathlib.Path(__file__).resolve().parents[1] / "appimage-cli.sh"
         for name in ("typerelay", "typerelay-tui"):
             command = self.commands / name
-            shutil.copyfile(script, command)
+            command.write_text(script.read_text().replace("registration=/proc/sys/fs/binfmt_misc/appimage-type2", 'registration="' + str(self.registration) + '"'))
             command.chmod(0o755)
 
     def register(self, user, filename="TypeRelay.AppImage"):
@@ -55,6 +56,40 @@ class AppImageCLITests(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(result.stdout.splitlines(), [mode, "--version"])
                     self.assertEqual(result.stderr, "")
+
+    def test_registered_bypass_launches_terminal_commands_without_interpreter_output(self):
+        appimage, environment = self.register("bypass user", "TypeRelay ' $ ` %.AppImage")
+        helper = self.root / "custom lib directory/appimagelauncher/binfmt-bypass"
+        helper.parent.mkdir(parents=True)
+        helper.write_text('#!/bin/sh\n[ "$QT_QPA_PLATFORM" = wayland ] || exit 91\nprintf \'%s\\n\' "$0" "$@"\nexit 7\n')
+        helper.chmod(0o755)
+        self.registration.write_text("enabled\ninterpreter " + str(helper.with_name("binfmt-interpreter")) + "\nflags: F\noffset 8\nmagic 414902\n")
+        environment["QT_QPA_PLATFORM"] = "wayland"
+        for name, mode in (("typerelay", "--cli"), ("typerelay-tui", "--tui-cli")):
+            with self.subTest(command=name):
+                result = subprocess.run([name, "--dir", "snippet files", "--version"], env=environment, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 7, result.stderr)
+                self.assertEqual(result.stdout.splitlines(), [str(helper), str(appimage), mode, "--dir", "snippet files", "--version"])
+                self.assertEqual(result.stderr, "")
+        helper.write_text('#!/bin/sh\nprintf \'%s\\n\' "Real launch failure" >&2\nexit 37\n')
+        result = subprocess.run(["typerelay-tui"], env=environment, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 37)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "Real launch failure\n")
+
+    def test_missing_or_unrelated_bypass_keeps_direct_appimage_execution(self):
+        appimage, environment = self.register("fallback user")
+        unrelated = self.root / "unrelated/binfmt-bypass"
+        unrelated.parent.mkdir()
+        unrelated.write_text("#!/bin/sh\nexit 99\n")
+        unrelated.chmod(0o755)
+        for interpreter in (self.root / "missing/appimagelauncher/binfmt-interpreter", self.root / "unrelated/binfmt-interpreter"):
+            with self.subTest(interpreter=interpreter):
+                self.registration.write_text("enabled\ninterpreter " + str(interpreter) + "\n")
+                result = subprocess.run(["typerelay-tui", "--help"], env=environment, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 7, result.stderr)
+                self.assertEqual(result.stdout.splitlines(), [str(appimage), "--tui-cli", "--help"])
+                self.assertEqual(result.stderr, "")
 
     def test_appimage_relocation_updates_command_without_reinstalling_wrapper(self):
         appimage, environment = self.register("user")
