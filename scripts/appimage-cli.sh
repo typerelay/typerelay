@@ -19,4 +19,6 @@ if [ ! -x "$appimage" ]; then
     printf '%s\n' 'The registered TypeRelay AppImage is missing. Launch its new location to register it again.' >&2
     exit 1
 fi
+# Terminal commands must not initialize AppImageLauncher's Qt integration dialog.
+export APPIMAGELAUNCHER_DISABLE=1
 exec "$appimage" "$mode" "$@"

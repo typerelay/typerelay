@@ -41,6 +41,21 @@ class AppImageCLITests(unittest.TestCase):
                 self.assertEqual(result.stdout.splitlines(), [str(appimage), mode, "--dir", "snippet files", "--version"])
                 self.assertEqual(result.stderr, "")
 
+    def test_terminal_commands_skip_appimage_integration_and_preserve_wayland(self):
+        appimage, environment = self.register("wayland user")
+        appimage.write_text('#!/bin/sh\n[ "$APPIMAGELAUNCHER_DISABLE" = 1 ] || exit 90\n[ "$QT_QPA_PLATFORM" = wayland ] || exit 91\nprintf \'%s\\n\' "$@"\n')
+        environment["QT_QPA_PLATFORM"] = "wayland"
+        for inherited in (None, "0"):
+            environment.pop("APPIMAGELAUNCHER_DISABLE", None)
+            if inherited is not None:
+                environment["APPIMAGELAUNCHER_DISABLE"] = inherited
+            for name, mode in (("typerelay", "--cli"), ("typerelay-tui", "--tui-cli")):
+                with self.subTest(command=name, inherited=inherited):
+                    result = subprocess.run([name, "--version"], env=environment, capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout.splitlines(), [mode, "--version"])
+                    self.assertEqual(result.stderr, "")
+
     def test_appimage_relocation_updates_command_without_reinstalling_wrapper(self):
         appimage, environment = self.register("user")
         moved = appimage.with_name("Updated TypeRelay.AppImage")
