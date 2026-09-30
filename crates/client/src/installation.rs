@@ -33,7 +33,7 @@ impl Installer {
     }
 
     pub fn keyboard_devices(devices: &[(String, std::path::PathBuf, String)]) -> Vec<&(String, std::path::PathBuf, String)> {
-        devices.iter().filter(|(_, _, properties)| properties.lines().any(|p| p == "ID_INPUT_KEYBOARD=1")).collect()
+        devices.iter().filter(|(name, _, properties)| !name.eq_ignore_ascii_case("TypeRelay virtual keyboard") && properties.lines().any(|p| p == "ID_INPUT_KEYBOARD=1")).collect()
     }
 
     pub fn select_keyboard(devices: &[(String, std::path::PathBuf, String)], requested: Option<&str>) -> Result<String> {
@@ -52,9 +52,16 @@ impl Installer {
         Ok(candidates[0].0.clone())
     }
 
+    pub fn configured_keyboard(devices: &[(String, std::path::PathBuf, String)], settings: &crate::panel::PanelSettings) -> Result<String> {
+        let requested=(!settings.keyboard.is_empty()).then_some(settings.keyboard.as_str());
+        Self::select_keyboard(devices,requested).or_else(|error| {
+            if requested.is_none() && !settings.keyboard_fallback.is_empty() { Self::select_keyboard(devices,Some(&settings.keyboard_fallback)).or(Err(error)) } else { Err(error) }
+        })
+    }
+
     pub fn keyboard() -> Result<String> {
         let settings = crate::panel::Panel::settings(&crate::editor::Paths::config_dir()?)?;
-        if !settings.keyboard.is_empty() { return Self::select_keyboard(&Self::devices()?, Some(&settings.keyboard)); }
+        if !settings.keyboard.is_empty() || !settings.keyboard_fallback.is_empty() { return Self::configured_keyboard(&Self::devices()?, &settings); }
         // Preserve the keyboard selected by an earlier managed installation.
         let data = std::env::var_os("XDG_DATA_HOME").map(std::path::PathBuf::from).unwrap_or(std::path::PathBuf::from(std::env::var_os("HOME").context("HOME is missing")?).join(".local/share"));
         let state = data.join("typerelay/installation.json");
@@ -249,6 +256,18 @@ mod tests {
         let selected:Vec<_>=Installer::keyboard_devices(&devices).into_iter().filter(|(name,_,_)|name=="Composite USB device").collect();
         assert_eq!(selected.len(),1);assert_eq!(selected[0].1,std::path::Path::new("/dev/input/event3"));
         assert_eq!(Installer::input_paths(&devices,"Composite USB device"),vec![("/dev/uinput".into(),true),("/dev/input/event2".into(),false),("/dev/input/event3".into(),false)]);
+    }
+    #[test]
+    fn automatic_keyboard_fallback_saves_and_survives_restart() {
+        let devices=vec![("Laptop keyboard".into(),"/dev/input/event1".into(),"ID_INPUT_KEYBOARD=1\nID_INTEGRATION=internal\n".into()),("USB keyboard".into(),"/dev/input/event2".into(),"ID_INPUT_KEYBOARD=1\nID_INTEGRATION=internal\n".into()),("TypeRelay virtual keyboard".into(),"/dev/input/event3".into(),"ID_INPUT_KEYBOARD=1\nID_INTEGRATION=internal\n".into())];
+        assert!(Installer::select_keyboard(&devices,None).is_err());
+        let root=tempfile::tempdir().unwrap();let mut settings=crate::panel::PanelSettings{keyboard_fallback:"USB keyboard".into(),..Default::default()};
+        settings.keyboard_fallback=Installer::configured_keyboard(&devices,&settings).unwrap();crate::panel::Panel::save_settings(root.path(),&settings).unwrap();
+        let saved=crate::panel::Panel::settings(root.path()).unwrap();assert!(saved.keyboard.is_empty());assert_eq!(saved.keyboard_fallback,"USB keyboard");assert_eq!(Installer::configured_keyboard(&devices,&saved).unwrap(),"USB keyboard");
+        assert_eq!(Installer::configured_keyboard(&devices[..1],&saved).unwrap(),"Laptop keyboard");
+        assert!(Installer::configured_keyboard(&devices[2..],&saved).is_err());
+        assert!(Installer::select_keyboard(&devices,Some("TypeRelay virtual keyboard")).is_err());
+        settings.keyboard="Missing keyboard".into();assert!(Installer::configured_keyboard(&devices,&settings).is_err());
     }
     #[test]
     fn appimage_registration_uses_one_native_launcher_and_preserves_its_actions() {

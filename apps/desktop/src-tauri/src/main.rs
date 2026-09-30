@@ -358,11 +358,12 @@ fn sync_now(app:tauri::AppHandle)->std::result::Result<(),String>{
     Ok(())
 }
 #[tauri::command]
-fn save_settings(app:tauri::AppHandle,config:PanelSettings)->std::result::Result<(),String> {
+fn save_settings(app:tauri::AppHandle,mut config:PanelSettings)->std::result::Result<(),String> {
     let root=&app.state::<Runtime>().root;
     let old=Panel::settings(root).map_err(|e|e.to_string())?;
+	config.keyboard_fallback=if old.keyboard.is_empty(){old.keyboard_fallback.clone()}else{old.keyboard.clone()};
 	#[cfg(target_os="linux")]
-	if config.keyboard!=old.keyboard {if app.state::<Runtime>().linux_setup.load(Ordering::SeqCst){return Err("Keyboard setup is running; finish it before changing keyboards".into());}typerelay_client::installation::Installer::select_keyboard(&typerelay_client::installation::Installer::devices().map_err(|error|error.to_string())?,if config.keyboard.is_empty(){None}else{Some(&config.keyboard)}).map_err(|error|error.to_string())?;}
+	if config.keyboard!=old.keyboard {if app.state::<Runtime>().linux_setup.load(Ordering::SeqCst){return Err("Keyboard setup is running; finish it before changing keyboards".into());}config.keyboard_fallback=typerelay_client::installation::Installer::configured_keyboard(&typerelay_client::installation::Installer::devices().map_err(|error|error.to_string())?,&config).map_err(|error|error.to_string())?;}
     Runtime::shortcut(&app,Some(&old.shortcut),&config.shortcut).map_err(|e|e.to_string())?;
     let result=(||->Result<()>{if config.launch_at_login{app.autolaunch().enable()?;}else{app.autolaunch().disable()?;} Panel::save_settings(root,&config)})();
     if result.is_err(){let _=Runtime::shortcut(&app,Some(&config.shortcut),&old.shortcut);if old.launch_at_login{let _=app.autolaunch().enable();}else{let _=app.autolaunch().disable();}}

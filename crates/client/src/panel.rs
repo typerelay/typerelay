@@ -9,8 +9,8 @@ use base64::{Engine as _,engine::general_purpose::STANDARD};
 pub struct Hit { pub id: String, pub library: String, pub library_name: String, pub revision: i64, pub title: String, pub abbreviation: String, pub preview: String }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct PanelSettings { pub shortcut: String, pub launch_at_login: bool, pub keyboard: String }
-impl Default for PanelSettings { fn default() -> Self { Self { shortcut: "Ctrl+Shift+Semicolon".into(), launch_at_login: true, keyboard: String::new() } } }
+pub struct PanelSettings { pub shortcut: String, pub launch_at_login: bool, pub keyboard: String, pub keyboard_fallback: String }
+impl Default for PanelSettings { fn default() -> Self { Self { shortcut: "Ctrl+Shift+Semicolon".into(), launch_at_login: true, keyboard: String::new(), keyboard_fallback: String::new() } } }
 pub struct Panel;
 impl Panel {
 	pub fn conflicts(directory:&Path)->Result<serde_json::Value>{let db=Database::open(directory)?;let rows=db.meta("conflicts")?.and_then(|value|value.as_array().cloned()).unwrap_or_default().into_iter().map(|mut conflict|{let name=conflict["library"].as_str().and_then(|id|db.library(id).ok()).and_then(|library|library["name"].as_str().map(str::to_owned)).unwrap_or_else(||"Library".into());conflict["library_name"]=serde_json::json!(name);conflict}).collect::<Vec<_>>();Ok(serde_json::json!(rows))}
