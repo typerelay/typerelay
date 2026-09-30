@@ -160,10 +160,9 @@ html(lang="en")
 							h2.settings-card-title Miscellaneous
 						.setting-row#keyboard-setting(hidden)
 							.setting-copy
-								h3 Keyboard
+								label(for="keyboard") Keyboard
 								p Choose the keyboard used for expansion.
 							.setting-control
-								label.visually-hidden(for="keyboard") Keyboard
 								select#keyboard.form-select.form-select-sm(form="settings-form")
 									option(value="") Automatic selection
 									template#keyboard-option-template
