@@ -73,7 +73,7 @@ enum Commands {
     Run { #[command(flatten)] source: ConfigSource, #[arg(long, default_value = "keyd virtual keyboard")] device_name: String },
     #[cfg(target_os = "linux")]
     /// Install the Omarchy service and device access.
-    Install { #[arg(long)] dry_run: bool },
+    Install { #[arg(long)] dry_run: bool, #[arg(long)] device_name: Option<String> },
 	#[cfg(target_os = "linux")]
 	/// Remove the Omarchy installation.
 	Uninstall { #[arg(long)] dry_run: bool },
@@ -149,11 +149,11 @@ impl Cli {
                 omarchy::Session::run(typerelay_client::database::DatabaseSnapshot::open(&path)?, &device_name)?;
             },
             #[cfg(target_os = "linux")]
-            Commands::Install { dry_run } => installation::Installer::run("install", dry_run)?,
+            Commands::Install { dry_run, device_name } => installation::Installer::run("install", dry_run, device_name.as_deref())?,
 			#[cfg(target_os = "linux")]
-			Commands::Uninstall { dry_run } => installation::Installer::run("uninstall", dry_run)?,
+			Commands::Uninstall { dry_run } => installation::Installer::run("uninstall", dry_run, None)?,
 			#[cfg(target_os = "linux")]
-			Commands::Update => installation::Installer::run("update", false)?,
+			Commands::Update => installation::Installer::run("update", false, None)?,
         }
         Ok(())
     }

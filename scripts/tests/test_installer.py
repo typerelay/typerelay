@@ -33,6 +33,8 @@ class InstallerTests(unittest.TestCase):
         binary.with_name("typerelay-tui").write_bytes(b"test-tui-binary")
         self.subject = self.installer.Installer(binary, "# helper", self.home)
         self.subject.preflight = Mock()
+        self.subject.access = Mock(return_value=Mock(select_keyboard=Mock(return_value="keyd virtual keyboard")))
+        self.subject.permissions_current = Mock(return_value=True)
         self.subject.prompt = Mock(return_value=True)
         self.subject.privileged = Mock()
         self.subject.conflicts = Mock(return_value={"manual": [], "possible": [], "espanso_process": True, "espanso_enabled": True, "espanso_active": True})
@@ -233,6 +235,91 @@ class InstallerTests(unittest.TestCase):
             self.assertFalse(rule.exists())
             access.set_acl.assert_any_call(pathlib.Path("/dev/uinput"), 1234, None)
             access.set_acl.assert_any_call(pathlib.Path("/dev/input/event16"), 1234, None)
+
+    def test_keyd_free_install_and_update_keep_selected_keyboard(self):
+        self.subject.device_name = "AT Translated Set 2 keyboard"
+        self.subject.conflicts.return_value.update(espanso_process=False, espanso_enabled=False, espanso_active=False)
+        self.subject.install(False)
+        self.assertIn('--device-name "AT Translated Set 2 keyboard"', self.subject.unit.read_text())
+        self.assertEqual(json.loads(self.subject.manifest.read_text())["device_name"], self.subject.device_name)
+        self.subject.device_name = None
+        self.subject.access.return_value.select_keyboard.return_value = "AT Translated Set 2 keyboard"
+        self.subject.validate_bundle = Mock()
+        self.subject.command.return_value = subprocess.CompletedProcess([], 1, "", "")
+        with patch.object(self.installer.shutil, "which", return_value="/usr/bin/tool"):
+            self.installer.Installer.preflight(self.subject, True)
+        self.subject.access.return_value.select_keyboard.assert_called_with("AT Translated Set 2 keyboard")
+        self.subject.command.return_value = subprocess.CompletedProcess([], 0, '{"backup": null}', "")
+        bundle = self.home / "update-bundle"
+        bundle.mkdir()
+        for name in (self.subject.binary.name, "typerelay-tui"):
+            self.installer.shutil.copyfile(self.subject.binary.with_name(name), bundle / name)
+        self.subject.binary = bundle / self.subject.binary.name
+        self.subject.install(False, automatic=True)
+        self.assertIn('--device-name "AT Translated Set 2 keyboard"', self.subject.unit.read_text())
+        self.subject.privileged.assert_called_once_with("install")
+
+    def test_native_keyboard_selection_ignores_virtual_devices_and_security_key(self):
+        access = self.session_access.SessionAccess(self.home)
+        access.devices = Mock(return_value=[("AT Translated Set 2 keyboard", pathlib.Path("/dev/input/event3"), ["ID_INPUT_KEYBOARD=1", "ID_INTEGRATION=internal"]), ("TypeRelay virtual keyboard", pathlib.Path("/dev/input/event20"), ["ID_INPUT_KEYBOARD=1"]), ("Yubico YubiKey OTP+FIDO+CCID", pathlib.Path("/dev/input/event24"), ["ID_INPUT_KEYBOARD=1", "ID_INTEGRATION=external"])])
+        self.assertEqual(access.select_keyboard(), "AT Translated Set 2 keyboard")
+        self.assertIn('ATTRS{name}=="AT Translated Set 2 keyboard"', access.rules(1234))
+        self.assertNotIn("Yubico", access.rules(1234))
+        self.assertNotIn("TypeRelay virtual keyboard", access.rules(1234))
+        # Selecting a keyboard must not grant access to every keyboard.
+        self.assertEqual([name for name, _, _ in access.paths()], ["uinput", "AT Translated Set 2 keyboard"])
+
+    def test_keyd_preferred_and_ambiguous_native_selection_requires_explicit_name(self):
+        access = self.session_access.SessionAccess(self.home)
+        access.devices = Mock(return_value=[("keyd virtual keyboard", pathlib.Path("/dev/input/event16"), ["ID_INPUT_KEYBOARD=1"]), ("Built-in keyboard", pathlib.Path("/dev/input/event3"), ["ID_INPUT_KEYBOARD=1", "ID_INTEGRATION=internal"])])
+        self.assertEqual(access.select_keyboard(), "keyd virtual keyboard")
+        with self.assertRaisesRegex(RuntimeError, "Stop keyd"):
+            access.select_keyboard("Built-in keyboard")
+        access.devices.return_value = [("USB keyboard", pathlib.Path("/dev/input/event3"), ["ID_INPUT_KEYBOARD=1"]), ("Other keyboard", pathlib.Path("/dev/input/event4"), ["ID_INPUT_KEYBOARD=1"])]
+        with self.assertRaisesRegex(RuntimeError, "--device-name"):
+            access.select_keyboard()
+        self.assertEqual(access.select_keyboard("USB keyboard"), "USB keyboard")
+        access.devices.return_value.append(access.devices.return_value[0])
+        with self.assertRaisesRegex(RuntimeError, "exactly one"):
+            access.select_keyboard("USB keyboard")
+
+    def test_native_access_uninstall_restores_previously_selected_keyboards(self):
+        access = self.session_access.SessionAccess(self.home, "Built-in keyboard")
+        access.devices = Mock(return_value=[("Built-in keyboard", pathlib.Path("/dev/input/event3"), ["ID_INPUT_KEYBOARD=1"]), ("Old keyboard", pathlib.Path("/dev/input/event4"), ["ID_INPUT_KEYBOARD=1"])])
+        access.acl = Mock(return_value=None)
+        access.set_acl = Mock()
+        state = self.home / "var/lib/typerelay/access-1234.json"
+        state.parent.mkdir(parents=True)
+        state.write_text(json.dumps({"Old keyboard": "rw-"}))
+        with patch.object(self.session_access.subprocess, "run"):
+            access.persistent("install", 1234)
+            access.acl.side_effect = lambda path, uid: "rw-" if path.name == "uinput" else "r--"
+            access.persistent("uninstall", 1234)
+        access.set_acl.assert_any_call(pathlib.Path("/dev/input/event4"), 1234, "rw-")
+
+    def test_keyboard_name_cannot_broaden_device_permissions(self):
+        for name in ['*', 'Keyboard"', "Keyboard\n", "Keyboard\\", "Keyboard?"]:
+            with self.assertRaises(ValueError):
+                self.session_access.SessionAccess(self.home, name)
+
+    def test_preflight_does_not_require_keyd_and_rejects_missing_update_permissions(self):
+        self.subject.validate_bundle = Mock()
+        self.subject.command.return_value = subprocess.CompletedProcess([], 1, "", "")
+        self.subject.access.return_value.select_keyboard.return_value = "Built-in keyboard"
+        with patch.object(self.installer.shutil, "which", return_value="/usr/bin/tool"):
+            self.installer.Installer.preflight(self.subject)
+            self.assertEqual(self.subject.device_name, "Built-in keyboard")
+            self.subject.command.assert_called_once_with("pgrep", "-u", str(os.getuid()), "-x", "typerelay-tui", check=False)
+            self.subject.permissions_current.return_value = False
+            with self.assertRaisesRegex(RuntimeError, "administrator setup"):
+                self.installer.Installer.preflight(self.subject, True)
+
+    def test_embedded_permission_helper_uses_selected_device(self):
+        self.subject.permission_source = (pathlib.Path(__file__).resolve().parents[1] / "session-access.py").read_text()
+        self.subject.device_name = "Built-in keyboard"
+        access = self.installer.Installer.access(self.subject)
+        self.assertEqual(access.device_name, "Built-in keyboard")
+        self.assertIn('ATTRS{name}=="Built-in keyboard"', access.rules(1234))
 
 
 if __name__ == "__main__":

@@ -9,11 +9,11 @@ TypeRelay verifies the original window before insertion. If focus cannot be rest
 
 ## Omarchy/Hyprland
 
-- Continuous expansion is verified with Omarchy/Hyprland, keyd’s effective virtual keyboard, uinput and a US keyboard layout.
+- Continuous expansion uses Omarchy/Hyprland, a selected physical keyboard or keyd's effective virtual keyboard, uinput and a US keyboard layout. Keyd is optional; see [keyboard selection](./omarchy).
 - The installer configures only the required keyboard, pointer-cancellation and uinput access. The engine runs as a systemd user service, never as root.
 - A pointer click, focus change or lock screen cancels a pending abbreviation. Keyboard reconnects are handled by the managed service restart path.
 - Running Espanso at the same time is unsafe. TypeRelay detects its virtual device, sends a notification and stops instead of repeatedly restarting. Stop Espanso, then explicitly restart TypeRelay.
-- AutoKey, xremap, kmonad and other input injectors are reported during installation but cannot all be detected at runtime. keyd and Fcitx are expected components.
+- AutoKey, xremap, kmonad and other input injectors are reported during installation but cannot all be detected at runtime. keyd and Fcitx are compatible components.
 - Closing or quitting the panel does not stop the separate expansion service. Use `systemctl --user stop typerelay` to stop continuous expansion.
 - The TUI suppresses expansion only in its own registered live terminal window.
 - The generic Linux GUI packages do not install the input service. Other compositors and non-US layouts are not supported targets.

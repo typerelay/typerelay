@@ -106,6 +106,30 @@ impl Session {
 
     const MODIFIERS: [KeyCode; 8] = [KeyCode::KEY_LEFTSHIFT, KeyCode::KEY_RIGHTSHIFT, KeyCode::KEY_LEFTCTRL, KeyCode::KEY_RIGHTCTRL, KeyCode::KEY_LEFTALT, KeyCode::KEY_RIGHTALT, KeyCode::KEY_LEFTMETA, KeyCode::KEY_RIGHTMETA];
 
+    fn caps_control(devices: &serde_json::Value, device_name: &str) -> Result<bool> {
+        let name = device_name.to_lowercase().replace([' ', '\n', ','], "-");
+        let keyboards = devices["keyboards"].as_array().context("No Hyprland keyboard information")?;
+        let keyboard = keyboards.iter().find(|keyboard| keyboard["name"].as_str() == Some(&name)).context("Selected keyboard is unavailable in Hyprland")?;
+        let native = |keyboard: &serde_json::Value| keyboard["options"].as_str().unwrap_or_default().split(',').any(|option| matches!(option, "ctrl:nocaps" | "caps:ctrl_modifier"));
+        let caps_control = native(keyboard);
+        if let Some(output) = keyboards.iter().find(|keyboard| keyboard["name"].as_str() == Some("typerelay-virtual-keyboard")) { anyhow::ensure!(native(output) == caps_control, "Use the same native Caps-to-Ctrl options for the selected keyboard and TypeRelay virtual keyboard"); }
+        Ok(caps_control)
+    }
+
+    fn effective_key(code: u16, caps_control: bool) -> u16 {
+        if caps_control && code == KeyCode::KEY_CAPSLOCK.0 { KeyCode::KEY_LEFTCTRL.0 } else { code }
+    }
+
+    fn modifiers_down(pressed: &BTreeSet<u16>, caps_control: bool) -> bool {
+        pressed.iter().any(|code| Self::MODIFIERS.iter().any(|modifier| modifier.0 == Self::effective_key(*code, caps_control)))
+    }
+
+    fn feed_input(engine: &mut Engine, event: &InputEvent, pressed: &BTreeSet<u16>, caps_control: bool, caps: &mut bool, allowed: bool) -> FeedResult {
+        let code = KeyCode(event.code());
+        if code == KeyCode::KEY_CAPSLOCK && event.value() == 1 && !caps_control { *caps = !*caps; }
+        if *caps || Self::modifiers_down(pressed, caps_control) || !allowed || (code == KeyCode::KEY_RIGHT && event.value() == 2) { engine.feed(Input::Cancel); FeedResult::Forward } else { engine.feed_event(Self::input(code)) }
+    }
+
     fn interference_present(devices: &serde_json::Value) -> bool {
         devices["keyboards"].as_array().is_some_and(|keyboards| keyboards.iter().any(|keyboard| keyboard["name"].as_str() == Some("espanso-virtual-device")))
     }
@@ -185,9 +209,7 @@ impl Session {
         println!("Hyprland reachable: {}", Hyprland::query("locked").is_ok());
         println!("uinput writable: {}", fs::OpenOptions::new().write(true).open("/dev/uinput").is_ok());
         for (path, name) in Self::devices()? {
-            if name == "keyd virtual keyboard" {
-                println!("Keyboard: {} ({name}), readable: {}", path.display(), Device::open(&path).is_ok());
-            }
+            println!("Input: {} ({name}), readable: {}", path.display(), Device::open(&path).is_ok());
         }
         println!("Pointer/context access: {}", ContextWatch::connect().is_ok());
         Ok(())
@@ -276,6 +298,7 @@ impl Session {
         // keyd reserves vendor 0x0fac for virtual devices and ignores them, preventing feedback.
         let mut output = VirtualDevice::builder()?.name("TypeRelay virtual keyboard").input_id(InputId::new(BusType::BUS_VIRTUAL, 0x0fac, 0x5452, 1)).with_keys(keyboard.supported_keys().context("Not a keyboard")?)?.build()?;
         thread::sleep(Duration::from_millis(300));
+        let mut caps_control = Self::caps_control(&Hyprland::query("devices")?, device_name)?;
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             Self::wait_for_release(|| {
@@ -325,7 +348,10 @@ impl Session {
         eprintln!("TypeRelay running: {} snippets; configured prefix + abbreviation + Space. Ctrl+C stops. No keystrokes are logged.", store.snapshot.len());
         while running.load(Ordering::SeqCst) {
             if last_conflict_check.elapsed() >= Duration::from_secs(2) {
-                Self::check_interference(&Hyprland::query("devices")?)?;
+                let devices = Hyprland::query("devices")?;
+                Self::check_interference(&devices)?;
+                let updated = Self::caps_control(&devices, device_name)?;
+                if updated != caps_control { caps_control = updated; caps = false; engine.feed(Input::Cancel); target = None; }
                 last_conflict_check = Instant::now();
             }
             let context_changed=context.changed(target.as_deref())?;
@@ -361,7 +387,7 @@ impl Session {
                 if suppressed_space && !keys_down.contains(&KeyCode::KEY_SPACE.0) { suppressed_space = false; }
                 if suppressed_key.is_some_and(|key|!keys_down.contains(&key)) { suppressed_key = None; }
             }
-            if paste.is_none() && insertion.is_empty() && pressed.is_empty() && (buffered.is_empty() || template_wait.is_some()) && keys_down.iter().all(|key| !Self::MODIFIERS.iter().any(|modifier|modifier.0 == *key)) && let Ok(request) = panel_requests.try_recv() {
+            if paste.is_none() && insertion.is_empty() && pressed.is_empty() && (buffered.is_empty() || template_wait.is_some()) && !Self::modifiers_down(&keys_down, caps_control) && let Ok(request) = panel_requests.try_recv() {
                     if template_wait.as_ref().is_none_or(|wait|request.generation==Some(wait.generation)) && Instant::now() < request.deadline && request.generation.is_none_or(|expected| expected == input_generation) && Self::target()? == Some(request.target.clone()) {
                         engine.feed(Input::Cancel); last_input=Instant::now();
                         match request.step {
@@ -439,55 +465,51 @@ impl Session {
                 }
                 if event.value() == 0 { pressed.remove(&code.0); }
                 if event.value() == 1 { pressed.insert(code.0); input_generation = input_generation.wrapping_add(1); }
-                if event.value() == 1 && panel_shortcut.as_ref().is_some_and(|(key, groups)| *key == code.0 && groups.iter().all(|group|group.iter().any(|key|pressed.contains(key))) && pressed.iter().all(|key|*key == code.0 || groups.iter().any(|group|group.contains(key)))) && typerelay_client::panel_ipc::PanelIpc::notify() {
+                let effective_pressed: BTreeSet<_> = pressed.iter().map(|key| Self::effective_key(*key, caps_control)).collect();
+                if event.value() == 1 && panel_shortcut.as_ref().is_some_and(|(key, groups)| *key == code.0 && groups.iter().all(|group|group.iter().any(|key|effective_pressed.contains(key))) && effective_pressed.iter().all(|key|*key == code.0 || groups.iter().any(|group|group.contains(key)))) && typerelay_client::panel_ipc::PanelIpc::notify() {
                     suppressed_key = Some(code.0); engine.feed(Input::Cancel); target = None; continue;
                 }
                 if event.value() != 0 {
                     last_input = Instant::now();
 					if BrowserLease::active() { engine.feed(Input::Cancel); target = None; output.emit(&[event])?; continue; }
-                    if code == KeyCode::KEY_CAPSLOCK && event.value() == 1 { caps = !caps; }
-                    if caps || Self::MODIFIERS.iter().any(|key| pressed.contains(&key.0)) {
-                        engine.feed(Input::Cancel);
-                    } else {
-                        if context.changed(target.as_deref())? { engine.feed(Input::Cancel); target = None; }
-                        if matches!(Self::input(code), Input::Character(c) if c == engine.prefix()) { target = Self::target()?; if std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some() { eprintln!("Candidate target available: {}", target.is_some()); } }
-                        let result = if code == KeyCode::KEY_RIGHT && event.value() == 2 { engine.feed(Input::Cancel); target = None; FeedResult::Forward } else if target.is_some() { engine.feed_event(Self::input(code)) } else { engine.feed(Input::Cancel); FeedResult::Forward };
-                        if matches!(result, FeedResult::Suppress) { suppressed_key = Some(code.0); pressed.remove(&code.0); continue; }
-                        let expansion = if let FeedResult::Expand(expansion) = result { Some(expansion) } else { None };
-                        if expansion.is_some() && std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some() { eprintln!("Match found; held-key count {}", pressed.len()); }
-                        if let Some(expansion) = expansion
-                            && Self::target()? == target && !context.changed(target.as_deref())? {
-                                let destination = target.clone().unwrap();
-                                pressed.remove(&code.0);
-                                if !Self::wait_for_forwarded_keys(&mut keyboard, &mut output, &mut buffered, &mut pressed, Instant::now() + Duration::from_secs(3))? || Self::target()? != Some(destination.clone()) || context.changed(Some(&destination))? {
-                                    output.emit(&[event])?;
-                                    pressed.insert(code.0);
-                                    target = None;
-                                    continue;
-                                }
-                                suppressed_space = true;
-                                if let Some(template) = &expansion.template {
-                                    if let Some(identity) = &template.identity {
-                                        let hit = typerelay_client::panel::Hit { id: identity.id.clone(), library: identity.library.clone(), revision: identity.revision, library_name: String::new(), title: template.abbreviation.clone(), abbreviation: template.abbreviation.clone(), preview: String::new() };
-                                        let accepted = if template.prompted { typerelay_client::panel_ipc::PanelIpc::prompt(typerelay_client::panel_ipc::Prompt { hit, target: destination, erase: expansion.erase, generation:input_generation, created_ms:std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis() }) } else {
-                                            let tx=template_tx.clone(); let erase=expansion.erase; let generation=input_generation; let started=Instant::now();
+                    if context.changed(target.as_deref())? { engine.feed(Input::Cancel); target = None; }
+                    if matches!(Self::input(code), Input::Character(c) if c == engine.prefix()) { target = Self::target()?; if std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some() { eprintln!("Candidate target available: {}", target.is_some()); } }
+                    let result = Self::feed_input(&mut engine, &event, &pressed, caps_control, &mut caps, target.is_some());
+                    if matches!(result, FeedResult::Suppress) { suppressed_key = Some(code.0); pressed.remove(&code.0); continue; }
+                    let expansion = if let FeedResult::Expand(expansion) = result { Some(expansion) } else { None };
+                    if expansion.is_some() && std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some() { eprintln!("Match found; held-key count {}", pressed.len()); }
+                    if let Some(expansion) = expansion
+                        && Self::target()? == target && !context.changed(target.as_deref())? {
+                            let destination = target.clone().unwrap();
+                            pressed.remove(&code.0);
+                            if !Self::wait_for_forwarded_keys(&mut keyboard, &mut output, &mut buffered, &mut pressed, Instant::now() + Duration::from_secs(3))? || Self::target()? != Some(destination.clone()) || context.changed(Some(&destination))? {
+                                output.emit(&[event])?;
+                                pressed.insert(code.0);
+                                target = None;
+                                continue;
+                            }
+                            suppressed_space = true;
+                            if let Some(template) = &expansion.template {
+                                if let Some(identity) = &template.identity {
+                                    let hit = typerelay_client::panel::Hit { id: identity.id.clone(), library: identity.library.clone(), revision: identity.revision, library_name: String::new(), title: template.abbreviation.clone(), abbreviation: template.abbreviation.clone(), preview: String::new() };
+                                    let accepted = if template.prompted { typerelay_client::panel_ipc::PanelIpc::prompt(typerelay_client::panel_ipc::Prompt { hit, target: destination, erase: expansion.erase, generation:input_generation, created_ms:std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis() }) } else {
+                                        let tx=template_tx.clone(); let erase=expansion.erase; let generation=input_generation; let started=Instant::now();
 											let (done,completion)=std::sync::mpsc::channel();template_wait=Some(TemplateWait{done:completion,target:destination.clone(),started:false,generation});
 											std::thread::spawn(move || { let result=(||->Result<()>{ let steps=typerelay_client::panel::Panel::steps_at(&Paths::config_dir()?.join("snippets"),&hit,Default::default(),false,typerelay_client::templates::Templates::clock())?; anyhow::ensure!(started.elapsed()<Duration::from_secs(2),"Template preparation expired");typerelay_client::panel_ipc::PanelIpc::execute(&tx,&hit,&destination,steps,erase,Some(generation)) })().map_err(|error|error.to_string()); if let Err(error)=&result { eprintln!("Template insertion cancelled: {error}"); }let _=done.send(result); }); true
-                                        };
-                                        if accepted { target=None; break; }
-                                    }
-                                    eprintln!("Prompted expansion requires the TypeRelay panel; abbreviation left unchanged");
-                                    std::thread::spawn(||{let _=std::process::Command::new("notify-send").args(["TypeRelay","Prompted expansion requires the TypeRelay panel. Your abbreviation was left unchanged."]).output();});
-                                    output.emit(&Self::stroke(KeyCode::KEY_SPACE,false))?; target=None; continue;
+                                    };
+                                    if accepted { target=None; break; }
                                 }
-                                if expansion.requires_paste() {
-                                    paste = Some(PasteState { job: PasteJob::start(expansion.text.clone()), expansion, target: target.clone(), reply: None, generation:input_generation, started: false, sent: false, cancelled: false });
-                                } else {
-                                    insertion = Self::inject(&expansion, None)?; usage=Some(expansion);
-                                }
-                                target = None;
-                                break;
-                        }
+                                eprintln!("Prompted expansion requires the TypeRelay panel; abbreviation left unchanged");
+                                std::thread::spawn(||{let _=std::process::Command::new("notify-send").args(["TypeRelay","Prompted expansion requires the TypeRelay panel. Your abbreviation was left unchanged."]).output();});
+                                output.emit(&Self::stroke(KeyCode::KEY_SPACE,false))?; target=None; continue;
+                            }
+                            if expansion.requires_paste() {
+                                paste = Some(PasteState { job: PasteJob::start(expansion.text.clone()), expansion, target: target.clone(), reply: None, generation:input_generation, started: false, sent: false, cancelled: false });
+                            } else {
+                                insertion = Self::inject(&expansion, None)?; usage=Some(expansion);
+                            }
+                            target = None;
+                            break;
                     }
                 }
                 output.emit(&[event])?;
@@ -518,6 +540,30 @@ mod tests {
         assert!(!Session::interference_present(&normal));
         let conflict = serde_json::json!({"keyboards": [{"name": "espanso-virtual-device"}]});
         assert!(Session::interference_present(&conflict));
+    }
+    #[test]
+    fn native_caps_control_shortcuts_do_not_latch_caps_or_expand_while_held() {
+        let devices = serde_json::json!({"keyboards": [{"name": "at-translated-set-2-keyboard", "options": "ctrl:nocaps,shift:both_capslock_cancel"}, {"name": "other-keyboard", "options": ""}]});
+        let caps_control = Session::caps_control(&devices, "AT Translated Set 2 keyboard").unwrap();
+        assert!(caps_control);
+        assert!(!Session::caps_control(&devices, "Other keyboard").unwrap());
+        let incompatible = serde_json::json!({"keyboards": [{"name": "at-translated-set-2-keyboard", "options": "ctrl:nocaps"}, {"name": "typerelay-virtual-keyboard", "options": ""}]});
+        assert!(Session::caps_control(&incompatible, "AT Translated Set 2 keyboard").is_err());
+        let mut engine = Engine::new(typerelay_core::Snapshot::new(vec![typerelay_core::Snippet { trigger: "brb".into(), replacement: "Be right back.".into() }]).unwrap());
+        let mut caps = false;
+        let held = BTreeSet::from([KeyCode::KEY_CAPSLOCK.0]);
+        assert!(Session::modifiers_down(&held, caps_control));
+        Session::feed_input(&mut engine, &InputEvent::new(EventType::KEY.0, KeyCode::KEY_CAPSLOCK.0, 1), &held, caps_control, &mut caps, true);
+        let keys = [KeyCode::KEY_SEMICOLON, KeyCode::KEY_B, KeyCode::KEY_R, KeyCode::KEY_B, KeyCode::KEY_SPACE];
+        for key in keys { assert!(!matches!(Session::feed_input(&mut engine, &InputEvent::new(EventType::KEY.0, key.0, 1), &held, caps_control, &mut caps, true), FeedResult::Expand(_))); }
+        assert!(!caps, "Native Ctrl must not toggle TypeRelay's Caps Lock state");
+        let released = BTreeSet::new();
+        assert!(!Session::modifiers_down(&released, caps_control));
+        let mut expansion = None;
+        for key in keys { if let FeedResult::Expand(value) = Session::feed_input(&mut engine, &InputEvent::new(EventType::KEY.0, key.0, 1), &released, caps_control, &mut caps, true) { expansion = Some(value); } }
+        assert_eq!(expansion.unwrap().text, "Be right back.");
+        Session::feed_input(&mut engine, &InputEvent::new(EventType::KEY.0, KeyCode::KEY_CAPSLOCK.0, 1), &held, false, &mut caps, true);
+        assert!(caps, "An unremapped Caps Lock retains its existing behavior");
     }
     #[test]
     fn startup_waits_for_launch_key_release_and_a_stable_idle_period() {

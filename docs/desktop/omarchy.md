@@ -1,6 +1,6 @@
 ---
 title: "Install TypeRelay on Omarchy"
-description: "Install, update, preview, operate, or uninstall TypeRelay on Omarchy, including systemd services, keyd and uinput permissions, and local files."
+description: "Install, update, preview, operate, or uninstall TypeRelay on Omarchy, including systemd services, keyboard and uinput permissions, and local files."
 ---
 
 # Omarchy installation and uninstall
@@ -44,7 +44,7 @@ typerelay install
 
 From a fresh checkout, first build with `cargo build --workspace --bins --release --locked`, then run
 `./target/release/typerelay install`. The installer is embedded in the executable;
-it does not need the checkout afterward. Python 3, systemd, keyd, acl, udev, modprobe,
+it does not need the checkout afterward. Python 3, systemd, acl, udev, modprobe,
 notify-send and sudo or pkexec must be available. Building the panel also requires Node.js,
 pnpm, GTK 3 and WebKitGTK 4.1 development packages. Omarchy provides the runtime dependencies.
 
@@ -52,7 +52,22 @@ The installer prints the exact paths and asks before proceeding. It also asks be
 stopping manual TypeRelay clients or stopping/disabling Espanso. Possible conflicts with
 AutoKey, xremap and kmonad are reported but are never silently killed. These checks do not
 detect every possible third-party text expander or input injector. Keyd and Fcitx are
-expected components, not competing expanders.
+compatible components, not competing expanders. Keyd is optional.
+
+When keyd is running, TypeRelay selects its effective virtual keyboard. Without keyd,
+the installer selects a single built-in keyboard, or a single physical keyboard if no
+built-in keyboard exists. Ambiguous selection requires an exact device name:
+
+```fish
+typerelay install --device-name 'AT Translated Set 2 keyboard'
+```
+
+The selected keyboard is saved for future updates. Direct input expands only on that
+keyboard; other keyboards keep working normally. Stop keyd before selecting physical
+input. Native Caps-to-Ctrl (`ctrl:nocaps` or `caps:ctrl_modifier`) is supported; use the
+same option for the selected keyboard and TypeRelay's virtual keyboard, normally by
+setting it globally in Hyprland. Caps shortcuts cancel pending abbreviations, and
+expansion resumes after releasing Caps. Other native remappings are not supported.
 
 Administrator authentication is requested only to install scoped device-access rules.
 The expander runs under a **systemd user service**, never as root. It starts with the
@@ -68,7 +83,7 @@ in the service file. The installer imports the current session values when avail
 - `~/.config/systemd/user/typerelay.service`: graphical-session service.
 - `~/.config/typerelay/snippets/`: your library SQLite database and related storage.
 - `~/.local/share/typerelay/`: installer state and the device-access helper.
-- `/etc/udev/rules.d/99-typerelay-<uid>.rules`: access for the effective keyd keyboard,
+- `/etc/udev/rules.d/99-typerelay-<uid>.rules`: access for the selected keyboard,
   pointer devices used for cancellation, and `/dev/uinput`.
 - `/etc/modules-load.d/typerelay-<uid>.conf`: load uinput at boot.
 - `/var/lib/typerelay/access-<uid>.json`: previous per-user ACL entries for uninstall.

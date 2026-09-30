@@ -11,23 +11,42 @@ import subprocess
 class SessionAccess:
     marker = "# Managed by TypeRelay"
 
-    def __init__(self, root="/"):
+    def __init__(self, root="/", device_name="keyd virtual keyboard"):
         self.root = pathlib.Path(root)
+        if not device_name or any(c in device_name for c in '\n\r\0"\\*?[]'):
+            raise ValueError("Keyboard name contains unsupported udev-rule characters")
+        self.device_name = device_name
 
-    def paths(self):
-        paths = [("uinput", pathlib.Path("/dev/uinput"), "rw")]
-        for entry in pathlib.Path("/sys/class/input").glob("event*"):
-            path = pathlib.Path("/dev/input") / entry.name
+    def devices(self):
+        for entry in (self.root / "sys/class/input").glob("event*"):
+            path = self.root / "dev/input" / entry.name
             name = (entry / "device/name").read_text().strip()
             properties = subprocess.check_output(["/usr/bin/udevadm", "info", "--query=property", "--name", str(path)], text=True).splitlines()
-            if name == "keyd virtual keyboard" or any(p in properties for p in ["ID_INPUT_MOUSE=1", "ID_INPUT_TOUCHPAD=1", "ID_INPUT_TOUCHSCREEN=1"]):
+            yield name, path, properties
+
+    def select_keyboard(self, requested=None):
+        keyboards = [(name, properties) for name, _, properties in self.devices() if "ID_INPUT_KEYBOARD=1" in properties]
+        keyd = [name for name, _ in keyboards if name == "keyd virtual keyboard"]
+        if requested and keyd and requested != "keyd virtual keyboard":
+            raise RuntimeError("Stop keyd before selecting a physical keyboard")
+        candidates = [name for name, _ in keyboards if name == requested] if requested else keyd or [name for name, properties in keyboards if "ID_INTEGRATION=internal" in properties] or [name for name, _ in keyboards if "virtual" not in name.lower()]
+        if len(candidates) != 1:
+            choices = ", ".join(name for name, _ in keyboards)
+            raise RuntimeError("Select exactly one keyboard with --device-name. Available keyboards: " + choices)
+        self.__init__(self.root, candidates[0])
+        return self.device_name
+
+    def paths(self, previous=()):
+        paths = [("uinput", self.root / "dev/uinput", "rw")]
+        for name, path, properties in self.devices():
+            if name == self.device_name or name in previous or any(p in properties for p in ["ID_INPUT_MOUSE=1", "ID_INPUT_TOUCHPAD=1", "ID_INPUT_TOUCHSCREEN=1"]):
                 paths.append((name, path, "r"))
         return paths
 
     def rules(self, uid):
         lines = [self.marker]
         access = f'RUN+="/usr/bin/setfacl -m u:{uid}:r $env{{DEVNAME}}"'
-        lines.append('SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="keyd virtual keyboard", ' + access)
+        lines.append(f'SUBSYSTEM=="input", KERNEL=="event*", ATTRS{{name}}=="{self.device_name}", ' + access)
         for kind in ["MOUSE", "TOUCHPAD", "TOUCHSCREEN"]:
             lines.append(f'SUBSYSTEM=="input", KERNEL=="event*", ENV{{ID_INPUT_{kind}}}=="1", ' + access)
         lines.append(f'SUBSYSTEM=="misc", KERNEL=="uinput", RUN+="/usr/bin/setfacl -m u:{uid}:rw $env{{DEVNAME}}"')
@@ -82,7 +101,7 @@ class SessionAccess:
             subprocess.run(["/usr/bin/udevadm", "control", "--reload"], check=True)
             if state_path.exists():
                 previous = json.loads(state_path.read_text())
-                for name, path, permission in self.paths():
+                for name, path, permission in self.paths(previous):
                     if self.acl(path, uid) == permission.ljust(3, "-"):
                         self.set_acl(path, uid, previous.get(name))
                 state_path.unlink()
@@ -92,7 +111,9 @@ class SessionAccess:
         parser = argparse.ArgumentParser()
         parser.add_argument("action", choices=["grant", "revoke", "install", "uninstall", "render-rules"])
         parser.add_argument("user")
+        parser.add_argument("--device-name", default=self.device_name)
         args = parser.parse_args()
+        self.__init__(device_name=args.device_name)
         account = pwd.getpwnam(args.user)
         if args.action == "render-rules":
             print(self.rules(account.pw_uid), end="")

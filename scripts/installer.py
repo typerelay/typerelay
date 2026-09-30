@@ -6,7 +6,6 @@ import json
 import os
 import pathlib
 import pwd
-import runpy
 import shutil
 import signal
 import subprocess
@@ -18,7 +17,7 @@ import time
 class Installer:
     marker = "# Managed by TypeRelay"
 
-    def __init__(self, binary, permission_source, home=None):
+    def __init__(self, binary, permission_source, home=None, device_name=None):
         self.home = pathlib.Path(home or pathlib.Path.home())
         config = pathlib.Path(os.environ.get("XDG_CONFIG_HOME", self.home / ".config"))
         data = pathlib.Path(os.environ.get("XDG_DATA_HOME", self.home / ".local/share"))
@@ -31,6 +30,12 @@ class Installer:
         self.helper = self.data / "session-access.py"
         self.binary = pathlib.Path(binary).resolve()
         self.permission_source = permission_source
+        self.device_name = device_name
+
+    def access(self):
+        namespace = {"__name__": "typerelay_session_access"}
+        exec(self.permission_source, namespace)
+        return namespace["SessionAccess"](device_name=self.device_name or "keyd virtual keyboard")
 
     def artifacts(self):
         artifacts = [("typerelay", self.binary, self.destination), ("typerelay-tui", self.binary.with_name("typerelay-tui"), self.destination.with_name("typerelay-tui"))]
@@ -82,7 +87,7 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-ExecStart={self.quote(self.destination)} run --dir {self.quote(self.snippets)}
+ExecStart={self.quote(self.destination)} run --dir {self.quote(self.snippets)} --device-name {self.quote(self.device_name or "keyd virtual keyboard")}
 Restart=on-failure
 RestartSec=3
 RestartPreventExitStatus=78
@@ -131,7 +136,7 @@ WantedBy=graphical-session.target
     def permissions_current(self):
         try:
             uid = os.getuid()
-            access = runpy.run_path(str(self.helper))["SessionAccess"]()
+            access = self.access()
             rule = pathlib.Path(f"/etc/udev/rules.d/99-typerelay-{uid}.rules")
             module = pathlib.Path(f"/etc/modules-load.d/typerelay-{uid}.conf")
             saved = pathlib.Path(f"/var/lib/typerelay/access-{uid}.json")
@@ -143,7 +148,7 @@ WantedBy=graphical-session.target
         if action == "install" and self.permissions_current():
             print("Existing persistent input access is current; no administrator changes needed.")
             return
-        arguments = ["/usr/bin/python3", str(self.helper), action, pwd.getpwuid(os.getuid()).pw_name]
+        arguments = ["/usr/bin/python3", str(self.helper), action, pwd.getpwuid(os.getuid()).pw_name, "--device-name", self.device_name or "keyd virtual keyboard"]
         if shutil.which("sudo"):
             arguments.insert(0, "sudo")
         elif shutil.which("pkexec"):
@@ -211,8 +216,11 @@ WantedBy=graphical-session.target
         missing = [name for name in required if not shutil.which(name)]
         if missing:
             raise RuntimeError("Missing dependencies: " + ", ".join(missing))
-        if not automatic and self.command("systemctl", "is-active", "keyd", check=False).returncode:
-            raise RuntimeError("This Omarchy client requires keyd to be running")
+        if self.device_name is None and self.manifest.exists():
+            self.device_name = json.loads(self.manifest.read_text()).get("device_name")
+        self.device_name = self.access().select_keyboard(self.device_name)
+        if automatic and not self.permissions_current():
+            raise RuntimeError("Keyboard access needs administrator setup; run typerelay install before updating")
         if self.unit.exists() and not self.unit.read_text().startswith(self.marker):
             raise RuntimeError("Existing typerelay.service is unmanaged; preserve/move it before installing")
         self.validate_bundle()
@@ -230,6 +238,7 @@ WantedBy=graphical-session.target
         conflicts = self.conflicts()
         print("Binaries: " + ", ".join(str(destination) for _, _, destination in self.artifacts()) + f"\nService: {self.unit}\nSnippets: {self.snippets}")
         print("Starts with your graphical login, runs as your user, restarts after failures.")
+        print("Keyboard: " + (self.device_name or "keyd virtual keyboard"))
         print("Administrator access installs scoped udev rules and loads uinput at boot.")
         if conflicts["manual"]:
             print("Running manual TypeRelay client(s): " + ", ".join(map(str, conflicts["manual"])))
@@ -260,6 +269,7 @@ WantedBy=graphical-session.target
         # Save recovery information before any privileged mutation.
         previous["binaries"] = {**previous.get("binaries", {}), **{name: hashlib.sha256(source.read_bytes()).hexdigest() for name, source, _ in self.artifacts()}}
         previous["binary_sha256"] = previous["binaries"]["typerelay"]
+        previous["device_name"] = self.device_name or "keyd virtual keyboard"
         self.write_private(self.manifest, json.dumps(previous, indent=2) + "\n")
         if not automatic:
             self.privileged("install")
@@ -367,6 +377,7 @@ WantedBy=graphical-session.target
             print("No managed installation found. Snippets and standalone binary left untouched.")
             return
         state = json.loads(self.manifest.read_text())
+        self.device_name = state.get("device_name", "keyd virtual keyboard")
         print("Stop TypeRelay clients and remove its service, managed binary and persistent input rules.")
         print("KEEP all snippet/config files: " + str(self.config))
         if dry_run:
@@ -417,12 +428,13 @@ WantedBy=graphical-session.target
         parser.add_argument("binary")
         parser.add_argument("permission_source")
         parser.add_argument("--dry-run", action="store_true")
+        parser.add_argument("--device-name")
         args = parser.parse_args()
         if os.getuid() == 0:
             raise RuntimeError("Run the installer as your desktop user, not root")
         if args.action != "update" and not args.dry_run and not sys.stdin.isatty():
             raise RuntimeError("Run typerelay install/uninstall from an interactive terminal")
-        installer = cls(args.binary, args.permission_source)
+        installer = cls(args.binary, args.permission_source, device_name=args.device_name)
         if args.action == "update":
             installer.install(False, automatic=True)
         else:
