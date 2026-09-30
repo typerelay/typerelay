@@ -16,7 +16,7 @@ TypeRelay verifies the original window before insertion. If focus cannot be rest
 - AutoKey, xremap, kmonad and other input injectors are reported during installation but cannot all be detected at runtime. keyd and Fcitx are compatible components.
 - Closing or quitting the panel does not stop the separate expansion service. Use `systemctl --user stop typerelay` to stop continuous expansion.
 - The TUI suppresses expansion only in its own registered live terminal window.
-- The generic Linux GUI packages do not install the input service. Other compositors and non-US layouts are not supported targets.
+- AppImage, deb and rpm bundle the engine, TUI and panel; first launch offers input-service setup. Other compositors and non-US layouts are not supported targets.
 
 ## macOS
 

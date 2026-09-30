@@ -16,6 +16,29 @@ use tauri_plugin_global_shortcut::GlobalShortcutExt;
 #[derive(Default)]
 struct Runtime { root:PathBuf, target:Mutex<Option<platform::Target>>, last:Mutex<Option<platform::Target>>, erase:Mutex<usize>, busy:AtomicBool, syncing:AtomicBool, authenticating:AtomicBool, cancel_auth:AtomicBool, auth_error:Mutex<String>, prompting:AtomicBool, prompt_hit:Mutex<Option<Hit>>, settings:AtomicBool, status:Mutex<String>, capture_status:Mutex<String>, #[cfg(any(target_os="windows",target_os="macos"))] expansion_started:AtomicBool, #[cfg(target_os="linux")] registration:Mutex<Option<typerelay_client::desktop::Registration>> }
 impl Runtime {
+	#[cfg(target_os="linux")]
+	fn setup_linux(app: tauri::AppHandle) {
+		if tauri::utils::platform::bundle_type().is_none() { update::schedule(app); return; }
+		std::thread::spawn(move || {
+			let result=(||->Result<()> {
+				let engine=std::env::current_exe()?.with_file_name("typerelay");
+				let launcher=std::env::var_os("APPIMAGE").map(PathBuf::from).unwrap_or(std::env::current_exe()?);
+				ensure!(engine.is_file(),"The Linux package is missing the expansion engine");
+				let arguments=[std::ffi::OsStr::new("setup"),std::ffi::OsStr::new("--panel-launcher"),launcher.as_os_str()];
+				if std::process::Command::new(&engine).args(arguments).arg("--check").output()?.status.success() { return Ok(()); }
+				let automatic=std::process::Command::new(&engine).args(arguments).arg("--automatic").output()?;
+				if automatic.status.success() { return Ok(()); }
+				let accepted=app.dialog().message("Set up the bundled expansion engine and TUI? A terminal will open for keyboard access and service setup.").title("Set up Typerelay").buttons(tauri_plugin_dialog::MessageDialogButtons::OkCancelCustom("Set up".into(),"Later".into())).blocking_show();
+				ensure!(accepted,"Expansion setup postponed. Restart Typerelay to set it up.");
+				let status=std::process::Command::new("foot").args(["--title=Typerelay setup"]).arg(&engine).args(arguments).status().context("Could not open the setup terminal (foot)")?;
+				ensure!(status.success(),"Expansion setup did not complete. Restart Typerelay to retry.");
+				ensure!(std::process::Command::new(&engine).args(arguments).arg("--check").output()?.status.success(),"Expansion setup was cancelled or incomplete. Restart Typerelay to retry.");
+				Ok(())
+			})();
+			if let Err(error)=result { *app.state::<Runtime>().status.lock().unwrap()=error.to_string(); let _=app.emit("panel-error",error.to_string()); }
+			update::schedule(app);
+		});
+	}
 	fn update_capture(&self,captured:Result<Option<platform::Target>>) {
 		let (target,message)=match captured {
 			Ok(target)=>(target,String::new()),
@@ -374,7 +397,10 @@ fn main() {
         if let Err(error)=Runtime::shortcut(app.handle(),None,&config.shortcut){*app.state::<Runtime>().status.lock().unwrap()=error.to_string();}
         if config.launch_at_login && let Err(error)=app.autolaunch().enable(){*app.state::<Runtime>().status.lock().unwrap()=format!("Could not enable launch at login: {error}");}
 		if let Err(error)=tray::install(app.handle()){*app.state::<Runtime>().status.lock().unwrap()=format!("Tray unavailable: {error}. Use the shortcut or launcher.");}
+		#[cfg(not(target_os="linux"))]
 		update::schedule(app.handle().clone());
+		#[cfg(target_os="linux")]
+		Runtime::setup_linux(app.handle().clone());
         let handle=app.handle().clone();
         std::thread::spawn(move||loop { if let Some(window)=handle.get_webview_window("panel")&& !window.is_visible().unwrap_or(false)&& let Ok(target)=platform::Target::capture(){*handle.state::<Runtime>().last.lock().unwrap()=Some(target);} std::thread::sleep(std::time::Duration::from_millis(150)); });
         #[cfg(target_os="linux")]

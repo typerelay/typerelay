@@ -11,7 +11,7 @@ Create an account when sign-up is available, or sign in with password, Magic Lin
 
 ## 2. Install the desktop app
 
-Install the package for your operating system. On macOS, grant Accessibility and Input Monitoring when prompted. On Omarchy, the installer configures the user service and scoped input-device permissions. Windows needs no equivalent permission, but cannot insert into an elevated application from a normally running TypeRelay process.
+Install the package for your operating system. On macOS, grant Accessibility and Input Monitoring when prompted. On Linux, first-launch setup configures the user service and scoped input-device permissions. Windows needs no equivalent permission, but cannot insert into an elevated application from a normally running TypeRelay process.
 
 See [Desktop installation](../desktop/installation) and [Operating system notes](../desktop/platforms) before rollout.
 

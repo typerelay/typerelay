@@ -7,11 +7,15 @@ description: "Install TypeRelay Desktop on Omarchy, macOS, or Windows, grant req
 
 Install only an artifact whose version, platform and architecture match the release announcement. The engine, panel and TUI must use the same version; desktop/server sync requires protocol 6. Test artifacts may be unsigned. Production releases should be signed, and macOS releases notarized.
 
-## Omarchy/Hyprland
+## Linux
 
-Run `install.sh` from a terminal to download and install the latest matching prebuilt engine, panel and TUI. It verifies the release checksum, opens the interactive installer, configures a systemd user service and adds narrowly scoped device permissions. It never runs TypeRelay as root. The commands work in fish, bash and zsh; see the [Omarchy installation and uninstall guide](./omarchy).
+Download [AppImage](https://transfer.typerelay.com/apps/typerelay-desktop-latest-linux-x64.AppImage), [deb](https://transfer.typerelay.com/apps/typerelay-desktop-latest-linux-x64.deb), or [rpm](https://transfer.typerelay.com/apps/typerelay-desktop-latest-linux-x64.rpm), in that order of preference. Each x86_64 package includes the engine, TUI, panel, tray menu, sync, settings and update checking. Omarchy uses AppImage.
 
-The generic Linux AppImage or DEB installs only the GUI. It does not configure the Omarchy input service, keyd/uinput permissions or non-Hyprland insertion support.
+Make the AppImage executable and keep it at a stable path before launching. Install deb/rpm with the distribution package manager. First launch opens a setup prompt for the per-user expansion service and scoped keyboard permissions. Setup uses a foot terminal and requires Python 3, systemd, udev, ACL tools, kmod and notify-send; these are provided by Omarchy or declared as deb/rpm dependencies. Expansion currently supports Hyprland with a US keyboard layout.
+
+The engine and TUI are staged under `~/.local/bin` so they remain available after an AppImage unmounts. The panel stays in its installed package. After a package update, launch TypeRelay to refresh the matching engine and TUI automatically. If keyboard access needs repair, setup asks again. Close the TUI before upgrading.
+
+When moving from the former standalone installer, quit the old panel first, then launch the new package and complete setup. Existing snippets and settings are preserved. See [Linux service management](./omarchy) for keyboard selection, service commands and removal.
 
 ## macOS
 
@@ -43,6 +47,6 @@ The Windows uninstaller removes the startup entry and TUI shortcut but preserves
 
 ## Upgrade and uninstall behavior
 
-The app silently downloads and verifies signed updates, then asks once: **Install and restart** or **Later**. Choosing **Later** keeps the download ready and pauses automatic reminders for that version until the next launch. Use **Install update…** in the tray/menu-bar menu to reopen the prompt anytime. Cached downloads are verified again before reuse. Operating-system permission dialogs may still appear. On Omarchy, a managed update replaces the engine, TUI and panel together and rolls back on failure. Do not mix standalone binaries from different releases.
+The app silently downloads and verifies signed updates, then asks once: **Install and restart** or **Later**. Choosing **Later** keeps the download ready and pauses automatic reminders for that version until the next launch. Use **Install update…** in the tray/menu-bar menu to reopen the prompt anytime. Cached downloads are verified again before reuse. Operating-system permission dialogs may still appear. Linux updates use the installed package format: AppImage, deb or rpm. deb/rpm installation may request administrator access. After restart, the bundled engine and TUI refresh together through the existing service setup. Legacy standalone installations retain their signed update path. Do not mix standalone binaries from different releases.
 
 Uninstalling preserves snippets, settings and sync credentials unless you remove the platform data directory yourself. Back up or export important libraries before deleting that directory.

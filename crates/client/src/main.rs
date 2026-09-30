@@ -80,6 +80,9 @@ enum Commands {
 	#[cfg(target_os = "linux")]
 	#[command(hide = true)]
 	Update,
+	#[cfg(target_os = "linux")]
+	#[command(hide = true)]
+	Setup { #[arg(long)] panel_launcher: std::path::PathBuf, #[arg(long)] check: bool, #[arg(long)] automatic: bool },
 }
 
 #[derive(Subcommand)]
@@ -149,11 +152,13 @@ impl Cli {
                 omarchy::Session::run(typerelay_client::database::DatabaseSnapshot::open(&path)?, &device_name)?;
             },
             #[cfg(target_os = "linux")]
-            Commands::Install { dry_run, device_name } => installation::Installer::run("install", dry_run, device_name.as_deref())?,
+            Commands::Install { dry_run, device_name } => installation::Installer::run("install", dry_run, device_name.as_deref(), None, false, false)?,
 			#[cfg(target_os = "linux")]
-			Commands::Uninstall { dry_run } => installation::Installer::run("uninstall", dry_run, None)?,
+			Commands::Uninstall { dry_run } => installation::Installer::run("uninstall", dry_run, None, None, false, false)?,
 			#[cfg(target_os = "linux")]
-			Commands::Update => installation::Installer::run("update", false, None)?,
+			Commands::Update => installation::Installer::run("update", false, None, None, false, false)?,
+			#[cfg(target_os = "linux")]
+			Commands::Setup { panel_launcher, check, automatic } => installation::Installer::run("setup", false, None, Some(&panel_launcher), check, automatic)?,
         }
         Ok(())
     }

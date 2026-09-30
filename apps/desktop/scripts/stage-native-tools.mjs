@@ -9,9 +9,9 @@ export class NativeTools {
 	static rustflags = 'CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS';
 	static environment(environment = process.env) { return { ...environment, [NativeTools.rustflags]: [environment[NativeTools.rustflags], '-C target-feature=+crt-static'].filter(Boolean).join(' ') }; }
 	static plan(target, { platform = process.platform, environment = process.env, root = NativeTools.root } = {}) {
-		const windows = target === 'x86_64-pc-windows-msvc'; const macos = ['aarch64-apple-darwin', 'x86_64-apple-darwin'].includes(target);
-		if (!windows && !macos) throw new Error('Unsupported native-tools target');
-		const names = windows ? ['typerelay', 'typerelay-tui'] : ['typerelay-tui'];
+		const windows = target === 'x86_64-pc-windows-msvc'; const linux = target === 'x86_64-unknown-linux-gnu'; const macos = ['aarch64-apple-darwin', 'x86_64-apple-darwin'].includes(target);
+		if (!windows && !macos && !linux) throw new Error('Unsupported native-tools target');
+		const names = windows || linux ? ['typerelay', 'typerelay-tui'] : ['typerelay-tui'];
 		const targetRoot = environment.CARGO_TARGET_DIR ? path.resolve(root, environment.CARGO_TARGET_DIR) : path.join(root, 'target');
 		const release = path.join(targetRoot, target, 'release');
 		const destination = path.join(root, 'apps/desktop/src-tauri/binaries');
@@ -37,7 +37,7 @@ export class NativeTools {
 		for (const file of plans.flatMap(plan => plan.files)) await fs.copyFile(file.source, file.destination);
 		return plans.flatMap(plan => plan.files.map(file => file.destination));
 	}
-	static hostTarget(platform = process.platform, architecture = process.arch) { if (platform === 'darwin') return architecture === 'x64' ? 'x86_64-apple-darwin' : 'aarch64-apple-darwin'; if (platform === 'win32') return 'x86_64-pc-windows-msvc'; throw new Error('Pass a supported native-tools target'); }
+	static hostTarget(platform = process.platform, architecture = process.arch) { if (platform === 'darwin') return architecture === 'x64' ? 'x86_64-apple-darwin' : 'aarch64-apple-darwin'; if (platform === 'win32') return 'x86_64-pc-windows-msvc'; if (platform === 'linux' && architecture === 'x64') return 'x86_64-unknown-linux-gnu'; throw new Error('Pass a supported native-tools target'); }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) NativeTools.stage(process.argv[2] || process.env.TAURI_ENV_TARGET_TRIPLE || NativeTools.hostTarget()).catch(error => { console.error(error.message); process.exitCode = 1; });

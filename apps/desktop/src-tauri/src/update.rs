@@ -71,6 +71,12 @@ impl Package {
 }
 
 impl UpdateState {
+    #[cfg(target_os="linux")]
+    fn linux_target(bundle: Option<tauri::utils::config::BundleType>) -> Option<String> {
+        use tauri::utils::config::BundleType;
+        let suffix=match bundle { Some(BundleType::AppImage)=>"appimage", Some(BundleType::Deb)=>"deb", Some(BundleType::Rpm)=>"rpm", _=>return None };
+        Some(format!("linux-{}-{suffix}",std::env::consts::ARCH))
+    }
     pub fn value(&self) -> Value { let status=self.status.lock().unwrap(); json!({"checking":status.busy,"installing":status.phase==Phase::Installing,"version":status.version,"phase":status.phase}) }
     pub fn menu(&self) -> (&'static str, bool) { self.status.lock().unwrap().menu() }
     fn phase(&self, app: &AppHandle, phase: Phase) { self.status.lock().unwrap().phase=phase; emit(app); }
@@ -78,7 +84,12 @@ impl UpdateState {
         let root=app.path().app_cache_dir()?.join("updates");
         // A tray action can use the feed-validated package already offered this session, even offline.
         let ready=if manual { self.ready.lock().unwrap().clone() } else { None };
-        let update=match ready { Some(update)=>Some(update), None=>app.updater_builder().timeout(Duration::from_secs(30)).build()?.check().await? };
+        let update=match ready { Some(update)=>Some(update), None=>{
+            let builder=app.updater_builder().timeout(Duration::from_secs(30));
+            #[cfg(target_os="linux")]
+            let builder=match Self::linux_target(tauri::utils::platform::bundle_type()) { Some(target)=>builder.target(target), None=>builder };
+            builder.build()?.check().await?
+        } };
         let Some(mut update)=update else {
             *self.ready.lock().unwrap()=None; self.status.lock().unwrap().version=None; Package::clear(&root)?;
             if manual { app.dialog().message("You already have the latest version.").title("Typerelay is up to date").show(|_|{}); }
@@ -117,7 +128,10 @@ fn unpack_linux(bytes: &[u8], version: &str) -> Result<PathBuf> {
 async fn install(app: AppHandle, update: Update, bytes: Vec<u8>) -> Result<()> {
     tauri::async_runtime::spawn_blocking(move||->Result<()> {
         #[cfg(target_os="linux")]
-        {let directory=unpack_linux(&bytes,&update.version)?;let engine=directory.join("typerelay");if let Err(error)=Command::new(engine).arg("update").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn(){let _=fs::remove_dir_all(directory);return Err(error.into());}app.exit(0);Ok(())}
+        {
+            if tauri::utils::platform::bundle_type().is_some() { update.install(bytes)?; app.restart(); }
+            let directory=unpack_linux(&bytes,&update.version)?;let engine=directory.join("typerelay");if let Err(error)=Command::new(engine).arg("update").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn(){let _=fs::remove_dir_all(directory);return Err(error.into());}app.exit(0);Ok(())
+        }
         #[cfg(target_os="windows")]
         {let _=app;update.install(bytes)?;Ok(())}
         #[cfg(target_os="macos")]

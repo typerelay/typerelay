@@ -1,62 +1,17 @@
 ---
-title: "Install TypeRelay on Omarchy"
+title: "Linux expansion service"
 description: "Install, update, preview, operate, or uninstall TypeRelay on Omarchy, including systemd services, keyboard and uinput permissions, and local files."
 ---
 
-# Omarchy installation and uninstall
+# Linux expansion service
 
-## Install the latest Linux release
+## Install a Linux package
 
-Requirements: Omarchy/Hyprland on x86_64, `curl`, Python 3 and `tar`. Omarchy provides the desktop runtime dependencies. No checkout, Rust compiler or Node.js installation is needed.
+Use [AppImage](https://transfer.typerelay.com/apps/typerelay-desktop-latest-linux-x64.AppImage), [deb](https://transfer.typerelay.com/apps/typerelay-desktop-latest-linux-x64.deb), or [rpm](https://transfer.typerelay.com/apps/typerelay-desktop-latest-linux-x64.rpm). All include the engine, TUI, desktop panel, tray menu and sync. Omarchy uses the same AppImage as other supported Hyprland installations. There is no separate Omarchy download.
 
-Run this command in **fish, bash or zsh** to download and start the installer:
+Follow the [installation guide](./installation). First launch offers keyboard permission and service setup. The package retains the panel; the service keeps matching engine and TUI copies under `~/.local/bin`. Keep AppImage at a stable path. Quit the old panel before migrating from a standalone installation.
 
-```sh
-curl -fsSLo /tmp/typerelay-install.sh https://raw.githubusercontent.com/typerelay/typerelay/main/scripts/install.sh && sh /tmp/typerelay-install.sh
-```
-
-The script downloads the latest prebuilt engine, TUI and desktop panel together. It checks
-the bundle's SHA-256 checksum and size against that release's metadata before opening the
-interactive installer. It does not stop the current client until you confirm the installer
-prompts. Temporary downloads are cleaned up afterward.
-
-To inspect or preview first, run only the `curl` command above. `less` displays the script;
-press **q** to return to your terminal. Then preview or install:
-
-```sh
-less /tmp/typerelay-install.sh
-```
-
-```sh
-sh /tmp/typerelay-install.sh --dry-run
-```
-
-```sh
-sh /tmp/typerelay-install.sh
-```
-
-Always invoke the installer with `sh`, including from fish. If you already downloaded
-an Omarchy `.tar.gz` archive, extract it and run `./typerelay install` in the directory
-containing `typerelay`, `typerelay-tui` and `typerelay-panel`.
-
-## Build a specific source revision
-
-Passing `--ref` selects a source build instead of the prebuilt release. This requires
-Rust/Cargo, Python 3 and `tar`; building the desktop panel also requires Node.js, pnpm,
-`pkg-config`, GTK 3 and WebKitGTK 4.1 development packages. The script resolves the tag,
-branch or commit to a pinned commit and builds with locked dependencies. For example:
-
-```sh
-sh /tmp/typerelay-install.sh --ref main
-```
-
-For a private checkout, authenticate GitHub CLI and stream the same file:
-
-```sh
-gh api --hostname github.com -H 'Accept: application/vnd.github.raw+json' 'repos/typerelay/typerelay/contents/scripts/install.sh?ref=main' | sh -s -- --ref main --dry-run
-```
-
-## Install or update an existing binary
+## Service maintenance
 
 Run from a terminal as your desktop user:
 
@@ -155,8 +110,8 @@ hash; replacements made outside the installer are preserved. Legacy engine-only 
 remain supported. Snippets and settings are preserved.
 
 The engine and TUI must be present with matching versions before installation changes any
-service state. When the panel binary is present, it must match too. The Linux script downloads
-all three by default; `--without-panel` installs only the engine and TUI. The TUI is never started as a service.
+service state. When the panel binary is present, it must match too. Linux packages include
+all three; package setup stages the engine and TUI for the user service. The TUI is never started as a service.
 
 **All snippet/configuration files are kept.** Installation never deletes legacy YAML
 or Espanso files. If installation fails after permissions were configured, installer

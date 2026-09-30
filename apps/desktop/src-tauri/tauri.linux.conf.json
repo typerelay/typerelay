@@ -1,0 +1,13 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "build": {
+    "beforeBundleCommand": "node scripts/stage-native-tools.mjs"
+  },
+  "bundle": {
+    "externalBin": ["binaries/typerelay", "binaries/typerelay-tui"],
+    "linux": {
+      "deb": {"depends": ["libwebkit2gtk-4.1-0", "python3", "acl", "udev", "kmod", "libnotify-bin", "pkexec", "foot"]},
+      "rpm": {"depends": ["webkit2gtk4.1", "python3", "acl", "systemd-udev", "kmod", "libnotify", "polkit", "foot"]}
+    }
+  }
+}

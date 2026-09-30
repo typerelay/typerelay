@@ -38,23 +38,21 @@ TypeRelay does not log keystrokes. Exported YAML is a portable copy, not live st
 | Omarchy / Hyprland, US layout | Continuous expansion, desktop panel and TUI; primary verified target |
 | Windows x64 | Continuous expansion, layout-aware desktop panel and TUI |
 | macOS Apple Silicon | Continuous expansion, desktop search and insertion panel |
-| Other Linux desktops, layouts and architectures | Continuous expansion and safe insertion are unsupported; generic GUI packages do not install the Omarchy input service |
+| Other Linux desktops, layouts and architectures | Continuous expansion and safe insertion are unsupported |
 
 See the [desktop overview](docs/desktop/index.md) and [troubleshooting guide](docs/desktop/troubleshooting.md) for current limitations.
 
-## Quick start on Omarchy
+## Quick start on Linux
 
-Requirements: Omarchy/Hyprland on x86_64, `curl`, Python 3 and `tar`. Omarchy provides the desktop runtime dependencies. No compiler or Node.js installation is needed.
+Choose a Linux x86_64 package:
 
-Run this command in **fish, bash or zsh** to download and start the installer:
+1. [AppImage](https://transfer.typerelay.com/apps/typerelay-desktop-latest-linux-x64.AppImage)
+2. [deb](https://transfer.typerelay.com/apps/typerelay-desktop-latest-linux-x64.deb)
+3. [rpm](https://transfer.typerelay.com/apps/typerelay-desktop-latest-linux-x64.rpm)
 
-```sh
-curl -fsSLo /tmp/typerelay-install.sh https://raw.githubusercontent.com/typerelay/typerelay/main/scripts/install.sh && sh /tmp/typerelay-install.sh
-```
+All three include the expansion engine, TUI, desktop search panel, tray menu, sync and update checking. For AppImage, make the downloaded file executable and launch it. Install deb/rpm with your distribution's package manager, then launch TypeRelay.
 
-The installer downloads the latest matching engine, TUI and desktop panel, verifies the release checksum, then asks before changing the system. It runs TypeRelay as your desktop user and installs scoped device permissions; the expansion service never runs as root. Read the complete [installation and uninstall guide](docs/desktop/omarchy.md) before deploying it across a team.
-
-To inspect or preview first, run only the `curl` command above. Optionally open the downloaded script with `less /tmp/typerelay-install.sh` and press **q** to exit; `less` only displays the script. Preview changes with `sh /tmp/typerelay-install.sh --dry-run`, then install with `sh /tmp/typerelay-install.sh`. Always run the script with `sh`, including from fish.
+On first launch, TypeRelay offers to configure the user expansion service and scoped keyboard permissions. Expansion currently requires Hyprland on x86_64 and a US keyboard layout; Omarchy uses the same AppImage. No separate installer download is needed. See the [installation guide](docs/desktop/installation.md) for requirements, updates and removal.
 
 Create a library and snippets with:
 

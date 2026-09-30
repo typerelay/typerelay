@@ -9,7 +9,7 @@ The TypeRelay desktop app provides a resident search panel, continuous abbreviat
 
 | Platform | Package | Current scope |
 | --- | --- | --- |
-| Omarchy/Hyprland x86_64 | Installer plus engine, panel and TUI | Primary verified target; continuous expansion uses keyd/uinput and a US keyboard layout |
+| Omarchy/Hyprland x86_64 | AppImage, deb or rpm with engine, panel and TUI | Primary verified target; continuous expansion uses keyd/uinput and a US keyboard layout |
 | macOS Apple Silicon | App/DMG with panel and TUI | Beta; Accessibility and Input Monitoring required |
 | Windows x64 | NSIS installer with panel, CLI and TUI | Beta; layout-aware expansion |
 | Other Linux desktops | GUI packages may launch | Continuous expansion and safe insertion are not supported; no non-Hyprland claim |

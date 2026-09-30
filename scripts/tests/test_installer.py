@@ -47,6 +47,66 @@ class InstallerTests(unittest.TestCase):
         self.stdout.__enter__()
         self.addCleanup(self.stdout.__exit__, None, None, None)
 
+    def test_package_setup_keeps_package_files_and_refreshes_engine_and_tui(self):
+        panel = self.home / "TypeRelay.AppImage"
+        panel.write_bytes(b"appimage")
+        self.subject.panel_launcher = panel
+        self.subject.install(False)
+        state = json.loads(self.subject.manifest.read_text())
+        self.assertEqual(state["panel_launcher"], str(panel))
+        self.assertEqual(set(state["binaries"]), {"typerelay", "typerelay-tui"})
+        self.subject.setup(check=True)
+        self.subject.binary.write_bytes(b"new engine")
+        with self.assertRaisesRegex(RuntimeError, "need updating"):
+            self.subject.setup(check=True)
+        self.subject.setup(automatic=True)
+        self.assertEqual(self.subject.destination.read_bytes(), b"new engine")
+        self.assertTrue(self.subject.binary.exists(), "Package directory must never be removed by automatic setup")
+        self.assertEqual(panel.read_bytes(), b"appimage")
+        self.subject.setup(check=True)
+        self.subject.destination.write_bytes(b"tampered")
+        with self.assertRaisesRegex(RuntimeError, "need updating"):
+            self.subject.setup(check=True)
+
+    def test_package_migration_retires_only_owned_legacy_panel(self):
+        source_panel = self.subject.binary.with_name("typerelay-panel")
+        source_panel.write_bytes(b"legacy panel")
+        with patch.object(self.installer.subprocess, "Popen"):
+            self.subject.install(False)
+        panel = self.home / "TypeRelay.AppImage"
+        panel.write_bytes(b"appimage")
+        self.subject.panel_launcher = panel
+        self.subject.setup(automatic=True)
+        self.assertFalse(self.subject.destination.with_name("typerelay-panel").exists())
+        self.assertTrue(source_panel.exists())
+        self.assertNotIn("typerelay-panel", json.loads(self.subject.manifest.read_text())["binaries"])
+        self.assertIn(str(panel), (self.home / ".local/share/applications/typerelay-panel.desktop").read_text())
+        self.subject.uninstall(False)
+        self.assertTrue(panel.exists(), "Removing expansion setup must not delete package files")
+        self.assertFalse((self.home / ".local/share/applications/typerelay-panel.desktop").exists())
+
+    def test_package_setup_preserves_unowned_panel_and_selected_keyboard(self):
+        panel = self.home / "TypeRelay.AppImage"
+        panel.write_bytes(b"appimage")
+        self.subject.panel_launcher = panel
+        self.subject.device_name = "AT Translated Set 2 keyboard"
+        self.subject.install(False)
+        unowned = self.subject.destination.with_name("typerelay-panel")
+        unowned.write_bytes(b"unrelated")
+        self.subject.setup(automatic=True)
+        self.assertEqual(unowned.read_bytes(), b"unrelated")
+        self.subject.device_name = None
+        self.subject.setup(check=True)
+        self.assertEqual(self.subject.device_name, "AT Translated Set 2 keyboard")
+
+    def test_system_package_uses_its_own_menu_entry(self):
+        panel = self.subject.binary.with_name("typerelay-panel")
+        panel.write_bytes(b"packaged panel")
+        self.subject.panel_launcher = panel
+        self.subject.setup()
+        self.assertFalse((self.home / ".local/share/applications/typerelay-panel.desktop").exists())
+        self.assertTrue(panel.exists())
+
     def test_optional_panel_install_tracks_ownership_and_uninstall_preserves_data(self):
         panel = self.subject.binary.with_name("typerelay-panel")
         panel.write_bytes(b"test-panel")
