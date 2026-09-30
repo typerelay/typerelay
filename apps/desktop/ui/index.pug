@@ -158,15 +158,15 @@ html(lang="en")
 					section#keyboard-card.settings-list(hidden)
 						.setting-section
 							h2.settings-card-title Miscellaneous
-						.setting-row#keyboard-setting(hidden)
-							.setting-copy
-								label(for="keyboard") Keyboard
-								p Choose the keyboard used for expansion.
-							.setting-control
-								select#keyboard.form-select.form-select-sm(form="settings-form")
-									option(value="") Automatic selection
-									template#keyboard-option-template
-										option
+							.setting-row#keyboard-setting(hidden)
+								.setting-copy
+									label(for="keyboard") Keyboard
+									p Choose the keyboard used for expansion.
+								.setting-control
+									select#keyboard.form-select.form-select-sm(form="settings-form")
+										option(value="") Automatic selection
+										template#keyboard-option-template
+											option
 						.settings-actions
 							button.primary(type="submit" form="settings-form") Save changes
 				section#settings-about.settings-page(hidden)
