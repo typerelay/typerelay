@@ -133,13 +133,12 @@ html(lang="en")
 				section#settings-sync.settings-page(hidden)
 					.settings-list
 						form#connect-form.setting-section
-							label(for="server") Sync server URL
-							input#server(type="url" value="https://app.typerelay.com" required)
-							.form-actions
-								button#sync.secondary(type="button") Sync now
-								span.action-group
-									button#disconnect.secondary(type="button") Disconnect
-									button#authenticate.primary(type="submit") Authenticate
+							.row
+								label(for="server") Sync server URL
+								button#disconnect.link-button(type="button" hidden) Disconnect
+							.input-group
+								input#server.form-control-sm(type="url" value="https://app.typerelay.com" required)
+								button#authenticate.primary.btn-sm(type="submit") Authenticate
 							p#connection-status.settings-description(role="status" aria-live="polite") Not connected
 						section#enroll-form.setting-section
 							h3 Libraries on this device
@@ -147,7 +146,7 @@ html(lang="en")
 							div#local-libraries
 							.form-actions
 								span
-								button#upload-selected.primary(type="button") Upload selected
+								button#sync.primary.btn-sm(type="button" disabled) Sync now
 						section#conflict-section.setting-section(hidden)
 							h3 Needs review
 							p#conflict-count.settings-description

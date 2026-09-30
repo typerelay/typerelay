@@ -273,6 +273,7 @@ test('template fields wait for confirmation, retain literal answers and clear on
 
 test('manual sync relies on notifications without adding panel status',async()=>{
  const f=await Fixture.create();try{
+  f.panel.connection('connected');
   f.panel.lastStatus='';
   await f.dom.window.document.querySelector('#sync').onclick();
   assert.ok(f.calls.some(call=>call.name==='sync_now'));
@@ -284,8 +285,9 @@ test('manual sync relies on notifications without adding panel status',async()=>
 for(const os of ['macos','windows','linux'])test(`${os} native sync events update only the initiating button`,async()=>{
  const f=await Fixture.create();try{
   f.dom.window.document.body.dataset.os=os;
+  f.panel.connection('connected');
   const button=f.dom.window.document.querySelector('#sync');
-  const server=f.dom.window.document.querySelector('#server');server.value='https://example.test';server.focus();
+  const server=f.dom.window.document.querySelector('#server');server.value='https://example.test';f.panel.query.focus();
   const before=f.calls.length;
   f.callbacks['sync-notice']({payload:{message:'Starting to sync…',running:true,visible:true}});
   assert.equal(button.disabled,true);assert.equal(button.textContent,'Syncing…');
@@ -293,7 +295,7 @@ for(const os of ['macos','windows','linux'])test(`${os} native sync events updat
    f.callbacks['sync-notice']({payload:{message,running:false,visible:true}});
    assert.equal(button.disabled,false);assert.equal(button.textContent,'Sync now');
   }
-  assert.ok(f.calls.slice(before).every(call=>['libraries','conflicts'].includes(call.name)));assert.equal(server.value,'https://example.test');assert.equal(f.dom.window.document.activeElement,server);
+  assert.ok(f.calls.slice(before).every(call=>['libraries','conflicts'].includes(call.name)));assert.equal(server.value,'https://example.test');assert.equal(f.dom.window.document.activeElement,f.panel.query);
   f.callbacks['sync-notice']({payload:{message:'Sync successful',running:false,visible:false}});
  }finally{f.dom.window.close();}
 });
@@ -339,12 +341,38 @@ for(const os of ['macos','windows','linux'])test(`${os} search gear opens native
  }finally{f.dom.window.close();}
 });
 
-test('empty upload selection reports a native error without adding a footer or reloading settings',async()=>{
+test('library sync without a selection runs normally and retains the current tab and rows',async()=>{
  const f=await Fixture.create();try{
-  await f.panel.settings(true);f.panel.settingsPage('sync');const before=f.calls.length;
-	  f.dom.window.document.querySelector('#upload-selected').click();await new Promise(resolve=>setTimeout(resolve,0));
-  const calls=f.calls.slice(before);assert.deepEqual(JSON.parse(JSON.stringify(calls)),[{name:'notify',args:{message:'Select local libraries first',error:true}}]);
-  assert.equal(f.dom.window.document.querySelector('#status'),null);assert.equal(f.dom.window.document.querySelector('#settings-sync').hidden,false);
+  await f.panel.settings(true);f.panel.settingsPage('sync');f.panel.connection('connected');
+  const original=f.panel.invoke;f.panel.invoke=async(name,args)=>name==='libraries'?[{id:'remote',name:'Synced',synced:true,snippets:2},{id:'local',name:'Local',synced:false,snippets:1}]:original(name,args);await f.panel.refreshLibraries();
+  const document=f.dom.window.document;const container=document.querySelector('#local-libraries');const remote=container.children[0];const local=container.children[1];const button=document.querySelector('#sync');container.scrollTop=30;button.focus();
+  f.panel.settings=()=>{throw Error('No settings reload allowed');};f.panel.render=()=>{throw Error('No surrounding render allowed');};const before=f.calls.length;
+  await button.onclick();await f.callbacks['sync-notice']({payload:{running:false}});
+  assert.equal(f.calls.slice(before).filter(call=>call.name==='sync_now').length,1);assert.ok(!f.calls.slice(before).some(call=>['enroll','initialize','set_settings_view'].includes(call.name)));
+  assert.equal(document.querySelector('#settings-sync').hidden,false);assert.equal(container.children[0],remote);assert.equal(container.children[1],local);assert.equal(container.scrollTop,30);assert.equal(document.activeElement,button);
+  assert.equal(button.textContent,'Sync now');assert.equal(button.closest('#enroll-form').id,'enroll-form');assert.equal(button.closest('#local-libraries'),null);assert.equal(document.querySelector('#connect-form #sync'),null);assert.equal(document.querySelector('#upload-selected'),null);
+ }finally{f.dom.window.close();}
+});
+
+test('library sync enrolls only selected local libraries and updates their existing rows',async()=>{
+ const f=await Fixture.create();try{
+  await f.panel.settings(true);f.panel.settingsPage('sync');f.panel.connection('connected');let rows=[{id:'remote',name:'Synced',synced:true,snippets:2},{id:'local',name:'Local',synced:false,snippets:1},{id:'other',name:'Other',synced:false,snippets:3}];let enrolled;
+  const original=f.panel.invoke;f.panel.invoke=async(name,args)=>{if(name==='libraries')return structuredClone(rows);if(name==='enroll'){f.calls.push({name,args});return new Promise(resolve=>{enrolled=()=>{rows[1].synced=true;resolve();};});}return original(name,args);};await f.panel.refreshLibraries();
+  const document=f.dom.window.document;const container=document.querySelector('#local-libraries');const nodes=[...container.children];const input=nodes[1].querySelector('input');input.checked=true;container.scrollTop=30;const button=document.querySelector('#sync');button.focus();
+  f.panel.settings=()=>{throw Error('No settings reload allowed');};f.panel.render=()=>{throw Error('No surrounding render allowed');};const before=f.calls.length;const request=button.onclick();
+  assert.equal(button.disabled,true);assert.equal(button.textContent,'Syncing…');await f.callbacks['sync-notice']({payload:{running:false}});assert.equal(button.disabled,true);
+  enrolled();await request;
+  const calls=f.calls.slice(before);assert.deepEqual(JSON.parse(JSON.stringify(calls.find(call=>call.name==='enroll').args)),{names:['Local']});assert.equal(calls.filter(call=>call.name==='sync_now').length,1);assert.ok(!calls.some(call=>['initialize','set_settings_view'].includes(call.name)));
+  assert.deepEqual([...container.children],nodes);assert.equal(nodes[1].querySelector('.library-sync-state').textContent,'Synced');assert.equal(input.checked,false);assert.equal(input.disabled,true);assert.equal(nodes[2].querySelector('.library-sync-state').textContent,'Local only');assert.equal(container.scrollTop,30);assert.equal(document.activeElement,button);assert.equal(button.disabled,false);
+ }finally{f.dom.window.close();}
+});
+
+test('failed library enrollment preserves the selection and restores the sync control',async()=>{
+ const f=await Fixture.create();try{
+  f.panel.connection('connected');const original=f.panel.invoke;f.panel.invoke=async(name,args)=>{if(name==='libraries')return[{id:'local',name:'Local',synced:false,snippets:1}];if(name==='enroll')throw Error('Upload failed');return original(name,args);};await f.panel.refreshLibraries();
+  const container=f.dom.window.document.querySelector('#local-libraries');const row=container.firstElementChild;const input=row.querySelector('input');input.checked=true;container.scrollTop=30;const button=f.dom.window.document.querySelector('#sync');
+  await button.onclick();assert.equal(container.firstElementChild,row);assert.equal(input.checked,true);assert.equal(container.scrollTop,30);assert.equal(button.disabled,false);assert.equal(button.textContent,'Sync now');assert.ok(!f.calls.some(call=>call.name==='sync_now'));assert.equal(f.calls.findLast(call=>call.name==='notify').args.message,'Upload failed');
+  f.panel.connection('disconnected');await f.callbacks['sync-notice']({payload:{running:false}});assert.equal(button.disabled,true);
  }finally{f.dom.window.close();}
 });
 
@@ -378,15 +406,17 @@ test('notification settings show permission and remain reachable when enabled',a
  }finally{f.dom.window.close();}
 });
 
-test('connected clients can disconnect without dismissing the panel',async()=>{
+test('connected clients disconnect through the URL label row without reloading settings',async()=>{
  const f=await Fixture.create();try{
+  await f.panel.settings(true);f.panel.settingsPage('sync');
   f.panel.configure({config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},connected:true,accessibility:false,input_monitoring:false});
-  const button=f.dom.window.document.querySelector('#disconnect');assert.equal(button.hidden,false);assert.equal(button.disabled,false);
-  button.click();await new Promise(resolve=>setTimeout(resolve,0));
+  const document=f.dom.window.document;const button=document.querySelector('#disconnect');assert.equal(button.hidden,false);assert.equal(button.disabled,false);assert.equal(button.parentElement.querySelector('label').htmlFor,'server');assert.equal(document.querySelector('#connection-status').hidden,true);assert.equal(document.querySelector('#connection-status').textContent,'');
+  assert.equal(document.querySelector('#authenticate').parentElement,document.querySelector('#server').parentElement);f.panel.settings=()=>{throw Error('No settings reload allowed');};f.panel.render=()=>{throw Error('No surrounding render allowed');};const before=f.calls.length;
+  await button.onclick();
   assert.ok(f.calls.some(call=>call.name==='disconnect'));
   assert.equal((f.panel.lastStatus||''),'Disconnected');
-  assert.ok(!f.calls.some(call=>call.name==='dismiss'));
-  f.panel.configure({config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},connected:false,accessibility:false,input_monitoring:false});assert.equal(button.hidden,false);assert.equal(button.disabled,false);
+  assert.ok(!f.calls.slice(before).some(call=>['dismiss','initialize','set_settings_view'].includes(call.name)));assert.equal(document.querySelector('#settings-sync').hidden,false);assert.equal(document.querySelector('#sync').disabled,true);assert.equal(document.querySelector('#server').disabled,false);assert.equal(button.hidden,true);
+  f.panel.connection('authenticating');assert.equal(button.hidden,true);f.panel.connection('connected','Connected');assert.equal(button.hidden,false);assert.equal(document.querySelector('#connection-status').hidden,true);
  }finally{f.dom.window.close();}
 });
 
