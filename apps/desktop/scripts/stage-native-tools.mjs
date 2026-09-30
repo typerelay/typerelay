@@ -17,7 +17,7 @@ export class NativeTools {
 		const destination = path.join(root, 'apps/desktop/src-tauri/binaries');
 		return {
 			command: windows && platform !== 'win32' ? 'cargo-xwin' : 'cargo',
-			args: ['build', '--release', '--locked', '--target', target, ...names.flatMap(name => ['--bin', name])],
+			args: ['build', '--release', '--locked', '--target', target, ...(linux ? ['--no-default-features', '--features', 'desktop'] : []), ...names.flatMap(name => ['--bin', name])],
 			files: names.map(name => ({ source: path.join(release, name + (windows ? '.exe' : '')), destination: path.join(destination, name + '-' + target + (windows ? '.exe' : '')) })),
 		};
 	}

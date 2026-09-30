@@ -22,7 +22,8 @@ name = "typerelay-yaml"
 path = "src/yaml_helper.rs"
 
 [features]
-default = ["desktop"]
+default = ["desktop", "legacy-install"]
+legacy-install = []
 mobile = ["reqwest/rustls-tls-webpki-roots"]
 desktop = ["dep:clap", "dep:ctrlc", "dep:ratatui", "dep:ratatui-textarea", "dep:tui-markdown", "dep:ratatui-image"]
 

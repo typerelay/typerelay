@@ -1,4 +1,6 @@
 pub mod config;
+#[cfg(all(feature = "desktop", target_os = "linux"))]
+pub mod installation;
 pub mod editor;
 pub mod settings;
 pub mod migration;

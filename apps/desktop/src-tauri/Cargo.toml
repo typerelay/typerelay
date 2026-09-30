@@ -19,7 +19,7 @@ tauri-plugin-autostart = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"
 typerelay-core = { path = "../../../crates/core" }
-typerelay-client = { path = "../../../crates/client" }
+typerelay-client = { path = "../../../crates/client", default-features = false, features = ["desktop"] }
 anyhow = "1"
 base64 = "0.22"
 minisign-verify = "0.2"

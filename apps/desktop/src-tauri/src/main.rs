@@ -14,30 +14,48 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 #[derive(Default)]
-struct Runtime { root:PathBuf, target:Mutex<Option<platform::Target>>, last:Mutex<Option<platform::Target>>, erase:Mutex<usize>, busy:AtomicBool, syncing:AtomicBool, authenticating:AtomicBool, cancel_auth:AtomicBool, auth_error:Mutex<String>, prompting:AtomicBool, prompt_hit:Mutex<Option<Hit>>, settings:AtomicBool, status:Mutex<String>, capture_status:Mutex<String>, #[cfg(any(target_os="windows",target_os="macos"))] expansion_started:AtomicBool, #[cfg(target_os="linux")] registration:Mutex<Option<typerelay_client::desktop::Registration>> }
+struct Runtime { root:PathBuf, target:Mutex<Option<platform::Target>>, last:Mutex<Option<platform::Target>>, erase:Mutex<usize>, busy:AtomicBool, syncing:AtomicBool, authenticating:AtomicBool, cancel_auth:AtomicBool, auth_error:Mutex<String>, prompting:AtomicBool, prompt_hit:Mutex<Option<Hit>>, settings:AtomicBool, status:Mutex<String>, capture_status:Mutex<String>, #[cfg(any(target_os="windows",target_os="macos"))] expansion_started:AtomicBool, #[cfg(target_os="linux")] registration:Mutex<Option<typerelay_client::desktop::Registration>>, #[cfg(target_os="linux")] engine:Mutex<Option<std::process::Child>>, #[cfg(target_os="linux")] closing:AtomicBool }
 impl Runtime {
 	#[cfg(target_os="linux")]
 	fn setup_linux(app: tauri::AppHandle) {
-		if tauri::utils::platform::bundle_type().is_none() { update::schedule(app); return; }
+		let bundle=tauri::utils::platform::bundle_type();
+		if bundle.is_none() { update::schedule(app); return; }
 		std::thread::spawn(move || {
 			let result=(||->Result<()> {
+				use typerelay_client::installation::Installer;
 				let engine=std::env::current_exe()?.with_file_name("typerelay");
-				let launcher=std::env::var_os("APPIMAGE").map(PathBuf::from).unwrap_or(std::env::current_exe()?);
 				ensure!(engine.is_file(),"The Linux package is missing the expansion engine");
-				let arguments=[std::ffi::OsStr::new("setup"),std::ffi::OsStr::new("--panel-launcher"),launcher.as_os_str()];
-				if std::process::Command::new(&engine).args(arguments).arg("--check").output()?.status.success() { return Ok(()); }
-				let automatic=std::process::Command::new(&engine).args(arguments).arg("--automatic").output()?;
-				if automatic.status.success() { return Ok(()); }
-				let accepted=app.dialog().message("Set up the bundled expansion engine and TUI? A terminal will open for keyboard access and service setup.").title("Set up Typerelay").buttons(tauri_plugin_dialog::MessageDialogButtons::OkCancelCustom("Set up".into(),"Later".into())).blocking_show();
-				ensure!(accepted,"Expansion setup postponed. Restart Typerelay to set it up.");
-				let status=std::process::Command::new("foot").args(["--title=Typerelay setup"]).arg(&engine).args(arguments).status().context("Could not open the setup terminal (foot)")?;
-				ensure!(status.success(),"Expansion setup did not complete. Restart Typerelay to retry.");
-				ensure!(std::process::Command::new(&engine).args(arguments).arg("--check").output()?.status.success(),"Expansion setup was cancelled or incomplete. Restart Typerelay to retry.");
+				let appimage=std::env::var_os("APPIMAGE").map(PathBuf::from);
+				if let Some(launcher)=&appimage {Installer::register_appimage(launcher,include_bytes!("../icons/128x128.png"))?;}
+				let keyboard=Installer::keyboard()?;
+				if !Installer::has_access(&keyboard)? {
+					let accepted=app.dialog().message("Allow Typerelay to read your selected keyboard and insert text? Linux will ask for administrator authentication.").title("Keyboard access").buttons(tauri_plugin_dialog::MessageDialogButtons::OkCancelCustom("Allow".into(),"Later".into())).blocking_show();
+					ensure!(accepted,"Keyboard access postponed. Restart Typerelay to allow expansion.");
+					let mut permission=std::process::Command::new("pkexec");
+					if let Some(launcher)=&appimage {permission.arg(launcher).args(["--input-access",&keyboard]);}else{permission.arg(&engine).args(["input-access","--device-name",&keyboard]);}
+					ensure!(permission.status()?.success(),"Keyboard access was not granted");
+					ensure!(Installer::has_access(&keyboard)?,"Keyboard access is still unavailable");
+				}
+				let package=matches!(bundle,Some(tauri::utils::config::BundleType::Deb|tauri::utils::config::BundleType::Rpm));
+				Installer::prepare_package_service(package)?;
+				if !package {
+					let mut child=std::process::Command::new(&engine).args(["run","--device-name",&keyboard]).arg("--dir").arg(app.state::<Runtime>().root.join("snippets")).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped()).spawn()?;
+					let errors=child.stderr.take().context("Engine diagnostics are unavailable")?;
+					let state=app.state::<Runtime>();let mut running=state.engine.lock().unwrap();
+					if state.closing.load(Ordering::SeqCst){unsafe{libc::kill(child.id() as i32,libc::SIGINT);}let _=child.wait();return Ok(());}
+					*running=Some(child);drop(running);
+					let handle=app.clone();std::thread::spawn(move||{use std::io::BufRead;let mut lines=std::collections::VecDeque::new();for line in std::io::BufReader::new(errors).lines().map_while(Result::ok){if lines.len()==32{lines.pop_front();}lines.push_back(line);}let message=lines.into_iter().collect::<Vec<_>>().join("\n");if !handle.state::<Runtime>().closing.load(Ordering::SeqCst)&&!message.trim().is_empty(){*handle.state::<Runtime>().status.lock().unwrap()=message.clone();let _=handle.emit("panel-error",message);}});
+				}
 				Ok(())
 			})();
 			if let Err(error)=result { *app.state::<Runtime>().status.lock().unwrap()=error.to_string(); let _=app.emit("panel-error",error.to_string()); }
 			update::schedule(app);
 		});
+	}
+	#[cfg(target_os="linux")]
+	fn stop_engine(&self) {
+		self.closing.store(true,Ordering::SeqCst);
+		if let Some(mut child)=self.engine.lock().unwrap().take() {if child.try_wait().ok().flatten().is_none(){unsafe{libc::kill(child.id() as i32,libc::SIGINT);}let deadline=std::time::Instant::now()+std::time::Duration::from_secs(5);while child.try_wait().ok().flatten().is_none()&&std::time::Instant::now()<deadline{std::thread::sleep(std::time::Duration::from_millis(50));}if child.try_wait().ok().flatten().is_none(){let _=child.kill();}let _=child.wait();}}
 	}
 	fn update_capture(&self,captured:Result<Option<platform::Target>>) {
 		let (target,message)=match captured {
@@ -80,6 +98,8 @@ impl Runtime {
     }
     fn quit(app:&tauri::AppHandle) {
         if app.state::<Runtime>().busy.load(Ordering::SeqCst) {let _=app.emit("panel-error","Insertion is finishing; try Quit again in a moment");return;}
+        #[cfg(target_os="linux")]
+        app.state::<Runtime>().stop_engine();
         app.exit(0);
     }
     fn open(app: &tauri::AppHandle, settings:bool) {
@@ -362,6 +382,8 @@ fn main() {
     if arguments.get(1).is_some_and(|value| value.starts_with("chrome-extension://")) { if let Err(error) = browser_bridge::BrowserBridge::serve() { eprintln!("TypeRelay browser bridge: {error:#}"); } return; }
     if arguments.get(1).is_some_and(|value| value == "--register-chrome-extension") { let result = arguments.get(2).context("Chrome extension ID required").and_then(|id| browser_bridge::BrowserBridge::register(id)); if let Err(error) = result { eprintln!("TypeRelay browser registration: {error:#}"); std::process::exit(1); } return; }
     if std::env::args().any(|a|a=="--version"){println!("typerelay-panel {}",env!("TYPERELAY_VERSION"));return;}
+	#[cfg(target_os="linux")]
+	if let Some(index)=arguments.iter().position(|arg|arg=="--input-access") {let result=arguments.get(index+1).ok_or_else(||anyhow::anyhow!("Missing keyboard name")).and_then(|name|typerelay_client::installation::Installer::grant_input_access(name));if let Err(error)=result{eprintln!("Keyboard access failed: {error:#}");std::process::exit(1);}return;}
 	if Runtime::receive_callback(&arguments){return;}
     #[cfg(target_os="macos")]
     if std::env::args().any(|a|a=="--accessibility-status"){println!("{}",if platform::accessibility(false){"allowed"}else{"required"});return;}
@@ -374,7 +396,7 @@ fn main() {
 
     #[cfg(target_os="linux")]
     if std::env::args().any(|a|a=="clipboard-serve") {let _=typerelay_client::clipboard::PasteJob::serve_restored();return;}
-	let builder=tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app,args,_|{let callback=Runtime::receive_callback(&args);if args.iter().any(|arg|arg=="--uninstall"){let _=app.autolaunch().disable();Runtime::quit(app);}else if args.iter().any(|arg|arg=="--quit"){Runtime::quit(app);}else if !callback&&!args.iter().any(|arg|arg=="--background"){Runtime::open(app,false);}})).plugin(tauri_plugin_deep_link::init()).plugin(tauri_plugin_autostart::Builder::new().args(["--background"]).build()).plugin(tauri_plugin_dialog::init()).plugin(tauri_plugin_updater::Builder::new().build());
+	let builder=tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app,args,_|{let callback=Runtime::receive_callback(&args);if args.iter().any(|arg|arg=="--uninstall"){let _=app.autolaunch().disable();Runtime::quit(app);}else if args.iter().any(|arg|arg=="--quit"){Runtime::quit(app);}else if args.iter().any(|arg|arg=="--tui"){if let Err(error)=platform::open_tui(){Runtime::notice(app,&error.to_string(),true);}}else if !callback&&!args.iter().any(|arg|arg=="--background"){Runtime::open(app,false);}})).plugin(tauri_plugin_deep_link::init()).plugin(tauri_plugin_autostart::Builder::new().args(["--background"]).build()).plugin(tauri_plugin_dialog::init()).plugin(tauri_plugin_updater::Builder::new().build());
     #[cfg(not(target_os="linux"))]
     let builder=builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());
     let result=builder.setup(|app| {
@@ -385,7 +407,7 @@ fn main() {
         {use tauri_plugin_deep_link::DeepLinkExt;#[cfg(target_os="linux")]app.deep_link().register_all()?;let callback_root=root.clone();app.deep_link().on_open_url(move|event|for url in event.urls(){let _=Sync::receive_callback(&callback_root,url.as_str());});if let Some(urls)=app.deep_link().get_current()?{for url in urls{let _=Sync::receive_callback(&root,url.as_str());}}}
         Sync::worker(root.clone(),root.join("snippets"));
         let config=Panel::settings(&root)?;
-		app.manage(Runtime{root:root.clone(),target:Mutex::new(None),last:Mutex::new(None),erase:Mutex::new(0),busy:AtomicBool::new(false),syncing:AtomicBool::new(false),authenticating:AtomicBool::new(false),cancel_auth:AtomicBool::new(false),auth_error:Mutex::new(String::new()),prompting:AtomicBool::new(false),prompt_hit:Mutex::new(None),settings:AtomicBool::new(false),status:Mutex::new(String::new()),capture_status:Mutex::new(String::new()),#[cfg(any(target_os="windows",target_os="macos"))] expansion_started:AtomicBool::new(false),#[cfg(target_os="linux")] registration:Mutex::new(None)});
+		app.manage(Runtime{root:root.clone(),target:Mutex::new(None),last:Mutex::new(None),erase:Mutex::new(0),busy:AtomicBool::new(false),syncing:AtomicBool::new(false),authenticating:AtomicBool::new(false),cancel_auth:AtomicBool::new(false),auth_error:Mutex::new(String::new()),prompting:AtomicBool::new(false),prompt_hit:Mutex::new(None),settings:AtomicBool::new(false),status:Mutex::new(String::new()),capture_status:Mutex::new(String::new()),#[cfg(any(target_os="windows",target_os="macos"))] expansion_started:AtomicBool::new(false),#[cfg(target_os="linux")] registration:Mutex::new(None),#[cfg(target_os="linux")] engine:Mutex::new(None),#[cfg(target_os="linux")] closing:AtomicBool::new(false)});
 		app.manage(update::UpdateState::default());
 		#[cfg(target_os="macos")]
 		let missing_permissions={let (accessibility,input_monitoring)=Runtime::permissions();app.state::<Runtime>().update_permission_status(accessibility,input_monitoring);if accessibility&&input_monitoring&&let Err(error)=Runtime::start_expansion(app.handle()){*app.state::<Runtime>().status.lock().unwrap()=format!("TypeRelay could not start Input Monitoring: {error:#}");}!(accessibility&&input_monitoring)};
@@ -415,7 +437,8 @@ fn main() {
                 } else {let quit=&bytes[..length]==b"quit";let app=handle.clone();let _=handle.run_on_main_thread(move||if quit{Runtime::quit(&app);}else{Runtime::open(&app,false);});}
             }}});
         }
-        if !std::env::args().any(|a|a=="--background"){
+        if std::env::args().any(|a|a=="--tui"){platform::open_tui()?;}
+        else if !std::env::args().any(|a|a=="--background"){
             #[cfg(target_os="macos")]
             Runtime::open(app.handle(),missing_permissions);
             #[cfg(not(target_os="macos"))]
@@ -425,8 +448,8 @@ fn main() {
     }).on_window_event(|window,event|match event {
         tauri::WindowEvent::CloseRequested{api,..}=>{api.prevent_close();set_prompt_view(window.app_handle().clone(),false);Runtime::hide(window.app_handle());},
         tauri::WindowEvent::Focused(false)if Runtime::hide_on_focus_loss() && !window.app_handle().state::<Runtime>().busy.load(Ordering::SeqCst) && !window.app_handle().state::<Runtime>().settings.load(Ordering::SeqCst) && !window.app_handle().state::<Runtime>().prompting.load(Ordering::SeqCst)=> {Runtime::hide(window.app_handle());},_=>()
-    }).invoke_handler(tauri::generate_handler![initialize,search,personal_status,personal_abbreviation,insert,copy_snippet,prepare_template,set_prompt_view,set_settings_view,dismiss,notify,sync_now,save_settings,connect,cancel_connect,disconnect,libraries,merge_destinations,merge_library,conflicts,resolve_conflict,enroll,open_accessibility_settings,open_input_monitoring_settings,open_notification_settings,open_tui,open_web_app]).run(tauri::generate_context!());
-    if let Err(error)=result {eprintln!("TypeRelay panel: {error}");std::process::exit(1);}
+    }).invoke_handler(tauri::generate_handler![initialize,search,personal_status,personal_abbreviation,insert,copy_snippet,prepare_template,set_prompt_view,set_settings_view,dismiss,notify,sync_now,save_settings,connect,cancel_connect,disconnect,libraries,merge_destinations,merge_library,conflicts,resolve_conflict,enroll,open_accessibility_settings,open_input_monitoring_settings,open_notification_settings,open_tui,open_web_app]).build(tauri::generate_context!());
+    match result {Ok(app)=>app.run(|handle,event|{#[cfg(target_os="linux")]if matches!(event,tauri::RunEvent::Exit|tauri::RunEvent::ExitRequested{..}){handle.state::<Runtime>().stop_engine();}#[cfg(not(target_os="linux"))]let _=(handle,event);}),Err(error)=>{eprintln!("TypeRelay panel: {error}");std::process::exit(1);}}
 }
 
 #[cfg(all(test,target_os="linux"))]

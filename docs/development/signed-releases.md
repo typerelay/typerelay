@@ -42,7 +42,7 @@ Tauri performs signing/notarization with hardened runtime enabled. The app bundl
 
 ## Outputs and boundaries
 
-The Linux build creates x86_64 AppImage, deb and rpm packages, each containing matching engine, TUI and panel binaries. Each package has its own signed updater target. A signed legacy archive remains internal to the updater feed for existing standalone installations; it is not advertised as a download. Package launches refresh the user expansion service and TUI through the embedded setup workflow.
+The Linux build creates x86_64 AppImage, deb and rpm packages, each containing matching engine, TUI and panel binaries. Each package has its own signed updater target. A signed legacy archive remains internal to the updater feed for existing standalone installations; it is not advertised as a download. Native packages compile the engine without the legacy-install feature, excluding the embedded Python installer. deb/rpm install their service and device rules through package-managed files; AppImage starts its bundled engine directly. Missing keyboard access uses pkexec and the native input-access command. Only the compatibility archive rebuilds the engine with legacy-install enabled.
 
 Verified artifacts and a SHA-256/source-commit report go into a fresh commit-prefixed subdirectory of `target/desktop-releases/windows`, `linux`, or `macos`. Each invocation isolates its artifacts and report from previous builds. Failed builds must not be distributed. Bunny publication uploads immutable artifacts and platform metadata first; `latest.json` changes only after all three platforms match the same SemVer and commit.
 

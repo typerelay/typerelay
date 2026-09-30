@@ -1,0 +1,21 @@
+# Managed by TypeRelay package
+[Unit]
+Description=Typerelay text expansion
+After=graphical-session.target
+PartOf=graphical-session.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/typerelay run
+Restart=on-failure
+RestartSec=3
+RestartPreventExitStatus=78
+KillSignal=SIGINT
+KillMode=process
+TimeoutStopSec=5
+NoNewPrivileges=true
+UMask=0077
+
+[Install]
+WantedBy=graphical-session.target

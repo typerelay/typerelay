@@ -207,6 +207,8 @@ export class PanelRelease {
 			} else {
 				const engine = path.join(release, 'typerelay'); const tui = path.join(release, 'typerelay-tui'); const panel = path.join(release, 'typerelay-panel');
 				for (const [name, file] of [['typerelay', engine], ['typerelay-tui', tui], ['typerelay-panel', panel]]) { const version = await PanelRelease.run(file, ['--version'], { capture: true }); if (version !== `${name} ${config.version}`) throw new Error(`${name} version does not match ${config.version}`); const type = await PanelRelease.run('file', ['--brief', file], { capture: true }); if (!/ELF 64-bit.*x86-64/i.test(type)) throw new Error(`${name} is not an x86-64 ELF binary`); }
+				// Only the compatibility archive retains the standalone installer; native packages exclude it.
+				await PanelRelease.run('cargo', ['build', '--release', '--locked', '--target', options.target, '--features', 'legacy-install', '--bin', 'typerelay'], { cwd: PanelRelease.root, environment });
 				const bundle = path.join(release, 'bundle/legacy'); await fs.mkdir(bundle, { recursive: true }); for (const file of [engine, tui, panel]) await fs.copyFile(file, path.join(bundle, path.basename(file)));
 				// Tauri patches the release binary while bundling; legacy installs must keep their archive updater.
 				const legacyPanel = path.join(bundle, 'typerelay-panel'); await fs.writeFile(legacyPanel, PanelRelease.legacyPanel(await fs.readFile(legacyPanel)));
