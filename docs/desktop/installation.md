@@ -9,7 +9,7 @@ Install only an artifact whose version, platform and architecture match the rele
 
 ## Omarchy/Hyprland
 
-The repository installer builds and installs the matching engine, panel and TUI, configures a systemd user service and adds narrowly scoped device permissions. It never runs TypeRelay as root. Review the complete [Omarchy installation and uninstall guide](./omarchy) before running it.
+Run `install.sh` from a terminal to download and install the latest matching prebuilt engine, panel and TUI. It verifies the release checksum, opens the interactive installer, configures a systemd user service and adds narrowly scoped device permissions. It never runs TypeRelay as root. The commands work in fish, bash and zsh; see the [Omarchy installation and uninstall guide](./omarchy).
 
 The generic Linux AppImage or DEB installs only the GUI. It does not configure the Omarchy input service, keyd/uinput permissions or non-Hyprland insertion support.
 

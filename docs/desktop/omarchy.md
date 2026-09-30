@@ -5,33 +5,55 @@ description: "Install, update, preview, operate, or uninstall TypeRelay on Omarc
 
 # Omarchy installation and uninstall
 
-## Install directly from GitHub
+## Install the latest Linux release
 
-No checkout is needed. Download and inspect the installer before running it:
+Requirements: Omarchy/Hyprland on x86_64, `curl`, Python 3 and `tar`. Omarchy provides the desktop runtime dependencies. No checkout, Rust compiler or Node.js installation is needed.
 
-```fish
-curl -fsSLo /tmp/typerelay-install.sh https://raw.githubusercontent.com/typerelay/typerelay/main/scripts/install.sh
+Run this command in **fish, bash or zsh** to download and start the installer:
+
+```sh
+curl -fsSLo /tmp/typerelay-install.sh https://raw.githubusercontent.com/typerelay/typerelay/main/scripts/install.sh && sh /tmp/typerelay-install.sh
+```
+
+The script downloads the latest prebuilt engine, TUI and desktop panel together. It checks
+the bundle's SHA-256 checksum and size against that release's metadata before opening the
+interactive installer. It does not stop the current client until you confirm the installer
+prompts. Temporary downloads are cleaned up afterward.
+
+To inspect or preview first, run only the `curl` command above. `less` displays the script;
+press **q** to return to your terminal. Then preview or install:
+
+```sh
 less /tmp/typerelay-install.sh
+```
+
+```sh
 sh /tmp/typerelay-install.sh --dry-run
+```
+
+```sh
 sh /tmp/typerelay-install.sh
 ```
 
-The bootstrap resolves the requested ref to a commit, downloads that exact source archive,
-builds with the locked dependencies, then opens the existing interactive installer. It
-does not stop the current client until you confirm the installer prompts. Temporary source
-and build files are cleaned up afterward. Rust/Cargo, Python 3 and tar must be installed.
-This initial distribution builds from source; it does not download a prebuilt release.
+Always invoke the installer with `sh`, including from fish. If you already downloaded
+an Omarchy `.tar.gz` archive, extract it and run `./typerelay install` in the directory
+containing `typerelay`, `typerelay-tui` and `typerelay-panel`.
 
-To select a tag, branch or commit, pass `--ref`. For example:
+## Build a specific source revision
 
-```fish
-sh /tmp/typerelay-install.sh --dry-run --ref v1.0.0
+Passing `--ref` selects a source build instead of the prebuilt release. This requires
+Rust/Cargo, Python 3 and `tar`; building the desktop panel also requires Node.js, pnpm,
+`pkg-config`, GTK 3 and WebKitGTK 4.1 development packages. The script resolves the tag,
+branch or commit to a pinned commit and builds with locked dependencies. For example:
+
+```sh
+sh /tmp/typerelay-install.sh --ref main
 ```
 
 For a private checkout, authenticate GitHub CLI and stream the same file:
 
-```fish
-gh api --hostname github.com -H 'Accept: application/vnd.github.raw+json' 'repos/typerelay/typerelay/contents/scripts/install.sh?ref=main' | sh -s -- --dry-run
+```sh
+gh api --hostname github.com -H 'Accept: application/vnd.github.raw+json' 'repos/typerelay/typerelay/contents/scripts/install.sh?ref=main' | sh -s -- --ref main --dry-run
 ```
 
 ## Install or update an existing binary
@@ -133,7 +155,7 @@ hash; replacements made outside the installer are preserved. Legacy engine-only 
 remain supported. Snippets and settings are preserved.
 
 The engine and TUI must be present with matching versions before installation changes any
-service state. When the panel binary is present, it must match too. The GitHub bootstrap builds
+service state. When the panel binary is present, it must match too. The Linux script downloads
 all three by default; `--without-panel` installs only the engine and TUI. The TUI is never started as a service.
 
 **All snippet/configuration files are kept.** Installation never deletes legacy YAML

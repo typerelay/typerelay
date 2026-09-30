@@ -44,23 +44,17 @@ See the [desktop overview](docs/desktop/index.md) and [troubleshooting guide](do
 
 ## Quick start on Omarchy
 
-Requirements: Rust/Cargo, Python 3 and `tar`. Building the desktop panel also requires Node.js, pnpm, `pkg-config`, GTK 3 and WebKitGTK 4.1 development packages.
+Requirements: Omarchy/Hyprland on x86_64, `curl`, Python 3 and `tar`. Omarchy provides the desktop runtime dependencies. No compiler or Node.js installation is needed.
 
-Download and inspect the installer:
+Run this command in **fish, bash or zsh** to download and start the installer:
 
-```fish
-curl -fsSLo /tmp/typerelay-install.sh https://raw.githubusercontent.com/typerelay/typerelay/main/scripts/install.sh
-less /tmp/typerelay-install.sh
+```sh
+curl -fsSLo /tmp/typerelay-install.sh https://raw.githubusercontent.com/typerelay/typerelay/main/scripts/install.sh && sh /tmp/typerelay-install.sh
 ```
 
-Preview every planned change, then install:
+The installer downloads the latest matching engine, TUI and desktop panel, verifies the release checksum, then asks before changing the system. It runs TypeRelay as your desktop user and installs scoped device permissions; the expansion service never runs as root. Read the complete [installation and uninstall guide](docs/desktop/omarchy.md) before deploying it across a team.
 
-```fish
-sh /tmp/typerelay-install.sh --dry-run
-sh /tmp/typerelay-install.sh
-```
-
-The installer builds a pinned source commit, asks before changing the system and runs TypeRelay as your desktop user. It installs scoped device permissions; the expansion service never runs as root. Read the complete [installation and uninstall guide](docs/desktop/omarchy.md) before deploying it across a team.
+To inspect or preview first, run only the `curl` command above. Optionally open the downloaded script with `less /tmp/typerelay-install.sh` and press **q** to exit; `less` only displays the script. Preview changes with `sh /tmp/typerelay-install.sh --dry-run`, then install with `sh /tmp/typerelay-install.sh`. Always run the script with `sh`, including from fish.
 
 Create a library and snippets with:
 
@@ -74,7 +68,9 @@ Then type the configured prefix, an abbreviation and Space in another applicatio
 
 The web app stores synchronized libraries in MongoDB. Devices authenticate in the browser, users explicitly enroll local libraries and assigned shared libraries download automatically. Conflicts retain both versions for resolution in the web app.
 
-For an open-source production deployment, export the public URLs and private values from your Fish terminal, then start the production stack:
+For an open-source production deployment, export the public URLs and private values, then start the production stack.
+
+**fish:**
 
 ```fish
 set -x APP_URL https://typerelay.example.com
@@ -83,6 +79,18 @@ set -x SESSION_SECRET (openssl rand -hex 64)
 set -x JWT_SECRET (openssl rand -hex 64)
 set -x SMTP_FROM noreply@example.com
 set -x SMTP_SERVERS '[{"name":"primary","host":"smtp.example.com","port":587,"secure":false,"user":"user","pass":"password","from":"noreply@example.com"}]'
+docker compose -f compose.prod.yml up -d
+```
+
+**bash / zsh:**
+
+```sh
+export APP_URL=https://typerelay.example.com
+export MCP_BASE_URL=https://mcp.typerelay.example.com
+export SESSION_SECRET="$(openssl rand -hex 64)"
+export JWT_SECRET="$(openssl rand -hex 64)"
+export SMTP_FROM=noreply@example.com
+export SMTP_SERVERS='[{"name":"primary","host":"smtp.example.com","port":587,"secure":false,"user":"user","pass":"password","from":"noreply@example.com"}]'
 docker compose -f compose.prod.yml up -d
 ```
 
@@ -98,7 +106,9 @@ See the [MCP setup](docs/mcp/setup.md), [tool catalog](docs/mcp/tools.md) and [A
 
 Requirements: Docker Compose, Rust 1.88+, Node.js 24+ and pnpm 12.
 
-```fish
+These commands work in fish, bash and zsh:
+
+```sh
 git clone https://github.com/typerelay/typerelay.git
 cd typerelay
 git switch develop
