@@ -6,7 +6,7 @@ import pug from 'pug';
 
 class Fixture {
  static async create() {
-  const dom=new JSDOM(pug.renderFile('ui/index.pug'),{runScripts:'outside-only',pretendToBeVisual:true});
+  const dom=new JSDOM(pug.renderFile('ui/index.pug'),{url:'http://tauri.localhost',runScripts:'outside-only',pretendToBeVisual:true});
   const calls=[];const callbacks={};const pending=[];
   const style=dom.window.document.createElement('style');style.textContent=await readFile('ui/panel.css','utf8');dom.window.document.head.append(style);
   dom.window.HTMLElement.prototype.scrollIntoView=()=>{};
@@ -19,6 +19,19 @@ class Fixture {
  }
  static hit(id){return{id,library:'one',revision:2,library_name:'Personal',title:'Title '+id,abbreviation:id,preview:'<b>literal</b>\n\tCode'};}
 }
+
+test('Advanced cards retain controls and save through the existing settings form',async()=>{
+ const f=await Fixture.create();try{
+  await f.panel.settings(true);const document=f.dom.window.document;const form=document.querySelector('#settings-form');const keyboard=document.querySelector('#keyboard');const shortcut=document.querySelector('#shortcut');
+  assert.equal(document.querySelector('[data-ai-controls]').closest('.settings-page').id,'settings-advanced');assert.equal(keyboard.closest('.settings-page').id,'settings-advanced');
+  assert.equal(document.querySelector('#ai-settings-card h2').textContent,'AI');assert.equal(document.querySelector('#keyboard-card h2').textContent,'Miscellaneous');assert.equal(document.querySelector('#shortcut-help').previousElementSibling,shortcut);
+  assert.equal(document.querySelector('#settings-sync [data-about-url="\u0023statistics"]'),null);
+  f.panel.render=()=>{throw Error('Settings tab switches and saves must retain existing views');};document.querySelector('[data-settings-tab="advanced"]').click();
+  assert.equal(document.querySelector('#settings-advanced').hidden,false);assert.equal(document.querySelector('#settings-general').hidden,true);assert.equal(document.querySelector('#keyboard'),keyboard);
+  const save=document.querySelector('#keyboard-card button[type="submit"]');assert.equal(save.form,form);save.click();await new Promise(resolve=>setTimeout(resolve,0));
+  assert.ok(f.calls.some(call=>call.name==='save_settings'));assert.equal(document.querySelector('#settings-form'),form);assert.equal(document.querySelector('#shortcut'),shortcut);assert.equal(document.querySelector('#settings-advanced').hidden,false);
+ }finally{f.dom.window.close();}
+});
 
 test('keyboard selection saves any device and preserves the settings form and search results',async()=>{
  const f=await Fixture.create();try{

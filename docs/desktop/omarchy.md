@@ -23,7 +23,7 @@ Keep the AppImage at its registered path. If you move it, launch the new locatio
 
 ## Keyboard support
 
-Expansion currently requires Hyprland with a US keyboard layout. When keyd is active, TypeRelay uses `keyd virtual keyboard`; stop keyd before selecting a physical keyboard. Otherwise it selects a single built-in keyboard, or a single non-virtual keyboard when no built-in keyboard exists. If several keyboards qualify, choose **Settings → General → Keyboard** and save. Your choice is retained after restart; changing it updates the expansion engine and prompts for access when necessary. Devices are identified by keyboard capabilities, so a mouse or media interface with the same device name is not grabbed as a keyboard.
+Expansion currently requires Hyprland with a US keyboard layout. When keyd is active, TypeRelay uses `keyd virtual keyboard`; stop keyd before selecting a physical keyboard. Otherwise it selects a single built-in keyboard, or a single non-virtual keyboard when no built-in keyboard exists. If several keyboards qualify, choose **Settings → Advanced → Miscellaneous → Keyboard** and save. Your choice is retained after restart; changing it updates the expansion engine and prompts for access when necessary. Devices are identified by keyboard capabilities, so a mouse or media interface with the same device name is not grabbed as a keyboard.
 
 **Automatic selection** uses normal detection when it resolves one keyboard. If detection is ambiguous, it retains your previous keyboard choice while that device remains available. Saving Automatic selection preserves this fallback across restarts. TypeRelay's own virtual output is never a candidate.
 

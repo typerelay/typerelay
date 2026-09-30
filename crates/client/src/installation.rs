@@ -48,7 +48,7 @@ impl Installer {
             else if internal { properties.lines().any(|p| p == "ID_INTEGRATION=internal") }
             else { !name.to_lowercase().contains("virtual") }
         }).collect();
-        ensure!(candidates.len() == 1, "Choose your keyboard in Settings → General (terminal: --device-name). Available keyboards: {available}");
+        ensure!(candidates.len() == 1, "Choose your keyboard in Settings → Advanced (terminal: --device-name). Available keyboards: {available}");
         Ok(candidates[0].0.clone())
     }
 

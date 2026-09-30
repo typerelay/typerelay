@@ -82,9 +82,9 @@ html(lang="en")
 				nav.settings-tabs(aria-label="Settings sections")
 					button(type="button" data-settings-tab="general" aria-selected="true") General
 					button(type="button" data-settings-tab="sync" aria-selected="false") Sync
+					button(type="button" data-settings-tab="advanced" aria-selected="false") Advanced
 					button(type="button" data-settings-tab="about" aria-selected="false") About
 				section#settings-general.settings-page
-					include ../../server/views/ajax/ai-controls.pug
 					form#settings-form.settings-list
 						.setting-row
 							.setting-copy
@@ -92,8 +92,8 @@ html(lang="en")
 								p Open TypeRelay from any app.
 							.setting-control.shortcut-control
 								label.visually-hidden(for="shortcut") Search shortcut
-								input#shortcut(required)
-								small Ctrl, Shift, Alt or Super + key
+								input#shortcut.form-control.form-control-sm(required aria-describedby="shortcut-help")
+								p#shortcut-help Ctrl, Shift, Alt or Super + key
 						.setting-row
 							.setting-copy
 								h3 Start at login
@@ -101,16 +101,6 @@ html(lang="en")
 							label.switch
 								input#autostart(type="checkbox")
 								span.switch-track(aria-hidden="true")
-						.setting-row#keyboard-setting(hidden)
-							.setting-copy
-								h3 Keyboard
-								p Choose the keyboard used for expansion.
-							.setting-control
-								label.visually-hidden(for="keyboard") Keyboard
-								select#keyboard.form-select.form-select-sm
-									option(value="") Automatic selection
-									template#keyboard-option-template
-										option
 						.settings-actions
 							button.primary(type="submit") Save changes
 					.settings-list.mac-only
@@ -141,7 +131,6 @@ html(lang="en")
 								p Edit local libraries and snippets in Terminal.
 							button#open-tui.secondary(type="button") Open
 				section#settings-sync.settings-page(hidden)
-					button.secondary(type="button" data-about-url="#statistics") Statistics
 					.settings-list
 						form#connect-form.setting-section
 							label(for="server") Sync server URL
@@ -163,6 +152,25 @@ html(lang="en")
 							h3 Needs review
 							p#conflict-count.settings-description
 							div#sync-conflicts
+				section#settings-advanced.settings-page(hidden)
+					section#ai-settings-card.settings-list
+						.setting-section
+							include ../../server/views/ajax/ai-controls.pug
+					section#keyboard-card.settings-list(hidden)
+						.setting-section
+							h2.settings-card-title Miscellaneous
+						.setting-row#keyboard-setting(hidden)
+							.setting-copy
+								h3 Keyboard
+								p Choose the keyboard used for expansion.
+							.setting-control
+								label.visually-hidden(for="keyboard") Keyboard
+								select#keyboard.form-select.form-select-sm(form="settings-form")
+									option(value="") Automatic selection
+									template#keyboard-option-template
+										option
+						.settings-actions
+							button.primary(type="submit" form="settings-form") Save changes
 				section#settings-about.settings-page(hidden)
 					.about-identity
 						img.about-logo(src="typerelay-logo.svg" alt="TypeRelay")
@@ -220,13 +228,13 @@ html(lang="en")
 					input(type="checkbox")
 					span.library-name
 					span.library-sync-state.status-pill
-				button.library-merge.secondary(type="button") Merge…
+				button.library-merge.secondary.btn-sm(type="button") Merge…
 				div.library-merge-form(hidden)
 					label Destination
 					select.library-merge-destination.form-select-sm
 					.form-actions
-						button.library-merge-cancel.secondary(type="button") Cancel
-						button.library-merge-submit.primary(type="button") Merge library
+						button.library-merge-cancel.secondary.btn-sm(type="button") Cancel
+						button.library-merge-submit.primary.btn-sm(type="button") Merge library
 		template#merge-option-template
 			option
 		template#conflict-template
