@@ -73,11 +73,50 @@ impl Installer {
         // Select from trusted kernel/udev device information; no caller-provided paths or UID.
         let devices = Self::devices()?;
         let keyboard = Self::select_keyboard(&devices, Some(requested))?;
+        Self::persist_input_access(std::path::Path::new("/"), uid, &keyboard)?;
         ensure!(Command::new("modprobe").arg("uinput").status()?.success(), "Could not load uinput");
+        ensure!(Command::new("/usr/bin/udevadm").args(["control", "--reload-rules"]).status()?.success(), "Could not reload keyboard access rules");
         for (path, write) in Self::input_paths(&devices, &keyboard) {
             ensure!(Command::new("/usr/bin/setfacl").args(["-m", &format!("u:{uid}:{}", if write { "rw" } else { "r" })]).arg(&path).status()?.success(), "Could not grant access to {}", path.display());
         }
         Ok(())
+    }
+
+    fn persist_input_access(root: &std::path::Path, uid: u32, keyboard: &str) -> Result<()> {
+        ensure!(uid > 0, "Input access is only for a desktop user");
+        ensure!(!keyboard.is_empty() && !keyboard.chars().any(|c| c.is_control() || "\"\\*?[]|$%".contains(c)), "Keyboard name contains unsupported udev-rule characters");
+        let access = format!("RUN+=\"/usr/bin/setfacl -m u:{uid}:r $env{{DEVNAME}}\"");
+        let mut rules = format!("# Managed by TypeRelay\nACTION!=\"remove\", SUBSYSTEM==\"input\", KERNEL==\"event*\", ENV{{ID_INPUT_KEYBOARD}}==\"1\", ATTRS{{name}}==\"{keyboard}\", {access}\n");
+        for kind in ["MOUSE", "TOUCHPAD", "TOUCHSCREEN"] { rules.push_str(&format!("ACTION!=\"remove\", SUBSYSTEM==\"input\", KERNEL==\"event*\", ENV{{ID_INPUT_{kind}}}==\"1\", {access}\n")); }
+        rules.push_str(&format!("ACTION!=\"remove\", SUBSYSTEM==\"misc\", KERNEL==\"uinput\", RUN+=\"/usr/bin/setfacl -m u:{uid}:rw $env{{DEVNAME}}\"\n"));
+        Self::write_managed(&[
+            (root.join(format!("etc/udev/rules.d/99-typerelay-{uid}.rules")), rules, 0o644),
+            (root.join(format!("etc/modules-load.d/typerelay-{uid}.conf")), "# Managed by TypeRelay\nuinput\n".into(), 0o644),
+        ])
+    }
+
+    fn write_managed(files: &[(std::path::PathBuf, String, u32)]) -> Result<()> {
+        use std::{io::Write, os::unix::fs::PermissionsExt};
+        for (path, _, _) in files {
+            if let Ok(metadata) = std::fs::symlink_metadata(path) { ensure!(metadata.is_file() && std::fs::read_to_string(path)?.lines().take(2).any(|line| line == "# Managed by TypeRelay"), "Refusing to overwrite unmanaged file: {}", path.display()); }
+        }
+        for (path, text, mode) in files {
+            let directory = path.parent().context("Installation directory is missing")?;
+            std::fs::create_dir_all(directory)?;
+            let mut temporary = tempfile::NamedTempFile::new_in(directory)?;
+            temporary.write_all(text.as_bytes())?;
+            temporary.as_file().set_permissions(std::fs::Permissions::from_mode(*mode))?;
+            temporary.persist(path)?;
+        }
+        Ok(())
+    }
+
+    pub fn appimage_commands(root: &std::path::Path, install: bool) -> Result<bool> {
+        use std::os::unix::fs::PermissionsExt;
+        let text = include_str!("../../../scripts/appimage-cli.sh");
+        let files: Vec<_> = ["typerelay", "typerelay-tui"].into_iter().map(|name| (root.join("usr/local/bin").join(name), text.to_owned(), 0o755)).collect();
+        if install { Self::write_managed(&files)?; }
+        Ok(files.iter().all(|(path, _, _)| std::fs::read_to_string(path).is_ok_and(|content| content == text) && std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)))
     }
 
     pub fn prepare_package_service(package: bool) -> Result<()> {
@@ -123,6 +162,11 @@ impl Installer {
             std::fs::write(&temporary, Self::desktop_entry(launcher, tui)?)?;
             std::fs::rename(temporary, path)?;
         }
+        let reference = data.join("typerelay/appimage-path");
+        std::fs::create_dir_all(reference.parent().context("AppImage directory is missing")?)?;
+        let temporary = reference.with_extension("new");
+        std::fs::write(&temporary, format!("{}\n", launcher.to_str().context("AppImage path is not valid UTF-8")?))?;
+        std::fs::rename(temporary, reference)?;
         Ok(())
     }
 }
@@ -159,5 +203,64 @@ mod tests {
         devices.push(("keyd virtual keyboard".into(), "/dev/input/event3".into(), "ID_INPUT_KEYBOARD=1\n".into()));
         assert_eq!(Installer::select_keyboard(&devices, None).unwrap(), "keyd virtual keyboard");
         assert!(Installer::select_keyboard(&devices, Some("First keyboard")).is_err());
+    }
+    #[test]
+    fn input_access_survives_device_renumbering_and_repeated_setup() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        Installer::persist_input_access(root.path(), 1234, "Built-in keyboard").unwrap();
+        let rule = root.path().join("etc/udev/rules.d/99-typerelay-1234.rules");
+        let first = std::fs::read_to_string(&rule).unwrap();
+        assert!(first.contains("ATTRS{name}==\"Built-in keyboard\""));
+        assert!(first.contains("u:1234:r $env{DEVNAME}"));
+        assert!(first.contains("u:1234:rw $env{DEVNAME}"));
+        assert!(!first.contains("/dev/input/event"));
+        assert!(!first.contains("MODE="));
+        assert_eq!(first.lines().filter(|line| line.contains("ID_INPUT_")).count(), 4);
+        assert_eq!(std::fs::read_to_string(root.path().join("etc/modules-load.d/typerelay-1234.conf")).unwrap(), "# Managed by TypeRelay\nuinput\n");
+        assert_eq!(std::fs::metadata(&rule).unwrap().permissions().mode() & 0o777, 0o644);
+        Installer::persist_input_access(root.path(), 1234, "Built-in keyboard").unwrap();
+        assert_eq!(std::fs::read_to_string(&rule).unwrap(), first);
+        if Command::new("/usr/bin/udevadm").arg("--help").output().is_ok_and(|help| String::from_utf8_lossy(&help.stdout).contains("verify")) {
+            let validation = Command::new("/usr/bin/udevadm").arg("verify").arg(&rule).output().unwrap();
+            assert!(validation.status.success(), "{}", String::from_utf8_lossy(&validation.stderr));
+        }
+    }
+    #[test]
+    fn persistent_access_rejects_patterns_and_preserves_unmanaged_files() {
+        let root = tempfile::tempdir().unwrap();
+        for keyboard in ["", "*", "Keyboard\nother", "Keyboard\"", "Keyboard\\", "Keyboard?", "Keyboard[1]", "Keyboard|other", "$env{DEVNAME}", "Keyboard%"] { assert!(Installer::persist_input_access(root.path(), 1234, keyboard).is_err()); }
+        assert!(Installer::persist_input_access(root.path(), 0, "Keyboard").is_err());
+        assert!(!root.path().join("etc").exists());
+        let module = root.path().join("etc/modules-load.d/typerelay-1234.conf");
+        std::fs::create_dir_all(module.parent().unwrap()).unwrap();
+        std::fs::write(&module, "Custom configuration\n").unwrap();
+        assert!(Installer::persist_input_access(root.path(), 1234, "Keyboard").is_err());
+        assert_eq!(std::fs::read_to_string(module).unwrap(), "Custom configuration\n");
+        assert!(!root.path().join("etc/udev").exists());
+    }
+    #[test]
+    fn appimage_command_setup_is_idempotent_and_preserves_custom_commands() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let text = include_str!("../../../scripts/appimage-cli.sh");
+        assert!(!Installer::appimage_commands(root.path(), false).unwrap());
+        assert!(Installer::appimage_commands(root.path(), true).unwrap());
+        assert!(Installer::appimage_commands(root.path(), false).unwrap());
+        assert!(Installer::appimage_commands(root.path(), true).unwrap());
+        let tui = root.path().join("usr/local/bin/typerelay-tui");
+        std::fs::set_permissions(&tui, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(!Installer::appimage_commands(root.path(), false).unwrap());
+        assert!(Installer::appimage_commands(root.path(), true).unwrap());
+        let target = root.path().join("custom-tui");
+        std::fs::write(&target, text).unwrap();
+        std::fs::remove_file(&tui).unwrap();
+        std::os::unix::fs::symlink(&target, &tui).unwrap();
+        assert!(Installer::appimage_commands(root.path(), true).is_err());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), text);
+        std::fs::remove_file(&tui).unwrap();
+        std::fs::write(&tui, "Custom TUI command\n").unwrap();
+        assert!(Installer::appimage_commands(root.path(), true).is_err());
+        assert_eq!(std::fs::read_to_string(tui).unwrap(), "Custom TUI command\n");
     }
 }

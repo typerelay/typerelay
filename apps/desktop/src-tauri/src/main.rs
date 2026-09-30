@@ -28,8 +28,9 @@ impl Runtime {
 				let appimage=std::env::var_os("APPIMAGE").map(PathBuf::from);
 				if let Some(launcher)=&appimage {Installer::register_appimage(launcher,include_bytes!("../icons/128x128.png"))?;}
 				let keyboard=Installer::keyboard()?;
-				if !Installer::has_access(&keyboard)? {
-					let accepted=app.dialog().message("Allow Typerelay to read your selected keyboard and insert text? Linux will ask for administrator authentication.").title("Keyboard access").buttons(tauri_plugin_dialog::MessageDialogButtons::OkCancelCustom("Allow".into(),"Later".into())).blocking_show();
+				if !Installer::has_access(&keyboard)? || appimage.is_some() && !Installer::appimage_commands(std::path::Path::new("/"),false)? {
+					let message=if appimage.is_some(){"Allow Typerelay to retain keyboard access after reboot and install the typerelay and typerelay-tui terminal commands? Linux will ask for administrator authentication."}else{"Allow Typerelay to read your selected keyboard and insert text? Keyboard access will persist after reboot. Linux will ask for administrator authentication."};
+					let accepted=app.dialog().message(message).title("Keyboard access").buttons(tauri_plugin_dialog::MessageDialogButtons::OkCancelCustom("Allow".into(),"Later".into())).blocking_show();
 					ensure!(accepted,"Keyboard access postponed. Restart Typerelay to allow expansion.");
 					let mut permission=std::process::Command::new("pkexec");
 					if let Some(launcher)=&appimage {permission.arg(launcher).args(["--input-access",&keyboard]);}else{permission.arg(&engine).args(["input-access","--device-name",&keyboard]);}
@@ -379,11 +380,13 @@ fn open_tui()->std::result::Result<(),String>{platform::open_tui().map_err(|e|e.
 fn open_web_app(url:Option<String>)->std::result::Result<(),String>{platform::open_web_app(url.as_deref()).map_err(|e|e.to_string())}
 fn main() {
     let arguments = std::env::args().collect::<Vec<_>>();
+	#[cfg(target_os="linux")]
+	if let Some(tool)=arguments.get(1).and_then(|arg|match arg.as_str(){"--cli"=>Some("typerelay"),"--tui-cli"=>Some("typerelay-tui"),_=>None}) {use std::os::unix::process::CommandExt;let result=std::env::current_exe().map(|path|std::process::Command::new(path.with_file_name(tool)).args(arguments.iter().skip(2)).exec());let error=match result{Ok(error)|Err(error)=>error};eprintln!("TypeRelay terminal command failed: {error}");std::process::exit(1);}
     if arguments.get(1).is_some_and(|value| value.starts_with("chrome-extension://")) { if let Err(error) = browser_bridge::BrowserBridge::serve() { eprintln!("TypeRelay browser bridge: {error:#}"); } return; }
     if arguments.get(1).is_some_and(|value| value == "--register-chrome-extension") { let result = arguments.get(2).context("Chrome extension ID required").and_then(|id| browser_bridge::BrowserBridge::register(id)); if let Err(error) = result { eprintln!("TypeRelay browser registration: {error:#}"); std::process::exit(1); } return; }
     if std::env::args().any(|a|a=="--version"){println!("typerelay-panel {}",env!("TYPERELAY_VERSION"));return;}
 	#[cfg(target_os="linux")]
-	if let Some(index)=arguments.iter().position(|arg|arg=="--input-access") {let result=arguments.get(index+1).ok_or_else(||anyhow::anyhow!("Missing keyboard name")).and_then(|name|typerelay_client::installation::Installer::grant_input_access(name));if let Err(error)=result{eprintln!("Keyboard access failed: {error:#}");std::process::exit(1);}return;}
+	if let Some(index)=arguments.iter().position(|arg|arg=="--input-access") {let result=arguments.get(index+1).ok_or_else(||anyhow::anyhow!("Missing keyboard name")).and_then(|name|{use typerelay_client::installation::Installer;Installer::grant_input_access(name)?;Installer::appimage_commands(std::path::Path::new("/"),true)?;Ok(())});if let Err(error)=result{eprintln!("Keyboard access failed: {error:#}");std::process::exit(1);}return;}
 	if Runtime::receive_callback(&arguments){return;}
     #[cfg(target_os="macos")]
     if std::env::args().any(|a|a=="--accessibility-status"){println!("{}",if platform::accessibility(false){"allowed"}else{"required"});return;}

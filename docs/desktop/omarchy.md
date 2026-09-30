@@ -1,121 +1,45 @@
 ---
-title: "Linux expansion service"
-description: "Install, update, preview, operate, or uninstall TypeRelay on Omarchy, including systemd services, keyboard and uinput permissions, and local files."
+title: "TypeRelay on Omarchy"
+description: "Install the compiled TypeRelay AppImage on Omarchy, retain keyboard access after reboot, and use the desktop panel and terminal editor."
 ---
 
-# Linux expansion service
+# Omarchy
 
-## Install a Linux package
+Download the compiled [Linux x86_64 AppImage](https://transfer.typerelay.com/apps/typerelay-desktop-latest-linux-x64.AppImage), make it executable, and launch it from a stable location. It includes the expansion engine, TUI, desktop panel, tray menu and sync. No source build or separate installer is required. Follow the [installation guide](./installation) for package verification and updates.
 
-Use [AppImage](https://transfer.typerelay.com/apps/typerelay-desktop-latest-linux-x64.AppImage), [deb](https://transfer.typerelay.com/apps/typerelay-desktop-latest-linux-x64.deb), or [rpm](https://transfer.typerelay.com/apps/typerelay-desktop-latest-linux-x64.rpm). All include the engine, TUI, desktop panel, tray menu and sync. Omarchy uses the same AppImage as other supported Hyprland installations. There is no separate Omarchy download.
+## First launch
 
-Follow the [installation guide](./installation). First launch offers keyboard permission and service setup. The package retains the panel; the service keeps matching engine and TUI copies under `~/.local/bin`. Keep AppImage at a stable path. Quit the old panel before migrating from a standalone installation.
+Accept **Keyboard access** and authenticate with Linux once. Setup installs persistent access for your selected keyboard, pointer devices used to cancel abbreviations, and `/dev/uinput`. It also loads uinput at boot. Access returns after reboot or device reconnection without another routine permission prompt. The engine runs as your desktop user while the AppImage is open; Quit stops it. Enable **Launch at login** in Settings for automatic startup.
 
-## Service maintenance
-
-Run from a terminal as your desktop user:
+Setup installs the `typerelay` and `typerelay-tui` terminal launchers in `/usr/local/bin`. They run the matching binaries inside your registered AppImage; no independently updated engine or TUI copies are needed. Each desktop user registers their own AppImage on first launch. The panel/search and TUI also appear in the application menu.
 
 ```fish
-typerelay install
+typerelay --version
+typerelay-tui --version
+typerelay-tui
 ```
 
-From a fresh checkout, first build with `cargo build --workspace --bins --release --locked`, then run
-`./target/release/typerelay install`. The installer is embedded in the executable;
-it does not need the checkout afterward. Python 3, systemd, acl, udev, modprobe,
-notify-send and sudo or pkexec must be available. Building the panel also requires Node.js,
-pnpm, GTK 3 and WebKitGTK 4.1 development packages. Omarchy provides the runtime dependencies.
+Keep the AppImage at its registered path. If you move it, launch the new location once to refresh its registration. Updates replacing the AppImage at the same path automatically update both terminal commands.
 
-The installer prints the exact paths and asks before proceeding. It also asks before
-stopping manual TypeRelay clients or stopping/disabling Espanso. Possible conflicts with
-AutoKey, xremap and kmonad are reported but are never silently killed. These checks do not
-detect every possible third-party text expander or input injector. Keyd and Fcitx are
-compatible components, not competing expanders. Keyd is optional.
+## Keyboard support
 
-When keyd is running, TypeRelay selects its effective virtual keyboard. Without keyd,
-the installer selects a single built-in keyboard, or a single physical keyboard if no
-built-in keyboard exists. Ambiguous selection requires an exact device name:
+Expansion currently requires Hyprland with a US keyboard layout. When keyd is active, TypeRelay uses `keyd virtual keyboard`; stop keyd before selecting a physical keyboard. Otherwise it selects a single built-in keyboard, or a single non-virtual keyboard when no built-in keyboard exists. Ambiguous selection is reported rather than granting access to every keyboard.
 
-```fish
-typerelay install --device-name 'AT Translated Set 2 keyboard'
-```
+For Caps mapped to Ctrl/Escape, use Hyprland's native `caps:ctrl_modifier` consistently for both the selected keyboard and TypeRelay's virtual keyboard. Caps shortcuts cancel pending abbreviations; expansion resumes after releasing Caps. Other native remappings are not supported.
 
-The selected keyboard is saved for future updates. Direct input expands only on that
-keyboard; other keyboards keep working normally. Stop keyd before selecting physical
-input. Native Caps-to-Ctrl (`ctrl:nocaps` or `caps:ctrl_modifier`) is supported; use the
-same option for the selected keyboard and TypeRelay's virtual keyboard, normally by
-setting it globally in Hyprland. Caps shortcuts cancel pending abbreviations, and
-expansion resumes after releasing Caps. Other native remappings are not supported.
+Espanso or another conflicting expander must be stopped before using TypeRelay. AppImage setup preserves your snippets, settings and any saved keyboard selection from a previous managed installation. It retires the previous managed TypeRelay user service; unmanaged services are preserved and reported as conflicts.
 
-Administrator authentication is requested only to install scoped device-access rules.
-The expander runs under a **systemd user service**, never as root. It starts with the
-graphical session, stops with that session, and restarts after recoverable process/device
-failures. Hyprland/Wayland environment variables come from the session, not hardcoded values
-in the service file. The installer imports the current session values when available.
+## Installed integration
 
-## Files installed
-
-- `~/.local/bin/typerelay`: engine executable, replaced atomically during upgrades.
-- `~/.local/bin/typerelay-tui`: [terminal snippet editor](../cli/tui), installed with the engine.
-- `~/.local/bin/typerelay-panel`: desktop search panel when included in the bundle.
-- `~/.config/systemd/user/typerelay.service`: graphical-session service.
-- `~/.config/typerelay/snippets/`: your library SQLite database and related storage.
-- `~/.local/share/typerelay/`: installer state and the device-access helper.
-- `/etc/udev/rules.d/99-typerelay-<uid>.rules`: access for the selected keyboard,
-  pointer devices used for cancellation, and `/dev/uinput`.
+- `/usr/local/bin/typerelay` and `/usr/local/bin/typerelay-tui`: shared terminal launchers that resolve each user's registered AppImage.
+- `~/.local/share/typerelay/appimage-path`: the current user's AppImage location.
+- `~/.local/share/applications/typerelay-panel.desktop` and `typerelay-tui.desktop`: menu entries.
+- `/etc/udev/rules.d/99-typerelay-<uid>.rules`: persistent access scoped to the selected keyboard, pointer devices and uinput.
 - `/etc/modules-load.d/typerelay-<uid>.conf`: load uinput at boot.
-- `/var/lib/typerelay/access-<uid>.json`: previous per-user ACL entries for uninstall.
+- `~/.config/typerelay/`: settings and local SQLite libraries.
 
-`XDG_CONFIG_HOME` and `XDG_DATA_HOME` override their respective user directories. No broad
-input-group membership, world-writable device modes or root execution capability is added.
-The persistent rules reapply access when the relevant device nodes are created. Installer
-updates preserve the original Espanso startup state for a later uninstall.
+`XDG_CONFIG_HOME` and `XDG_DATA_HOME` override their respective user directories. Setup preserves unmanaged files and does not add broad input-group membership or world-writable device modes. Manage libraries through the [TUI](../cli/tui), desktop or web app; YAML is explicit import/export.
 
-## Database-backed libraries
+## Legacy source installations
 
-Libraries live in SQLite under the configured directory. Manage them through the TUI or web app.
-YAML is explicit import/export only. First startup backs up and imports legacy YAML/sync state, then archives original files.
-The installer also backs up the stopped client configuration before replacing binaries for rollback.
-Active limits remain 256 libraries, 1 MiB serialized content per library, 8 MiB combined and 64 KiB per expansion.
-
-## Service control and interference alerts
-
-```fish
-systemctl --user status typerelay
-systemctl --user stop typerelay
-systemctl --user restart typerelay
-journalctl --user -u typerelay -f
-```
-
-If Espanso is detected at startup or appears while TypeRelay is running, TypeRelay reports
-the conflict in the terminal/journal, sends a desktop notification, and stops. The service
-does not repeatedly restart on this conflict. Stop Espanso and explicitly restart TypeRelay.
-Checking for a competing device runs every two seconds.
-
-The service stops only the main client, allowing its clipboard-restoration owner to retain
-your clipboard. That helper exits automatically when another application takes clipboard
-ownership. Snippet contents remain outside the repository.
-
-## Preview and uninstall
-
-```fish
-typerelay install --dry-run
-typerelay uninstall --dry-run
-typerelay uninstall
-```
-
-Uninstall asks for confirmation, stops TypeRelay, removes its managed service and persistent
-device rules, and restores prior ACL entries. It offers to restore the previous Espanso
-startup/running state. Each managed binary is removed only if it still matches its installed
-hash; replacements made outside the installer are preserved. Legacy engine-only manifests
-remain supported. Snippets and settings are preserved.
-
-The engine and TUI must be present with matching versions before installation changes any
-service state. When the panel binary is present, it must match too. Linux packages include
-all three; package setup stages the engine and TUI for the user service. The TUI is never started as a service.
-
-**All snippet/configuration files are kept.** Installation never deletes legacy YAML
-or Espanso files. If installation fails after permissions were configured, installer
-state remains available so rerunning install or uninstall can recover.
-
-Install/start/stop require the user’s systemd manager to be available. Keyboard reconnects are
-handled by restarting the service. Test hotplug and your exact keyboard/layout before team rollout.
+The old standalone installer is retained only for existing installations and developer builds with the `legacy-install` feature. Its `install`, `setup` and `uninstall` commands are excluded from current desktop packages. Install a compiled desktop release for normal use. deb/rpm use their package-managed user service; AppImage runs its bundled engine directly.

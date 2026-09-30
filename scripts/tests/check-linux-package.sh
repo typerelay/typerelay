@@ -16,4 +16,6 @@ fi
 mkdir -p apps/desktop/src-tauri/binaries
 cp "$target/typerelay" apps/desktop/src-tauri/binaries/typerelay-x86_64-unknown-linux-gnu
 cp "$target/typerelay-tui" apps/desktop/src-tauri/binaries/typerelay-tui-x86_64-unknown-linux-gnu
+cargo build --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
+python3 -m unittest scripts.tests.test_appimage_cli
 dbus-run-session -- cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml -- --include-ignored
