@@ -94,12 +94,13 @@ export class AiProvider {
 	}
 	static async generate(connection, installation, route, system, input, options = {}) {
 		const model = route.model; const protocol = AiProvider.protocol(connection, route); const tokens = options.tokens || 4096;
+		const effort = /^gpt-6(?:\.1-sol|-astra)(?:-|$)/i.test(model) ? 'low' : /^gpt-6/i.test(model) ? 'none' : '';
 		let path; let body;
 		if (protocol === 'gemini') { path = '/models/' + encodeURIComponent(model.replace(/^models\//, '')) + ':generateContent'; body = { systemInstruction: { parts: [{ text: system }] }, contents: [{ role: 'user', parts: [{ text: input }] }], generationConfig: { maxOutputTokens: tokens } }; }
 		else if (protocol === 'anthropic') { path = '/messages'; body = { model, system, messages: [{ role: 'user', content: input }], max_tokens: tokens }; }
-		else if (protocol === 'responses') { path = '/responses'; body = { model, instructions: system, input, max_output_tokens: tokens, store: false, ...(/^gpt-6/i.test(model) ? { reasoning: { effort: 'none' } } : {}) }; }
+		else if (protocol === 'responses') { path = '/responses'; body = { model, instructions: system, input, max_output_tokens: effort === 'low' ? Math.max(tokens, 2048) : tokens, store: false, ...(effort ? { reasoning: { effort } } : {}) }; }
 		else { path = '/chat/completions'; body = { model, messages: [{ role: 'system', content: system }, { role: 'user', content: input }], ...(/^(gpt-[56]|o\d)/i.test(model) ? { max_completion_tokens: tokens } : { max_tokens: tokens }) }; if (connection.provider === 'openai') body.store = false; }
-		if (protocol === 'chat' && /^gpt-6/i.test(model)) body.reasoning_effort = 'none';
+		if (protocol === 'chat' && effort) { body.reasoning_effort = effort; if (effort === 'low') body.max_completion_tokens = Math.max(tokens, 2048); }
 		const data = await AiProvider.request(connection, installation, path, { ...options, protocol, body });
 		let text;
 		if (protocol === 'gemini') { const candidate = data.candidates?.[0]; Support.assert(candidate && ['STOP', undefined].includes(candidate.finishReason), 'AI output is incomplete or blocked', 502); text = candidate.content?.parts?.filter(part => !part.thought).map(part => part.text || '').join(''); }

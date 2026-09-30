@@ -72,6 +72,17 @@ test('public/custom network policy and pinned local HTTP requests', async () => 
 	try { assert.equal(await AiProvider.generate({ provider: 'compatible', base_url: origin + '/v1', key: 'mock-private-key' }, { private_endpoints: [origin] }, { model: 'local-model', protocol: 'auto' }, 'Test', 'Hello'), 'OK'); } finally { await new Promise(resolve => server.close(resolve)); }
 });
 
+test('GPT-6.1 Sol and Astra use supported reasoning settings without changing Luna defaults', async () => {
+	await Fixture.provider(async calls => {
+		for (const model of ['gpt-6.1-sol', 'gpt-6.1-sol-2026-09-30', 'gpt-6-astra']) for (const protocol of ['responses', 'chat']) {
+			await AiProvider.generate({ provider: 'openai' }, {}, { model, protocol }, 'Test', 'Hello', { tokens: 512 });
+			const body = calls.at(-1).body; assert.equal(body.reasoning?.effort || body.reasoning_effort, 'low'); assert.equal(body.max_output_tokens || body.max_completion_tokens, 2048);
+		}
+		await AiProvider.generate({ provider: 'openai' }, {}, { model: 'gpt-6-luna', protocol: 'responses' }, 'Test', 'Hello', { tokens: 512 });
+		assert.deepEqual(calls.at(-1).body.reasoning, { effort: 'none' }); assert.equal(calls.at(-1).body.max_output_tokens, 512);
+	}, call => call.path === '/responses' ? { status: 'completed', output_text: 'OK' } : { choices: [{ finish_reason: 'stop', message: { content: 'OK' } }] });
+});
+
 test('private/team/installation precedence, masks, isolation and model inheritance', async () => {
 	const owner = await Fixture.context(); const account = await Account.findById(owner.account).lean(); const member = await Fixture.context('member', account);
 	await Fixture.configure(null, 'installation', 'managed-test-key', true);
