@@ -15,10 +15,16 @@ struct GlobalHit { library_id: String, snippet_id: String, file_index: usize, en
 
 pub struct App {
     ai_dialog: Option<crate::ai_dialog::Dialog>,
-    ai_base: Option<Match>,
+    writing: Option<(String, Match, String, std::sync::mpsc::Receiver<Result<Match>>)>,
+    writing_undo: Vec<(TextArea<'static>, String)>,
+    writing_buttons: Vec<Rect>,
     ai_query: String,
-    ai_due: std::time::Instant,
-    ai_pending: Option<(String, std::sync::mpsc::Receiver<anyhow::Result<Vec<typerelay_client::panel::Hit>>>)>,
+    ai_scope: Option<String>,
+    ai_generation: u64,
+    ai_cancelled: bool,
+    ai_hits: Vec<usize>,
+    ai_selection: Option<(String,String)>,
+    ai_pending: Option<(String, u64, std::sync::mpsc::Receiver<anyhow::Result<Vec<typerelay_client::panel::Hit>>>)>,
     ai_done: bool,
     store: EditorStore,
     settings: SettingsStore,
@@ -96,50 +102,59 @@ impl App {
         let files = Self::load_files(&store)?;
         let mut file_state = ListState::default();
         file_state.select(Some(0));
-        Ok(Self { ai_dialog:None, ai_base:None, ai_query:String::new(), ai_due:std::time::Instant::now(), ai_pending:None, ai_done:true, store, settings, screen: Screen::Files, files, file_state, global_search: TextArea::default(), global_search_focused: false, global_hits: Vec::new(), global_state: ListState::default(), global_edit: false, snippets_state: ListState::default(), file: None, search: TextArea::default(), search_focused: false, trigger: TextArea::default(), title: TextArea::default(), language: "plain_text".into(), code: false, template:false, rich:false, rich_preview:false,rich_image:None,image_source:TextArea::default(),image_alt:TextArea::default(),image_title:TextArea::default(),image_width:Self::text("640"),image_focus:0, variables:Default::default(), template_dialog:None, fill_base:None, copy_identity:None, rich_fill:None, preview_x: 0, expansion: TextArea::default(), name: TextArea::default(), url: TextArea::default(), editor_focus: 0, editing: None, original_entry: None, original_url: String::new(), prefix: TextArea::default(), original_prefix: String::new(), pending: None, pending_delete: None, selected_ids: std::collections::BTreeSet::new(), selection_anchor: None, move_destination: None, move_choices: Vec::new(), move_state: ListState::default(), move_from: Screen::Browse, move_items: Vec::new(), pending_batch: None,pending_merge:None, bulk_buttons: Vec::new(), pending_trash: None, trash_rows: Vec::new(), trash_state: ListState::default(), trash_buttons: Vec::new(), confirm_from: Screen::Files, status: "Choose a file, or create a new one".into(), error: false, quit: false, toolbar: Vec::new(), list_area: Rect::default(), field_areas: Vec::new(), save_area: Rect::default(), cancel_area: Rect::default(), confirm_buttons: Vec::new(),merge_button:Rect::default() })
+        Ok(Self { ai_dialog:None, writing:None, writing_undo:Vec::new(), writing_buttons:Vec::new(), ai_query:String::new(), ai_scope:None, ai_generation:0, ai_cancelled:false, ai_hits:Vec::new(), ai_selection:None, ai_pending:None, ai_done:true, store, settings, screen: Screen::Files, files, file_state, global_search: TextArea::default(), global_search_focused: false, global_hits: Vec::new(), global_state: ListState::default(), global_edit: false, snippets_state: ListState::default(), file: None, search: TextArea::default(), search_focused: false, trigger: TextArea::default(), title: TextArea::default(), language: "plain_text".into(), code: false, template:false, rich:false, rich_preview:false,rich_image:None,image_source:TextArea::default(),image_alt:TextArea::default(),image_title:TextArea::default(),image_width:Self::text("640"),image_focus:0, variables:Default::default(), template_dialog:None, fill_base:None, copy_identity:None, rich_fill:None, preview_x: 0, expansion: TextArea::default(), name: TextArea::default(), url: TextArea::default(), editor_focus: 0, editing: None, original_entry: None, original_url: String::new(), prefix: TextArea::default(), original_prefix: String::new(), pending: None, pending_delete: None, selected_ids: std::collections::BTreeSet::new(), selection_anchor: None, move_destination: None, move_choices: Vec::new(), move_state: ListState::default(), move_from: Screen::Browse, move_items: Vec::new(), pending_batch: None,pending_merge:None, bulk_buttons: Vec::new(), pending_trash: None, trash_rows: Vec::new(), trash_state: ListState::default(), trash_buttons: Vec::new(), confirm_from: Screen::Files, status: "Choose a file, or create a new one".into(), error: false, quit: false, toolbar: Vec::new(), list_area: Rect::default(), field_areas: Vec::new(), save_area: Rect::default(), cancel_area: Rect::default(), confirm_buttons: Vec::new(),merge_button:Rect::default() })
     }
     fn cancel_ai_search(&mut self) {
-        if let Some((id,_))=self.ai_pending.take(){let root=self.settings.config_dir().to_path_buf();std::thread::spawn(move||{let _=typerelay_client::native_ai::NativeAi::request(&root,serde_json::json!({"op":"cancel","id":id}));});}
+        if !self.ai_cancelled { if let Some((id,_,_))=&self.ai_pending { let id=id.clone();let root=self.settings.config_dir().to_path_buf();std::thread::spawn(move||{let _=typerelay_client::native_ai::NativeAi::request(&root,serde_json::json!({"op":"cancel","id":id}));});self.ai_cancelled=true; } }
+    }
+    fn cancel_writing(&mut self) {
+        if let Some((id,_,_,_))=self.writing.take(){let root=self.settings.config_dir().to_path_buf();std::thread::spawn(move||{let _=typerelay_client::native_ai::NativeAi::request(&root,serde_json::json!({"op":"cancel","id":id}));});self.message("Writing cancelled",false);}
+    }
+    fn writing_available(&self) -> bool { let root=self.settings.config_dir();typerelay_client::native_ai::NativeAi::settings(root).ok().and_then(|settings|settings.model).and_then(|id|typerelay_client::native_ai::NativeAi::model(&id).ok()).and_then(|model|typerelay_client::native_ai::NativeAi::path(root,&model).ok()).is_some_and(|path|path.is_file()) }
+    fn write_action(&mut self, action: usize) -> Result<()> {
+        if action==2 { self.cancel_writing();if self.writing_undo.last().is_some_and(|(_,text)|*text==Self::value(&self.expansion)){self.expansion=self.writing_undo.pop().unwrap().0;}else{self.expansion.undo();}self.rich_preview=false;return Ok(()); }
+        if self.writing.is_some(){return Ok(());}
+        let draft=self.draft();anyhow::ensure!(!draft.replace.trim().is_empty(),"Write a request or some text first");
+        anyhow::ensure!(self.writing_available(),"Enable AI and choose a downloaded model in Settings");
+        let root=self.settings.config_dir().to_path_buf();let id=uuid::Uuid::new_v4().to_string();let job_id=id.clone();let original=draft.clone();let action=if action==0{"create"}else{"rewrite"};let(sender,receiver)=std::sync::mpsc::channel();
+        std::thread::spawn(move||{let _=sender.send(typerelay_client::native_ai::NativeAi::author(&root,&original,action,&job_id));});self.writing=Some((id,draft,action.into(),receiver));Ok(())
     }
     pub fn ai_tick(&mut self)->bool {
-        if self.ai_dialog.is_some() && self.ai_base.as_ref().is_some_and(|base|base!=&self.draft()) { self.ai_dialog=None;self.ai_base=None;self.message("Draft changed; AI proposal discarded",true);return true; }
-        if let Some(dialog)=&mut self.ai_dialog{return dialog.tick();}
-        if self.screen!=Screen::Files{return false;}
-        if !self.ai_done && self.ai_due.elapsed()>=std::time::Duration::from_millis(600) {
-            self.ai_done=true;
-            if !self.ai_query.trim().is_empty() && typerelay_client::native_ai::NativeAi::settings(self.settings.config_dir()).is_ok_and(|settings|settings.model.is_some()){let root=self.settings.config_dir().to_path_buf();let directory=self.store.directory.clone();let query=self.ai_query.clone();let id=uuid::Uuid::new_v4().to_string();let job_id=id.clone();let(sender,receiver)=std::sync::mpsc::channel();std::thread::spawn(move||{let _=sender.send(typerelay_client::native_ai::NativeAi::search(&root,&directory,&query,&job_id));});self.ai_pending=Some((id,receiver));}
-        }
-        let result=self.ai_pending.as_ref().and_then(|(_,receiver)|receiver.try_recv().ok());
-        if let Some(result)=result {
-            self.ai_pending=None;
-            if let Ok(rows)=result {
-                let selected=self.selected_global().map(|hit|(hit.library_id.clone(),hit.snippet_id.clone()));
-                let mut hits=Vec::new();
-                for row in rows {if typerelay_client::panel::Panel::content(&self.store.directory,&row).is_err(){continue;}if let Some(file_index)=self.files.iter().position(|file|file.id==row.library){if let Some(entry_index)=self.files[file_index].ids.iter().position(|id|id==&row.id){hits.push(GlobalHit{library_id:row.library,snippet_id:row.id,file_index,entry_index});}}}
-                self.global_hits=hits;let index=selected.and_then(|(library,id)|self.global_hits.iter().position(|hit|hit.library_id==library&&hit.snippet_id==id)).unwrap_or(0);self.global_state.select((!self.global_hits.is_empty()).then_some(index));return true;
-            }
-        }
-        false
+        let mut changed=false;
+        if self.writing.as_ref().is_some_and(|(_,base,_,_)|self.screen!=Screen::Edit||*base!=self.draft()){self.cancel_writing();changed=true;}
+        let written=self.writing.as_ref().and_then(|(_,_,_,receiver)|receiver.try_recv().ok());
+        if let Some(result)=written {let(_,base,_,_)=self.writing.take().unwrap();match result.and_then(|proposal|{typerelay_client::native_ai::NativeAi::validate_proposal(&base,&proposal)?;Ok(proposal)}){Ok(proposal)=>{self.writing_undo.push((self.expansion.clone(),proposal.replace.clone()));self.expansion=Self::text(&proposal.replace);self.rich_preview=false;self.message("Text updated · Undo reverts · Ctrl+S saves",false);},Err(error)=>self.message(error.to_string(),true)}changed=true;}
+        if let Some(dialog)=&mut self.ai_dialog{return dialog.tick()||changed;}
+        if !matches!(self.screen,Screen::Files|Screen::Browse){self.cancel_ai_search();self.ai_done=true;self.ai_query.clear();return changed;}
+        let query=if self.screen==Screen::Browse{Self::value(&self.search)}else{Self::value(&self.global_search)};
+        let scope=if self.screen==Screen::Browse{self.file.as_ref().map(|file|file.id.clone())}else{None};
+        if query!=self.ai_query||scope!=self.ai_scope {self.rebuild_global_hits();changed=true;}
+        let result=self.ai_pending.as_ref().and_then(|(_,_,receiver)|receiver.try_recv().ok());
+        if let Some(result)=result {let(_,generation,_)=self.ai_pending.take().unwrap();self.ai_cancelled=false;if generation==self.ai_generation&&!self.ai_done {match result{Ok(rows)=>self.publish_search(rows),Err(error)=>{self.publish_search(Vec::new());self.message(error.to_string(),true);}}changed=true;}}
+        if !self.ai_done&&self.ai_pending.is_none(){let root=self.settings.config_dir().to_path_buf();let directory=self.store.directory.clone();let query=self.ai_query.clone();let scope=self.ai_scope.clone();let id=uuid::Uuid::new_v4().to_string();let job_id=id.clone();let(sender,receiver)=std::sync::mpsc::channel();std::thread::spawn(move||{let _=sender.send(typerelay_client::native_ai::NativeAi::search(&root,&directory,&query,&job_id,scope.as_deref()));});self.ai_pending=Some((id,self.ai_generation,receiver));}
+        changed
     }
     fn load_files(store: &EditorStore) -> Result<Vec<OpenFile>> { store.files()?.iter().map(|name| store.open(name)).collect() }
     fn text(value: &str) -> TextArea<'static> { TextArea::new(value.split('\n').map(str::to_owned).collect()) }
     fn value(field: &TextArea<'_>) -> String { field.lines().join("\n") }
     fn global_active(&self) -> bool { !Self::value(&self.global_search).is_empty() }
-    fn selected_global(&self) -> Option<&GlobalHit> { self.global_hits.get(self.global_state.selected()?) }
+    fn selected_global(&self) -> Option<&GlobalHit> { if !self.ai_done{return None;}self.global_hits.get(self.global_state.selected()?) }
+    fn publish_search(&mut self, rows: Vec<typerelay_client::panel::Hit>) {
+        let rows:Vec<_>=rows.into_iter().filter(|row|typerelay_client::panel::Panel::content(&self.store.directory,row).is_ok()).collect();self.ai_done=true;
+        if let Some(scope)=&self.ai_scope {
+            self.ai_hits=rows.iter().filter(|row|row.library==*scope).filter_map(|row|self.file.as_ref()?.ids.iter().position(|id|*id==row.id)).collect();
+            let index=self.ai_selection.as_ref().and_then(|(_,id)|self.ai_hits.iter().position(|index|self.file.as_ref().is_some_and(|file|file.ids[*index]==*id))).unwrap_or(0);self.snippets_state.select((!self.ai_hits.is_empty()).then_some(index));
+        }else{
+            self.global_hits=rows.into_iter().filter_map(|row|{let file_index=self.files.iter().position(|file|file.id==row.library)?;let entry_index=self.files[file_index].ids.iter().position(|id|*id==row.id)?;Some(GlobalHit{library_id:row.library,snippet_id:row.id,file_index,entry_index})}).collect();
+            let index=self.ai_selection.as_ref().and_then(|(library,id)|self.global_hits.iter().position(|hit|hit.library_id==*library&&hit.snippet_id==*id)).unwrap_or(0);self.global_state.select((!self.global_hits.is_empty()).then_some(index));
+        }
+    }
     fn rebuild_global_hits(&mut self) {
-        let selected = self.selected_global().map(|hit| (hit.library_id.clone(), hit.snippet_id.clone()));
-        let query = Self::value(&self.global_search);
-        if query != self.ai_query { self.cancel_ai_search(); self.ai_query=query.clone(); self.ai_due=std::time::Instant::now(); self.ai_done=false; }
-
-        self.global_hits = if query.is_empty() { Vec::new() } else {
-            self.files.iter().enumerate().flat_map(|(file_index, file)| {
-                file.search(&query).into_iter().map(move |entry_index| GlobalHit {
-                    library_id: file.id.clone(), snippet_id: file.ids[entry_index].clone(), file_index, entry_index,
-                })
-            }).collect()
-        };
-        let index = selected.and_then(|(library_id, snippet_id)| self.global_hits.iter().position(|hit| hit.library_id == library_id && hit.snippet_id == snippet_id)).unwrap_or(0);
-        self.global_state.select((!self.global_hits.is_empty()).then_some(index));
+        if !matches!(self.screen,Screen::Files|Screen::Browse){return;}
+        if self.ai_done {self.ai_selection=if self.screen==Screen::Browse{self.file.as_ref().and_then(|file|{let indices=if self.ai_query.trim().is_empty(){file.search("")}else{self.ai_hits.clone()};let index=*indices.get(self.snippets_state.selected()?)?;Some((file.id.clone(),file.ids.get(index)?.clone()))})}else{self.selected_global().map(|hit|(hit.library_id.clone(),hit.snippet_id.clone()))};}
+        self.cancel_ai_search();self.ai_generation+=1;let previous_query=self.ai_query.clone();self.ai_query=if self.screen==Screen::Browse{Self::value(&self.search)}else{Self::value(&self.global_search)};self.ai_scope=if self.screen==Screen::Browse{self.file.as_ref().map(|file|file.id.clone())}else{None};self.ai_done=false;if previous_query!=self.ai_query{self.selected_ids.clear();self.selection_anchor=None;}
+        let rows=typerelay_client::panel::Panel::search(&self.store.directory,&self.ai_query,self.ai_scope.as_deref());
+        match rows {Ok(rows)=>{if self.ai_query.trim().is_empty()||rows.iter().any(|row|row.abbreviation.eq_ignore_ascii_case(self.ai_query.trim()))||!typerelay_client::native_ai::NativeAi::settings(self.settings.config_dir()).is_ok_and(|settings|settings.model.is_some()){self.publish_search(rows);}},Err(error)=>{self.publish_search(Vec::new());self.message(error.to_string(),true);}}
     }
     fn reload_files(&mut self) -> Result<()> {
         self.files = Self::load_files(&self.store)?;
@@ -153,7 +168,7 @@ impl App {
     }
     fn draft(&self) -> Match { let replacement=Self::value(&self.expansion);let dynamic=self.template||(!self.code&&!self.rich&&(!self.variables.is_empty()||replacement.contains("{{")));Match { variables: self.variables.clone(), trigger: Self::value(&self.trigger), replace: replacement, title: Self::value(&self.title), kind: if self.rich { "rich_text" } else if self.code { "code" } else if dynamic { "template" } else { "plain_text" }.into(), language: self.language.clone() } }
     fn next_editor_field(&mut self, backwards: bool) {
-        let order = [2, 0, 1];
+        let order = [2, 0, 1, 3, 4, 5];
         let index = order.iter().position(|field| *field == self.editor_focus).unwrap_or(0);
         self.editor_focus = order[(index + if backwards { order.len() - 1 } else { 1 }) % order.len()];
     }
@@ -170,9 +185,10 @@ impl App {
         }
     }
     fn message(&mut self, text: impl Into<String>, error: bool) { self.status = text.into(); self.error = error; }
-    fn filtered(&self) -> Vec<usize> { self.file.as_ref().map(|file| file.search(&Self::value(&self.search))).unwrap_or_default() }
+    fn filtered(&self) -> Vec<usize> { if Self::value(&self.search).trim().is_empty(){return self.file.as_ref().map(|file|file.search("")).unwrap_or_default();}if !self.ai_done||self.ai_query!=Self::value(&self.search)||self.ai_scope.as_deref()!=self.file.as_ref().map(|file|file.id.as_str()){return Vec::new();}self.ai_hits.clone() }
     fn selected(&self) -> Option<usize> { self.filtered().get(self.snippets_state.selected().unwrap_or(0)).copied() }
     fn apply(&mut self, destination: Destination) -> Result<()> {
+        self.cancel_writing();
         self.pending = None;
         match destination {
             Destination::Trash => { self.load_trash()?; self.screen = Screen::Trash; }
@@ -192,6 +208,7 @@ impl App {
         Ok(())
     }
     fn leave(&mut self, destination: Destination) -> Result<()> {
+        self.cancel_writing();
         if self.dirty() {
             self.confirm_from = self.screen;
             self.pending = Some(destination);
@@ -243,10 +260,12 @@ impl App {
         self.original_entry = Some(entry);
         self.editor_focus = 0;
         self.screen = Screen::Edit;
-        self.message("Tab / Shift+Tab switch fields · Code: F2 leaves editor · F9 Type · Ctrl+G AI · Ctrl+S saves", false);
+        self.writing_undo.clear();
+        self.message("Tab / Shift+Tab switch fields · Code: F2 leaves editor · F9 Type · Ctrl+G Create · Ctrl+S saves", false);
         Ok(())
     }
     fn save(&mut self) -> Result<()> {
+        self.cancel_writing();
         match self.effective_screen() {
             Screen::Edit => {
                 let file = self.file.as_ref().context("No file selected")?;
@@ -511,23 +530,17 @@ impl App {
     }
     pub fn handle(&mut self, event: Event) {
         if let Err(error) = self.handle_inner(event) { self.message(format!("{error:#}"), true); }
+        if self.writing.as_ref().is_some_and(|(_,base,_,_)|self.screen!=Screen::Edit||*base!=self.draft()){self.cancel_writing();}
+        self.ai_tick();
     }
     fn handle_inner(&mut self, event: Event) -> Result<()> {
-        if let Some(dialog)=&mut self.ai_dialog {
-            if let Some(outcome)=dialog.event(event) {
-                let base=self.ai_base.take();self.ai_dialog=None;
-                if let crate::ai_dialog::Outcome::Apply(proposal)=outcome {
-                    anyhow::ensure!(base.as_ref()==Some(&self.draft()),"Draft changed; generate another proposal");
-                    typerelay_client::native_ai::NativeAi::validate_proposal(&self.draft(),&proposal)?;
-                    self.expansion=Self::text(&proposal.replace);self.message("AI draft applied; Ctrl+G AI · Ctrl+S saves",false);
-                }
-            }
-            return Ok(());
+        if let Some(dialog)=&mut self.ai_dialog {if dialog.event(event).is_some(){self.ai_dialog=None;}return Ok(());}
+        if matches!(&event,Event::Key(key) if key.kind!=KeyEventKind::Release&&key.code==KeyCode::Esc)&&self.writing.is_some(){self.cancel_writing();return Ok(());}
+        if matches!(&event,Event::Key(key) if key.kind!=KeyEventKind::Release&&key.modifiers.contains(KeyModifiers::CONTROL)&&key.code==KeyCode::Char('g')) {
+            if self.screen==Screen::Edit{return self.write_action(0);}
+            if self.screen==Screen::Settings{self.cancel_ai_search();self.ai_dialog=Some(crate::ai_dialog::Dialog::new(self.settings.config_dir().to_path_buf()));return Ok(());}
         }
-        if matches!(&event,Event::Key(key) if key.modifiers.contains(KeyModifiers::CONTROL) && key.code==KeyCode::Char('g')) && matches!(self.screen,Screen::Edit|Screen::Settings) {
-            self.cancel_ai_search();self.ai_base=if self.screen==Screen::Edit {Some(self.draft())} else {None};self.ai_dialog=Some(crate::ai_dialog::Dialog::new(self.settings.config_dir().to_path_buf(),self.ai_base.clone()));return Ok(());
-        }
-
+        if self.screen==Screen::Edit&&matches!(&event,Event::Key(key) if key.kind!=KeyEventKind::Release&&key.modifiers.contains(KeyModifiers::CONTROL)&&key.code==KeyCode::Char('z')){return self.write_action(2);}
         if let Some(dialog)=&mut self.template_dialog {
             if let Some(outcome)=dialog.event(event) { match outcome {
                 crate::template_dialog::Outcome::Cancel=>(),
@@ -646,6 +659,8 @@ impl App {
                     _ => (),
                 },
                 Screen::Edit => match key.code {
+                    KeyCode::Enter if self.editor_focus>=3=>self.write_action(self.editor_focus-3)?,
+                    _ if self.editor_focus>=3&&!matches!(key.code,KeyCode::Tab|KeyCode::BackTab|KeyCode::Esc)=>(),
                     KeyCode::Esc => self.leave(if self.global_edit { Destination::Files } else { Destination::Browse })?,
                     KeyCode::Tab if self.editor_focus == 1 && self.code && key.modifiers.is_empty() => { self.expansion.insert_str("\t"); }
                     KeyCode::Tab | KeyCode::BackTab => self.next_editor_field(key.code == KeyCode::BackTab || key.modifiers.contains(KeyModifiers::SHIFT)),
@@ -671,7 +686,7 @@ impl App {
 				Screen::Image=>match self.image_focus{0=>Self::single_input(&mut self.image_source,Event::Paste(text)),1=>Self::single_input(&mut self.image_alt,Event::Paste(text)),2=>Self::single_input(&mut self.image_title,Event::Paste(text)),_=>Self::single_input(&mut self.image_width,Event::Paste(text))},
 				Screen::Edit if self.editor_focus == 1&&!self.rich_preview => { self.expansion.insert_str(text.replace("\r\n", "\n").replace('\r', "\n")); }
                 Screen::Edit if self.editor_focus == 2 => Self::single_input(&mut self.title, Event::Paste(text)),
-                Screen::Edit => self.abbreviation_input(Event::Paste(text)),
+                Screen::Edit if self.editor_focus==0 => self.abbreviation_input(Event::Paste(text)),
                 Screen::Settings if self.editor_focus == 0 => Self::single_input(&mut self.url, Event::Paste(text)),
                 Screen::Settings => Self::single_input(&mut self.prefix, Event::Paste(text)),
                 Screen::NewFile => Self::single_input(&mut self.name, Event::Paste(text)),
@@ -701,6 +716,7 @@ impl App {
                     if let Some(index) = self.trash_buttons.iter().position(|area| area.contains(position)) { return self.trash_request(if index == 0 { "restore" } else { "purge" }); }
                     if self.list_area.contains(position) { let index = usize::from(mouse.row.saturating_sub(self.list_area.y + 1)) + self.trash_state.offset(); if index < self.trash_rows.len() { self.trash_state.select(Some(index)); } return Ok(()); }
                 }
+                if self.screen==Screen::Edit{if let Some(index)=self.writing_buttons.iter().position(|area|area.contains(position)){self.editor_focus=index+3;return self.write_action(index);}}
                 if let Some(index) = self.toolbar.iter().position(|area| area.contains(position)) { return self.toolbar_action(index); }
 				if self.save_area.contains(position) { return if self.screen==Screen::Image{self.image()}else{self.save()}; }
 				if self.cancel_area.contains(position) {if self.screen==Screen::Image{self.screen=Screen::Edit;return Ok(());}return self.leave(if self.screen == Screen::NewFile || self.screen == Screen::Edit && self.global_edit { Destination::Files } else { Destination::Browse }); }
@@ -739,7 +755,7 @@ impl App {
         else if self.screen == Screen::Files { let _ = self.reload_files(); }
         else if self.screen == Screen::Browse && let Some(file) = &self.file {
             match self.store.open(&file.name) {
-                Ok(current) => { if typerelay_client::database::Database::open(&self.store.directory).and_then(|db|db.editable(&current.id)).is_err() { self.selected_ids.clear(); self.selection_anchor = None; } self.selected_ids.retain(|id|current.ids.contains(id)); if self.selection_anchor.as_ref().is_some_and(|id|!current.ids.contains(id)) { self.selection_anchor = None; } self.file = Some(current); }
+                Ok(current) => { if typerelay_client::database::Database::open(&self.store.directory).and_then(|db|db.editable(&current.id)).is_err() { self.selected_ids.clear(); self.selection_anchor = None; } self.selected_ids.retain(|id|current.ids.contains(id)); if self.selection_anchor.as_ref().is_some_and(|id|!current.ids.contains(id)) { self.selection_anchor = None; } self.file = Some(current);self.rebuild_global_hits(); }
                 Err(_) => { self.file = None; let _ = self.apply(Destination::Files); }
             }
         }
@@ -749,7 +765,7 @@ impl App {
     }
     pub fn draw(&mut self, frame: &mut Frame) {
         if let Some(dialog)=&mut self.ai_dialog {dialog.draw(frame);return;}
-        self.toolbar.clear(); self.trash_buttons.clear(); self.bulk_buttons.clear(); self.field_areas.clear(); self.list_area = Rect::default(); self.save_area = Rect::default(); self.cancel_area = Rect::default(); self.merge_button = Rect::default();
+        self.writing_buttons.clear();self.toolbar.clear(); self.trash_buttons.clear(); self.bulk_buttons.clear(); self.field_areas.clear(); self.list_area = Rect::default(); self.save_area = Rect::default(); self.cancel_area = Rect::default(); self.merge_button = Rect::default();
         let area = frame.area();
         if let Some(dialog)=&mut self.template_dialog {dialog.draw(frame,area);return;}
         if area.width < 60 || area.height < 20 { frame.render_widget(Paragraph::new("TypeRelay — resize terminal to at least 60 × 20. Ctrl+Q exits."), area); return; }
@@ -784,12 +800,12 @@ impl App {
                 if self.global_active() {
                     let columns = Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)]).split(parts[1]);
                     self.list_area = columns[0];
-                    let items = self.global_hits.iter().map(|hit| {
+                    let items = self.global_hits.iter().filter(|_|self.ai_done).map(|hit| {
                         let file = &self.files[hit.file_index];
                         ListItem::new(format!("{} · {}", file.name, file.entries[hit.entry_index].label()))
                     }).collect::<Vec<_>>();
-                    frame.render_stateful_widget(List::new(items).block(Self::border(format!("{} snippets — Enter to edit", self.global_hits.len()), !self.global_search_focused)).highlight_style(Style::default().bg(Color::DarkGray)).highlight_symbol("› "), columns[0], &mut self.global_state);
-                    let preview = self.selected_global().map(|hit| self.files[hit.file_index].entries[hit.entry_index].replace.clone()).unwrap_or("No matching snippets.".into());
+                    frame.render_stateful_widget(List::new(items).block(Self::border(if !self.ai_done{"Searching…".into()}else{format!("{} snippets — Enter to edit", self.global_hits.len())}, !self.global_search_focused)).highlight_style(Style::default().bg(Color::DarkGray)).highlight_symbol("› "), columns[0], &mut self.global_state);
+                    let preview = self.selected_global().map(|hit| self.files[hit.file_index].entries[hit.entry_index].replace.clone()).unwrap_or_else(||if !self.ai_done{"Searching…".into()}else{"No matching snippets.".into()});
                     frame.render_widget(Paragraph::new(preview).scroll((0, self.preview_x)).block(Self::border("Preview · ←/→ scroll · Ctrl+C Copy", false)), columns[1]);
                 } else {
                     let rows = Layout::vertical([Constraint::Min(3), Constraint::Length(3)]).split(parts[1]);
@@ -820,8 +836,8 @@ impl App {
                 let filtered = self.filtered();
                 let entries = self.file.as_ref().map(|file| file.entries.as_slice()).unwrap_or(&[]);
                 let items = filtered.iter().map(|index| ListItem::new(format!("[{}] {}", if self.selected_ids.contains(&self.file.as_ref().unwrap().ids[*index]) { "x" } else { " " }, entries[*index].label()))).collect::<Vec<_>>();
-                frame.render_stateful_widget(List::new(items).block(Self::border(format!("{} snippets — Enter to edit", filtered.len()), !self.search_focused)).highlight_style(Style::default().bg(Color::DarkGray)).highlight_symbol("› "), columns[0], &mut self.snippets_state);
-                let preview = self.selected().map(|index| self.file.as_ref().unwrap().entries[index].replace.clone()).unwrap_or("No matching snippets. F2 adds a snippet.".into());
+                frame.render_stateful_widget(List::new(items).block(Self::border(if !self.ai_done{"Searching…".into()}else{format!("{} snippets — Enter to edit", filtered.len())}, !self.search_focused)).highlight_style(Style::default().bg(Color::DarkGray)).highlight_symbol("› "), columns[0], &mut self.snippets_state);
+                let preview = self.selected().map(|index| self.file.as_ref().unwrap().entries[index].replace.clone()).unwrap_or_else(||if !self.ai_done{"Searching…".into()}else{"No matching snippets. F2 adds a snippet.".into()});
                 frame.render_widget(Paragraph::new(preview).scroll((0, self.preview_x)).block(Self::border("Preview · ←/→ scroll · Ctrl+C Copy", false)), columns[1]);
             }
 			Screen::Image=>{let parts=Layout::vertical([Constraint::Length(3),Constraint::Length(3),Constraint::Length(3),Constraint::Length(3),Constraint::Min(2),Constraint::Length(3)]).split(body);self.image_source.set_block(Self::border("Local path or HTTP/HTTPS URL",self.image_focus==0));self.image_alt.set_block(Self::border("Alt text",self.image_focus==1));self.image_title.set_block(Self::border("Title",self.image_focus==2));self.image_width.set_block(Self::border("Display width (32–2048)",self.image_focus==3));frame.render_widget(&self.image_source,parts[0]);frame.render_widget(&self.image_alt,parts[1]);frame.render_widget(&self.image_title,parts[2]);frame.render_widget(&self.image_width,parts[3]);frame.render_widget(Paragraph::new("PNG, JPEG, WebP, and GIF · 5 MiB input · remote images are cached for offline insertion"),parts[4]);self.field_areas.extend([parts[0],parts[1],parts[2],parts[3]]);self.form_buttons(frame,parts[5]);}
@@ -839,7 +855,7 @@ impl App {
 				frame.render_widget(&self.trigger, trigger_row[2]);if self.rich&&self.rich_preview{if let Some(image)=&self.rich_image{let preview=Layout::horizontal([Constraint::Percentage(65),Constraint::Percentage(35)]).split(parts[2]);frame.render_widget(Paragraph::new(tui_markdown::from_str(&Self::value(&self.expansion))).wrap(Wrap{trim:false}).block(Self::border("Rich preview · F12 source",false)),preview[0]);frame.render_widget(ratatui_image::Image::new(image),preview[1]);}else{frame.render_widget(Paragraph::new(tui_markdown::from_str(&Self::value(&self.expansion))).wrap(Wrap{trim:false}).block(Self::border("Rich preview · F12 source",false)),parts[2]);}}else{frame.render_widget(&self.expansion, parts[2]);}
                 self.field_areas.extend([trigger_row[2], parts[2], title_area]);
                 let destination = self.move_destination.as_ref().and_then(|id| self.move_choices.iter().find(|library|library["_id"] == *id)).and_then(|library|library["name"].as_str()).unwrap_or("Current library");
-                frame.render_widget(Paragraph::new(format!("Library: {destination} · Ctrl+M / F8 destination · F9 Type · Ctrl+C Copy · F11 Variables · F12 Preview")), parts[4]);
+                frame.render_widget(Paragraph::new(format!("Library: {destination} · F8 destination · F9 Type · F11 Variables · F12 Preview\n{}",if !self.writing_available(){"Enable AI and choose a downloaded model in Settings"}else if Self::value(&self.expansion).trim().is_empty(){"Write a request or some text first"}else{"Create from your request · Rewrite your text · Undo · Ctrl+S saves"})), parts[4]);
                 self.form_buttons(frame, parts[5]);
             }
             Screen::NewFile => {
@@ -879,6 +895,13 @@ impl App {
         }
     }
     fn form_buttons(&mut self, frame: &mut Frame, area: Rect) {
+        if self.screen==Screen::Edit {
+            let parts=Layout::horizontal([Constraint::Length(12),Constraint::Length(14),Constraint::Length(14),Constraint::Length(10),Constraint::Min(0),Constraint::Length(16)]).split(area);self.cancel_area=parts[0];self.save_area=parts[5];self.writing_buttons=vec![parts[1],parts[2],parts[3]];
+            let enabled=!Self::value(&self.expansion).trim().is_empty()&&self.writing_available();
+            Self::button(frame,parts[0],"Esc Cancel",true);Self::button(frame,parts[5],"Ctrl+S Save",true);
+            for(index,label)in ["Create","Rewrite","Undo"].iter().enumerate(){let pending=self.writing.as_ref().is_some_and(|(_,_,action,_)|action==if index==0{"create"}else if index==1{"rewrite"}else{""});let label=if pending{if index==0{"Creating…"}else{"Rewriting…"}}else{label};Self::button(frame,parts[index+1],label,index==2||enabled&&self.writing.is_none());if self.editor_focus==index+3{frame.render_widget(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Cyan)),parts[index+1]);}}
+            return;
+        }
         let parts = Layout::horizontal([Constraint::Length(16), Constraint::Min(0), Constraint::Length(18)]).split(area);
         self.cancel_area = parts[0]; self.save_area = parts[2];
         Self::button(frame, parts[0], "Esc Cancel", true); Self::button(frame, parts[2], "Ctrl+S Save", true);
@@ -889,6 +912,23 @@ impl App {
 mod tests {
     use super::*;
     use ratatui::crossterm::event::KeyEvent;
+    #[test]
+    fn writing_replaces_in_place_and_undo_restores_editor_history() {
+        let temp=tempfile::tempdir().unwrap();let mut app=Fixture::app(temp.path());app.screen=Screen::Edit;app.expansion=App::text("Write a greeting");app.title=App::text("Title");app.trigger=App::text("greeting");let original=app.draft();let mut proposal=original.clone();proposal.replace="Hello there!".into();let(sender,receiver)=std::sync::mpsc::channel();app.writing=Some(("test".into(),original.clone(),"create".into(),receiver));sender.send(Ok(proposal)).unwrap();app.ai_tick();assert_eq!(App::value(&app.expansion),"Hello there!");assert_eq!(app.draft().title,original.title);assert_eq!(app.draft().trigger,original.trigger);assert_eq!(app.screen,Screen::Edit);app.write_action(2).unwrap();assert_eq!(app.draft(),original);
+    }
+    #[test]
+    fn failed_and_stale_writing_preserves_current_text() {
+        let temp=tempfile::tempdir().unwrap();let mut app=Fixture::app(temp.path());app.screen=Screen::Edit;app.expansion=App::text("Original");let(sender,receiver)=std::sync::mpsc::channel();app.writing=Some(("failed".into(),app.draft(),"rewrite".into(),receiver));sender.send(Err(anyhow::anyhow!("Failure"))).unwrap();app.ai_tick();assert_eq!(App::value(&app.expansion),"Original");assert!(app.error);
+        let(sender,receiver)=std::sync::mpsc::channel();let original=app.draft();app.writing=Some(("stale".into(),original.clone(),"rewrite".into(),receiver));app.expansion=App::text("New user text");sender.send(Ok(Match{replace:"Stale result".into(),..original})).unwrap();app.ai_tick();assert_eq!(App::value(&app.expansion),"New user text");assert!(app.writing.is_none());assert!(app.writing_undo.is_empty());
+    }
+    #[test]
+    fn escape_cancels_writing_without_leaving_editor() {
+        let temp=tempfile::tempdir().unwrap();let mut app=Fixture::app(temp.path());app.screen=Screen::Edit;app.expansion=App::text("Original");let(_sender,receiver)=std::sync::mpsc::channel();app.writing=Some(("cancel".into(),app.draft(),"rewrite".into(),receiver));Fixture::key(&mut app,KeyCode::Esc,KeyModifiers::NONE);assert_eq!(app.screen,Screen::Edit);assert_eq!(App::value(&app.expansion),"Original");assert!(app.writing.is_none());
+    }
+    #[test]
+    fn stale_search_cannot_replace_newer_scoped_results() {
+        let temp=tempfile::tempdir().unwrap();let mut app=Fixture::app(temp.path());app.store.create("Other").unwrap();let file=app.store.create("Local").unwrap();app.store.save(&file, None, Match{trigger:"found".into(),replace:"Current policy".into(),..Default::default()}).unwrap();app.file=Some(app.store.open("Local").unwrap());app.screen=Screen::Browse;app.search=App::text("policy");app.rebuild_global_hits();assert_eq!(app.filtered().len(),1);let(sender,receiver)=std::sync::mpsc::channel();app.ai_pending=Some(("stale".into(),app.ai_generation.saturating_sub(1),receiver));sender.send(Ok(Vec::new())).unwrap();app.ai_tick();assert_eq!(app.filtered().len(),1);assert!(app.ai_done);
+    }
     #[test]
     fn code_enter_retains_exact_leading_whitespace() {
         let temp = tempfile::tempdir().unwrap(); let mut app = Fixture::app(temp.path());
@@ -920,9 +960,9 @@ mod tests {
             assert_eq!(before, app.field_areas); assert_eq!(focus, app.editor_focus);
             assert!(app.status.starts_with("Type:")); assert!(!app.error);
             Fixture::key(&mut app, KeyCode::F(9), KeyModifiers::NONE);
-            let order = [2, 0, 1];
+            let order = [2, 0, 1, 3, 4, 5];
             app.editor_focus = order[0];
-            for expected in order.into_iter().cycle().skip(1).take(3) {
+            for expected in order.into_iter().cycle().skip(1).take(order.len()) {
                 let key = if code && app.editor_focus == 1 { KeyCode::F(2) } else { KeyCode::Tab };
                 Fixture::key(&mut app, key, KeyModifiers::NONE);
                 assert_eq!(app.editor_focus, expected);

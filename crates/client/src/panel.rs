@@ -36,13 +36,14 @@ impl Panel {
         }};
         Ok((code, modifiers))
     }
-    pub fn search(directory: &Path, query: &str) -> Result<Vec<Hit>> {
+    pub fn search(directory: &Path, query: &str, scope: Option<&str>) -> Result<Vec<Hit>> {
         let query = query.trim().to_lowercase(); if query.is_empty() { return Ok(Vec::new()); }
         ensure!(query.len() <= 512, "Search is too long");
         let db = Database::open(directory)?;
         let transaction = db.connection.unchecked_transaction()?;
         let mut ranked = Vec::new();
         for library in db.libraries()? {
+            if scope.is_some_and(|id| library["_id"].as_str() != Some(id)) { continue; }
             if library["state"] != "active" || library["permissions"]["read"] != true { continue; }
             let id = library["_id"].as_str().context("Invalid library ID")?;
             for entry in db.effective_records(id)?.into_iter().filter(|entry| entry["state"] == "active") {
@@ -114,16 +115,16 @@ mod tests {
     fn search_rank_optional_abbreviation_and_stale_selection() {
         let dir = tempfile::tempdir().unwrap(); let db = Database::open(dir.path()).unwrap();
         let file = db.import("Library", "matches: [{trigger: abc, replace: First}, {trigger: abcd, replace: Second}, {trigger: '', replace: ABC body}]").unwrap();
-        let hits = Panel::search(dir.path(), "AbC").unwrap(); assert_eq!(hits.len(),3); assert_eq!(hits[0].abbreviation,"abc"); assert_eq!(hits[1].abbreviation,"abcd"); assert!(hits[2].abbreviation.is_empty());
+        let hits = Panel::search(dir.path(), "AbC", None).unwrap(); assert_eq!(hits.len(),3); assert_eq!(hits[0].abbreviation,"abc"); assert_eq!(hits[1].abbreviation,"abcd"); assert!(hits[2].abbreviation.is_empty());
         assert_eq!(Panel::selected(dir.path(),&hits[0]).unwrap(),"First"); db.edit(&file,Some(0),None).unwrap(); assert!(Panel::selected(dir.path(),&hits[0]).is_err());
-        assert_eq!(Panel::search(dir.path(),"abc").unwrap().len(),2);
+        assert_eq!(Panel::search(dir.path(),"abc", None).unwrap().len(),2);
     }
     #[test]
     fn personal_refresh_preserves_search_hits_without_abbreviations() {
         let dir=tempfile::tempdir().unwrap();let db=Database::open(dir.path()).unwrap();
         let file=db.import("Library","matches: [{trigger: '', replace: Searchable body}]").unwrap();
         db.connection.execute("UPDATE snippets SET data=json_set(data,'$.trigger',NULL) WHERE library=?1",[&file.id]).unwrap();
-        let hits=Panel::search(dir.path(),"Searchable").unwrap();assert_eq!(hits.len(),1);
+        let hits=Panel::search(dir.path(),"Searchable", None).unwrap();assert_eq!(hits.len(),1);
         let rows=Panel::personal_rows(dir.path(),&hits).unwrap();let refreshed:Vec<Hit>=serde_json::from_value(rows).unwrap();
         assert_eq!(refreshed[0].abbreviation,"");assert_eq!(Panel::selected(dir.path(),&refreshed[0]).unwrap(),"Searchable body");
         assert!(serde_json::from_value::<Vec<Hit>>(Panel::personal_rows(dir.path(),&refreshed).unwrap()).is_ok());

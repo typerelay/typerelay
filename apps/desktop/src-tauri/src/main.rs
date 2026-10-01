@@ -247,7 +247,7 @@ fn initialize(app:tauri::AppHandle)->std::result::Result<Value,String> {
 #[tauri::command]
 async fn search(app:tauri::AppHandle,query:String)->std::result::Result<Value,String> {
     let directory=app.state::<Runtime>().root.join("snippets");
-    tauri::async_runtime::spawn_blocking(move ||Panel::search(&directory,&query).and_then(|hits|Panel::personal_rows(&directory,&hits)).map_err(|e|e.to_string())).await.map_err(|e|e.to_string())?
+    tauri::async_runtime::spawn_blocking(move ||Panel::search(&directory,&query, None).and_then(|hits|Panel::personal_rows(&directory,&hits)).map_err(|e|e.to_string())).await.map_err(|e|e.to_string())?
 }
 #[tauri::command]
 async fn native_ai(app:tauri::AppHandle,request:Value)->std::result::Result<Value,String>{
@@ -255,7 +255,7 @@ async fn native_ai(app:tauri::AppHandle,request:Value)->std::result::Result<Valu
     tauri::async_runtime::spawn_blocking(move||{
         if request["op"]=="search" {
             let query=request["query"].as_str().unwrap_or("");let id=request["id"].as_str().unwrap_or("");
-            typerelay_client::native_ai::NativeAi::search(&root,&root.join("snippets"),query,id).and_then(|hits|Panel::personal_rows(&root.join("snippets"),&hits))
+            typerelay_client::native_ai::NativeAi::search(&root,&root.join("snippets"),query,id, None).and_then(|hits|Panel::personal_rows(&root.join("snippets"),&hits))
         }else{typerelay_client::native_ai::NativeAi::request(&root,request)}
     }.map_err(|error|error.to_string())).await.map_err(|error|error.to_string())?
 }

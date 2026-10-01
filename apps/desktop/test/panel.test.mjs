@@ -11,7 +11,7 @@ class Fixture {
   const style=dom.window.document.createElement('style');style.textContent=await readFile('ui/panel.css','utf8');dom.window.document.head.append(style);
   dom.window.HTMLElement.prototype.scrollIntoView=()=>{};
 	  dom.window.Swal={fire:async()=>({isConfirmed:true})};
-  dom.window.__TAURI__={core:{invoke:async(name,args)=>{calls.push({name,args});if(name==='initialize')return{config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},theme:{os:'linux'},settings:false,accessibility:false,input_monitoring:false,empty:false,version:'1.2.0'};if(name==='native_ai')return{model:null,models:[{id:'small',name:'Small',bytes:1000000,publisher:'test',license:'apache-2.0',recommended:true,installed:false,downloaded:0}],download:null};if(name==='search')return new Promise(resolve=>pending.push({query:args.query,resolve}));if(name==='libraries'||name==='conflicts')return[];if(name==='prepare_template')return{fields:[],steps:[{kind:'text',text:'Literal'}],text:'Literal',enter_actions:0,template:{text:'Literal',variables:{}}};return null;}},event:{listen:(name,callback)=>{callbacks[name]=callback;}}};
+  dom.window.__TAURI__={core:{invoke:async(name,args)=>{calls.push({name,args});if(name==='initialize')return{config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},theme:{os:'linux'},settings:false,accessibility:false,input_monitoring:false,empty:false,version:'1.2.0'};if(name==='native_ai'&&args.request.op==='search')return new Promise(resolve=>pending.push({query:args.request.query,resolve}));if(name==='native_ai')return{model:null,models:[{id:'small',name:'Small',bytes:1000000,publisher:'test',license:'apache-2.0',recommended:true,installed:false,downloaded:0}],download:null};if(name==='libraries'||name==='conflicts')return[];if(name==='prepare_template')return{fields:[],steps:[{kind:'text',text:'Literal'}],text:'Literal',enter_actions:0,template:{text:'Literal',variables:{}}};return null;}},event:{listen:(name,callback)=>{callbacks[name]=callback;}}};
   dom.window.eval((await readFile('ui/panel.js','utf8')).replace("import { AiClient } from './ai.js';",'').replace('new Panel();','window.panel = new Panel();'));
   await new Promise(resolve=>setTimeout(resolve,0));
   return {dom,panel:dom.window.panel,calls,pending,callbacks};
@@ -29,20 +29,27 @@ test('native AI uses one input and never exposes remote authoring or provider co
  }finally{f.dom.window.close();}
 });
 
-test('AI result updates retain matching nodes, selection, focus and scroll and reject stale replies',async()=>{
+test('combined search updates retain matching nodes, selection, focus and scroll and reject stale replies',async()=>{
  const f=await Fixture.create();try{
   f.panel.aiStatus={model:'small'};f.panel.query.value='describe a reply';f.panel.rows=[Fixture.hit('one'),Fixture.hit('two')];f.panel.index=1;f.panel.render();f.panel.query.focus();f.panel.list.scrollTop=25;
   const node=f.panel.list.children[1];const sequence=f.panel.sequence;let finish;f.panel.invoke=async(name,args)=>{if(args?.request?.op==='search')return new Promise(resolve=>{finish=resolve;});throw Error('No section loader or unrelated command allowed');};
-  const task=f.panel.searchAi(sequence);finish([Fixture.hit('two'),Fixture.hit('three')]);await task;
+  const task=f.panel.search(sequence);finish([Fixture.hit('two'),Fixture.hit('three')]);await task;
   assert.equal(f.panel.rows[f.panel.index].id,'two');assert.equal(f.panel.list.children[0],node);assert.equal(f.dom.window.document.activeElement,f.panel.query);assert.equal(f.panel.list.scrollTop,25);
-  const stale=f.panel.searchAi(sequence);f.panel.sequence++;finish([Fixture.hit('stale')]);await stale;assert.equal(f.panel.rows[0].id,'two');
+  const stale=f.panel.search(sequence);f.panel.sequence++;finish([Fixture.hit('stale')]);await stale;assert.equal(f.panel.rows[0].id,'two');
  }finally{f.dom.window.close();}
 });
 
-test('exact abbreviations bypass AI and cancelled model consent starts no download',async()=>{
+test('search runs immediately, coalesces typing and publishes only the latest list',async()=>{
  const f=await Fixture.create();try{
-  f.panel.aiStatus={model:'small',models:[{id:'small',name:'Small',bytes:1000000,installed:false}]};f.panel.rows=[Fixture.hit('exact')];f.panel.query.value='EXACT';const before=f.calls.length;
-  await f.panel.searchAi(f.panel.sequence);assert.equal(f.calls.length,before);
+  f.panel.query.value='first';const task=f.panel.search(f.panel.sequence);assert.equal(f.pending.length,1);assert.equal(f.dom.window.document.querySelector('#hint').textContent,'Searching…');
+  f.panel.query.value='second';f.panel.query.dispatchEvent(new f.dom.window.Event('input'));f.panel.query.value='latest';f.panel.query.dispatchEvent(new f.dom.window.Event('input'));assert.equal(f.pending.length,1);
+  f.pending[0].resolve([Fixture.hit('stale')]);await new Promise(resolve=>setTimeout(resolve,0));assert.equal(f.pending.length,2);assert.equal(f.pending[1].query,'latest');assert.equal(f.panel.rows.length,0);
+  f.pending[1].resolve([Fixture.hit('latest')]);await task;assert.equal(f.panel.rows[0].id,'latest');assert.equal(f.panel.searching,false);assert.equal(f.calls.some(call=>call.name==='search'),false);assert.equal(f.calls.filter(call=>call.args?.request?.op==='search').length,2);
+ }finally{f.dom.window.close();}
+});
+
+test('cancelled model consent starts no download',async()=>{
+ const f=await Fixture.create();try{
   f.dom.window.Swal.fire=async()=>({isConfirmed:false});await f.panel.modelAction('download',f.dom.window.document.querySelector('#native-enable'));assert.equal(f.calls.some(call=>call.args?.request?.op==='download'),false);
  }finally{f.dom.window.close();}
 });
@@ -115,7 +122,7 @@ test('stale search cannot insert an old result; Enter waits for current query',a
  const f=await Fixture.create();try {
   f.panel.query.value='old';const old=f.panel.search(0);f.pending[0].resolve([Fixture.hit('old')]);await old;
   f.panel.query.value='new';f.panel.query.dispatchEvent(new f.dom.window.Event('input'));
-  assert.equal(f.panel.rows.length,0);
+  assert.equal(f.panel.list.inert,true);assert.equal(f.dom.window.document.querySelector('#hint').textContent,'Searching…');
   f.panel.insert();await new Promise(resolve=>setTimeout(resolve,0));
   assert.ok(!f.calls.some(call=>call.name==='insert'));
   const request=f.pending.find(item=>item.query==='new');request.resolve([Fixture.hit('new')]);
@@ -127,9 +134,9 @@ test('stale search cannot insert an old result; Enter waits for current query',a
 });
 test('late responses are ignored; keyboard selection, Copy and Escape use explicit commands',async()=>{
  const f=await Fixture.create();try{
-  const old=f.panel.search(0);f.panel.sequence=1;const next=f.panel.search(1);
-  f.pending[1].resolve([Fixture.hit('one'),Fixture.hit('two')]);await next;
-  f.pending[0].resolve([Fixture.hit('stale')]);await old;assert.equal(f.panel.rows[0].id,'one');
+  f.panel.query.value='old';const old=f.panel.search(0);f.panel.query.value='new';f.panel.sequence=1;const next=f.panel.search(1);
+  assert.equal(f.pending.length,1);f.pending[0].resolve([Fixture.hit('stale')]);await new Promise(resolve=>setTimeout(resolve,0));
+  f.pending[1].resolve([Fixture.hit('one'),Fixture.hit('two')]);await next;await old;assert.equal(f.panel.rows[0].id,'one');
   f.dom.window.document.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'ArrowDown'}));
   f.dom.window.document.querySelector('#copy').click();await new Promise(resolve=>setTimeout(resolve,0));
   assert.equal(f.calls.find(call=>call.name==='copy_snippet').args.hit.id,'two');
@@ -140,7 +147,7 @@ test('late responses are ignored; keyboard selection, Copy and Escape use explic
 
 test('Ctrl+C and Super+C copy the highlighted result while search has focus',async()=>{
  const f=await Fixture.create();try{
-  const search=f.panel.search(f.panel.sequence);f.pending[0].resolve([Fixture.hit('one'),Fixture.hit('two')]);await search;
+  f.panel.query.value='query';const search=f.panel.search(f.panel.sequence);f.pending[0].resolve([Fixture.hit('one'),Fixture.hit('two')]);await search;
   f.panel.query.focus();
   f.dom.window.document.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'ArrowDown'}));
   for(const modifier of [{ctrlKey:true},{metaKey:true}]){
@@ -162,10 +169,11 @@ test('copy waits for the current search and ignores empty or stale results',asyn
   const copy=new f.dom.window.KeyboardEvent('keydown',{key:'c',ctrlKey:true,bubbles:true,cancelable:true});
   f.panel.query.dispatchEvent(copy);
   assert.equal(copy.defaultPrevented,true);
+  f.pending.find(item=>item.query==='old').resolve([Fixture.hit('old')]);await new Promise(resolve=>setTimeout(resolve,0));
   const current=f.pending.find(item=>item.query==='new');
   assert.ok(current);
   current.resolve([Fixture.hit('new')]);await new Promise(resolve=>setTimeout(resolve,0));
-  f.pending.find(item=>item.query==='old').resolve([Fixture.hit('old')]);await old;
+  await old;
   assert.deepEqual(f.calls.filter(call=>call.name==='copy_snippet').map(call=>call.args.hit.id),['new']);
   f.panel.query.value='missing';f.panel.query.dispatchEvent(new f.dom.window.Event('input'));
   f.panel.query.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'c',metaKey:true,bubbles:true,cancelable:true}));
@@ -177,7 +185,7 @@ test('copy waits for the current search and ignores empty or stale results',asyn
 
 test('one result click inserts the clicked snippet',async()=>{
  const f=await Fixture.create();try{
-  const search=f.panel.search(f.panel.sequence);f.pending[0].resolve([Fixture.hit('one'),Fixture.hit('two')]);await search;
+  f.panel.query.value='query';const search=f.panel.search(f.panel.sequence);f.pending[0].resolve([Fixture.hit('one'),Fixture.hit('two')]);await search;
   f.panel.list.children[1].click();await new Promise(resolve=>setTimeout(resolve,0));
   assert.equal(f.calls.find(call=>call.name==='insert').args.hit.id,'two');
  }finally{f.dom.window.close();}

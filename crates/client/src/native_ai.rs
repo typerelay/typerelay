@@ -76,24 +76,26 @@ impl NativeAi {
         if let Err(error) = Self::verify(&partial, model, cancelled) { if !cancelled.load(Ordering::Relaxed) { let _ = fs::remove_file(&partial); } return Err(error); }
         fs::rename(partial, target)?; Ok(())
     }
-    pub fn search(root: &Path, directory: &Path, query: &str, id: &str) -> Result<Vec<Hit>> {
-        let ordinary = Panel::search(directory, query)?;
-        if query.trim().is_empty() || ordinary.iter().any(|hit| hit.abbreviation.eq_ignore_ascii_case(query.trim())) || Self::settings(root)?.model.is_none() { return Ok(ordinary); }
+    pub fn search(root: &Path, directory: &Path, query: &str, id: &str, scope: Option<&str>) -> Result<Vec<Hit>> {
+        let ordinary = Panel::search(directory, query, scope)?;
+        if query.trim().is_empty() || ordinary.iter().any(|hit| hit.abbreviation.eq_ignore_ascii_case(query.trim())) || !Self::settings(root).is_ok_and(|settings|settings.model.is_some()) { return Ok(ordinary); }
         let result = Self::request(root, json!({"op":"infer","kind":"search","id":id,"prompt":Self::prompt("search",json!({"query":query}))}));
         let Ok(result) = result else { return Ok(ordinary); }; let Ok(plan) = serde_json::from_value::<SearchPlan>(result) else { return Ok(ordinary); };
-        Self::rank(directory, ordinary, &plan)
+        Self::rank(directory, ordinary, &plan, scope)
     }
-    pub fn rank(directory: &Path, ordinary: Vec<Hit>, plan: &SearchPlan) -> Result<Vec<Hit>> {
+    pub fn rank(directory: &Path, ordinary: Vec<Hit>, plan: &SearchPlan, scope: Option<&str>) -> Result<Vec<Hit>> {
         if plan.intent != "descriptive" || plan.terms.is_empty() || plan.terms.len() > 6 || plan.terms.iter().any(|term| term.trim().is_empty() || term.len() > 80) { return Ok(ordinary); }
         let mut ranked = std::collections::BTreeMap::new();
-        for hit in ordinary { ranked.insert((hit.library.clone(), hit.id.clone()), (2usize, hit)); }
-        for term in &plan.terms { for hit in Panel::search(directory, term)? { let value = ranked.entry((hit.library.clone(), hit.id.clone())).or_insert((0, hit)); value.0 += 1; } }
+        for hit in ordinary.into_iter().filter(|hit|scope.is_none_or(|id|hit.library==id)) { ranked.insert((hit.library.clone(), hit.id.clone()), (2usize, hit)); }
+        for term in &plan.terms { for hit in Panel::search(directory, term, scope)? { let value = ranked.entry((hit.library.clone(), hit.id.clone())).or_insert((0, hit)); value.0 += 1; } }
         let mut rows: Vec<_> = ranked.into_values().collect(); rows.sort_by(|a,b| b.0.cmp(&a.0).then(a.1.id.cmp(&b.1.id)));
         Ok(rows.into_iter().filter_map(|(_,hit)| Panel::content(directory, &hit).ok().map(|_|hit)).take(50).collect())
     }
-    pub fn author(root: &Path, draft: &Match, instruction: &str, id: &str) -> Result<Match> {
-        ensure!(instruction.len() <= 2000 && draft.replace.len() <= 16000, "Draft or instruction too long");
-        let proposal = Self::request(root, json!({"op":"infer","kind":"author","id":id,"prompt":Self::prompt("author",json!({"instruction":instruction,"snippet":draft.replace,"content_type":draft.kind}))}))?;
+    pub fn author(root: &Path, draft: &Match, action: &str, id: &str) -> Result<Match> {
+        ensure!(["create", "rewrite"].contains(&action), "Unknown writing action");
+        ensure!(!draft.replace.trim().is_empty(), "Write a request or some text first");
+        ensure!(draft.replace.len() <= if action == "create" {2000} else {16000}, "Draft or instruction too long");
+        let proposal = Self::request(root, json!({"op":"infer","kind":"author","id":id,"prompt":Self::prompt("author",json!({"action":action,"snippet":draft.replace,"content_type":draft.kind}))}))?;
         let mut result = draft.clone(); result.replace = proposal["text"].as_str().context("Invalid AI draft")?.to_owned(); Self::validate_proposal(draft, &result)?; Ok(result)
     }
     pub fn validate_proposal(original: &Match, proposal: &Match) -> Result<()> {
@@ -123,21 +125,44 @@ mod tests {
     #[test]
     fn disabled_and_exact_search_never_start_a_worker() {
         let root = tempfile::tempdir().unwrap(); let directory = root.path().join("snippets"); let db = Database::open(&directory).unwrap(); db.import("Local", "matches: [{trigger: refund, replace: Refund policy}]").unwrap();
-        assert_eq!(NativeAi::search(root.path(), &directory, "policy", "one").unwrap().len(), 1);
-        NativeAi::save(root.path(), Some(NativeAi::catalog()[0].id.clone()), true).unwrap(); assert_eq!(NativeAi::search(root.path(), &directory, "REFUND", "two").unwrap()[0].abbreviation, "refund");
+        assert_eq!(NativeAi::search(root.path(), &directory, "policy", "one", None).unwrap().len(), 1);
+        NativeAi::save(root.path(), Some(NativeAi::catalog()[0].id.clone()), true).unwrap(); assert_eq!(NativeAi::search(root.path(), &directory, "REFUND", "two", None).unwrap()[0].abbreviation, "refund");
         assert!(!NativeAi::directory(root.path()).unwrap().join("endpoint.json").exists());
     }
     #[test]
     fn ranking_keeps_stored_readable_snippets_and_revalidates_revisions() {
         let root = tempfile::tempdir().unwrap(); let db = Database::open(root.path()).unwrap(); let local = db.import("Local", "matches: [{trigger: refund, replace: Refund policy}]").unwrap(); let synced = db.import("Synced", "matches: [{trigger: return, replace: Return policy}]").unwrap(); db.connection.execute("UPDATE libraries SET synced=1 WHERE id=?1", [&synced.id]).unwrap();
-        let plan = SearchPlan { intent: "descriptive".into(), terms: vec!["policy".into(),"refund".into()] }; let rows = NativeAi::rank(root.path(), vec![], &plan).unwrap(); assert_eq!(rows.len(), 2); assert_eq!(rows[0].library, local.id);
-        db.edit(&local, Some(0), None).unwrap(); assert!(Panel::content(root.path(), &rows[0]).is_err()); assert_eq!(NativeAi::rank(root.path(), rows, &plan).unwrap().len(),1);
+        let plan = SearchPlan { intent: "descriptive".into(), terms: vec!["policy".into(),"refund".into()] }; let rows = NativeAi::rank(root.path(), vec![], &plan, None).unwrap(); assert_eq!(rows.len(), 2); assert_eq!(rows[0].library, local.id);
+        db.edit(&local, Some(0), None).unwrap(); assert!(Panel::content(root.path(), &rows[0]).is_err()); assert_eq!(NativeAi::rank(root.path(), rows, &plan, None).unwrap().len(),1);
     }
     #[test]
     fn literal_and_invalid_plans_leave_results_unchanged() {
-        let root = tempfile::tempdir().unwrap(); Database::open(root.path()).unwrap().import("Local", "matches: [{trigger: a, replace: Hello}]").unwrap(); let rows = Panel::search(root.path(),"a").unwrap();
-        for plan in [SearchPlan { intent:"literal".into(), terms:vec!["different".into()] }, SearchPlan { intent:"descriptive".into(), terms:vec![String::new()] }] { assert_eq!(NativeAi::rank(root.path(),rows.clone(),&plan).unwrap()[0].id,rows[0].id); }
+        let root = tempfile::tempdir().unwrap(); Database::open(root.path()).unwrap().import("Local", "matches: [{trigger: a, replace: Hello}]").unwrap(); let rows = Panel::search(root.path(),"a", None).unwrap();
+        for plan in [SearchPlan { intent:"literal".into(), terms:vec!["different".into()] }, SearchPlan { intent:"descriptive".into(), terms:vec![String::new()] }] { assert_eq!(NativeAi::rank(root.path(),rows.clone(),&plan, None).unwrap()[0].id,rows[0].id); }
         assert!(serde_json::from_str::<SearchPlan>(r#"{"intent":"descriptive","terms":[],"text":"invented"}"#).is_err());
+    }
+    #[test]
+    fn library_scope_applies_before_limits_and_ranking() {
+        let root=tempfile::tempdir().unwrap();let db=Database::open(root.path()).unwrap();let entries:Vec<_>=(0..70).map(|index|json!({"trigger":format!("a{index:03}"),"replace":"Refund policy"})).collect();db.import("Other",&json!({"matches":entries}).to_string()).unwrap();let local=db.import("Selected","matches: [{trigger: zrefund, replace: Refund policy}]").unwrap();
+        assert_eq!(Panel::search(root.path(),"policy",None).unwrap().len(),50);
+        let rows=Panel::search(root.path(),"policy",Some(&local.id)).unwrap();assert_eq!(rows.len(),1);assert_eq!(rows[0].library,local.id);
+        let plan=SearchPlan{intent:"descriptive".into(),terms:vec!["refund".into(),"policy".into()]};let ranked=NativeAi::rank(root.path(),rows,&plan,Some(&local.id)).unwrap();assert_eq!(ranked.len(),1);assert_eq!(ranked[0].library,local.id);
+    }
+    #[test]
+    fn unavailable_inference_falls_back_to_scoped_matches() {
+        let root=tempfile::tempdir().unwrap();let directory=root.path().join("snippets");let db=Database::open(&directory).unwrap();let local=db.import("Local","matches: [{trigger: refund, replace: Refund policy}]").unwrap();db.import("Other","matches: [{trigger: other, replace: Refund policy}]").unwrap();NativeAi::save(root.path(),Some("test".into()),true).unwrap();
+        let listener=std::net::TcpListener::bind("127.0.0.1:0").unwrap();fs::write(NativeAi::directory(root.path()).unwrap().join("endpoint.json"),serde_json::to_vec(&Endpoint{address:listener.local_addr().unwrap(),token:"test".into()}).unwrap()).unwrap();
+        let worker=std::thread::spawn(move||{let(mut stream,_)=listener.accept().unwrap();let request=NativeAi::read(&mut stream).unwrap();assert_eq!(request["kind"],"search");NativeAi::write(&mut stream,&json!({"error":"Unavailable"})).unwrap();});
+        let rows=NativeAi::search(root.path(),&directory,"policy","fallback",Some(&local.id)).unwrap();worker.join().unwrap();assert_eq!(rows.len(),1);assert_eq!(rows[0].library,local.id);
+    }
+    #[test]
+    fn writing_actions_use_existing_body_and_preserve_metadata() {
+        for action in ["create","rewrite"] {
+            let root=tempfile::tempdir().unwrap();let listener=std::net::TcpListener::bind("127.0.0.1:0").unwrap();fs::write(NativeAi::directory(root.path()).unwrap().join("endpoint.json"),serde_json::to_vec(&Endpoint{address:listener.local_addr().unwrap(),token:"test".into()}).unwrap()).unwrap();
+            let original=Match{replace:"Write a greeting to {{name}}".into(),kind:"template".into(),trigger:"hello".into(),title:"Welcome".into(),..Default::default()};let expected=original.replace.clone();
+            let worker=std::thread::spawn(move||{let(mut stream,_)=listener.accept().unwrap();let request=NativeAi::read(&mut stream).unwrap();let input:Value=serde_json::from_str(request["prompt"].as_str().unwrap().split("\nInput: ").nth(1).unwrap()).unwrap();assert_eq!(input["action"],action);assert_eq!(input["snippet"],expected);NativeAi::write(&mut stream,&json!({"value":{"text":"Welcome, {{name}}!"}})).unwrap();});
+            let result=NativeAi::author(root.path(),&original,action,"write").unwrap();worker.join().unwrap();assert_eq!(result.replace,"Welcome, {{name}}!");assert_eq!(result.title,original.title);assert_eq!(result.trigger,original.trigger);assert_eq!(result.kind,original.kind);assert_eq!(result.variables,original.variables);
+        }
     }
     #[test]
     fn proposals_preserve_tokens_actions_images_and_type() {

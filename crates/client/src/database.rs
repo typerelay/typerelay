@@ -852,7 +852,7 @@ mod tests {
         let id=&file.ids[0];
         db.apply(&json!({"libraries":[library],"personal_abbreviations":[{"snippet":id,"trigger":"other","revision":1,"conflicts":[]}]}),None).unwrap();
         assert!(db.snapshot().unwrap().is_empty());
-        assert_eq!(crate::panel::Panel::search(&fixture.directory,"other").unwrap().len(),2);
+        assert_eq!(crate::panel::Panel::search(&fixture.directory,"other", None).unwrap().len(),2);
         assert_eq!(db.records(&file.id).unwrap()[0]["content"]["text"],"Shared");
         library["permissions"]["edit"]=json!(false);
         db.apply(&json!({"libraries":[library]}),None).unwrap();
@@ -875,7 +875,7 @@ mod tests {
         let library=|id:&str,name:&str|json!({"_id":id,"name":name,"shared":true,"state":"active","revision":1,"permissions":{"read":true,"edit":true},"records":[{"id":format!("{id}-snippet"),"trigger":"same","title":name,"content":{"version":1,"type":"plain_text","text":name},"revision":1,"state":"active","position":0}]});
         db.apply(&json!({"libraries":[library("first","First"),library("second","Second")],"capabilities":{"personal_abbreviations":1},"personal_abbreviations":[]}),None).unwrap();
         assert!(db.snapshot().unwrap().is_empty());
-        assert_eq!(crate::panel::Panel::search(&fixture.directory,"same").unwrap().len(),2);
+        assert_eq!(crate::panel::Panel::search(&fixture.directory,"same", None).unwrap().len(),2);
         db.personal_edit("first","first-snippet",Some("mine"),0,None).unwrap();
         assert_eq!(db.snapshot().unwrap().len(),2);
         assert_eq!(db.records("first").unwrap()[0]["trigger"],"same");
