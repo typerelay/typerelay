@@ -83,8 +83,8 @@ export class Statistics {
 	}
 	static csv(report) {
 		const cell = value => '"' + String(value ?? '').replace(/^[=+@\-\t\r]/, "'$&").replaceAll('"', '""') + '"';
-		const rows = [['Report', 'Name', 'Library', 'Uses', 'Copies', 'Insertions', 'Characters saved', 'Estimated minutes saved', 'Estimated money saved', 'Currency', 'WPM', 'Hourly rate']];
-		for (const kind of ['totals', 'days', 'snippets', 'libraries', 'members']) for (const row of (kind === 'totals' ? report.totals ? [{ name: 'Total', ...report.totals }] : [] : report[kind])) rows.push([kind, row.name, row.library || '', row.uses, row.copies, row.insertions, row.characters, row.minutes.toFixed(2), row.money.toFixed(2), report.settings.currency, report.settings.wpm, report.settings.hourly_rate]);
+		const rows = [['Report', 'Name', 'Library', 'Uses', 'Characters saved', 'Estimated minutes saved', 'Estimated money saved', 'Currency', 'WPM', 'Hourly rate']];
+		for (const kind of ['totals', 'days', 'snippets', 'libraries', 'members']) for (const row of (kind === 'totals' ? report.totals ? [{ name: 'Total', ...report.totals }] : [] : report[kind])) rows.push([kind, row.name, row.library || '', row.uses, row.characters, row.minutes.toFixed(2), row.money.toFixed(2), report.settings.currency, report.settings.wpm, report.settings.hourly_rate]);
 		return rows.map(row => row.map(cell).join(',')).join('\r\n');
 	}
 }

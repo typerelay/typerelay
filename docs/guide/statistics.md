@@ -11,7 +11,7 @@ Personal statistics cover your own usage of synchronized libraries. Owners and a
 
 ## What counts
 
-A successful abbreviation expansion, picker/keyboard insertion, or explicit snippet copy counts as one use. Copies and insertions appear separately. Previews, searches, cancellations, rejected insertions, and internal clipboard preparation do not count. Operating systems do not always confirm that another application accepted text; TypeRelay records completion of the platform insertion operation.
+A successful abbreviation expansion, picker/keyboard insertion, or explicit snippet copy counts as one **Use**. Reports combine these actions into one count. Previews, searches, cancellations, rejected insertions, and internal clipboard preparation do not count. Operating systems do not always confirm that another application accepted text; TypeRelay records completion of the platform insertion operation.
 
 Statistics begin with updated clients. Previous usage cannot be reconstructed. Devices queue counts offline and upload after reconnecting. Mobile keyboard usage uploads when the containing TypeRelay app next runs and synchronizes. Copies cannot confirm that content was subsequently pasted.
 
@@ -32,7 +32,9 @@ Changing estimate settings recalculates existing reports. Changing currency sele
 
 The default period is the last 30 calendar days. Choose 7 days, 90 days, all time, or a custom inclusive date range. Daily boundaries use your browser's timezone, displayed on the report.
 
-Review daily activity and sortable snippet/library tables. Team reports include members. CSV export uses the same selected scope, dates, timezone, and estimate settings. Open reports refresh counts every 30 seconds without reloading the page.
+Four summary cards show Uses, Characters saved, Time saved, and Money saved. The daily Uses trend includes inactive days as zero; all-time charts begin at the first recorded use. Review exact daily counts and sortable snippet/library tables, with bars comparing Uses within each table. Team reports include members. Estimate settings appear below the tables.
+
+CSV export contains Uses, Characters saved, Estimated minutes saved, and Estimated money saved, plus report and estimate metadata. Copies and insertions are included in Uses rather than separate export columns. Export uses the same selected scope, dates, timezone, and estimate settings. Open reports refresh counts every 30 seconds without reloading the page.
 
 Historical totals remain after deleting snippets. Unavailable records use generic labels, and former members lose access while their shared usage remains in team totals. Making a shared library private removes it from team reports. Events uploaded after access is revoked are discarded. Account deletion removes its statistics and preferences.
 
