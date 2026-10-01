@@ -53,6 +53,20 @@ class NativeWorkerTests(unittest.TestCase):
         self.assertTrue(all(not model["installed"] for model in status["models"]))
         self.assertEqual(list((self.root / "native-ai").glob("*.gguf")), [])
 
+    def test_enable_preference_survives_without_a_downloaded_model(self):
+        self.assertFalse(self.request(op="status")["value"]["enabled"])
+        self.assertIn("value", self.request(op="enable"))
+        status = self.request(op="status")["value"]
+        self.assertTrue(status["enabled"])
+        self.assertIsNone(status["model"])
+        self.assertTrue(json.loads((self.root / "native-ai/settings.json").read_text())["enabled"])
+        self.assertIn("value", self.request(op="disable"))
+        self.assertFalse(self.request(op="status")["value"]["enabled"])
+
+    def test_legacy_enabled_model_preserves_checkbox_state(self):
+        (self.root / "native-ai/settings.json").write_text(json.dumps({"model": "qwen3.5-4b-gguf"}))
+        self.assertTrue(self.request(op="status")["value"]["enabled"])
+
     def test_second_worker_exits_and_cannot_replace_owner(self):
         second = subprocess.run([str(self.binary), "--root", str(self.root)], timeout=5, capture_output=True)
         self.assertEqual(second.returncode, 0)

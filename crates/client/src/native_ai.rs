@@ -9,7 +9,7 @@ use crate::{config::Match, editor::Paths, panel::{Hit, Panel}};
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Model { pub id: String, pub name: String, pub publisher: String, pub repository: String, pub revision: String, pub filename: String, pub bytes: u64, pub sha256: String, pub license: String, pub recommended: bool, pub ram_bytes: Option<u64> }
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub struct Settings { pub model: Option<String> }
+pub struct Settings { pub model: Option<String>, pub enabled: Option<bool> }
 #[derive(Deserialize, Serialize)]
 pub struct Endpoint { pub address: SocketAddr, pub token: String }
 #[derive(Deserialize)]
@@ -26,7 +26,7 @@ impl NativeAi {
         Ok(directory)
     }
     pub fn settings(root: &Path) -> Result<Settings> { match fs::read(Self::directory(root)?.join("settings.json")) { Ok(bytes) => Ok(serde_json::from_slice(&bytes)?), Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Settings::default()), Err(error) => Err(error.into()) } }
-    pub fn save(root: &Path, model: Option<String>) -> Result<()> { Paths::atomic_write(&Self::directory(root)?.join("settings.json"), &serde_json::to_vec(&Settings { model })?, false) }
+    pub fn save(root: &Path, model: Option<String>, enabled: bool) -> Result<()> { Paths::atomic_write(&Self::directory(root)?.join("settings.json"), &serde_json::to_vec(&Settings { model, enabled: Some(enabled) })?, false) }
     pub fn path(root: &Path, model: &Model) -> Result<PathBuf> { Ok(Self::directory(root)?.join(format!("{}.gguf", model.id))) }
     pub fn exchange(stream: &mut TcpStream, value: &Value) -> Result<Value> {
         stream.set_read_timeout(Some(Duration::from_secs(if value["op"] == "download" { 7200 } else { 180 })))?; stream.set_write_timeout(Some(Duration::from_secs(5)))?;
@@ -124,7 +124,7 @@ mod tests {
     fn disabled_and_exact_search_never_start_a_worker() {
         let root = tempfile::tempdir().unwrap(); let directory = root.path().join("snippets"); let db = Database::open(&directory).unwrap(); db.import("Local", "matches: [{trigger: refund, replace: Refund policy}]").unwrap();
         assert_eq!(NativeAi::search(root.path(), &directory, "policy", "one").unwrap().len(), 1);
-        NativeAi::save(root.path(), Some(NativeAi::catalog()[0].id.clone())).unwrap(); assert_eq!(NativeAi::search(root.path(), &directory, "REFUND", "two").unwrap()[0].abbreviation, "refund");
+        NativeAi::save(root.path(), Some(NativeAi::catalog()[0].id.clone()), true).unwrap(); assert_eq!(NativeAi::search(root.path(), &directory, "REFUND", "two").unwrap()[0].abbreviation, "refund");
         assert!(!NativeAi::directory(root.path()).unwrap().join("endpoint.json").exists());
     }
     #[test]

@@ -43,25 +43,27 @@ test('exact abbreviations bypass AI and cancelled model consent starts no downlo
  const f=await Fixture.create();try{
   f.panel.aiStatus={model:'small',models:[{id:'small',name:'Small',bytes:1000000,installed:false}]};f.panel.rows=[Fixture.hit('exact')];f.panel.query.value='EXACT';const before=f.calls.length;
   await f.panel.searchAi(f.panel.sequence);assert.equal(f.calls.length,before);
-  f.dom.window.Swal.fire=async()=>({isConfirmed:false});await f.panel.modelAction('enable',f.dom.window.document.querySelector('#native-enable'));assert.equal(f.calls.some(call=>call.args?.request?.op==='download'),false);
+  f.dom.window.Swal.fire=async()=>({isConfirmed:false});await f.panel.modelAction('download',f.dom.window.document.querySelector('#native-enable'));assert.equal(f.calls.some(call=>call.args?.request?.op==='download'),false);
  }finally{f.dom.window.close();}
 });
 
-test('enabled models cannot be re-enabled and model actions retain pending feedback during polling',async()=>{
+test('AI checkbox and model rows update in place without reloading settings',async()=>{
  const f=await Fixture.create();try{
-  const document=f.dom.window.document;const button=document.querySelector('#native-enable');const card=document.querySelector('#ai-settings-card');
-  const status={model:'small',models:[{id:'small',name:'Small',bytes:1000000,installed:true,downloaded:0}],download:null};
-  f.panel.aiStatus=status;f.panel.modelInfo();assert.equal(button.textContent,'Model enabled');assert.equal(button.disabled,true);
+  const document=f.dom.window.document;const checkbox=document.querySelector('#native-ai-enabled');const card=document.querySelector('#native-ai-card');const row=document.querySelector('#native-model').firstElementChild;
+  const status={enabled:false,model:null,models:[{id:'small',name:'Small',bytes:1000000,installed:true,downloaded:0}],download:null};
+  f.panel.aiStatus=status;f.panel.modelInfo();assert.equal(card.hidden,true);assert.equal(checkbox.checked,false);
   const requests=[];let finish;
-  f.panel.invoke=async(name,args)=>{assert.equal(name,'native_ai');requests.push(args.request);if(args.request.op==='status')return status;return new Promise(resolve=>{finish=()=>{status.model='small';resolve();};});};
-  await f.panel.modelAction('enable',button);assert.equal(requests.length,0);
-  status.model=null;f.panel.modelInfo();assert.equal(button.textContent,'Enable model');assert.equal(button.disabled,false);
+  f.panel.invoke=async(name,args)=>{assert.equal(name,'native_ai');requests.push(args.request);if(args.request.op==='status')return status;return new Promise(resolve=>{finish=()=>{status.enabled=args.request.op==='enable';status.model=status.enabled?'small':null;resolve();};});};
   f.panel.render=()=>{throw Error('No whole-view rendering');};f.panel.settings=()=>{throw Error('No settings reload');};
-  const pending=f.panel.modelAction('enable',button);assert.equal(button.textContent,'Enabling…');assert.equal(button.disabled,true);
-  await f.panel.refreshAi();assert.equal(button.textContent,'Enabling…');assert.equal(button.disabled,true);
-  await f.panel.modelAction('enable',button);assert.equal(requests.filter(request=>request.op==='enable').length,1);
-  finish();await pending;assert.equal(button.textContent,'Model enabled');assert.equal(button.disabled,true);assert.equal(document.querySelector('#ai-settings-card'),card);
-  status.model='other';f.panel.modelInfo();assert.equal(button.textContent,'Enable model');assert.equal(button.disabled,false);
+  checkbox.checked=true;const pending=f.panel.modelAction('enable',checkbox);assert.equal(card.hidden,false);assert.equal(checkbox.disabled,true);
+  await f.panel.refreshAi();assert.equal(checkbox.checked,true);assert.equal(checkbox.disabled,true);
+  await f.panel.modelAction('enable',checkbox);assert.equal(requests.filter(request=>request.op==='enable').length,1);
+  finish();await pending;assert.equal(checkbox.checked,true);assert.equal(checkbox.disabled,false);assert.equal(document.querySelector('#native-download-area').hidden,true);
+  checkbox.checked=false;const disabling=f.panel.modelAction('disable',checkbox);finish();await disabling;assert.equal(card.hidden,true);
+  assert.equal(document.querySelector('#native-ai-card'),card);assert.equal(document.querySelector('#native-model').firstElementChild,row);
+  assert.equal(document.querySelector('#native-remove,#native-disable'),null);
+  status.enabled=true;status.models[0].installed=false;f.panel.modelInfo();assert.equal(card.hidden,false);assert.equal(document.querySelector('#native-enable').textContent,'Download 0.00 GB Model');assert.equal(document.querySelector('#native-enable').hidden,false);
+  assert.equal(f.dom.window.getComputedStyle(document.querySelector('#settings-advanced')).overflowY,'auto');
  }finally{f.dom.window.close();}
 });
 
@@ -69,7 +71,7 @@ test('Advanced cards retain controls and save through the existing settings form
  const f=await Fixture.create();try{
   await f.panel.settings(true);const document=f.dom.window.document;const form=document.querySelector('#settings-form');const keyboard=document.querySelector('#keyboard');const shortcut=document.querySelector('#shortcut');
   assert.equal(document.querySelector('#native-model').closest('.settings-page').id,'settings-advanced');assert.equal(keyboard.closest('.settings-page').id,'settings-advanced');
-  assert.equal(document.querySelector('#ai-settings-card h2').textContent,'On-device AI');assert.equal(document.querySelector('#keyboard-card h2').textContent,'Miscellaneous');assert.equal(document.querySelector('#shortcut-help').previousElementSibling,shortcut);
+  assert.equal(document.querySelector('#ai-settings-card h2').textContent,'AI options');assert.equal(document.querySelector('#keyboard-card h2').textContent,'Miscellaneous');assert.equal(document.querySelector('#shortcut-help').previousElementSibling,shortcut);
   assert.equal(document.querySelector('#settings-sync [data-about-url="\u0023statistics"]'),null);
   f.panel.render=()=>{throw Error('Settings tab switches and saves must retain existing views');};document.querySelector('[data-settings-tab="advanced"]').click();
   assert.equal(document.querySelector('#settings-advanced').hidden,false);assert.equal(document.querySelector('#settings-general').hidden,true);assert.equal(document.querySelector('#keyboard'),keyboard);

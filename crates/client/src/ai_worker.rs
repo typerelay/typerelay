@@ -57,14 +57,15 @@ impl Worker {
     fn handle(&self, request: Value) -> Result<Value> {
         let operation = request["op"].as_str().unwrap_or("");
         if operation == "shutdown" { for flag in self.jobs.lock().unwrap().values() { flag.store(true, Ordering::Relaxed); } std::thread::spawn(|| { std::thread::sleep(Duration::from_millis(100)); std::process::exit(0); }); return Ok(Value::Null); }
-        if operation == "status" { let settings = NativeAi::settings(&self.root)?; let mut models = Vec::new(); for model in NativeAi::catalog() { let path = NativeAi::path(&self.root, &model)?; let mut row = serde_json::to_value(&model)?; row["installed"] = json!(path.is_file()); row["downloaded"] = json!(fs::metadata(path.with_extension("partial")).map(|value|value.len()).unwrap_or(0)); models.push(row); } let loaded=self.runtime.try_lock().ok().and_then(|runtime|runtime.model.as_ref().map(|(id,_)|id.clone())); return Ok(json!({"model":settings.model,"models":models,"download":*self.download.lock().unwrap(),"error":*self.error.lock().unwrap(),"loaded":loaded,"busy":self.runtime.try_lock().is_err()})); }
+        if operation == "status" { let settings = NativeAi::settings(&self.root)?; let mut models = Vec::new(); for model in NativeAi::catalog() { let path = NativeAi::path(&self.root, &model)?; let mut row = serde_json::to_value(&model)?; row["installed"] = json!(path.is_file()); row["downloaded"] = json!(fs::metadata(path.with_extension("partial")).map(|value|value.len()).unwrap_or(0)); models.push(row); } let loaded=self.runtime.try_lock().ok().and_then(|runtime|runtime.model.as_ref().map(|(id,_)|id.clone())); return Ok(json!({"enabled":settings.enabled.unwrap_or(settings.model.is_some()),"model":settings.model,"models":models,"download":*self.download.lock().unwrap(),"error":*self.error.lock().unwrap(),"loaded":loaded,"busy":self.runtime.try_lock().is_err()})); }
         if operation == "cancel" { if let Some(id)=request["id"].as_str() { ensure!(id.len()<=80,"Invalid request ID");let mut cancelled=self.cancelled.lock().unwrap();cancelled.retain(|_,time|time.elapsed()<Duration::from_secs(180));ensure!(cancelled.len()<1024,"Too many cancellations");cancelled.insert(id.to_owned(),Instant::now()); } let jobs = self.jobs.lock().unwrap(); if let Some(id) = request["id"].as_str() { if let Some(flag) = jobs.get(id) { flag.store(true, Ordering::Relaxed); } } return Ok(Value::Null); }
         if ["enable","disable","remove"].contains(&operation) {
             let _mutation = self.mutation.lock().unwrap(); ensure!(self.download.lock().unwrap().is_none(), "Cancel the download first");
             for flag in self.jobs.lock().unwrap().values() { flag.store(true, Ordering::Relaxed); }
             let mut runtime = self.runtime.lock().unwrap(); runtime.model = None;
-            if operation == "disable" { NativeAi::save(&self.root, None)?; } else { let model = NativeAi::model(request["model"].as_str().context("Choose a model")?)?; let path = NativeAi::path(&self.root, &model)?;
-                if operation == "enable" { NativeAi::verify(&path, &model, &AtomicBool::new(false))?; NativeAi::save(&self.root, Some(model.id))?; } else { if NativeAi::settings(&self.root)?.model.as_deref() == Some(&model.id) { NativeAi::save(&self.root,None)?; } for path in [path.clone(),path.with_extension("partial")] { if path.exists() { fs::remove_file(path)?; } } }
+            if operation == "enable" && request["model"].is_null() { NativeAi::save(&self.root, NativeAi::settings(&self.root)?.model, true)?; return Ok(Value::Null); }
+            if operation == "disable" { NativeAi::save(&self.root, None, false)?; } else { let model = NativeAi::model(request["model"].as_str().context("Choose a model")?)?; let path = NativeAi::path(&self.root, &model)?;
+                if operation == "enable" { NativeAi::verify(&path, &model, &AtomicBool::new(false))?; NativeAi::save(&self.root, Some(model.id), true)?; } else { if NativeAi::settings(&self.root)?.model.as_deref() == Some(&model.id) { NativeAi::save(&self.root,None, false)?; } for path in [path.clone(),path.with_extension("partial")] { if path.exists() { fs::remove_file(path)?; } } }
             } return Ok(Value::Null);
         }
         let id = request["id"].as_str().context("Missing request ID")?.to_owned(); ensure!(id.len() <= 80, "Invalid request ID"); let flag = Arc::new(AtomicBool::new(self.cancelled.lock().unwrap().remove(&id).is_some()));
@@ -74,7 +75,7 @@ impl Worker {
             if operation == "download" {
                 let _mutation = self.mutation.lock().unwrap(); let model = NativeAi::model(request["model"].as_str().context("Choose a model")?)?;
                 { let mut download = self.download.lock().unwrap(); ensure!(download.is_none(), "Download already active"); *download = Some(id.clone()); } *self.error.lock().unwrap() = None;
-                let result = NativeAi::download(&self.root, &model, &flag).and_then(|_| { ensure!(!flag.load(Ordering::Relaxed), "Cancelled"); NativeAi::save(&self.root, Some(model.id.clone())) });
+                let result = NativeAi::download(&self.root, &model, &flag).and_then(|_| { ensure!(!flag.load(Ordering::Relaxed), "Cancelled"); NativeAi::save(&self.root, Some(model.id.clone()), true) });
                 *self.download.lock().unwrap() = None; if let Err(error) = &result { *self.error.lock().unwrap() = Some(error.to_string()); } result?; return Ok(Value::Null);
             }
             ensure!(operation == "infer", "Unknown AI operation");
