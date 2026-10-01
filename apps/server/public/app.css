@@ -159,7 +159,9 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 
 @media (max-width: 60rem) { #search-shortcut { display: none; } }
 
+.bulk-actions { position: fixed; left: 50%; bottom: calc(1.5rem + env(safe-area-inset-bottom)); z-index: 1030; width: max-content; max-width: calc(100% - 2rem); flex-wrap: wrap; justify-content: center; padding: .75rem 1rem; border: .0625rem solid #e7dfd2; border-radius: .75rem; background: #fffdf8; box-shadow: 0 .5rem 2rem rgb(48 45 41 / 18%); transform: translateX(-50%); }
 .bulk-actions[hidden] { display: none !important; }
+[data-editor]:has(.bulk-actions:not([hidden])) { padding-bottom: calc(6rem + env(safe-area-inset-bottom)); }
 .snippet-controls { min-height: 3.5rem; flex-wrap: wrap; }
 .snippet-selection { min-width: 0; }
 
