@@ -71,7 +71,7 @@ export class Server {
 		app.post('/billing/webhook', express.raw({ type: 'application/json' }), async (req, res) => { Support.assert(req.headers['stripe-signature'], 'Missing Stripe-Signature', 400); try { await Billing.handleWebhook(req.body, req.headers['stripe-signature']); res.json({ received: true }); } catch (error) { error.status ||= 400; throw error; } });
 		app.use(express.json({ limit: '12mb' }), express.urlencoded({ extended: false, limit: '32kb' }));
 		const publicAssets = express.static('public');
-		app.use('/assets/generated', express.static('/data/editor'));
+		app.use(['/assets/generated', `/assets/${assetVersion}/generated`], express.static('/data/editor'));
 		app.use('/assets/:assetVersion', (req, res, next) => req.path === '/' ? next() : req.params.assetVersion === assetVersion ? publicAssets(req, res, next) : res.sendStatus(404));
 		app.use('/assets', publicAssets);
 		app.use('/vendor/webauthn', express.static('node_modules/@simplewebauthn/browser/dist/bundle'));
