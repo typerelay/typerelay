@@ -102,11 +102,11 @@ test('changing only the desktop package version changes the release version', as
 test('Linux packages stage the engine and TUI together for all formats', async () => {
 	const plan = NativeTools.plan('x86_64-unknown-linux-gnu', { environment: {} });
 	assert.equal(plan.command, 'cargo');
-	assert.deepEqual(plan.args.slice(-4), ['--bin', 'typerelay', '--bin', 'typerelay-tui']);
-	assert.deepEqual(plan.files.map(file => path.basename(file.destination)), ['typerelay-x86_64-unknown-linux-gnu', 'typerelay-tui-x86_64-unknown-linux-gnu']);
+	assert.deepEqual(plan.args.slice(-6), ['--bin', 'typerelay', '--bin', 'typerelay-tui', '--bin', 'typerelay-ai']);
+	assert.deepEqual(plan.files.map(file => path.basename(file.destination)), ['typerelay-x86_64-unknown-linux-gnu', 'typerelay-tui-x86_64-unknown-linux-gnu', 'typerelay-ai-x86_64-unknown-linux-gnu']);
 	assert.equal(NativeTools.hostTarget('linux', 'x64'), 'x86_64-unknown-linux-gnu');
 	const config = JSON.parse(await fs.readFile(path.join(PanelRelease.root, 'apps/desktop/src-tauri/tauri.linux.conf.json'), 'utf8'));
-	assert.deepEqual(config.bundle.externalBin, ['binaries/typerelay', 'binaries/typerelay-tui']);
+	assert.deepEqual(config.bundle.externalBin, ['binaries/typerelay', 'binaries/typerelay-tui', 'binaries/typerelay-ai']);
 	assert.equal(config.build.beforeBundleCommand, 'node scripts/stage-native-tools.mjs');
 });
 

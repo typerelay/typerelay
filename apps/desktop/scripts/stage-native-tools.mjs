@@ -11,13 +11,13 @@ export class NativeTools {
 	static plan(target, { platform = process.platform, environment = process.env, root = NativeTools.root } = {}) {
 		const windows = target === 'x86_64-pc-windows-msvc'; const linux = target === 'x86_64-unknown-linux-gnu'; const macos = ['aarch64-apple-darwin', 'x86_64-apple-darwin'].includes(target);
 		if (!windows && !macos && !linux) throw new Error('Unsupported native-tools target');
-		const names = windows || linux ? ['typerelay', 'typerelay-tui'] : ['typerelay-tui'];
+		const names = windows || linux ? ['typerelay', 'typerelay-tui', 'typerelay-ai'] : ['typerelay-tui', 'typerelay-ai'];
 		const targetRoot = environment.CARGO_TARGET_DIR ? path.resolve(root, environment.CARGO_TARGET_DIR) : path.join(root, 'target');
 		const release = path.join(targetRoot, target, 'release');
 		const destination = path.join(root, 'apps/desktop/src-tauri/binaries');
 		return {
 			command: windows && platform !== 'win32' ? 'cargo-xwin' : 'cargo',
-			args: ['build', '--release', '--locked', '--target', target, ...(linux ? ['--no-default-features', '--features', 'desktop'] : []), ...names.flatMap(name => ['--bin', name])],
+			args: ['build', '--release', '--locked', '--target', target, '--no-default-features', '--features', 'desktop,ai-runtime', ...names.flatMap(name => ['--bin', name])],
 			files: names.map(name => ({ source: path.join(release, name + (windows ? '.exe' : '')), destination: path.join(destination, name + '-' + target + (windows ? '.exe' : '')) })),
 		};
 	}
@@ -30,9 +30,13 @@ export class NativeTools {
 		});
 		await fs.mkdir(path.dirname(plans[0].files[0].destination), { recursive: true });
 		if (target === 'universal-apple-darwin') {
-			const destination = path.join(path.dirname(plans[0].files[0].destination), 'typerelay-tui-universal-apple-darwin');
-			await new Promise((resolve, reject) => { const child = spawn('lipo', ['-create', ...plans.map(plan => plan.files[0].source), '-output', destination], { env: environment, stdio: 'inherit' }); child.on('error', reject); child.on('close', code => code === 0 ? resolve() : reject(new Error('lipo failed with exit code ' + code))); });
-			return [destination];
+			const destinations = [];
+			for (const [index, file] of plans[0].files.entries()) {
+				const destination = file.destination.replace('aarch64-apple-darwin', 'universal-apple-darwin');
+				await new Promise((resolve, reject) => { const child = spawn('lipo', ['-create', ...plans.map(plan => plan.files[index].source), '-output', destination], { env: environment, stdio: 'inherit' }); child.on('error', reject); child.on('close', code => code === 0 ? resolve() : reject(new Error('lipo failed with exit code ' + code))); });
+				destinations.push(destination);
+			}
+			return destinations;
 		}
 		for (const file of plans.flatMap(plan => plan.files)) await fs.copyFile(file.source, file.destination);
 		return plans.flatMap(plan => plan.files.map(file => file.destination));

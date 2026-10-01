@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 cargo test --locked -p typerelay-client --lib --no-default-features --features desktop installation::tests
-cargo build --locked --no-default-features --features desktop --bin typerelay --bin typerelay-tui
+cargo build --locked --no-default-features --features desktop,ai-runtime --bin typerelay --bin typerelay-tui --bin typerelay-ai
 target="${CARGO_TARGET_DIR:-target}/debug"
 for command in install setup uninstall update; do
     if "$target/typerelay" "$command" --help >/dev/null 2>&1; then
@@ -15,6 +15,7 @@ if strings "$target/typerelay" | grep -q 'Interactive per-user TypeRelay install
 fi
 mkdir -p apps/desktop/src-tauri/binaries
 cp "$target/typerelay" apps/desktop/src-tauri/binaries/typerelay-x86_64-unknown-linux-gnu
+cp "$target/typerelay-ai" apps/desktop/src-tauri/binaries/typerelay-ai-x86_64-unknown-linux-gnu
 cp "$target/typerelay-tui" apps/desktop/src-tauri/binaries/typerelay-tui-x86_64-unknown-linux-gnu
 cargo build --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
 python3 -m unittest scripts.tests.test_appimage_cli

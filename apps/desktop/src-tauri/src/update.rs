@@ -120,13 +120,14 @@ fn message(app: &AppHandle, title: &str, body: impl Into<String>, buttons: Messa
 #[cfg(target_os="linux")]
 fn unpack_linux(bytes: &[u8], version: &str) -> Result<PathBuf> {
     let root=std::env::temp_dir().join(format!("typerelay-update-{}-{}",std::process::id(),uuid::Uuid::new_v4()));fs::create_dir(&root)?;
-    let result=(||->Result<()>{let allowed=BTreeSet::from(["typerelay".to_string(),"typerelay-tui".to_string(),"typerelay-panel".to_string()]);let mut found=BTreeSet::new();let mut archive=tar::Archive::new(flate2::read::GzDecoder::new(Cursor::new(bytes)));for item in archive.entries()?{let mut item=item?;let path=item.path()?.into_owned();let name=path.file_name().and_then(|value|value.to_str()).context("Update contains an invalid path")?;if path.components().count()!=1||!allowed.contains(name)||!item.header().entry_type().is_file(){anyhow::bail!("Update contains an unsafe or unexpected file");}let destination=root.join(name);item.unpack(&destination)?;found.insert(name.to_string());}anyhow::ensure!(found==allowed,"Update must contain matching engine, TUI and panel binaries");for name in allowed{let file=root.join(&name);let output=Command::new(&file).arg("--version").output()?;anyhow::ensure!(output.status.success()&&String::from_utf8_lossy(&output.stdout).trim()==format!("{name} {version}"),"{name} version does not match {version}");}Ok(())})();
+    let result=(||->Result<()>{let allowed=BTreeSet::from(["typerelay".to_string(),"typerelay-tui".to_string(),"typerelay-panel".to_string(),"typerelay-ai".to_string()]);let mut found=BTreeSet::new();let mut archive=tar::Archive::new(flate2::read::GzDecoder::new(Cursor::new(bytes)));for item in archive.entries()?{let mut item=item?;let path=item.path()?.into_owned();let name=path.file_name().and_then(|value|value.to_str()).context("Update contains an invalid path")?;if path.components().count()!=1||!allowed.contains(name)||!item.header().entry_type().is_file(){anyhow::bail!("Update contains an unsafe or unexpected file");}let destination=root.join(name);item.unpack(&destination)?;found.insert(name.to_string());}anyhow::ensure!(found==allowed,"Update must contain matching engine, TUI, panel and AI binaries");for name in allowed{let file=root.join(&name);let output=Command::new(&file).arg("--version").output()?;anyhow::ensure!(output.status.success()&&String::from_utf8_lossy(&output.stdout).trim()==format!("{name} {version}"),"{name} version does not match {version}");}Ok(())})();
     if let Err(error)=result {let _=fs::remove_dir_all(&root);return Err(error);}
     Ok(root)
 }
 
 async fn install(app: AppHandle, update: Update, bytes: Vec<u8>) -> Result<()> {
     tauri::async_runtime::spawn_blocking(move||->Result<()> {
+        typerelay_client::native_ai::NativeAi::stop(&app.state::<crate::Runtime>().root)?;
         #[cfg(target_os="linux")]
         {
             if tauri::utils::platform::bundle_type().is_some() { update.install(bytes)?; app.restart(); }

@@ -250,24 +250,14 @@ async fn search(app:tauri::AppHandle,query:String)->std::result::Result<Value,St
     tauri::async_runtime::spawn_blocking(move ||Panel::search(&directory,&query).and_then(|hits|Panel::personal_rows(&directory,&hits)).map_err(|e|e.to_string())).await.map_err(|e|e.to_string())?
 }
 #[tauri::command]
-async fn ai_request(app:tauri::AppHandle,method:String,path:String,body:Option<Value>)->std::result::Result<Value,String>{
-	let root=app.state::<Runtime>().root.clone();
-	tauri::async_runtime::spawn_blocking(move||typerelay_client::sync::Sync::new(root.clone(),root.join("snippets")).and_then(|sync|sync.ai_request(&method,&path,body.as_ref())).map_err(|error|error.to_string())).await.map_err(|error|error.to_string())?
-}
-#[tauri::command]
-async fn ai_inventory(app:tauri::AppHandle,selected:Vec<String>)->std::result::Result<Value,String>{
-	let directory=app.state::<Runtime>().root.join("snippets");
-	tauri::async_runtime::spawn_blocking(move||Panel::ai_inventory(&directory,&selected).map_err(|error|error.to_string())).await.map_err(|error|error.to_string())?
-}
-#[tauri::command]
-async fn ai_hit(app:tauri::AppHandle,result:Value)->std::result::Result<Hit,String>{
-	let directory=app.state::<Runtime>().root.join("snippets");
-	tauri::async_runtime::spawn_blocking(move||Panel::ai_hit(&directory,&result).map_err(|error|error.to_string())).await.map_err(|error|error.to_string())?
-}
-#[tauri::command]
-async fn ai_web(app:tauri::AppHandle,page:String,library:Option<String>,snippet:Option<String>)->std::result::Result<(),String>{
-	let root=app.state::<Runtime>().root.clone();
-	tauri::async_runtime::spawn_blocking(move||typerelay_client::sync::Sync::new(root.clone(),root.join("snippets")).and_then(|sync|sync.ai_web_url(&page,library.as_deref(),snippet.as_deref())).and_then(|url|platform::open_web_app(Some(&url))).map_err(|error|error.to_string())).await.map_err(|error|error.to_string())?
+async fn native_ai(app:tauri::AppHandle,request:Value)->std::result::Result<Value,String>{
+    let root=app.state::<Runtime>().root.clone();
+    tauri::async_runtime::spawn_blocking(move||{
+        if request["op"]=="search" {
+            let query=request["query"].as_str().unwrap_or("");let id=request["id"].as_str().unwrap_or("");
+            typerelay_client::native_ai::NativeAi::search(&root,&root.join("snippets"),query,id).and_then(|hits|Panel::personal_rows(&root.join("snippets"),&hits))
+        }else{typerelay_client::native_ai::NativeAi::request(&root,request)}
+    }.map_err(|error|error.to_string())).await.map_err(|error|error.to_string())?
 }
 #[tauri::command]
 async fn personal_status(app:tauri::AppHandle,hits:Vec<Hit>)->std::result::Result<Value,String> {
@@ -485,7 +475,7 @@ fn main() {
     }).on_window_event(|window,event|match event {
         tauri::WindowEvent::CloseRequested{api,..}=>{api.prevent_close();set_prompt_view(window.app_handle().clone(),false);Runtime::hide(window.app_handle());},
         tauri::WindowEvent::Focused(false)if Runtime::hide_on_focus_loss() && !window.app_handle().state::<Runtime>().busy.load(Ordering::SeqCst) && !window.app_handle().state::<Runtime>().settings.load(Ordering::SeqCst) && !window.app_handle().state::<Runtime>().prompting.load(Ordering::SeqCst)=> {Runtime::hide(window.app_handle());},_=>()
-    }).invoke_handler(tauri::generate_handler![initialize,ai_request,ai_inventory,ai_hit,ai_web,search,personal_status,personal_abbreviation,insert,copy_snippet,prepare_template,set_prompt_view,set_settings_view,dismiss,notify,sync_now,save_settings,connect,cancel_connect,disconnect,libraries,merge_destinations,merge_library,conflicts,resolve_conflict,enroll,open_accessibility_settings,open_input_monitoring_settings,open_notification_settings,open_tui,open_web_app]).build(tauri::generate_context!());
+    }).invoke_handler(tauri::generate_handler![initialize,native_ai,search,personal_status,personal_abbreviation,insert,copy_snippet,prepare_template,set_prompt_view,set_settings_view,dismiss,notify,sync_now,save_settings,connect,cancel_connect,disconnect,libraries,merge_destinations,merge_library,conflicts,resolve_conflict,enroll,open_accessibility_settings,open_input_monitoring_settings,open_notification_settings,open_tui,open_web_app]).build(tauri::generate_context!());
     match result {Ok(app)=>app.run(|handle,event|{#[cfg(target_os="linux")]if matches!(event,tauri::RunEvent::Exit|tauri::RunEvent::ExitRequested{..}){handle.state::<Runtime>().stop_engine();}#[cfg(not(target_os="linux"))]let _=(handle,event);}),Err(error)=>{eprintln!("TypeRelay panel: {error}");std::process::exit(1);}}
 }
 

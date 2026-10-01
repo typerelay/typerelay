@@ -1,0 +1,101 @@
+{
+  "date": "2026-09-30",
+  "host": "Apple M2 Pro",
+  "context_tokens": 8192,
+  "scope": "Two-prompt smoke tests, not a minimum-RAM or quality benchmark",
+  "results": [
+    {
+      "routing_pass": true,
+      "protected_draft_pass": true,
+      "model": "Qwen 3.5 2B",
+      "cpu_only": false,
+      "cold_search_seconds": 5.43,
+      "warm_draft_seconds": 1.19,
+      "process_rss_bytes": 1621737472,
+      "external_network": "denied",
+      "search": {
+        "intent": "descriptive",
+        "terms": [
+          "return",
+          "damaged",
+          "product",
+          "message",
+          "refund",
+          "replacement"
+        ]
+      },
+      "draft": {
+        "text": "Hello {{name}}, we received your message. How are you doing today? I hope you're having a wonderful day."
+      }
+    },
+    {
+      "routing_pass": true,
+      "protected_draft_pass": true,
+      "model": "Qwen 3.5 4B",
+      "cpu_only": false,
+      "cold_search_seconds": 9.61,
+      "warm_draft_seconds": 1.08,
+      "process_rss_bytes": 3096215552,
+      "external_network": "denied",
+      "search": {
+        "intent": "descriptive",
+        "terms": [
+          "returning",
+          "damaged product",
+          "message"
+        ]
+      },
+      "draft": {
+        "text": "Hello {{name}}, we received your message."
+      }
+    },
+    {
+      "routing_pass": true,
+      "protected_draft_pass": true,
+      "model": "Gemma 4 E2B",
+      "cpu_only": false,
+      "cold_search_seconds": 11.23,
+      "warm_draft_seconds": 0.84,
+      "process_rss_bytes": 3717971968,
+      "external_network": "denied",
+      "search": {
+        "intent": "descriptive",
+        "terms": [
+          "returning",
+          "damaged",
+          "product",
+          "message",
+          "return policy"
+        ]
+      },
+      "draft": {
+        "text": "Hi {{name}}, we're so happy to receive your message."
+      }
+    },
+    {
+      "routing_pass": true,
+      "protected_draft_pass": true,
+      "model": "Qwen 3.5 2B",
+      "cpu_only": true,
+      "cold_search_seconds": 10.84,
+      "warm_draft_seconds": 1.87,
+      "process_rss_bytes": 2893217792,
+      "external_network": "denied",
+      "search": {
+        "intent": "descriptive",
+        "terms": [
+          "return",
+          "damaged",
+          "product",
+          "message",
+          "refund",
+          "replacement"
+        ]
+      },
+      "draft": {
+        "text": "Hello {{name}}, we received your message. How are you doing today? I hope you're having a wonderful day."
+      },
+      "idle_unload": "verified after 302 seconds"
+    }
+  ]
+}

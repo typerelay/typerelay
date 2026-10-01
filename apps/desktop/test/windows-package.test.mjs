@@ -12,8 +12,8 @@ test('Windows CLI and TUI use one native staging plan', () => {
 	const cross = NativeTools.plan('x86_64-pc-windows-msvc', { platform: 'linux', environment: { CARGO_TARGET_DIR: '/tmp/typerelay-release' }, root });
 	assert.equal(native.command, 'cargo');
 	assert.equal(cross.command, 'cargo-xwin');
-	assert.deepEqual(native.args.slice(-4), ['--bin', 'typerelay', '--bin', 'typerelay-tui']);
-	assert.deepEqual(native.files.map(file => path.basename(file.destination)), ['typerelay-x86_64-pc-windows-msvc.exe', 'typerelay-tui-x86_64-pc-windows-msvc.exe']);
+	assert.deepEqual(native.args.slice(-6), ['--bin', 'typerelay', '--bin', 'typerelay-tui', '--bin', 'typerelay-ai']);
+	assert.deepEqual(native.files.map(file => path.basename(file.destination)), ['typerelay-x86_64-pc-windows-msvc.exe', 'typerelay-tui-x86_64-pc-windows-msvc.exe', 'typerelay-ai-x86_64-pc-windows-msvc.exe']);
 	assert.ok(cross.files.every(file => file.source.startsWith(path.resolve(root, '/tmp/typerelay-release') + path.sep)));
 	assert.equal(NativeTools.environment({})[NativeTools.rustflags], '-C target-feature=+crt-static');
 	assert.equal(NativeTools.environment({ [NativeTools.rustflags]: '-C opt-level=2' })[NativeTools.rustflags], '-C opt-level=2 -C target-feature=+crt-static');
@@ -25,7 +25,7 @@ test('Windows bundle embeds both tools and owns its TUI shortcut', async () => {
 	const hooks = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/installer-hooks.nsh'), 'utf8');
 	const platform = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/platform.rs'), 'utf8');
 	const windows = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/platform_windows.rs'), 'utf8');
-	assert.deepEqual(config.bundle.externalBin, ['binaries/typerelay', 'binaries/typerelay-tui']);
+	assert.deepEqual(config.bundle.externalBin, ['binaries/typerelay', 'binaries/typerelay-tui', 'binaries/typerelay-ai']);
 	assert.match(windows, /keys_down\(\)[\s\S]*0x20/);
 	assert.match(windows, /released:Receiver<\(\)>/);
 	assert.match(windows, /GetSystemMetrics\(SM_REMOTESESSION\)/);

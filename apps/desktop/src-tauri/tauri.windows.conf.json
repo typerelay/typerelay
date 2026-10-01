@@ -3,7 +3,8 @@
   "bundle": {
     "externalBin": [
       "binaries/typerelay",
-      "binaries/typerelay-tui"
+      "binaries/typerelay-tui",
+      "binaries/typerelay-ai"
     ]
   }
 }

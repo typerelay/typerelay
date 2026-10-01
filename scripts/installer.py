@@ -40,6 +40,9 @@ class Installer:
 
     def artifacts(self):
         artifacts = [("typerelay", self.binary, self.destination), ("typerelay-tui", self.binary.with_name("typerelay-tui"), self.destination.with_name("typerelay-tui"))]
+        worker = self.binary.with_name("typerelay-ai")
+        if worker.exists():
+            artifacts.append(("typerelay-ai", worker, self.destination.with_name("typerelay-ai")))
         panel = self.binary.with_name("typerelay-panel")
         if panel.exists() and self.panel_launcher is None:
             artifacts.append(("typerelay-panel", panel, self.destination.with_name("typerelay-panel")))
@@ -436,7 +439,7 @@ WantedBy=graphical-session.target
         self.systemctl("daemon-reload")
         self.systemctl("reset-failed", "typerelay.service", check=False)
         hashes = state.get("binaries", {"typerelay": state.get("binary_sha256")})
-        for name in ("typerelay", "typerelay-tui", "typerelay-panel"):
+        for name in ("typerelay", "typerelay-tui", "typerelay-panel", "typerelay-ai"):
             destination = self.destination.with_name(name)
             if destination.exists():
                 if hashlib.sha256(destination.read_bytes()).hexdigest() == hashes.get(name):

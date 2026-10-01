@@ -1,4 +1,6 @@
 pub mod config;
+#[cfg(feature = "desktop")]
+pub mod native_ai;
 #[cfg(all(feature = "desktop", target_os = "linux"))]
 pub mod installation;
 pub mod editor;

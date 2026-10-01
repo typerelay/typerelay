@@ -17,11 +17,18 @@ name = "typerelay-tui"
 path = "src/tui/main.rs"
 
 [[bin]]
+required-features = ["ai-runtime"]
+name = "typerelay-ai"
+path = "src/ai_worker.rs"
+
+[[bin]]
 required-features = ["desktop"]
 name = "typerelay-yaml"
 path = "src/yaml_helper.rs"
 
 [features]
+ai-runtime = ["desktop", "dep:llama-cpp-2"]
+ai-vulkan = ["ai-runtime", "llama-cpp-2/vulkan"]
 default = ["desktop", "legacy-install"]
 legacy-install = []
 mobile = ["reqwest/rustls-tls-webpki-roots"]
@@ -56,6 +63,7 @@ zip = { version = "6.0.0", default-features = false, features = ["deflate"] }
 ratatui-image = { version = "11.0.8", default-features = false, features = ["crossterm"] , optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+llama-cpp-2 = { version = "=0.1.158", default-features = false, optional = true }
 # Avoid the Mio reader's EOF/EIO spin on a closed terminal.
 crossterm = { version = "0.29", features = ["use-dev-tty"] }
 evdev = "0.13"
@@ -63,6 +71,10 @@ libc = "0.2"
 wl-clipboard-rs = "0.9.3"
 
 [target.'cfg(target_os = "windows")'.dependencies]
+llama-cpp-2 = { version = "=0.1.158", default-features = false, optional = true }
 clipboard-win = { version = "5", features = ["std"] }
 
 windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+llama-cpp-2 = { version = "=0.1.158", default-features = false, features = ["metal"], optional = true }

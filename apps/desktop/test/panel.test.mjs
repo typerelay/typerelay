@@ -11,8 +11,7 @@ class Fixture {
   const style=dom.window.document.createElement('style');style.textContent=await readFile('ui/panel.css','utf8');dom.window.document.head.append(style);
   dom.window.HTMLElement.prototype.scrollIntoView=()=>{};
 	  dom.window.Swal={fire:async()=>({isConfirmed:true})};
-  dom.window.__TAURI__={core:{invoke:async(name,args)=>{calls.push({name,args});if(name==='initialize')return{config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},theme:{os:'linux'},settings:false,accessibility:false,input_monitoring:false,empty:false,version:'1.2.0'};if(name==='search')return new Promise(resolve=>pending.push({query:args.query,resolve}));if(name==='libraries'||name==='conflicts')return[];if(name==='prepare_template')return{fields:[],steps:[{kind:'text',text:'Literal'}],text:'Literal',enter_actions:0,template:{text:'Literal',variables:{}}};return null;}},event:{listen:(name,callback)=>{callbacks[name]=callback;}}};
-  dom.window.eval((await readFile('../server/public/ai.js','utf8')).replace('export class AiClient','window.AiClient = class AiClient'));
+  dom.window.__TAURI__={core:{invoke:async(name,args)=>{calls.push({name,args});if(name==='initialize')return{config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},theme:{os:'linux'},settings:false,accessibility:false,input_monitoring:false,empty:false,version:'1.2.0'};if(name==='native_ai')return{model:null,models:[{id:'small',name:'Small',bytes:1000000,publisher:'test',license:'apache-2.0',recommended:true,installed:false,downloaded:0}],download:null};if(name==='search')return new Promise(resolve=>pending.push({query:args.query,resolve}));if(name==='libraries'||name==='conflicts')return[];if(name==='prepare_template')return{fields:[],steps:[{kind:'text',text:'Literal'}],text:'Literal',enter_actions:0,template:{text:'Literal',variables:{}}};return null;}},event:{listen:(name,callback)=>{callbacks[name]=callback;}}};
   dom.window.eval((await readFile('ui/panel.js','utf8')).replace("import { AiClient } from './ai.js';",'').replace('new Panel();','window.panel = new Panel();'));
   await new Promise(resolve=>setTimeout(resolve,0));
   return {dom,panel:dom.window.panel,calls,pending,callbacks};
@@ -20,11 +19,39 @@ class Fixture {
  static hit(id){return{id,library:'one',revision:2,library_name:'Personal',title:'Title '+id,abbreviation:id,preview:'<b>literal</b>\n\tCode'};}
 }
 
+test('native AI uses one input and never exposes remote authoring or provider controls',async()=>{
+ const f=await Fixture.create();try{
+  const document=f.dom.window.document;
+  assert.equal(document.querySelectorAll('input[type="search"]').length,1);
+  assert.equal(document.querySelector('#ai-create,#ai-edit,[data-ai-search],[data-ai-controls]'),null);
+  assert.ok(document.querySelector('#native-model'));
+  assert.equal(f.calls.some(call=>['ai_request','ai_web','ai_inventory'].includes(call.name)),false);
+ }finally{f.dom.window.close();}
+});
+
+test('AI result updates retain matching nodes, selection, focus and scroll and reject stale replies',async()=>{
+ const f=await Fixture.create();try{
+  f.panel.aiStatus={model:'small'};f.panel.query.value='describe a reply';f.panel.rows=[Fixture.hit('one'),Fixture.hit('two')];f.panel.index=1;f.panel.render();f.panel.query.focus();f.panel.list.scrollTop=25;
+  const node=f.panel.list.children[1];const sequence=f.panel.sequence;let finish;f.panel.invoke=async(name,args)=>{if(args?.request?.op==='search')return new Promise(resolve=>{finish=resolve;});throw Error('No section loader or unrelated command allowed');};
+  const task=f.panel.searchAi(sequence);finish([Fixture.hit('two'),Fixture.hit('three')]);await task;
+  assert.equal(f.panel.rows[f.panel.index].id,'two');assert.equal(f.panel.list.children[0],node);assert.equal(f.dom.window.document.activeElement,f.panel.query);assert.equal(f.panel.list.scrollTop,25);
+  const stale=f.panel.searchAi(sequence);f.panel.sequence++;finish([Fixture.hit('stale')]);await stale;assert.equal(f.panel.rows[0].id,'two');
+ }finally{f.dom.window.close();}
+});
+
+test('exact abbreviations bypass AI and cancelled model consent starts no download',async()=>{
+ const f=await Fixture.create();try{
+  f.panel.aiStatus={model:'small',models:[{id:'small',name:'Small',bytes:1000000,installed:false}]};f.panel.rows=[Fixture.hit('exact')];f.panel.query.value='EXACT';const before=f.calls.length;
+  await f.panel.searchAi(f.panel.sequence);assert.equal(f.calls.length,before);
+  f.dom.window.Swal.fire=async()=>({isConfirmed:false});await f.panel.modelAction('enable',f.dom.window.document.querySelector('#native-enable'));assert.equal(f.calls.some(call=>call.args?.request?.op==='download'),false);
+ }finally{f.dom.window.close();}
+});
+
 test('Advanced cards retain controls and save through the existing settings form',async()=>{
  const f=await Fixture.create();try{
   await f.panel.settings(true);const document=f.dom.window.document;const form=document.querySelector('#settings-form');const keyboard=document.querySelector('#keyboard');const shortcut=document.querySelector('#shortcut');
-  assert.equal(document.querySelector('[data-ai-controls]').closest('.settings-page').id,'settings-advanced');assert.equal(keyboard.closest('.settings-page').id,'settings-advanced');
-  assert.equal(document.querySelector('#ai-settings-card h2').textContent,'AI');assert.equal(document.querySelector('#keyboard-card h2').textContent,'Miscellaneous');assert.equal(document.querySelector('#shortcut-help').previousElementSibling,shortcut);
+  assert.equal(document.querySelector('#native-model').closest('.settings-page').id,'settings-advanced');assert.equal(keyboard.closest('.settings-page').id,'settings-advanced');
+  assert.equal(document.querySelector('#ai-settings-card h2').textContent,'On-device AI');assert.equal(document.querySelector('#keyboard-card h2').textContent,'Miscellaneous');assert.equal(document.querySelector('#shortcut-help').previousElementSibling,shortcut);
   assert.equal(document.querySelector('#settings-sync [data-about-url="\u0023statistics"]'),null);
   f.panel.render=()=>{throw Error('Settings tab switches and saves must retain existing views');};document.querySelector('[data-settings-tab="advanced"]').click();
   assert.equal(document.querySelector('#settings-advanced').hidden,false);assert.equal(document.querySelector('#settings-general').hidden,true);assert.equal(document.querySelector('#keyboard'),keyboard);

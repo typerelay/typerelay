@@ -194,25 +194,25 @@ export class PanelRelease {
 				artifacts = [...installers, ...signatures]; updater = { target: 'windows-x86_64', file: installers[0], signature: signatures[0] };
 			} else if (options.mode === 'macos') {
 				const apps = await PanelRelease.files(path.join(release, 'bundle/macos'), '.app'); if (apps.length !== 1) throw new Error('Expected one macOS app');
-				const tui = path.join(apps[0], 'Contents/MacOS/typerelay-tui'); const version = await PanelRelease.run(tui, ['--version'], { capture: true }); if (version !== `typerelay-tui ${config.version}`) throw new Error('Bundled macOS TUI version does not match');
+				const ai = path.join(apps[0], 'Contents/MacOS/typerelay-ai'); if(await PanelRelease.run(ai, ['--version'], {capture:true}) !== 'typerelay-ai '+config.version) throw new Error('Bundled AI worker version does not match'); const tui = path.join(apps[0], 'Contents/MacOS/typerelay-tui'); const version = await PanelRelease.run(tui, ['--version'], { capture: true }); if (version !== `typerelay-tui ${config.version}`) throw new Error('Bundled macOS TUI version does not match');
 				await PanelRelease.run('codesign', ['--verify', '--deep', '--strict', '--verbose=2', apps[0]]);
 				await PanelRelease.run('spctl', ['--assess', '--type', 'execute', '--verbose=2', apps[0]]);
 				await PanelRelease.run('xcrun', ['stapler', 'validate', apps[0]]);
-				for (const file of [path.join(apps[0], 'Contents/MacOS/typerelay-panel'), tui]) for (const target of targets) await PanelRelease.run('lipo', [file, '-verify_arch', target.startsWith('aarch64') ? 'arm64' : 'x86_64']);
+				for (const file of [path.join(apps[0], 'Contents/MacOS/typerelay-panel'), tui, ai]) for (const target of targets) await PanelRelease.run('lipo', [file, '-verify_arch', target.startsWith('aarch64') ? 'arm64' : 'x86_64']);
 				const dmgs = await PanelRelease.files(path.join(release, 'bundle/dmg'), '.dmg'); const archives = await PanelRelease.files(path.join(release, 'bundle/macos'), '.app.tar.gz'); const signatures = await PanelRelease.files(path.join(release, 'bundle/macos'), '.sig');
 				if (dmgs.length !== 1 || archives.length !== 1 || signatures.length !== 1) throw new Error('Expected one macOS DMG and signed updater archive');
 				const macArchitecture = options.target.startsWith('aarch64') ? 'aarch64' : options.target.startsWith('x86_64') ? 'x64' : 'universal'; const archive = path.join(path.dirname(archives[0]), `TypeRelay_${config.version}_${macArchitecture}.app.tar.gz`); const signature = `${archive}.sig`;
 				await fs.rename(archives[0], archive); await fs.rename(signatures[0], signature);
 				artifacts = [...dmgs, archive, signature]; updater = { target: options.target.startsWith('aarch64') ? 'darwin-aarch64' : 'darwin-x86_64', file: archive, signature };
 			} else {
-				const engine = path.join(release, 'typerelay'); const tui = path.join(release, 'typerelay-tui'); const panel = path.join(release, 'typerelay-panel');
-				for (const [name, file] of [['typerelay', engine], ['typerelay-tui', tui], ['typerelay-panel', panel]]) { const version = await PanelRelease.run(file, ['--version'], { capture: true }); if (version !== `${name} ${config.version}`) throw new Error(`${name} version does not match ${config.version}`); const type = await PanelRelease.run('file', ['--brief', file], { capture: true }); if (!/ELF 64-bit.*x86-64/i.test(type)) throw new Error(`${name} is not an x86-64 ELF binary`); }
+				const engine = path.join(release, 'typerelay'); const tui = path.join(release, 'typerelay-tui'); const panel = path.join(release, 'typerelay-panel'); const ai = path.join(release, 'typerelay-ai');
+				for (const [name, file] of [['typerelay', engine], ['typerelay-tui', tui], ['typerelay-panel', panel], ['typerelay-ai', ai]]) { const version = await PanelRelease.run(file, ['--version'], { capture: true }); if (version !== `${name} ${config.version}`) throw new Error(`${name} version does not match ${config.version}`); const type = await PanelRelease.run('file', ['--brief', file], { capture: true }); if (!/ELF 64-bit.*x86-64/i.test(type)) throw new Error(`${name} is not an x86-64 ELF binary`); }
 				// Only the compatibility archive retains the standalone installer; native packages exclude it.
 				await PanelRelease.run('cargo', ['build', '--release', '--locked', '--target', options.target, '--features', 'legacy-install', '--bin', 'typerelay'], { cwd: PanelRelease.root, environment });
-				const bundle = path.join(release, 'bundle/legacy'); await fs.mkdir(bundle, { recursive: true }); for (const file of [engine, tui, panel]) await fs.copyFile(file, path.join(bundle, path.basename(file)));
+				const bundle = path.join(release, 'bundle/legacy'); await fs.mkdir(bundle, { recursive: true }); for (const file of [engine, tui, panel, ai]) await fs.copyFile(file, path.join(bundle, path.basename(file)));
 				// Tauri patches the release binary while bundling; legacy installs must keep their archive updater.
 				const legacyPanel = path.join(bundle, 'typerelay-panel'); await fs.writeFile(legacyPanel, PanelRelease.legacyPanel(await fs.readFile(legacyPanel)));
-				const archive = path.join(release, 'bundle', `TypeRelay-Linux-legacy-${config.version}-x86_64.tar.gz`); await PanelRelease.run('tar', ['-czf', archive, '-C', bundle, 'typerelay', 'typerelay-tui', 'typerelay-panel']); await PanelRelease.run('pnpm', ['tauri', 'signer', 'sign', archive], { cwd: working, environment });
+				const archive = path.join(release, 'bundle', `TypeRelay-Linux-legacy-${config.version}-x86_64.tar.gz`); await PanelRelease.run('tar', ['-czf', archive, '-C', bundle, 'typerelay', 'typerelay-tui', 'typerelay-panel', 'typerelay-ai']); await PanelRelease.run('pnpm', ['tauri', 'signer', 'sign', archive], { cwd: working, environment });
 				const appImages = await PanelRelease.files(path.join(release, 'bundle/appimage'), '.AppImage'); const debs = await PanelRelease.files(path.join(release, 'bundle/deb'), '.deb'); const rpms = await PanelRelease.files(path.join(release, 'bundle/rpm'), '.rpm');
 				if (appImages.length !== 1 || debs.length !== 1 || rpms.length !== 1) throw new Error('Expected one Linux AppImage, DEB and RPM');
 				const rpmMetadata = await PanelRelease.run('rpm', ['-qp', '--queryformat', '%{VERSION} %{ARCH}', rpms[0]], { capture: true });
