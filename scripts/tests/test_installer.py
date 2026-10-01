@@ -300,7 +300,7 @@ class InstallerTests(unittest.TestCase):
         self.subject.device_name = "AT Translated Set 2 keyboard"
         self.subject.conflicts.return_value.update(espanso_process=False, espanso_enabled=False, espanso_active=False)
         self.subject.install(False)
-        self.assertIn('--device-name "AT Translated Set 2 keyboard"', self.subject.unit.read_text())
+        self.assertIn('--device-name auto', self.subject.unit.read_text())
         self.assertEqual(json.loads(self.subject.manifest.read_text())["device_name"], self.subject.device_name)
         self.subject.device_name = None
         self.subject.access.return_value.select_keyboard.return_value = "AT Translated Set 2 keyboard"
@@ -316,7 +316,7 @@ class InstallerTests(unittest.TestCase):
             self.installer.shutil.copyfile(self.subject.binary.with_name(name), bundle / name)
         self.subject.binary = bundle / self.subject.binary.name
         self.subject.install(False, automatic=True)
-        self.assertIn('--device-name "AT Translated Set 2 keyboard"', self.subject.unit.read_text())
+        self.assertIn('--device-name auto', self.subject.unit.read_text())
         self.subject.privileged.assert_called_once_with("install")
 
     def test_native_keyboard_selection_ignores_virtual_devices_and_security_key(self):

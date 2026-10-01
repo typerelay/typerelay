@@ -29,6 +29,8 @@ Expansion currently requires Hyprland with a US keyboard layout. When keyd is ac
 
 If input forwarding stops making progress for five seconds, the engine exits to release its keyboard grab. A stalled template also releases buffered typing after five seconds without progress. Restart TypeRelay to resume expansion after an engine error.
 
+Startup uses the saved keyboard setting, including Automatic selection's fallback. After suspend, disconnects or temporary input/compositor errors, the engine releases its previous keyboard and reconnects automatically. Automatic selection rechecks connected devices, so a dock keyboard returning after resume can replace the temporary laptop keyboard. Pending insertions are cancelled during reconnection.
+
 For Caps mapped to Ctrl/Escape, use Hyprland's native `caps:ctrl_modifier` consistently for both the selected keyboard and TypeRelay's virtual keyboard. Caps shortcuts cancel pending abbreviations; expansion resumes after releasing Caps. Other native remappings are not supported.
 
 Espanso or another conflicting expander must be stopped before using TypeRelay. AppImage setup preserves your snippets, settings and any saved keyboard selection from a previous managed installation. It retires the previous managed TypeRelay user service; unmanaged services are preserved and reported as conflicts.

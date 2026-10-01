@@ -25,9 +25,11 @@ impl Installer {
             let name = name.to_string_lossy();
             if !name.strip_prefix("event").is_some_and(|suffix| !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit())) { continue; }
             let path = std::path::Path::new("/dev/input").join(name.as_ref());
+            let device_name = match std::fs::read_to_string(entry.path().join("device/name")) { Ok(name) => name.trim().to_owned(), Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue, Err(error) => return Err(error.into()) };
             let properties = Command::new("/usr/bin/udevadm").args(["info", "--query=property", "--name"]).arg(&path).output()?;
+            if !properties.status.success() && !path.exists() { continue; }
             ensure!(properties.status.success(), "Could not inspect input device {}", path.display());
-            devices.push((std::fs::read_to_string(entry.path().join("device/name"))?.trim().into(), path, String::from_utf8(properties.stdout)?));
+            devices.push((device_name, path, String::from_utf8(properties.stdout)?));
         }
         Ok(devices)
     }
@@ -48,6 +50,7 @@ impl Installer {
             else if internal { properties.lines().any(|p| p == "ID_INTEGRATION=internal") }
             else { !name.to_lowercase().contains("virtual") }
         }).collect();
+        if candidates.is_empty() { return Err(std::io::Error::new(std::io::ErrorKind::NotConnected, format!("Selected keyboard is disconnected. Available keyboards: {available}")).into()); }
         ensure!(candidates.len() == 1, "Choose your keyboard in Settings → Advanced (terminal: --device-name). Available keyboards: {available}");
         Ok(candidates[0].0.clone())
     }

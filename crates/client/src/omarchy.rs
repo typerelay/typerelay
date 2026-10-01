@@ -108,7 +108,7 @@ impl Session {
     fn caps_control(devices: &serde_json::Value, device_name: &str) -> Result<bool> {
         let name = device_name.to_lowercase().replace([' ', '\n', ','], "-");
         let keyboards = devices["keyboards"].as_array().context("No Hyprland keyboard information")?;
-        let keyboard = keyboards.iter().find(|keyboard| keyboard["name"].as_str() == Some(&name)).context("Selected keyboard is unavailable in Hyprland")?;
+        let keyboard = keyboards.iter().find(|keyboard| keyboard["name"].as_str() == Some(&name)).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotConnected, "Selected keyboard is unavailable in Hyprland"))?;
         let native = |keyboard: &serde_json::Value| keyboard["options"].as_str().unwrap_or_default().split(',').any(|option| matches!(option, "ctrl:nocaps" | "caps:ctrl_modifier"));
         let caps_control = native(keyboard);
         if let Some(output) = keyboards.iter().find(|keyboard| keyboard["name"].as_str() == Some("typerelay-virtual-keyboard")) { anyhow::ensure!(native(output) == caps_control, "Use the same native Caps-to-Ctrl options for the selected keyboard and TypeRelay virtual keyboard"); }
@@ -289,12 +289,45 @@ impl Session {
         let runtime = std::env::var("XDG_RUNTIME_DIR")?;
         let lock = fs::OpenOptions::new().create(true).truncate(false).read(true).write(true).open(PathBuf::from(runtime).join("typerelay.lock"))?;
         lock.try_lock_exclusive().context("Another TypeRelay client is already running")?;
+        let running = Arc::new(AtomicBool::new(true));
+        let signal = running.clone();
+        ctrlc::set_handler(move || signal.store(false, Ordering::SeqCst))?;
+        let panel = typerelay_client::panel_ipc::PanelIpc::engine(running.clone())?;
+        let progress=Arc::new(AtomicU64::new(0));let guarded=Arc::new(AtomicBool::new(true));Self::guard_relay(guarded.clone(),progress.clone());
+        let mut input_generation = 0u64;
+        let result = Self::keep_connected(&running, &progress, || {
+            input_generation = input_generation.wrapping_add(1);
+            while let Ok(request) = panel.0.try_recv() { let _ = request.reply.send(Err("Keyboard reconnected; insertion cancelled".into())); }
+            Self::relay(&mut store, device_name, &running, &progress, &panel, &mut input_generation)
+        });
+        running.store(false, Ordering::SeqCst);
+        guarded.store(false, Ordering::SeqCst);
+        result
+    }
+
+    fn keep_connected(running: &AtomicBool, progress: &AtomicU64, mut relay: impl FnMut() -> Result<()>) -> Result<()> {
+        while running.load(Ordering::SeqCst) {
+            progress.fetch_add(1, Ordering::SeqCst);
+            match relay() {
+                Ok(()) => return Ok(()),
+                Err(error) if error.chain().any(|cause| cause.downcast_ref::<std::io::Error>().is_some_and(|io| io.raw_os_error() == Some(libc::ENODEV) || matches!(io.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut | std::io::ErrorKind::Interrupted | std::io::ErrorKind::NotConnected | std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::BrokenPipe))) => eprintln!("TypeRelay input interrupted: {error:#}; reconnecting keyboard"),
+                Err(error) => return Err(error),
+            }
+            for _ in 0..10 { if !running.load(Ordering::SeqCst) { break; } progress.fetch_add(1, Ordering::SeqCst); thread::sleep(Duration::from_millis(100)); }
+        }
+        Ok(())
+    }
+
+    fn relay(store: &mut DatabaseSnapshot, requested: &str, running: &AtomicBool, progress: &AtomicU64, panel: &(std::sync::mpsc::Receiver<typerelay_client::panel_ipc::Insertion>, std::sync::mpsc::SyncSender<typerelay_client::panel_ipc::Insertion>), input_generation: &mut u64) -> Result<()> {
+        let (panel_requests, template_tx) = panel;
+        let device_name = if requested == "auto" { Installer::keyboard()? } else { requested.to_owned() };
         let devices = Hyprland::query("devices")?;
         let keyboards = devices["keyboards"].as_array().context("No Hyprland keyboard information")?;
         if keyboards.iter().any(|k| k["layout"].as_str() != Some("us") || k["capsLock"].as_bool() == Some(true)) { bail!("POC requires US-only layouts and Caps Lock off"); }
         Self::check_interference(&devices)?;
         let inputs=Installer::devices()?;
-        let selected: Vec<_> = Installer::keyboard_devices(&inputs).into_iter().filter(|(name, _, _)| name == device_name).collect();
+        let selected: Vec<_> = Installer::keyboard_devices(&inputs).into_iter().filter(|(name, _, _)| name == &device_name).collect();
+        if selected.is_empty() { return Err(std::io::Error::new(std::io::ErrorKind::NotConnected, format!("Keyboard {device_name} is disconnected")).into()); }
         if selected.len() != 1 { bail!("Expected exactly one keyboard named {device_name}"); }
         let mut keyboard = Device::open(&selected[0].1).context("Keyboard unavailable; allow keyboard access in TypeRelay")?;
         keyboard.set_nonblocking(true)?;
@@ -302,10 +335,12 @@ impl Session {
         // keyd reserves vendor 0x0fac for virtual devices and ignores them, preventing feedback.
         let mut output = VirtualDevice::builder()?.name("TypeRelay virtual keyboard").input_id(InputId::new(BusType::BUS_VIRTUAL, 0x0fac, 0x5452, 1)).with_keys(keyboard.supported_keys().context("Not a keyboard")?)?.build()?;
         thread::sleep(Duration::from_millis(300));
-        let mut caps_control = Self::caps_control(&Hyprland::query("devices")?, device_name)?;
+        let mut caps_control = Self::caps_control(&Hyprland::query("devices")?, &device_name)?;
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             Self::wait_for_release(|| {
+                progress.fetch_add(1, Ordering::SeqCst);
+                if !running.load(Ordering::SeqCst) { return Ok(false); }
                 // Startup keystrokes already reached the application; never replay them.
                 let mut activity = false;
                 loop {
@@ -321,23 +356,18 @@ impl Session {
                 }
                 Ok(activity || keyboard.get_key_state()?.iter().next().is_some())
             }, deadline)?;
+            if !running.load(Ordering::SeqCst) { return Ok(()); }
             keyboard.grab()?;
             if keyboard.get_key_state()?.iter().next().is_none() { break; }
             // A key arrived between the idle check and grab. Let it finish normally.
             keyboard.ungrab()?;
         }
-        let running = Arc::new(AtomicBool::new(true));
-        let signal = running.clone();
-        ctrlc::set_handler(move || signal.store(false, Ordering::SeqCst))?;
-        let progress=Arc::new(AtomicU64::new(0));let guarded=Arc::new(AtomicBool::new(true));Self::guard_relay(guarded.clone(),progress.clone());
         let mut settings = SettingsStore::open(Paths::config_dir()?.join("settings.yml"))?;
         let mut engine = Engine::new(store.snapshot.clone());
         engine.set_prefix(&settings.settings.trigger_prefix).map_err(anyhow::Error::msg)?;
         let mut pressed = BTreeSet::new();
         let mut suppressed_space = false;
         let mut suppressed_key = None;
-        let (panel_requests, template_tx) = typerelay_client::panel_ipc::PanelIpc::engine(running.clone())?;
-        let mut input_generation = 0u64;
         let mut template_wait: Option<TemplateWait> = None;
         let mut panel_shortcut = typerelay_client::panel::Panel::settings(settings.config_dir()).ok().and_then(|value|typerelay_client::panel::Panel::shortcut(&value.shortcut).ok());
         let mut target = None;
@@ -350,18 +380,19 @@ impl Session {
         let mut last_stroke = Instant::now();
         let mut paste: Option<PasteState> = None;
         let mut last_conflict_check = Instant::now();
-        eprintln!("TypeRelay running: {} snippets; configured prefix + abbreviation + Space. Ctrl+C stops. No keystrokes are logged.", store.snapshot.len());
+        eprintln!("TypeRelay running: {} snippets; keyboard {device_name}; configured prefix + abbreviation + Space. Ctrl+C stops. No keystrokes are logged.", store.snapshot.len());
         while running.load(Ordering::SeqCst) {
             progress.fetch_add(1,Ordering::SeqCst);
             if last_conflict_check.elapsed() >= Duration::from_secs(2) {
                 let devices = Hyprland::query("devices")?;
                 Self::check_interference(&devices)?;
-                let updated = Self::caps_control(&devices, device_name)?;
+                if requested == "auto" && Installer::keyboard()? != device_name { return Err(std::io::Error::new(std::io::ErrorKind::NotConnected, "Configured keyboard changed").into()); }
+                let updated = Self::caps_control(&devices, &device_name)?;
                 if updated != caps_control { caps_control = updated; caps = false; engine.feed(Input::Cancel); target = None; }
                 last_conflict_check = Instant::now();
             }
             let context_changed=context.changed(target.as_deref())?;
-            if context_changed {input_generation=input_generation.wrapping_add(1);}
+            if context_changed {*input_generation=input_generation.wrapping_add(1);}
             if context_changed || last_input.elapsed() > Duration::from_secs(10) {
                 engine.feed(Input::Cancel); target = None; insertion.clear(); usage = None;
                 if let Some(state) = &mut paste { state.cancelled = true; state.job.cancel(); }
@@ -394,16 +425,16 @@ impl Session {
                 if suppressed_key.is_some_and(|key|!keys_down.contains(&key)) { suppressed_key = None; }
             }
             if paste.is_none() && insertion.is_empty() && pressed.is_empty() && (buffered.is_empty() || template_wait.is_some()) && !Self::modifiers_down(&keys_down, caps_control) && let Ok(request) = panel_requests.try_recv() {
-                    if template_wait.as_ref().is_none_or(|wait|request.generation==Some(wait.generation)) && Instant::now() < request.deadline && request.generation.is_none_or(|expected| expected == input_generation) && Self::target()? == Some(request.target.clone()) {
+                    if template_wait.as_ref().is_none_or(|wait|request.generation==Some(wait.generation)) && Instant::now() < request.deadline && request.generation.is_none_or(|expected| expected == *input_generation) && Self::target()? == Some(request.target.clone()) {
                         engine.feed(Input::Cancel); last_input=Instant::now();
                         if let Some(wait)=&mut template_wait {wait.deadline=Instant::now()+Duration::from_secs(5);}
                         match request.step {
-							typerelay_client::clipboard_payload::ClipboardStep::Payload(payload) if !payload.plain.is_empty()||payload.html.is_some()=>{let text=payload.plain.clone();paste=Some(PasteState{job:PasteJob::start_payload(payload),expansion:Expansion{identity:None,template:None,erase:request.erase,text},target:Some(request.target),reply:Some(request.reply),generation:input_generation,started:false,sent:false,cancelled:false});}
+							typerelay_client::clipboard_payload::ClipboardStep::Payload(payload) if !payload.plain.is_empty()||payload.html.is_some()=>{let text=payload.plain.clone();paste=Some(PasteState{job:PasteJob::start_payload(payload),expansion:Expansion{identity:None,template:None,erase:request.erase,text},target:Some(request.target),reply:Some(request.reply),generation:*input_generation,started:false,sent:false,cancelled:false});}
                             step => {
                                 if let Some(wait)=&mut template_wait {wait.started=true;}
                                 for _ in 0..request.erase { output.emit(&Self::stroke(KeyCode::KEY_BACKSPACE,false))?; }
 								if matches!(step,typerelay_client::clipboard_payload::ClipboardStep::Enter) { if Self::target()? != Some(request.target) { let _=request.reply.send(Err("Original window lost focus; remaining actions cancelled".into())); continue; } output.emit(&Self::stroke(KeyCode::KEY_ENTER,false))?; }
-                                let _=request.reply.send(Ok(input_generation));
+                                let _=request.reply.send(Ok(*input_generation));
                             }
                         }
                     } else { let _ = request.reply.send(Err("Target changed or insertion expired; remaining actions cancelled".into())); }
@@ -456,7 +487,7 @@ impl Session {
                 match wait.done.try_recv() {
                     Ok(result)=>{if result.is_err()&&!wait.started&&Self::target()?==Some(wait.target.clone()){output.emit(&Self::stroke(KeyCode::KEY_SPACE,false))?;}template_wait=None;},
                     Err(std::sync::mpsc::TryRecvError::Empty) if Instant::now()<wait.deadline=>{thread::sleep(Duration::from_millis(1));continue;},
-                    Err(std::sync::mpsc::TryRecvError::Empty)=>{if !wait.started&&Self::target()?==Some(wait.target.clone()){output.emit(&Self::stroke(KeyCode::KEY_SPACE,false))?;}input_generation=input_generation.wrapping_add(1);template_wait=None;insertion.clear();paste=None;eprintln!("Template insertion timed out; releasing buffered typing");},
+                    Err(std::sync::mpsc::TryRecvError::Empty)=>{if !wait.started&&Self::target()?==Some(wait.target.clone()){output.emit(&Self::stroke(KeyCode::KEY_SPACE,false))?;}*input_generation=input_generation.wrapping_add(1);template_wait=None;insertion.clear();paste=None;eprintln!("Template insertion timed out; releasing buffered typing");},
                     Err(std::sync::mpsc::TryRecvError::Disconnected)=>{template_wait=None;}
                 }
             }
@@ -472,7 +503,7 @@ impl Session {
                     continue;
                 }
                 if event.value() == 0 { pressed.remove(&code.0); }
-                if event.value() == 1 { pressed.insert(code.0); input_generation = input_generation.wrapping_add(1); }
+                if event.value() == 1 { pressed.insert(code.0); *input_generation = input_generation.wrapping_add(1); }
                 let effective_pressed: BTreeSet<_> = pressed.iter().map(|key| Self::effective_key(*key, caps_control)).collect();
                 if event.value() == 1 && panel_shortcut.as_ref().is_some_and(|(key, groups)| *key == code.0 && groups.iter().all(|group|group.iter().any(|key|effective_pressed.contains(key))) && effective_pressed.iter().all(|key|*key == code.0 || groups.iter().any(|group|group.contains(key)))) && typerelay_client::panel_ipc::PanelIpc::notify() {
                     suppressed_key = Some(code.0); engine.feed(Input::Cancel); target = None; continue;
@@ -500,8 +531,8 @@ impl Session {
                             if let Some(template) = &expansion.template {
                                 if let Some(identity) = &template.identity {
                                     let hit = typerelay_client::panel::Hit { id: identity.id.clone(), library: identity.library.clone(), revision: identity.revision, library_name: String::new(), title: template.abbreviation.clone(), abbreviation: template.abbreviation.clone(), preview: String::new() };
-                                    let accepted = if template.prompted { typerelay_client::panel_ipc::PanelIpc::prompt(typerelay_client::panel_ipc::Prompt { hit, target: destination, erase: expansion.erase, generation:input_generation, created_ms:std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis() }) } else {
-                                        let tx=template_tx.clone(); let erase=expansion.erase; let generation=input_generation; let started=Instant::now();
+                                    let accepted = if template.prompted { typerelay_client::panel_ipc::PanelIpc::prompt(typerelay_client::panel_ipc::Prompt { hit, target: destination, erase: expansion.erase, generation:*input_generation, created_ms:std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis() }) } else {
+                                        let tx=template_tx.clone(); let erase=expansion.erase; let generation=*input_generation; let started=Instant::now();
 											let (done,completion)=std::sync::mpsc::channel();template_wait=Some(TemplateWait{done:completion,target:destination.clone(),started:false,generation,deadline:Instant::now()+Duration::from_secs(5)});
 											std::thread::spawn(move || { let result=(||->Result<()>{ let steps=typerelay_client::panel::Panel::steps_at(&Paths::config_dir()?.join("snippets"),&hit,Default::default(),false,typerelay_client::templates::Templates::clock())?; anyhow::ensure!(started.elapsed()<Duration::from_secs(2),"Template preparation expired");typerelay_client::panel_ipc::PanelIpc::execute(&tx,&hit,&destination,steps,erase,Some(generation)) })().map_err(|error|error.to_string()); if let Err(error)=&result { eprintln!("Template insertion cancelled: {error}"); }let _=done.send(result); }); true
                                     };
@@ -512,7 +543,7 @@ impl Session {
                                 output.emit(&Self::stroke(KeyCode::KEY_SPACE,false))?; target=None; continue;
                             }
                             if expansion.requires_paste() {
-                                paste = Some(PasteState { job: PasteJob::start(expansion.text.clone()), expansion, target: target.clone(), reply: None, generation:input_generation, started: false, sent: false, cancelled: false });
+                                paste = Some(PasteState { job: PasteJob::start(expansion.text.clone()), expansion, target: target.clone(), reply: None, generation:*input_generation, started: false, sent: false, cancelled: false });
                             } else {
                                 insertion = Self::inject(&expansion, None)?; usage=Some(expansion);
                             }
@@ -524,10 +555,9 @@ impl Session {
             }
             thread::sleep(Duration::from_millis(1));
         }
-        running.store(false,Ordering::SeqCst);drop(paste);
+        drop(paste);
         for code in pressed { output.emit(&[InputEvent::new(EventType::KEY.0, code, 0)])?; }
         keyboard.ungrab()?;
-        guarded.store(false,Ordering::SeqCst);
         eprintln!("TypeRelay stopped");
         Ok(())
     }
@@ -536,6 +566,40 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn input_reconnect_releases_resources_and_reselects_saved_keyboard() {
+        let directory = tempfile::tempdir().unwrap();let path = directory.path().join("keyboard.lock");fs::write(&path, b"").unwrap();
+        let settings = typerelay_client::panel::PanelSettings { keyboard_fallback: "USB keyboard".into(), ..Default::default() };
+        typerelay_client::panel::Panel::save_settings(directory.path(), &settings).unwrap();
+        let laptop = ("Laptop keyboard".into(), "/dev/input/event1".into(), "ID_INPUT_KEYBOARD=1\nID_INTEGRATION=internal\n".into());
+        let usb = ("USB keyboard".into(), "/dev/input/event2".into(), "ID_INPUT_KEYBOARD=1\nID_INTEGRATION=internal\n".into());
+        let mut devices = vec![laptop];let mut selected = Vec::new();let mut attempts = 0;
+        Session::keep_connected(&AtomicBool::new(true), &AtomicU64::new(0), || {
+            // The previous attempt must have released its exclusive input resource.
+            let lock = fs::OpenOptions::new().read(true).write(true).open(&path)?;lock.try_lock_exclusive()?;
+            let saved = typerelay_client::panel::Panel::settings(directory.path())?;
+            selected.push(Installer::configured_keyboard(&devices, &saved)?);
+            attempts += 1;
+            match attempts {
+                1 => { devices.push(usb.clone()); Err(std::io::Error::new(std::io::ErrorKind::NotConnected, "Dock keyboard returned").into()) },
+                2 => Err(std::io::Error::from_raw_os_error(libc::ENODEV).into()),
+                3 => Err(std::io::Error::from_raw_os_error(libc::EAGAIN).into()),
+                _ => Ok(()),
+            }
+        }).unwrap();
+        assert_eq!(selected, ["Laptop keyboard", "USB keyboard", "USB keyboard", "USB keyboard"]);
+    }
+    #[test]
+    fn reconnect_stops_on_shutdown_and_preserves_configuration_errors() {
+        let running = AtomicBool::new(true);let progress = AtomicU64::new(0);let mut attempts = 0;
+        Session::keep_connected(&running, &progress, || { attempts += 1;running.store(false, Ordering::SeqCst);Err(std::io::Error::from_raw_os_error(libc::ENODEV).into()) }).unwrap();
+        assert_eq!(attempts, 1);
+        for error in [anyhow::Error::from(std::io::Error::from_raw_os_error(libc::EACCES)), anyhow::Error::from(Interference), anyhow::anyhow!("Incompatible keyboard layout")] {
+            let mut error = Some(error);let mut attempts = 0;
+            assert!(Session::keep_connected(&AtomicBool::new(true), &progress, || { attempts += 1;Err(error.take().expect("Permanent errors must not retry")) }).is_err());
+            assert_eq!(attempts, 1);
+        }
+    }
     #[test]
     fn relay_guard_child() {
         let Some(path)=std::env::var_os("TYPERELAY_RELAY_GUARD_TEST") else{return;};

@@ -156,7 +156,6 @@ impl Cli {
                 let path = source.path()?;
                 anyhow::ensure!(path.is_dir(), "YAML runtime input is retired. Import a library, then run with --dir");
                 typerelay_client::sync::Sync::worker(root, path.clone());
-                let device_name = if device_name == "auto" { installation::Installer::keyboard()? } else { device_name };
                 omarchy::Session::run(typerelay_client::database::DatabaseSnapshot::open(&path)?, &device_name)?;
             },
             #[cfg(all(target_os = "linux", feature = "legacy-install"))]

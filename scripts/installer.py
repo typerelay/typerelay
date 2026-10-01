@@ -91,7 +91,7 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-ExecStart={self.quote(self.destination)} run --dir {self.quote(self.snippets)} --device-name {self.quote(self.device_name or "keyd virtual keyboard")}
+ExecStart={self.quote(self.destination)} run --dir {self.quote(self.snippets)} --device-name auto
 Restart=on-failure
 RestartSec=3
 RestartPreventExitStatus=78

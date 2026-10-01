@@ -42,7 +42,7 @@ impl Runtime {
 				let package=matches!(bundle,Some(tauri::utils::config::BundleType::Deb|tauri::utils::config::BundleType::Rpm));
 				Installer::prepare_package_service(package)?;
 				if !package {
-					let mut child=std::process::Command::new(&engine).args(["run","--device-name",&keyboard]).arg("--dir").arg(app.state::<Runtime>().root.join("snippets")).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped()).spawn()?;
+					let mut child=std::process::Command::new(&engine).args(["run","--device-name","auto"]).arg("--dir").arg(app.state::<Runtime>().root.join("snippets")).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped()).spawn()?;
 					let errors=child.stderr.take().context("Engine diagnostics are unavailable")?;let pid=child.id();
 					let state=app.state::<Runtime>();let mut running=state.engine.lock().unwrap();
 					if state.closing.load(Ordering::SeqCst){unsafe{libc::kill(child.id() as i32,libc::SIGINT);}let _=child.wait();return Ok(());}
