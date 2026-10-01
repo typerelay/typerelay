@@ -147,13 +147,11 @@ html(lang="en")
 						.setting-section
 							h2.settings-card-title AI options
 							label.check(for="native-ai-enabled")
-								input#native-ai-enabled(type="checkbox")
 								span Enable AI
+								input#native-ai-enabled(type="checkbox")
 					section#native-ai-card.settings-list(hidden)
 						.setting-section
-							h2.settings-card-title Local AI
-							h3#native-model-heading Choose a Model
-							p This powers suggestions in your apps. You can change it anytime.
+							h2#native-model-heading.settings-card-title Choose local AI model
 							#native-model(role="radiogroup" aria-labelledby="native-model-heading")
 							#native-download-area
 								p#native-download-label Download to continue
@@ -168,6 +166,7 @@ html(lang="en")
 										span.native-model-title
 											strong.native-model-name
 											span.native-model-recommended Recommended
+											span.native-model-downloaded(hidden) Downloaded
 										small.native-model-description
 									span.native-model-size
 					section#keyboard-card.settings-list(hidden)

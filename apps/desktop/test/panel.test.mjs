@@ -58,11 +58,11 @@ test('AI checkbox and model rows update in place without reloading settings',asy
   checkbox.checked=true;const pending=f.panel.modelAction('enable',checkbox);assert.equal(card.hidden,false);assert.equal(checkbox.disabled,true);
   await f.panel.refreshAi();assert.equal(checkbox.checked,true);assert.equal(checkbox.disabled,true);
   await f.panel.modelAction('enable',checkbox);assert.equal(requests.filter(request=>request.op==='enable').length,1);
-  finish();await pending;assert.equal(checkbox.checked,true);assert.equal(checkbox.disabled,false);assert.equal(document.querySelector('#native-download-area').hidden,true);
+  finish();await pending;assert.equal(checkbox.checked,true);assert.equal(checkbox.disabled,false);assert.equal(document.querySelector('#native-download-area').hidden,true);assert.equal(row.querySelector('.native-model-downloaded').hidden,false);
   checkbox.checked=false;const disabling=f.panel.modelAction('disable',checkbox);finish();await disabling;assert.equal(card.hidden,true);
   assert.equal(document.querySelector('#native-ai-card'),card);assert.equal(document.querySelector('#native-model').firstElementChild,row);
   assert.equal(document.querySelector('#native-remove,#native-disable'),null);
-  status.enabled=true;status.models[0].installed=false;f.panel.modelInfo();assert.equal(card.hidden,false);assert.equal(document.querySelector('#native-enable').textContent,'Download 0.00 GB Model');assert.equal(document.querySelector('#native-enable').hidden,false);
+  status.enabled=true;status.models[0].installed=false;f.panel.modelInfo();assert.equal(row.querySelector('.native-model-downloaded').hidden,true);assert.equal(card.hidden,false);assert.equal(document.querySelector('#native-enable').textContent,'Download 0.00 GB Model');assert.equal(document.querySelector('#native-enable').hidden,false);
   assert.equal(f.dom.window.getComputedStyle(document.querySelector('#settings-advanced')).overflowY,'auto');
  }finally{f.dom.window.close();}
 });

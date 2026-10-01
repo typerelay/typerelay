@@ -4,7 +4,7 @@ Desktop and TUI share one local worker and one active model. AI is off until a m
 
 ## Desktop
 
-Open **Settings → Advanced → AI options** and check **Enable AI**. The **Local AI** card appears with selectable model rows. Select a model, then choose **Download … GB Model** and confirm if it is not installed. Selecting an installed model activates it immediately. Interrupted downloads can resume; Cancel keeps downloaded bytes. Uncheck **Enable AI** to disable AI and hide the model card without deleting downloaded models. Switching models never downloads another model automatically.
+Open **Settings → Advanced → AI options** and check **Enable AI**. The **Choose local AI model** card appears with selectable model rows. Select a model, then choose **Download … GB Model** and confirm if it is not installed. Selecting an installed model activates it immediately. Interrupted downloads can resume; Cancel keeps downloaded bytes. Uncheck **Enable AI** to disable AI and hide the model card without deleting downloaded models. Switching models never downloads another model automatically.
 
 Use the ordinary search input. Literal matches appear immediately; an enabled model interprets the query after 600 ms without typing. Exact abbreviation matches bypass AI. Descriptive queries retrieve and rank existing readable snippets from synced and local libraries. Results never contain generated snippets. Insert/copy rechecks access and revision.
 
