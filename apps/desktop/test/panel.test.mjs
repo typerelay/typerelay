@@ -47,6 +47,24 @@ test('exact abbreviations bypass AI and cancelled model consent starts no downlo
  }finally{f.dom.window.close();}
 });
 
+test('enabled models cannot be re-enabled and model actions retain pending feedback during polling',async()=>{
+ const f=await Fixture.create();try{
+  const document=f.dom.window.document;const button=document.querySelector('#native-enable');const card=document.querySelector('#ai-settings-card');
+  const status={model:'small',models:[{id:'small',name:'Small',bytes:1000000,installed:true,downloaded:0}],download:null};
+  f.panel.aiStatus=status;f.panel.modelInfo();assert.equal(button.textContent,'Model enabled');assert.equal(button.disabled,true);
+  const requests=[];let finish;
+  f.panel.invoke=async(name,args)=>{assert.equal(name,'native_ai');requests.push(args.request);if(args.request.op==='status')return status;return new Promise(resolve=>{finish=()=>{status.model='small';resolve();};});};
+  await f.panel.modelAction('enable',button);assert.equal(requests.length,0);
+  status.model=null;f.panel.modelInfo();assert.equal(button.textContent,'Enable model');assert.equal(button.disabled,false);
+  f.panel.render=()=>{throw Error('No whole-view rendering');};f.panel.settings=()=>{throw Error('No settings reload');};
+  const pending=f.panel.modelAction('enable',button);assert.equal(button.textContent,'Enabling…');assert.equal(button.disabled,true);
+  await f.panel.refreshAi();assert.equal(button.textContent,'Enabling…');assert.equal(button.disabled,true);
+  await f.panel.modelAction('enable',button);assert.equal(requests.filter(request=>request.op==='enable').length,1);
+  finish();await pending;assert.equal(button.textContent,'Model enabled');assert.equal(button.disabled,true);assert.equal(document.querySelector('#ai-settings-card'),card);
+  status.model='other';f.panel.modelInfo();assert.equal(button.textContent,'Enable model');assert.equal(button.disabled,false);
+ }finally{f.dom.window.close();}
+});
+
 test('Advanced cards retain controls and save through the existing settings form',async()=>{
  const f=await Fixture.create();try{
   await f.panel.settings(true);const document=f.dom.window.document;const form=document.querySelector('#settings-form');const keyboard=document.querySelector('#keyboard');const shortcut=document.querySelector('#shortcut');
