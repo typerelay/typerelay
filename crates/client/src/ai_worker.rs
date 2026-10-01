@@ -29,9 +29,9 @@ impl Runtime {
             ensure!(!cancelled.load(Ordering::Relaxed) && started.elapsed() < Duration::from_secs(120), "AI cancelled or timed out"); batch.clear();
             for (index, token) in chunk.iter().enumerate() { let position = chunk_index * 256 + index; batch.add(*token, position as i32, &[0], position == tokens.len()-1)?; } context.decode(&mut batch)?;
         }
-        let grammar = if request["kind"] == "search" { "root ::= \"{\" ws \"\\\"intent\\\"\" ws \":\" ws (\"\\\"literal\\\"\" | \"\\\"descriptive\\\"\") ws \",\" ws \"\\\"terms\\\"\" ws \":\" ws \"[\" ws (string (ws \",\" ws string)*)? ws \"]\" ws \"}\"\n" } else { "root ::= \"{\" ws \"\\\"text\\\"\" ws \":\" ws string ws \"}\"\n" };
+        let grammar = "root ::= \"{\" ws \"\\\"text\\\"\" ws \":\" ws string ws \"}\"\n";
         let grammar = format!("{grammar}string ::= \"\\\"\" ([^\"\\\\\\x00-\\x1F] | \"\\\\\" ([\"\\\\/bfnrt] | \"u\" [0-9a-fA-F]{{4}}))* \"\\\"\"\nws ::= [ \\t\\n\\r]*\n");
-        let mut sampler = LlamaSampler::chain_simple([LlamaSampler::grammar(model, &grammar, "root")?, LlamaSampler::greedy()]); let mut bytes = Vec::new(); let limit = if request["kind"] == "search" { 256 } else { 1800 };
+        let mut sampler = LlamaSampler::chain_simple([LlamaSampler::grammar(model, &grammar, "root")?, LlamaSampler::greedy()]); let mut bytes = Vec::new(); let limit = 1800;
         for offset in 0..limit {
             ensure!(!cancelled.load(Ordering::Relaxed) && started.elapsed() < Duration::from_secs(120), "AI cancelled or timed out");
             let token = sampler.sample(&context, -1); if vocab.is_eog(token) { break; }
@@ -42,13 +42,13 @@ impl Runtime {
     }
 }
 
-struct Worker { root: PathBuf, token: String, runtime: Mutex<Runtime>, jobs: Mutex<HashMap<String, Arc<AtomicBool>>>, cancelled: Mutex<HashMap<String, Instant>>, download: Mutex<Option<String>>, error: Mutex<Option<String>>, authors: AtomicUsize, clients: AtomicUsize, mutation: Mutex<()> }
+struct Worker { root: PathBuf, token: String, runtime: Mutex<Runtime>, jobs: Mutex<HashMap<String, Arc<AtomicBool>>>, cancelled: Mutex<HashMap<String, Instant>>, download: Mutex<Option<String>>, error: Mutex<Option<String>>, clients: AtomicUsize, mutation: Mutex<()> }
 impl Worker {
     fn run(root: PathBuf, gpu: bool) -> Result<()> {
         let directory = NativeAi::directory(&root)?; let lock = fs::OpenOptions::new().create(true).truncate(false).read(true).write(true).open(directory.join("worker.lock"))?;
         if fs2::FileExt::try_lock_exclusive(&lock).is_err() { return Ok(()); }
         let listener = TcpListener::bind("127.0.0.1:0")?; let token = uuid::Uuid::new_v4().to_string();
-        let worker = Arc::new(Self { root, token: token.clone(), runtime: Mutex::new(Runtime { backend:None, model: None, used: Instant::now(), gpu }), jobs: Mutex::new(HashMap::new()), cancelled: Mutex::new(HashMap::new()), download: Mutex::new(None), error: Mutex::new(None), authors: AtomicUsize::new(0), clients: AtomicUsize::new(0), mutation: Mutex::new(()) });
+        let worker = Arc::new(Self { root, token: token.clone(), runtime: Mutex::new(Runtime { backend:None, model: None, used: Instant::now(), gpu }), jobs: Mutex::new(HashMap::new()), cancelled: Mutex::new(HashMap::new()), download: Mutex::new(None), error: Mutex::new(None), clients: AtomicUsize::new(0), mutation: Mutex::new(()) });
         Paths::atomic_write(&directory.join("endpoint.json"), &serde_json::to_vec(&Endpoint { address: listener.local_addr()?, token })?, false)?;
         let idle = worker.clone(); std::thread::spawn(move || loop { std::thread::sleep(Duration::from_secs(1)); if let Ok(mut runtime) = idle.runtime.try_lock() { if runtime.used.elapsed() >= Duration::from_secs(300) { runtime.model = None; } } });
         for stream in listener.incoming() { let stream = stream?; if worker.clients.fetch_add(1, Ordering::SeqCst) >= 16 { worker.clients.fetch_sub(1, Ordering::SeqCst); continue; } let worker = worker.clone(); std::thread::spawn(move || { let _ = worker.serve(stream); worker.clients.fetch_sub(1, Ordering::SeqCst); }); } Ok(())
@@ -79,9 +79,7 @@ impl Worker {
                 *self.download.lock().unwrap() = None; if let Err(error) = &result { *self.error.lock().unwrap() = Some(error.to_string()); } result?; return Ok(Value::Null);
             }
             ensure!(operation == "infer", "Unknown AI operation");
-            if request["kind"] == "search" { ensure!(self.authors.load(Ordering::SeqCst) == 0, "Authoring busy"); let mut runtime = self.runtime.try_lock().map_err(|_|anyhow::anyhow!("AI busy"))?; runtime.infer(&self.root, &request, &flag) } else {
-                self.authors.fetch_add(1, Ordering::SeqCst); let result = self.runtime.lock().unwrap().infer(&self.root, &request, &flag); self.authors.fetch_sub(1, Ordering::SeqCst); result
-            }
+            self.runtime.lock().unwrap().infer(&self.root, &request, &flag)
         })(); self.jobs.lock().unwrap().remove(&id); result
     }
 }

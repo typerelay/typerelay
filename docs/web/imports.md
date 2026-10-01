@@ -82,3 +82,7 @@ TypeRelay YAML and SnippetsLab retain their existing content/language semantics,
 Synthetic fixture tests cover quoted multiline CSV/BOM, mixed whitespace, nested JSON folders, HTML conversion, review-only commands, XML/plist decoding, entity rejection and unknown formats. Transaction tests cover abbreviation corrections/clearing, private access, retry idempotency, duplicate rollback and name suffixes. The DOM integration test verifies dropdown placement, preview edits, unselected invalid rows and item-level library insertion without replacing the editor. Existing YAML/SnippetsLab and two-desktop sync tests are rerun.
 
 Other beta vendor formats still require customer compatibility testing. No analytics or automatic upload of customer files has been added.
+
+## Conflicting abbreviations
+
+Imports preserve existing abbreviations. Incoming conflicts receive the first available numeric suffix, such as `hello-2`. Snippets without an abbreviation, including entries that need review, remain unassigned. The completion summary lists imported snippets, skipped macros and renamed abbreviations. Failed imports keep the preview open with a persistent error; successful retries of the same request do not import twice.

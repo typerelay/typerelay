@@ -22,6 +22,7 @@ html(lang="en")
 					span.search-icon(aria-hidden="true")
 					label.visually-hidden(for="query") Search snippets
 					input#query(type="search" autocomplete="off" spellcheck="false" aria-controls="results")
+					button#clear-search.icon-button(type="button" hidden aria-label="Clear search" title="Clear search") ×
 				#empty-state(hidden)
 					p Hey there, you have no snippets yet. Connect to your server to sync, create your first snippet in the TypeRelay web app, or use TypeRelay TUI.
 					.empty-actions
@@ -39,21 +40,6 @@ html(lang="en")
 						span.keycap esc
 						span Close
 					button#copy.secondary(type="button" disabled aria-keyshortcuts="Control+C Meta+C" title="Copy highlighted snippet") Copy
-			section#personal-view(hidden)
-				form#personal-form
-					h2 My abbreviation
-					p#personal-shared
-					label(for="personal-trigger") My abbreviation
-					input#personal-trigger(maxlength="63" pattern="[a-z0-9-]{1,63}")
-					button#personal-reset(type="button") Use shared default
-					p#personal-status
-					label#personal-conflict-label(for="personal-conflict") Conflict to resolve
-					select#personal-conflict
-					button#personal-use-pending(type="button") Use pending value
-					button#personal-use-rejected(type="button" hidden) Use rejected value
-					.form-actions
-						button#personal-cancel(type="button") Cancel
-						button#personal-save.primary(type="submit") Save
 			section#fill-view(hidden)
 				form#fill-form
 					h2 Fill template
@@ -233,7 +219,6 @@ html(lang="en")
 				code.result-abbreviation
 				pre.result-preview
 				small.result-personal-status
-				button.result-personal(type="button" hidden) My abbreviation
 		template#library-template
 			div.library-row
 				label.check

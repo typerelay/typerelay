@@ -36,39 +36,38 @@ impl Panel {
         }};
         Ok((code, modifiers))
     }
+    fn typo_distance(left: &str, right: &str, limit: usize) -> usize {
+        let left:Vec<_>=left.chars().collect();let right:Vec<_>=right.chars().collect();if left.len().abs_diff(right.len())>limit{return limit+1;}
+        let mut previous:Vec<_>=(0..=right.len()).collect();let mut before=previous.clone();
+        for(i,a)in left.iter().enumerate(){let mut current=vec![limit+1;right.len()+1];current[0]=i+1;for j in i.saturating_sub(limit)..right.len().min(i+limit+1){current[j+1]=(previous[j+1]+1).min(current[j]+1).min(previous[j]+usize::from(*a!=right[j]));if i>0&&j>0&&*a==right[j-1]&&left[i-1]==right[j]{current[j+1]=current[j+1].min(before[j-1]+1);}}if *current.iter().min().unwrap()>limit{return limit+1;}before=previous;previous=current;}
+        previous[right.len()]
+    }
     pub fn search(directory: &Path, query: &str, scope: Option<&str>) -> Result<Vec<Hit>> {
-        let query = query.trim().to_lowercase(); if query.is_empty() { return Ok(Vec::new()); }
-        ensure!(query.len() <= 512, "Search is too long");
-        let db = Database::open(directory)?;
-        let transaction = db.connection.unchecked_transaction()?;
-        let mut ranked = Vec::new();
-        for library in db.libraries()? {
-            if scope.is_some_and(|id| library["_id"].as_str() != Some(id)) { continue; }
-            if library["state"] != "active" || library["permissions"]["read"] != true { continue; }
-            let id = library["_id"].as_str().context("Invalid library ID")?;
-            for entry in db.effective_records(id)?.into_iter().filter(|entry| entry["state"] == "active") {
-                let abbreviation = entry["effective_trigger"].as_str().unwrap_or_default();
-                let text = entry["content"]["text"].as_str().or(entry["content"]["markdown"].as_str()).context("Missing snippet content")?;
-                let needle = abbreviation.to_lowercase();
-                let rank = if needle == query { 0 } else if needle.starts_with(&query) { 1 } else if needle.contains(&query) { 2 } else if text.to_lowercase().contains(&query) || entry["title"].as_str().unwrap_or_default().to_lowercase().contains(&query) { 3 } else { continue; };
-                ranked.push((rank, Hit { id: entry["id"].as_str().context("Missing snippet ID")?.into(), library: id.into(), library_name: library["name"].as_str().unwrap_or_default().into(), revision: entry["revision"].as_i64().context("Missing revision")?, title: entry["title"].as_str().unwrap_or_default().into(), abbreviation: abbreviation.into(), preview: text.chars().take(800).collect() }));
-            }
+        let query=query.trim().to_lowercase();if query.is_empty(){return Ok(Vec::new());}ensure!(query.len()<=512,"Search is too long");
+        let db=Database::open(directory)?;let transaction=loop{db.search_index()?;let transaction=db.connection.unchecked_transaction()?;if db.connection.query_row("SELECT built=version FROM search_state WHERE id=1",[],|row|row.get::<_,bool>(0))?{break transaction;}transaction.rollback()?;};
+        db.connection.execute_batch("CREATE VIRTUAL TABLE temp.search_query USING fts5(text,tokenize='unicode61 remove_diacritics 2'); CREATE VIRTUAL TABLE temp.query_vocab USING fts5vocab(search_query,'row');")?;db.connection.execute("INSERT INTO temp.search_query(text) VALUES(?1)",[&query])?;
+        let tokens=db.connection.prepare("SELECT term FROM temp.query_vocab ORDER BY term")?.query_map([],|row|row.get::<_,String>(0))?.collect::<std::result::Result<Vec<_>,_>>()?;ensure!(tokens.len()<=32,"Use at most 32 search words");if tokens.is_empty(){return Ok(Vec::new());}
+        let mut values:Vec<rusqlite::types::Value>=vec![query.clone().into(),scope.map(str::to_owned).map(Into::into).unwrap_or(rusqlite::types::Value::Null)];let mut clauses=Vec::new();let mut counts=Vec::new();let mut exact=Vec::new();
+        for token in tokens {
+            let literal=format!("\"{}\"*",token.replace('"',"\"\""));values.push(literal.clone().into());exact.push(format!("(rowid IN (SELECT rowid FROM search_fts WHERE search_fts MATCH ?{}))",values.len()));
+            let length=token.chars().count();let limit=if length>=8{2}else if length>=4{1}else{0};let mut alternatives=vec![literal];
+            if limit>0 {let mut statement=db.connection.prepare("SELECT term FROM search_vocab WHERE length(term) BETWEEN ?1 AND ?2")?;let candidates=statement.query_map(rusqlite::params![(length-limit) as i64,(length+limit) as i64],|row|row.get::<_,String>(0))?;let mut corrections=Vec::new();for term in candidates{let term=term?;let distance=Self::typo_distance(&token,&term,limit);if distance>0&&distance<=limit{corrections.push((distance,term));}}corrections.sort();for(_,term)in corrections.into_iter().take(8){alternatives.push(format!("\"{}\"",term.replace('"',"\"\"")));}}
+            let clause=format!("({})",alternatives.join(" OR "));values.push(clause.clone().into());counts.push(format!("(rowid IN (SELECT rowid FROM search_fts WHERE search_fts MATCH ?{}))",values.len()));clauses.push(clause);
         }
-        transaction.commit()?;
-        ranked.sort_by(|(a,x),(b,y)| a.cmp(b).then(x.abbreviation.cmp(&y.abbreviation)).then(x.library_name.cmp(&y.library_name)).then(x.id.cmp(&y.id)));
-        Ok(ranked.into_iter().take(50).map(|(_, hit)|hit).collect())
+        values.push(clauses.join(" OR ").into());let sql=format!("SELECT id,library,library_name,revision,title,abbreviation,substr(body,1,800) FROM search_fts WHERE search_fts MATCH ?{} AND (?2 IS NULL OR library=?2) ORDER BY CASE WHEN lower(abbreviation)=?1 THEN 0 WHEN substr(lower(abbreviation),1,length(?1))=?1 THEN 1 WHEN instr(lower(title),?1)>0 OR instr(lower(body),?1)>0 THEN 2 ELSE 3 END, ({}) DESC, ({}) DESC, bm25(search_fts,0,0,0,0,10,5,1),id LIMIT 50",values.len(),counts.join("+"),exact.join("+"));
+        let hits=db.connection.prepare(&sql)?.query_map(rusqlite::params_from_iter(values),|row|Ok(Hit{id:row.get(0)?,library:row.get(1)?,library_name:row.get(2)?,revision:row.get(3)?,title:row.get(4)?,abbreviation:row.get(5)?,preview:row.get(6)?}))?.collect::<std::result::Result<Vec<_>,_>>()?;transaction.commit()?;Ok(hits)
     }
     pub fn personal_rows(directory: &Path, hits: &[Hit]) -> Result<serde_json::Value> {
-        let db=Database::open(directory)?; let transaction=db.connection.unchecked_transaction()?; let collisions=db.abbreviation_collisions()?; let mut rows=Vec::new();
+        let db=Database::open(directory)?;let transaction=db.connection.unchecked_transaction()?;let mut rows=Vec::new();let mut records=std::collections::HashMap::new();let mut counts=std::collections::HashMap::<String,usize>::new();let mut libraries=std::collections::HashMap::new();
+        for library in db.libraries()?.into_iter().filter(|library|library["state"]=="active"&&library["permissions"]["read"]==true){let id=library["_id"].as_str().context("Invalid library ID")?.to_owned();for record in db.effective_records(&id)?.into_iter().filter(|record|record["state"]=="active"){let trigger=record["effective_trigger"].as_str().unwrap_or("");if !trigger.is_empty(){*counts.entry(trigger.to_owned()).or_default()+=1;}records.insert((id.clone(),record["id"].as_str().unwrap_or("").to_owned()),record);}libraries.insert(id,library);}
         for hit in hits {
-            let Ok(library)=db.library(&hit.library) else { continue; };
-            if library["state"]!="active" || library["permissions"]["read"]!=true { continue; }
-            let Some(record)=db.effective_records(&hit.library)?.into_iter().find(|row|row["id"]==hit.id && row["state"]=="active") else { continue; };
+            let Some(library)=libraries.get(&hit.library)else{continue;};
+            let Some(record)=records.get(&(hit.library.clone(),hit.id.clone())).filter(|record|record["revision"].as_i64()==Some(hit.revision))else{continue;};
             let mut value=serde_json::to_value(hit)?;
             value["abbreviation"]=serde_json::json!(record["effective_trigger"].as_str().unwrap_or_default()); value["shared_trigger"]=record["trigger"].clone(); value["personal"]=record["personal"].clone();
             value["can_personal"]=serde_json::json!(library["shared"]==true && library["permissions"]["edit"]==true && db.synced(&hit.library)? && db.meta("personal_capability")?==Some(serde_json::json!(1)));
             value["review_personal"]=serde_json::json!(record["personal"]["rejected"].is_object() || record["personal"]["conflicts"].as_array().is_some_and(|rows|!rows.is_empty()));
-            value["abbreviation_collision"]=serde_json::json!(collisions.contains(record["effective_trigger"].as_str().unwrap_or("")));
+            value["abbreviation_collision"]=serde_json::json!(counts.get(record["effective_trigger"].as_str().unwrap_or("")).copied().unwrap_or(0)>1);
             rows.push(value);
         }
         transaction.commit()?; Ok(serde_json::json!(rows))
@@ -101,6 +100,21 @@ impl Panel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn indexed_words_typos_unicode_scope_and_refresh() {
+        let temp=tempfile::tempdir().unwrap();let db=Database::open(temp.path()).unwrap();let local=db.import("Local","matches: [{trigger: missed, title: Missed meeting, replace: Please reschedule our meeting}, {trigger: cafe, replace: Café résumé}]").unwrap();let other=db.import("Other","matches: [{trigger: other, replace: Missed meeting elsewhere}]").unwrap();
+        for query in ["meeting missed","meeitng","reschedlue","cafe resume",r#""meeting" OR :*"#] {assert!(!Panel::search(temp.path(),query,Some(&local.id)).unwrap().is_empty(),"{query}");}
+        assert_eq!(Panel::search(temp.path(),"missed",None).unwrap()[0].abbreviation,"missed");assert!(Panel::search(temp.path(),"meeting",Some(&local.id)).unwrap().iter().all(|hit|hit.library==local.id));
+        let before:i64=db.connection.query_row("SELECT built FROM search_state",[],|r|r.get(0)).unwrap();Panel::search(temp.path(),"meeting",None).unwrap();assert_eq!(db.connection.query_row("SELECT built FROM search_state",[],|r|r.get::<_,i64>(0)).unwrap(),before);
+        db.connection.execute("UPDATE libraries SET synced=1,data=json_set(data,'$.shared',json('true')) WHERE id=?1",[&local.id]).unwrap();db.set_meta("personal_abbreviations",&serde_json::json!([{ "snippet":local.ids[0],"trigger":"mine","revision":1 }])).unwrap();assert_eq!(Panel::search(temp.path(),"mine",Some(&local.id)).unwrap()[0].abbreviation,"mine");
+        db.edit(&local,Some(0),None).unwrap();assert!(Panel::search(temp.path(),"meeting",Some(&local.id)).unwrap().is_empty());
+        db.connection.execute("UPDATE libraries SET data=json_set(data,'$.permissions.read',json('false')) WHERE id=?1",[other.id]).unwrap();assert!(Panel::search(temp.path(),"meeting",None).unwrap().is_empty());
+        assert!(!temp.path().join("native-ai/endpoint.json").exists());
+    }
+    #[test]
+    fn indexed_scope_precedes_limit() {
+        let temp=tempfile::tempdir().unwrap();let db=Database::open(temp.path()).unwrap();let entries:Vec<_>=(0..70).map(|n|serde_json::json!({"trigger":format!("a{n}"),"replace":"Meeting"})).collect();let other=db.import("Other",&serde_json::json!({"matches":entries}).to_string()).unwrap();let local=db.import("Selected","matches: [{trigger: z, replace: Meeting}]").unwrap();assert_eq!(Panel::search(temp.path(),"meeting",None).unwrap().len(),50);assert_eq!(Panel::search(temp.path(),"meeting",Some(&local.id)).unwrap().len(),1);db.edit_move(&local,0,local.entries[0].clone(),&other.id).unwrap();assert!(Panel::search(temp.path(),"meeting",Some(&local.id)).unwrap().is_empty());assert_eq!(Panel::search(temp.path(),"z",Some(&other.id)).unwrap()[0].library,other.id);
+    }
     #[test]
     fn library_inventory_includes_synced_and_local_libraries_with_active_counts() {
         let dir=tempfile::tempdir().unwrap();let db=Database::open(dir.path()).unwrap();

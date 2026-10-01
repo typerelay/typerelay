@@ -349,6 +349,7 @@ export class Server {
 		return { library, html: pug.renderFile('./views/ajax/library.pug', { library }), fragments: library.snippets.map(snippet => ({ id: snippet.id, revision: snippet.revision, html: pug.renderFile('./views/ajax/snippet.pug', { snippet, library }) })) };
 	}
 	static async result(res, ctx, result) {
+		if (result.import_summary) result.import_summary_html = pug.renderFile('./views/ajax/import-summary.pug', result.import_summary);
 		if (result.libraries) result.libraries = await Libraries.personalize(ctx, result.libraries);
 		if (result.library) [result.library] = await Libraries.personalize(ctx, [result.library]);
 		if (result.libraries) return res.json({ ...result, updates: result.libraries.map(Server.presentation) });

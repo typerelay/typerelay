@@ -6,20 +6,20 @@ Desktop and TUI share one local worker and one active model. AI is off until a m
 
 Open **Settings → Advanced → AI options** and check **Enable AI**. The **Choose local AI model** card appears with selectable model rows. Select a model, then choose **Download … GB Model** and confirm if it is not installed. Selecting an installed model activates it immediately. Interrupted downloads can resume; Cancel keeps downloaded bytes. Uncheck **Enable AI** to disable AI and hide the model card without deleting downloaded models. Switching models never downloads another model automatically.
 
-Use the ordinary search input. Search starts as you type, showing Searching… until one combined result list is ready. There is no additional debounce delay or second AI result update. New input cancels superseded work; only the latest query waits to run. Exact abbreviation matches bypass AI. Descriptive queries retrieve and rank existing readable snippets from synced and local libraries. Results never contain generated snippets. Insert/copy rechecks access and revision.
+Search uses a local SQLite full-text index, independently of AI. It matches words in any order, prefixes and bounded spelling mistakes in titles, abbreviations and snippet content. Exact abbreviations rank first. Results stay within the current library when searching inside a library. No language model or network request is used for search. Insert/copy rechecks access and revision.
 
 ## TUI
 
 - In Settings, **Ctrl+G** opens model management. Arrow keys select a model; **d** downloads/resumes after confirmation, **e** enables an installed model, **x** disables AI, **r** removes it, and **c** cancels a download.
 - In the editor, type a request in the body and click **Create** (or press **Ctrl+G**). Click **Rewrite** to improve existing text. Both replace the text directly in the same editor; Tab and Enter also reach these buttons.
 - **Undo** or **Ctrl+Z** restores the previous text. **Esc** cancels generation without leaving the editor. Editing, saving or leaving cancels pending work; failures preserve your text. **Ctrl+S** saves normally. Existing template tokens, Enter actions, image references, metadata and content type remain unchanged.
-- Global and per-library searches use the same combined search flow. Per-library search stays within the selected library. Disabled or unavailable AI falls back to ordinary matches.
+- Global and per-library searches use the same combined search flow. Per-library search stays within the selected library. Search is unaffected by the AI setting.
 
 ## Storage and runtime
 
 The existing Typerelay configuration directory contains `native-ai/settings.json`, verified `.gguf` models, resumable `.partial` files and private worker coordination files. Downloads use publisher/revision/filename/size/SHA-256 pins in `crates/client/src/ai-models.json`. Only downloads contact Hugging Face; inference has no HTTP client use. Search terms and drafts stay on the device.
 
-`typerelay-ai` embeds `llama-cpp-2` and `llama-cpp-sys-2` 0.1.158. A per-user file lock prevents duplicate workers. Authenticated, length-bounded loopback IPC supports desktop and TUI across platforms. Inference never runs in the expansion process or UI event loop. Authoring is serialized; automatic search yields while authoring is queued/active. Cancellation checks run during model verification/loading, prompt batches and token generation. Model weights unload after five idle minutes; the next request reloads them. Updates stop the worker before replacing native executables.
+`typerelay-ai` embeds `llama-cpp-2` and `llama-cpp-sys-2` 0.1.158. A per-user file lock prevents duplicate workers. Authenticated, length-bounded loopback IPC supports desktop and TUI across platforms. Inference never runs in the expansion process or UI event loop. Authoring is serialized; search runs independently using SQLite. Cancellation checks run during model verification/loading, prompt batches and token generation. Model weights unload after five idle minutes; the next request reloads them. Updates stop the worker before replacing native executables.
 
 CPU inference is supported on all native targets. Apple builds include Metal and retry model loading on CPU if GPU loading fails. Linux/Windows Vulkan builds use the `ai-vulkan` Cargo feature and require a Vulkan SDK at build time; standard portable staging uses CPU on those targets. Vulkan packaging and hardware validation remain release gates. Download sizes are exact; the UI deliberately does not claim minimum RAM until measurements are qualified across supported hardware.
 
@@ -34,3 +34,5 @@ On macOS, `scripts/tests/benchmark_native_ai.py --download` explicitly fetches i
 Before public release, benchmark retrieval and drafting on representative Windows/Linux CPU and Vulkan hardware and Intel/Apple Silicon Macs; build and test each native installer. A passing two-prompt smoke test is not a quality evaluation. Older standalone Linux updaters only accept three-file archives: migrate those installations to a current native package before publishing a four-file legacy AI bundle. No automatic public release is part of this change.
 
 See [AI third-party notices](ai-notices.txt) for runtime and model licenses.
+
+Local search performance can be checked with `cargo run --release -p typerelay-client --example search_benchmark`. This builds an isolated 10,000-snippet fixture. Passing a SQLite path benchmarks a temporary backup, leaving the original database unchanged. The reported p95 includes search and result metadata.

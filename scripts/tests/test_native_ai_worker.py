@@ -80,9 +80,9 @@ class NativeWorkerTests(unittest.TestCase):
 
     def test_cancellation_before_request_arrival_is_honored(self):
         self.request(op="cancel", id="superseded")
-        result = self.request(op="infer", kind="search", id="superseded", prompt="query")
+        result = self.request(op="infer", kind="author", id="superseded", prompt="query")
         self.assertEqual(result["error"], "Cancelled")
-        self.assertEqual(self.request(op="infer", kind="search", id="next", prompt="query")["error"], "AI is disabled")
+        self.assertEqual(self.request(op="infer", kind="author", id="next", prompt="query")["error"], "AI is disabled")
 
     def test_corrupt_model_cannot_be_enabled(self):
         model = self.request(op="status")["value"]["models"][0]

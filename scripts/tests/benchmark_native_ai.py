@@ -77,13 +77,13 @@ class Benchmark:
                         time.sleep(0.05)
                     self.endpoint = json.loads(endpoint.read_text())
                     start = time.monotonic()
-                    search = self.request(op="infer", kind="search", id="search", prompt=self.prompts["search"]+"\nInput: "+json.dumps({"query":"find the message about returning a damaged product"}))
+                    created = self.request(op="infer", kind="author", id="create", prompt=self.prompts["author"]+"\nInput: "+json.dumps({"action":"create","snippet":"Write a short reply about returning a damaged product.","content_type":"plain_text"}))
                     cold_seconds = time.monotonic() - start
                     start = time.monotonic()
                     author = self.request(op="infer", kind="author", id="author", prompt=self.prompts["author"]+"\nInput: "+json.dumps({"instruction":"Improve. Make the greeting warmer.","snippet":"Hello {{name}}, we received your message.","content_type":"template"}))
                     warm_seconds = time.monotonic() - start
                     rss = int(subprocess.check_output(["ps", "-o", "rss=", "-p", str(worker.pid)], text=True).strip())
-                    report = {"routing_pass": search["intent"]=="descriptive" and bool(search["terms"]), "protected_draft_pass":author["text"].count("{{name}}")==1, "model": model["name"], "cpu_only": self.options.cpu, "cold_search_seconds": round(cold_seconds, 2), "warm_draft_seconds": round(warm_seconds, 2), "process_rss_bytes": rss * 1024, "external_network": "denied", "search": search, "draft": author}
+                    report = {"creation_pass": bool(created["text"].strip()), "protected_draft_pass":author["text"].count("{{name}}")==1, "model": model["name"], "cpu_only": self.options.cpu, "cold_create_seconds": round(cold_seconds, 2), "warm_draft_seconds": round(warm_seconds, 2), "process_rss_bytes": rss * 1024, "external_network": "denied", "created": created, "draft": author}
                     if self.options.idle:
                         for _ in range(6):
                             time.sleep(50)

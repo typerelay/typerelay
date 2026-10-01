@@ -11,7 +11,7 @@ class Fixture {
   const style=dom.window.document.createElement('style');style.textContent=await readFile('ui/panel.css','utf8');dom.window.document.head.append(style);
   dom.window.HTMLElement.prototype.scrollIntoView=()=>{};
 	  dom.window.Swal={fire:async()=>({isConfirmed:true})};
-  dom.window.__TAURI__={core:{invoke:async(name,args)=>{calls.push({name,args});if(name==='initialize')return{config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},theme:{os:'linux'},settings:false,accessibility:false,input_monitoring:false,empty:false,version:'1.2.0'};if(name==='native_ai'&&args.request.op==='search')return new Promise(resolve=>pending.push({query:args.request.query,resolve}));if(name==='native_ai')return{model:null,models:[{id:'small',name:'Small',bytes:1000000,publisher:'test',license:'apache-2.0',recommended:true,installed:false,downloaded:0}],download:null};if(name==='libraries'||name==='conflicts')return[];if(name==='prepare_template')return{fields:[],steps:[{kind:'text',text:'Literal'}],text:'Literal',enter_actions:0,template:{text:'Literal',variables:{}}};return null;}},event:{listen:(name,callback)=>{callbacks[name]=callback;}}};
+  dom.window.__TAURI__={core:{invoke:async(name,args)=>{calls.push({name,args});if(name==='initialize')return{config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},theme:{os:'linux'},settings:false,accessibility:false,input_monitoring:false,empty:false,version:'1.2.0'};if(name==='search')return new Promise(resolve=>pending.push({query:args.query,resolve}));if(name==='native_ai')return{model:null,models:[{id:'small',name:'Small',bytes:1000000,publisher:'test',license:'apache-2.0',recommended:true,installed:false,downloaded:0}],download:null};if(name==='libraries'||name==='conflicts')return[];if(name==='prepare_template')return{fields:[],steps:[{kind:'text',text:'Literal'}],text:'Literal',enter_actions:0,template:{text:'Literal',variables:{}}};return null;}},event:{listen:(name,callback)=>{callbacks[name]=callback;}}};
   dom.window.eval((await readFile('ui/panel.js','utf8')).replace("import { AiClient } from './ai.js';",'').replace('new Panel();','window.panel = new Panel();'));
   await new Promise(resolve=>setTimeout(resolve,0));
   return {dom,panel:dom.window.panel,calls,pending,callbacks};
@@ -32,7 +32,7 @@ test('native AI uses one input and never exposes remote authoring or provider co
 test('combined search updates retain matching nodes, selection, focus and scroll and reject stale replies',async()=>{
  const f=await Fixture.create();try{
   f.panel.aiStatus={model:'small'};f.panel.query.value='describe a reply';f.panel.rows=[Fixture.hit('one'),Fixture.hit('two')];f.panel.index=1;f.panel.render();f.panel.query.focus();f.panel.list.scrollTop=25;
-  const node=f.panel.list.children[1];const sequence=f.panel.sequence;let finish;f.panel.invoke=async(name,args)=>{if(args?.request?.op==='search')return new Promise(resolve=>{finish=resolve;});throw Error('No section loader or unrelated command allowed');};
+  const node=f.panel.list.children[1];const sequence=f.panel.sequence;let finish;f.panel.invoke=async(name,args)=>{if(name==='search')return new Promise(resolve=>{finish=resolve;});throw Error('No section loader or unrelated command allowed');};
   const task=f.panel.search(sequence);finish([Fixture.hit('two'),Fixture.hit('three')]);await task;
   assert.equal(f.panel.rows[f.panel.index].id,'two');assert.equal(f.panel.list.children[0],node);assert.equal(f.dom.window.document.activeElement,f.panel.query);assert.equal(f.panel.list.scrollTop,25);
   const stale=f.panel.search(sequence);f.panel.sequence++;finish([Fixture.hit('stale')]);await stale;assert.equal(f.panel.rows[0].id,'two');
@@ -44,7 +44,7 @@ test('search runs immediately, coalesces typing and publishes only the latest li
   f.panel.query.value='first';const task=f.panel.search(f.panel.sequence);assert.equal(f.pending.length,1);assert.equal(f.dom.window.document.querySelector('#hint').textContent,'Searching…');
   f.panel.query.value='second';f.panel.query.dispatchEvent(new f.dom.window.Event('input'));f.panel.query.value='latest';f.panel.query.dispatchEvent(new f.dom.window.Event('input'));assert.equal(f.pending.length,1);
   f.pending[0].resolve([Fixture.hit('stale')]);await new Promise(resolve=>setTimeout(resolve,0));assert.equal(f.pending.length,2);assert.equal(f.pending[1].query,'latest');assert.equal(f.panel.rows.length,0);
-  f.pending[1].resolve([Fixture.hit('latest')]);await task;assert.equal(f.panel.rows[0].id,'latest');assert.equal(f.panel.searching,false);assert.equal(f.calls.some(call=>call.name==='search'),false);assert.equal(f.calls.filter(call=>call.args?.request?.op==='search').length,2);
+  f.pending[1].resolve([Fixture.hit('latest')]);await task;assert.equal(f.panel.rows[0].id,'latest');assert.equal(f.panel.searching,false);assert.equal(f.calls.some(call=>call.args?.request?.op==='search'),false);assert.equal(f.calls.filter(call=>call.name==='search').length,2);
  }finally{f.dom.window.close();}
 });
 
@@ -100,24 +100,11 @@ test('keyboard selection saves any device and preserves the settings form and se
  }finally{f.dom.window.close();}
 });
 
-test('personal abbreviation save updates the selected result without rebuilding search or other rows',async()=>{
- const {dom,panel,calls}=await Fixture.create();
- try {
-  const hit={...Fixture.hit('one'),can_personal:true,personal:{revision:0,trigger:null,conflicts:[]}};
-  panel.rows=[hit,Fixture.hit('two')];panel.render();
-  const list=panel.list;const sibling=list.children[1];const original=list.children[0];
-  const invoke=panel.invoke;panel.invoke=async(name,args)=>{if(name==='personal_abbreviation')return{shared_trigger:'tw',can_edit:true,personal:{revision:0,trigger:args.change?.trigger||null,pending:!!args.change,conflicts:[]}};return invoke(name,args);};
-  await panel.openPersonal(hit);dom.window.document.querySelector('#personal-trigger').value='mine';
-  const searches=calls.filter(call=>call.name==='search').length;
-  panel.render=()=>{throw Error('No whole-list render allowed');};
-  await panel.savePersonal();
-  assert.equal(panel.list,list);assert.equal(list.children[0],original);assert.equal(list.children[1],sibling);
-  assert.equal(original.querySelector('.result-abbreviation').textContent,'mine');
-  assert.match(original.querySelector('.result-personal-status').textContent,/waiting to sync/);
-  assert.equal(calls.filter(call=>call.name==='search').length,searches);
- } finally {dom.window.close();}
+test('search results have no abbreviation editor and Clear keeps focus',async()=>{
+ const f=await Fixture.create();try{
+  f.panel.rows=[{...Fixture.hit('one'),can_personal:true}];f.panel.query.value='meeting';f.panel.render();assert.equal(f.dom.window.document.querySelector('.result-personal,#personal-view'),null);assert.equal(f.dom.window.document.querySelector('.result-library').tagName,'SPAN');f.dom.window.document.querySelector('#clear-search').click();assert.equal(f.panel.query.value,'');assert.equal(f.dom.window.document.activeElement,f.panel.query);assert.equal(f.panel.rows.length,0);
+ }finally{f.dom.window.close();}
 });
-
 test('stale search cannot insert an old result; Enter waits for current query',async()=>{
  const f=await Fixture.create();try {
   f.panel.query.value='old';const old=f.panel.search(0);f.pending[0].resolve([Fixture.hit('old')]);await old;

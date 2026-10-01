@@ -253,10 +253,7 @@ async fn search(app:tauri::AppHandle,query:String)->std::result::Result<Value,St
 async fn native_ai(app:tauri::AppHandle,request:Value)->std::result::Result<Value,String>{
     let root=app.state::<Runtime>().root.clone();
     tauri::async_runtime::spawn_blocking(move||{
-        if request["op"]=="search" {
-            let query=request["query"].as_str().unwrap_or("");let id=request["id"].as_str().unwrap_or("");
-            typerelay_client::native_ai::NativeAi::search(&root,&root.join("snippets"),query,id, None).and_then(|hits|Panel::personal_rows(&root.join("snippets"),&hits))
-        }else{typerelay_client::native_ai::NativeAi::request(&root,request)}
+        typerelay_client::native_ai::NativeAi::request(&root,request)
     }.map_err(|error|error.to_string())).await.map_err(|error|error.to_string())?
 }
 #[tauri::command]

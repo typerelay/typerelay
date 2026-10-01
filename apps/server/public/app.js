@@ -390,6 +390,8 @@ class TypeRelay {
 		document.querySelector('#record-form button[type="submit"]').disabled = ['snippetslab', 'import'].includes(kind) || (kind === 'move' && !document.querySelector('#destination-library option'));
 		document.querySelector('#record-form button[type="submit"]').textContent = kind === 'move' ? 'Move' : ['import', 'snippetslab'].includes(kind) ? 'Import' : 'Save';
 		await this.codeEditor();
+		document.querySelector('#record-form button[type=submit]').hidden = false;
+		document.querySelector('#record-form [data-bs-dismiss=modal]').textContent = 'Cancel';
 		this.submit = submit;
 		this.formOperation = crypto.randomUUID();
 		const settings = document.querySelector('#settings');
@@ -459,8 +461,8 @@ class TypeRelay {
 				if (!id) { form.reset(); form.classList.add('d-none'); }
 				this.toast('Group saved');
 			}
-			if (form.id === 'record-form') { this.submitting = true; await this.submit(data); bootstrap.Modal.getInstance(document.querySelector('#form-modal')).hide(); this.toast('Saved'); }
-		} catch (error) { this.toast(error.message, 'error'); }
+			if (form.id === 'record-form') { this.submitting = true; if (await this.submit(data) !== false) { bootstrap.Modal.getInstance(document.querySelector('#form-modal')).hide(); this.toast('Saved'); } }
+		} catch (error) { const warning = form.querySelector('#import-error'); if (warning) { warning.textContent = error.message; warning.hidden = false; warning.scrollIntoView?.({ block: 'nearest' }); } this.toast(error.message, 'error'); }
 		finally { this.submitting = false; if (button) button.disabled = false; }
 	}
 	async confirm(title) { return (await Swal.fire({ title, icon: 'warning', showCancelButton: true, allowOutsideClick: false, allowEscapeKey: false, confirmButtonText: 'Confirm' })).isConfirmed; }
@@ -596,7 +598,17 @@ class TypeRelay {
 		if (button.dataset.importPage) { const controls = button.closest('[data-import-pagination]'); this.renderImportPage(Number(controls.dataset.page) + (button.dataset.importPage === 'next' ? 1 : -1)); return; }
 		if (button.dataset.importFormat) { this.importSource = null; this.importFormat = button.dataset.importFormat; return this.form('import', { format: this.importFormat }, async () => {
 			const selected = [...document.querySelectorAll('[data-import-key]:checked')].map(input => ({ key: input.dataset.importKey, trigger: Abbreviation.normalize(document.querySelector('[data-import-trigger="' + input.dataset.importKey + '"]').value) }));
-			await this.applyBatch(await this.request('import/' + this.importFormat, 'POST', { source: this.importSource, filename: this.importFilename, selected }), false);
+			document.querySelector('#import-error').hidden = true;
+			const result = await this.request('import/' + this.importFormat, 'POST', { source: this.importSource, filename: this.importFilename, selected });
+			await this.applyBatch(result, false);
+			document.querySelector('#import-summary').replaceChildren(this.fragment(result.import_summary_html));
+			document.querySelector('#import-preview').hidden = true;
+			document.querySelector('#import-file').disabled = true;
+			document.querySelector('#preview-import').disabled = true;
+			for (const button of document.querySelectorAll('#record-form button[type=submit]')) button.hidden = true;
+			document.querySelector('#record-form [data-bs-dismiss=modal]').textContent = 'Close';
+			document.querySelector('#import-summary').scrollIntoView?.({ block: 'start' });
+			return false;
 		}); }
 		if (button.id === 'preview-import') {
 			const file = document.querySelector('#import-file').files[0];

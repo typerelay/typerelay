@@ -31,6 +31,28 @@ impl Database {
         db.migrate()?;
         Ok(db)
     }
+    pub fn search_index(&self) -> Result<()> {
+        if !self.connection.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='search_state')",[],|row|row.get::<_,bool>(0))? {
+            let transaction=rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?;
+            self.connection.execute_batch("CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(id UNINDEXED, library UNINDEXED, revision UNINDEXED, library_name UNINDEXED, abbreviation, title, body, tokenize='unicode61 remove_diacritics 2', prefix='2 3 4'); CREATE VIRTUAL TABLE IF NOT EXISTS search_vocab USING fts5vocab(search_fts, 'row'); CREATE TABLE IF NOT EXISTS search_state(id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL, built INTEGER NOT NULL); INSERT OR IGNORE INTO search_state VALUES(1,1,0);")?;
+            for table in ["snippets","libraries","meta","outbox"] { for operation in ["INSERT","UPDATE","DELETE"] { self.connection.execute_batch(&format!("CREATE TRIGGER IF NOT EXISTS search_dirty_{table}_{operation} AFTER {operation} ON {table} BEGIN UPDATE search_state SET version=version+1 WHERE id=1; END;"))?; } }
+            transaction.commit()?;
+        }
+        if !self.connection.query_row("SELECT version!=built FROM search_state WHERE id=1",[],|row|row.get::<_,bool>(0))? {return Ok(());}
+        let transaction=rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?;
+        if self.connection.query_row("SELECT version!=built FROM search_state WHERE id=1",[],|row|row.get::<_,bool>(0))? {
+            self.connection.execute("DELETE FROM search_fts",[])?;
+            let mut insert=self.connection.prepare("INSERT INTO search_fts(id,library,revision,library_name,abbreviation,title,body) VALUES(?1,?2,?3,?4,?5,?6,?7)")?;
+            for library in self.libraries()?.iter().filter(|library|library["state"]=="active"&&library["permissions"]["read"]==true) {
+                let id=library["_id"].as_str().context("Invalid library ID")?;
+                for record in self.effective_records(id)?.iter().filter(|record|record["state"]=="active") {
+                    insert.execute(params![record["id"].as_str(),id,record["revision"].as_i64().unwrap_or(0),library["name"].as_str().unwrap_or(""),record["effective_trigger"].as_str().unwrap_or(""),record["title"].as_str().unwrap_or(""),record["content"]["text"].as_str().or(record["content"]["markdown"].as_str()).unwrap_or("")])?;
+                }
+            }
+            self.connection.execute("UPDATE search_state SET built=version WHERE id=1",[])?;
+        }
+        transaction.commit()?;Ok(())
+    }
     pub fn meta(&self, key: &str) -> Result<Option<Value>> {
         self.connection.query_row("SELECT value FROM meta WHERE key=?1", [key], |row| row.get::<_, String>(0)).optional()?.map(|text| serde_json::from_str(&text).map_err(Into::into)).transpose()
     }
