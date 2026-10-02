@@ -490,7 +490,10 @@ class TypeRelay {
 			all.indeterminate = this.selectedSnippets.size > 0 && !all.checked;
 			document.querySelector('[data-select-all-label]').textContent = all.checked ? 'Deselect all' : 'Select all';
 			document.querySelector('.bulk-actions').hidden = !this.selectedSnippets.size;
-			document.querySelector('[data-selection-count]').textContent = this.selectedSnippets.size + ' selected';
+			document.querySelector('[data-bulk-move-label]').textContent = this.selectedSnippets.size === 1 ? 'Move snippet to...' : 'Move snippets to...';
+			document.querySelector('[data-selection-count]').textContent = all.checked ? 'All snippets selected.' : this.selectedSnippets.size + (this.selectedSnippets.size === 1 ? ' is selected. Do you want to' : ' are selected. Do you want to');
+			document.querySelector('[data-selection-toggle]').textContent = all.checked ? 'Clear selection' : 'select all';
+			document.querySelector('[data-selection-question]').hidden = all.checked;
 		}
 	}
 	selectSnippet(id, checked, range) {
@@ -520,13 +523,14 @@ class TypeRelay {
 		} else await this.form('move', { library: source }, async fields => this.applyBatch(await this.request('snippets/batch', 'POST', { action, source_library: source, destination_library: fields.get('destination_library'), items })));
 	}
 	async onClick(event) {
-		const input = event.target.closest('[data-select-snippet],[data-select-all],[data-clear-selection]');
+		const input = event.target.closest('[data-select-snippet],[data-select-all],[data-clear-selection],[data-selection-toggle]');
 		if (input) {
 			if (input.disabled) return;
-			if (input.hasAttribute('data-select-all') || input.hasAttribute('data-clear-selection')) {
-				const focus = input.hasAttribute('data-clear-selection') ? document.querySelector('[data-select-snippet]:checked') : null;
+			if (!input.hasAttribute('data-select-snippet')) {
+				const selectAll = input.checked || (input.hasAttribute('data-selection-toggle') && !document.querySelector('[data-select-all]').checked);
+				const focus = !selectAll && input.tagName === 'BUTTON' ? document.querySelector('[data-select-snippet]:checked') : null;
 				this.selectedSnippets.clear();
-				if (input.checked) for (const item of this.libraries.get(this.selected)?.snippets || []) this.selectedSnippets.add(item.id);
+				if (selectAll) for (const item of this.libraries.get(this.selected)?.snippets || []) this.selectedSnippets.add(item.id);
 				this.selectionAnchor = null; this.syncSelection();
 				focus?.focus({ preventScroll: true });
 			} else this.selectSnippet(input.dataset.selectSnippet, input.checked, event.shiftKey);

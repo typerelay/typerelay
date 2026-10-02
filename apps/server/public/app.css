@@ -181,13 +181,15 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 
 @media (max-width: 60rem) { #search-shortcut { display: none; } }
 
-.bulk-actions { position: fixed; left: 50%; top: calc(6rem + env(safe-area-inset-top)); z-index: 1030; width: max-content; max-width: calc(100% - 2rem); flex-wrap: wrap; justify-content: center; gap: .5rem; padding: .75rem 1rem; border-radius: 1rem; background: #74422e; color: #fff; box-shadow: 0 .5rem 1.5rem rgb(48 25 16 / 25%); transform: translateX(-50%); }
-.bulk-actions [data-selection-count] { margin-right: .5rem; font-size: .8125rem; white-space: nowrap; }
+.bulk-actions { position: fixed; left: 50%; top: calc(6rem + env(safe-area-inset-top)); z-index: 1030; width: max-content; max-width: calc(100% - 2rem); flex-direction: column; justify-content: center; gap: .5rem; padding: .75rem 1rem; border-radius: 1rem; background: #74422e; color: #fff; box-shadow: 0 .5rem 1.5rem rgb(48 25 16 / 25%); transform: translateX(-50%); }
+.bulk-action-buttons { width: 100%; }
+.bulk-selection-summary { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: .25rem; width: 100%; font-size: .8125rem; }
 .bulk-actions .btn { display: inline-flex; align-items: center; justify-content: center; gap: .375rem; min-width: 2.125rem; min-height: 2.125rem; padding: .375rem .625rem; border: 0; border-radius: .5rem; background: #593121; color: #fff; font-size: .8125rem; }
 .bulk-actions .btn:hover, .bulk-actions .btn:active { background: #422317; color: #fff; }
 .bulk-actions .btn:focus-visible { outline: .125rem solid #fff; outline-offset: .125rem; box-shadow: none; }
 .bulk-actions svg { width: 1rem; height: 1rem; flex-shrink: 0; }
 .bulk-actions [data-clear-selection] { background: transparent; }
+.bulk-actions [data-selection-toggle], .bulk-actions [data-selection-toggle]:hover, .bulk-actions [data-selection-toggle]:active { min-width: 0; min-height: 0; padding: 0; border-radius: .125rem; background: transparent; text-decoration: underline; font-weight: 600; vertical-align: baseline; }
 .bulk-actions[hidden] { display: none !important; }
 .snippet-controls { min-height: 3.5rem; flex-wrap: wrap; }
 .snippet-selection { min-width: 0; }
