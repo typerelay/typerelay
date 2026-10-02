@@ -15,10 +15,9 @@ pub struct Endpoint { pub address: SocketAddr, pub token: String }
 pub struct NativeAi;
 impl NativeAi {
     pub fn prompt(kind: &str, input: Value) -> String {
-        let instructions: Value = serde_json::from_str(include_str!("ai-prompts.json")).expect("AI instructions");
-        let text=input["snippet"].as_str().unwrap_or("");let content_type=input["content_type"].as_str().unwrap_or("plain_text");let normalized=text.trim_start().to_lowercase();let request=normalized.strip_prefix("please ").unwrap_or(&normalized);
-        let drafting=content_type!="code"&&(["write ","draft ","compose ","create ","generate ","help me write ","i would like to write ","i want to write ","can you write ","could you write "].iter().any(|prefix|request.starts_with(prefix))||["i need a ","i need an ","i want a ","i want an ","i would like a ","i would like an "].iter().any(|prefix|request.starts_with(prefix))&&request.split(|c:char|!c.is_alphanumeric()).any(|word|["response","reply","message","email","letter","snippet","template"].contains(&word)));
-        let kind=if kind=="refine"{if drafting{"create"}else{"rewrite"}}else{kind};let constraints=if content_type!="plain_text"||text.contains("{{"){format!("\n{}\nContent type: {}",instructions["preserve"].as_str().unwrap(),content_type)}else{String::new()};
+        let instructions: Value = serde_json::from_str(include_str!("ai-prompts.json")).expect("AI instructions");let text=input["snippet"].as_str().unwrap_or("");let content_type=input["content_type"].as_str().unwrap_or("plain_text");
+        if kind=="intent"{return format!("{}\nText: {}",instructions["intent"].as_str().unwrap(),text);}
+        let constraints=if content_type!="plain_text"||text.contains("{{"){format!("\n{}\nContent type: {}",instructions["preserve"].as_str().unwrap(),content_type)}else{String::new()};
         format!("{}{}\n{}: {}",instructions[kind].as_str().expect("Writing action"),constraints,if kind=="create"{"Request"}else{"Message"},text)
     }
 
@@ -84,8 +83,10 @@ impl NativeAi {
         ensure!(["create", "rewrite", "refine"].contains(&action), "Unknown writing action");
         ensure!(!draft.replace.trim().is_empty(), "Write a request or some text first");
         ensure!(draft.replace.len() <= if action == "create" {2000} else {16000}, "Draft or instruction too long");
-        let proposal = Self::request(root, json!({"op":"infer","kind":"author","id":id,"prompt":Self::prompt(action,json!({"snippet":draft.replace,"content_type":draft.kind}))}))?;
-        let mut result = draft.clone(); result.replace = proposal["text"].as_str().context("Invalid AI draft")?.to_owned(); Self::validate_proposal(draft, &result)?; Ok(result)
+        let input=json!({"snippet":draft.replace,"content_type":draft.kind});
+        let action=if action=="refine"&&draft.kind!="code"{let intent=Self::request(root,json!({"op":"infer","kind":"intent","id":id,"prompt":Self::prompt("intent",input.clone())}))?;match intent["text"].as_str().unwrap_or("").trim().to_ascii_lowercase().as_str(){"create"=>"create","rewrite"=>"rewrite",_=>anyhow::bail!("AI could not determine the writing task. Please try again.")}}else if action=="refine"{"rewrite"}else{action};
+        let proposal = Self::request(root, json!({"op":"infer","kind":"author","id":id,"prompt":Self::prompt(action,input)}))?;
+        let mut result = draft.clone(); result.replace = proposal["text"].as_str().context("Invalid AI draft")?.to_owned(); Self::validate_proposal(draft, &result)?;ensure!(action!="create"||result.replace.trim()!=draft.replace.trim(),"AI repeated the request instead of writing the message. Please try again."); Ok(result)
     }
     pub fn validate_proposal(original: &Match, proposal: &Match) -> Result<()> {
         ensure!(original.kind == proposal.kind && original.variables == proposal.variables && original.language == proposal.language && original.trigger == proposal.trigger, "AI changed protected snippet fields");
@@ -112,7 +113,7 @@ mod tests {
     use super::*;
     #[test]
     fn writing_actions_use_existing_body_and_preserve_metadata() {
-        for (action,response,valid) in [("create",json!({"text":"Welcome, {{name}}!"}),true),("rewrite",json!({"text":"Welcome, {{name}}!"}),true),("rewrite",json!({"text":42}),false),("rewrite",json!({}),false),("rewrite",json!({"text":""}),false)] {
+        for (action,response,valid) in [("create",json!({"text":"Welcome, {{name}}!"}),true),("rewrite",json!({"text":"Welcome, {{name}}!"}),true),("rewrite",json!({"text":42}),false),("rewrite",json!({}),false),("rewrite",json!({"text":""}),false),("create",json!({"text":"Write a greeting to {{name}}"}),false)] {
             let root=tempfile::tempdir().unwrap();let listener=std::net::TcpListener::bind("127.0.0.1:0").unwrap();fs::write(NativeAi::directory(root.path()).unwrap().join("endpoint.json"),serde_json::to_vec(&Endpoint{address:listener.local_addr().unwrap(),token:"test".into()}).unwrap()).unwrap();
             let original=Match{replace:"Write a greeting to {{name}}".into(),kind:"template".into(),trigger:"hello".into(),title:"Welcome".into(),..Default::default()};let expected=original.replace.clone();
             let worker=std::thread::spawn(move||{let(mut stream,_)=listener.accept().unwrap();let request=NativeAi::read(&mut stream).unwrap();let prompt=request["prompt"].as_str().unwrap();assert!(prompt.ends_with(&format!("{}: {}",if action=="create"{"Request"}else{"Message"},expected)));assert!(prompt.contains(if action=="create"{"Do not repeat or rewrite the request itself"}else{"Keep its meaning and language"}));assert!(prompt.contains("Content type: template"));NativeAi::write(&mut stream,&json!({"value":response})).unwrap();});
@@ -124,8 +125,12 @@ mod tests {
         let text="I would like to write a message to cancel a meeting.";let input=json!({"snippet":text,"content_type":"plain_text"});let create=NativeAi::prompt("create",input.clone());assert!(create.starts_with("Write a short, polite, ready-to-send message"));assert!(create.ends_with(&format!("Request: {text}")));assert!(!create.contains("Input.action"));assert!(!create.contains("Content type:"));let rewrite=NativeAi::prompt("rewrite",input);assert!(rewrite.starts_with("Improve the following message"));assert!(rewrite.ends_with(&format!("Message: {text}")));assert_ne!(create,rewrite);
     }
     #[test]
-    fn refine_routes_requests_without_turning_existing_messages_or_code_into_requests() {
-        for(text,kind,action)in [("I need a canned response for proposing a later meeting date.","plain_text","create"),("I would like to write a message to cancel a meeting.","plain_text","create"),("Please write a reply thanking {{name}}.","template","create"),("cant make the meeting today sorry lets reschedule","plain_text","rewrite"),("I need your response by Friday.","plain_text","rewrite"),("Can you confirm our meeting?","plain_text","rewrite"),("CREATE TABLE messages (id INT);","code","rewrite")] {let input=json!({"snippet":text,"content_type":kind});assert_eq!(NativeAi::prompt("refine",input.clone()),NativeAi::prompt(action,input),"{text}");}
+    fn refine_uses_model_intent_and_preserves_request_id_across_both_stages() {
+        for decision in ["create","rewrite","unknown","cancelled"] {
+            let root=tempfile::tempdir().unwrap();let listener=std::net::TcpListener::bind("127.0.0.1:0").unwrap();fs::write(NativeAi::directory(root.path()).unwrap().join("endpoint.json"),serde_json::to_vec(&Endpoint{address:listener.local_addr().unwrap(),token:"test".into()}).unwrap()).unwrap();
+            let worker=std::thread::spawn(move||{let(mut stream,_)=listener.accept().unwrap();let request=NativeAi::read(&mut stream).unwrap();assert_eq!(request["id"],"refine");assert_eq!(request["kind"],"intent");assert!(request["prompt"].as_str().unwrap().ends_with("Text: I need a text that I can send asking to postpone a meeting."));NativeAi::write(&mut stream,&if decision=="cancelled"{json!({"error":"Cancelled"})}else{json!({"value":{"text":decision}})}).unwrap();if ["create","rewrite"].contains(&decision){let(mut stream,_)=listener.accept().unwrap();let request=NativeAi::read(&mut stream).unwrap();assert_eq!(request["id"],"refine");assert_eq!(request["kind"],"author");assert!(request["prompt"].as_str().unwrap().starts_with(if decision=="create"{"Write a short"}else{"Improve the following"}));NativeAi::write(&mut stream,&json!({"value":{"text":"Could we postpone our meeting? Please let me know a time that works for you."}})).unwrap();}});
+            let draft=Match{replace:"I need a text that I can send asking to postpone a meeting.".into(),..Default::default()};let result=NativeAi::author(root.path(),&draft,"refine","refine");worker.join().unwrap();assert_eq!(result.is_ok(),["create","rewrite"].contains(&decision));
+        }
     }
     #[test]
     fn proposals_preserve_tokens_actions_images_and_type() {
