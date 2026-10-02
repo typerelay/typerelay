@@ -187,7 +187,7 @@ pub struct ObservationAdapter;
 impl ObservationAdapter {
     fn string(value:Ref)->String {use core_foundation::{base::TCFType,string::CFString};unsafe{CFString::wrap_under_get_rule(value.cast()).to_string()}}
     fn field()->Option<(String,String,isize)> {
-        use core_foundation::{base::CFHash,boolean::CFBoolean};
+        use core_foundation::{base::{CFHash,TCFType},boolean::CFBoolean};
         unsafe {
             if !AXIsProcessTrusted()||!input_monitoring(false)||IsSecureEventInputEnabled(){return None;}
             let application=NSWorkspace::sharedWorkspace().frontmostApplication()?;let pid=application.processIdentifier();if pid==std::process::id() as i32{return None;}
