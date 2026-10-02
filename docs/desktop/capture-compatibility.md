@@ -13,7 +13,7 @@ This is an opt-in development build, not a declaration of cross-platform or IME 
 | Linux, Hyprland/Omarchy, selected physical keyboard, US layout | Native worker/panel release builds; live focus/session/layout metadata probe; replay, XKB and IPC tests | User confirmed Zed and Obsidian work on 2026-10-02; VS Code acceptance for this build remains pending |
 | German AltGr and US international dead keys | libxkbcommon deterministic tests | Physical layouts pending |
 | Sway, X11, GNOME, KDE Plasma | Context adapters compile; GNOME/KWin helper sources included | Untested; no compatibility claim |
-| macOS | Native-context implementation started | Build and device acceptance pending |
+| macOS 27, TextEdit, US layout | Signed ARM64 build; 41 detector/storage tests; controlled native event test produced one local review card at count two and marked its notification sent | Physical keyboard, Parsec input, and visible banner acceptance pending |
 | Windows 11 VM, RDP, Notepad, US keyboard | Live keyboard input, repeated closing, email/URL, Backspace after idle, notification and review/save/expansion checks; 14 native Windows tests | Verified on 2026-10-02; Windows Zed/Obsidian/VS Code and physical-device acceptance pending |
 | IBus/Fcitx5 and native macOS/Windows IMEs | Shared commit/cancel arbitration replay tests only | Commit adapters unfinished; release blocker |
 | Required app bridges | Official Zed extension API reviewed; no passive text-edit/commit hook found | Required IME coverage remains a release blocker where OS commit delivery is unavailable |
@@ -79,3 +79,9 @@ Frontend regression coverage was added but execution and physical acceptance rem
 Automatic input now owns all physical text keyboards through one relay, with persistent permissions, per-device held-key recovery and validated Hyprland composite-name resolution. Input readiness is included in `--capture-status` independently of discovery settings. Virtual output is excluded.
 
 The user verified the panel shortcut and snippet expansion on both Kinesis and the laptop keyboard with the installed repair. Backend readiness also reports both devices active with no worker restarts. This does not establish cold-boot, docking, suspend/resume or repeated-passage acceptance for this build; those checks remain pending. The broader workspace test run reported five failures in untouched TUI tests; focused client/relay, panel backend, core, mobile and installer tests passed. Frontend regression tests were added but left to the user.
+
+## macOS local test (2026-10-02)
+
+The controlled event test used a temporary, uniquely tagged input allowance because macOS stamps injected events with the injector process ID. The normal filter rejects these events. The allowance was removed before the final signed installation; this test verifies the capture-to-review pipeline, not physical-keyboard or Parsec acceptance. The test phrase remained in the local Suggestions list and was not saved to a synced library. Notification submission was recorded; visible banner delivery during screen sharing remains unverified.
+
+On macOS, `typerelay-panel --capture-status` now uses the existing nonce-based diagnostic response to inspect the running application without changing focus. Inspect `capture.app`, `capture.layout`, `capture_stats`, and `observed_app` while the target editor is focused.

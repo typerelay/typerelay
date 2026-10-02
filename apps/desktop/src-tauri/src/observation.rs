@@ -82,15 +82,15 @@ impl Observation {
         notification.app_id(&app.config().identifier);
         let notification=notification.show()?;let app=app.clone();std::thread::spawn(move||notification.wait_for_action(move|action|if action=="review"||action=="default"{let handle=app.clone();let _=app.run_on_main_thread(move||Self::open(&handle));}));Ok(())}
     }
-    #[cfg(target_os="windows")]
+    #[cfg(any(target_os="windows",target_os="macos"))]
     pub fn diagnostics_request(args:&[String])->Option<uuid::Uuid>{args.iter().position(|arg|arg=="--capture-status-request").and_then(|index|args.get(index+1)).and_then(|value|uuid::Uuid::parse_str(value).ok())}
-    #[cfg(target_os="windows")]
+    #[cfg(any(target_os="windows",target_os="macos"))]
     pub fn diagnostics_response(app:&tauri::AppHandle,args:&[String])->bool {
         let Some(id)=Self::diagnostics_request(args)else{return false;};
         if let Some(state)=app.try_state::<Arc<Self>>()&&let Ok(value)=state.diagnostics()&&let Ok(root)=typerelay_client::editor::Paths::config_dir(){let path=root.join("observations").join(format!("capture-status-{id}.json"));if let Ok(mut file)=std::fs::OpenOptions::new().write(true).create_new(true).open(path){let _=serde_json::to_writer(&mut file,&value);}}
         true
     }
-    #[cfg(target_os="windows")]
+    #[cfg(any(target_os="windows",target_os="macos"))]
     pub fn request_diagnostics()->Result<serde_json::Value> {
         let id=uuid::Uuid::new_v4();let root=typerelay_client::editor::Paths::config_dir()?;let path=root.join("observations").join(format!("capture-status-{id}.json"));
         let mut child=std::process::Command::new(std::env::current_exe()?).args(["--capture-status-request",&id.to_string()]).spawn()?;
@@ -130,7 +130,7 @@ impl Observation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(target_os="windows")]
+    #[cfg(any(target_os="windows",target_os="macos"))]
     #[test]
     fn diagnostic_requests_accept_only_a_nonce_not_a_path(){let id=uuid::Uuid::new_v4();assert_eq!(Observation::diagnostics_request(&["app".into(),"--capture-status-request".into(),id.to_string()]),Some(id));for args in [vec!["--capture-status-request".into()],vec!["--capture-status-request".into(),"../private.sqlite3".into()],vec!["--capture-status-request".into(),"C:\\private.json".into()]]{assert!(Observation::diagnostics_request(&args).is_none());}}
     #[test]
