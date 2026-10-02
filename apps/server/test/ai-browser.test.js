@@ -42,6 +42,7 @@ test('new web snippets show only the compact AI prompt and Submit above regular 
 		assert.equal(root.querySelector('[data-ai-action]'), null); assert.equal(root.querySelector('[data-ai-effective]'), null); assert.equal(root.querySelector('h3'), null);
 		const prompt = root.querySelector('[data-ai-prompt]'); assert.equal(prompt.closest('label').querySelector('span').textContent, 'What would you like to do?'); assert.equal(prompt.closest('.col-12') !== null, true);
 		const button = root.querySelector('[data-ai-generate]'); assert.equal(button.textContent, 'Submit'); assert.equal(button.type, 'button'); assert.equal(button.parentElement.classList.contains('justify-content-end'), true);
+		assert.equal(button.querySelector('[data-ai-spinner]').hidden, true);
 		assert.equal(fixture.window.getComputedStyle(root.querySelector('[data-ai-author-status]')).display, 'none'); assert.equal(root.querySelector('[data-ai-proposal]').hidden, true);
 		for (const selector of ['#trigger', '#snippet-title', '#snippet-type', '#replace']) assert.ok(form.querySelector(selector));
 	} finally { fixture.dom.window.close(); }
@@ -67,7 +68,9 @@ test('compact Submit generates an editable proposal and Use draft updates fields
 		area.value = 'Original'; title.value = 'Original title'; trigger.value = 'reply'; trigger.focus(); form.scrollTop = 175;
 		root.querySelector('[data-ai-prompt]').value = 'Write a friendly reply'; const button = root.querySelector('[data-ai-generate]'); const generation = fixture.client.click({ target: button }); await BrowserFixture.tick();
 		assert.equal(button.disabled, true); assert.equal(trigger.disabled, false); assert.equal(area.disabled, false); assert.equal(requests.at(-1).body.action, 'generate'); assert.equal(requests.at(-1).body.prompt, 'Write a friendly reply'); assert.equal(requests.at(-1).body.entry.content.text, 'Original');
+		assert.equal(button.querySelector('[data-ai-spinner]').hidden, false); assert.equal(button.getAttribute('aria-busy'), 'true');
 		resolveAuthor({ proposal: { title: 'Reply', trigger: 'reply', content: { version: 1, type: 'plain_text', text: 'AI draft' } }, status: BrowserFixture.status }); await generation;
+		assert.equal(button.querySelector('[data-ai-spinner]').hidden, true); assert.equal(button.hasAttribute('aria-busy'), false);
 		assert.equal(area.value, 'Original'); assert.equal(root.querySelector('[data-ai-proposal]').hidden, false); assert.equal(root.querySelector('[data-ai-draft]').value, 'AI draft'); assert.notEqual(fixture.window.getComputedStyle(root.querySelector('[data-ai-author-status]')).display, 'none');
 		root.querySelector('[data-ai-draft]').value = 'Reviewed reply'; await fixture.client.click({ target: root.querySelector('[data-ai-apply]') });
 		assert.equal(area.value, 'Reviewed reply'); assert.equal(title.value, 'Reply'); assert.equal(trigger.value, 'reply'); assert.equal(root.querySelector('[data-ai-proposal]').hidden, true);
@@ -83,6 +86,7 @@ test('compact generation errors preserve the editor and report an error', async 
 		const { form, root } = await BrowserFixture.editor(fixture); const area = form.querySelector('#replace'); area.value = 'Keep my edits'; root.querySelector('[data-ai-prompt]').value = 'Write a reply';
 		const button = root.querySelector('[data-ai-generate]'); await fixture.client.click({ target: button });
 		assert.equal(form.querySelector('#replace'), area); assert.equal(area.value, 'Keep my edits'); assert.equal(root.querySelector('[data-ai-proposal]').hidden, true); assert.equal(root.hidden, false); assert.equal(button.disabled, false); assert.deepEqual(fixture.errors, ['Provider unavailable']);
+		assert.equal(button.querySelector('[data-ai-spinner]').hidden, true); assert.equal(button.hasAttribute('aria-busy'), false);
 	} finally { fixture.dom.window.close(); }
 });
 

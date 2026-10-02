@@ -18,7 +18,10 @@ section.ai-author.mb-5(class=compactAuthor ? 'ai-author-compact card card-body' 
 				span= compactAuthor ? 'What would you like to do?' : 'What would you like to write or change?'
 				textarea.form-control.form-control-sm(data-ai-prompt rows="2" maxlength="4000")
 	.d-flex.justify-content-end.mb-3
-		button.btn.btn-outline-primary.btn-sm(type="button" data-ai-generate)= compactAuthor ? 'Submit' : 'Generate proposal'
+		button.btn.btn-outline-primary.btn-sm(type="button" data-ai-generate)
+			if compactAuthor
+				span.spinner-border.spinner-border-sm.me-2(data-ai-spinner hidden aria-hidden="true")
+			span= compactAuthor ? 'Submit' : 'Generate proposal'
 	p.text-muted.small(data-ai-author-status role="status")
 	div(data-ai-proposal hidden)
 		label.form-label

@@ -34,9 +34,10 @@ export class AiClient {
 	fragment(html) { return new DOMParser().parseFromString(html, 'text/html').body.firstElementChild; }
 	async busy(control, action) {
 		if (!control || control.dataset.aiBusy === 'true') return;
-		control.dataset.aiBusy = 'true'; control.disabled = true;
+		const spinner = control.querySelector('[data-ai-spinner]');
+		control.dataset.aiBusy = 'true'; control.disabled = true; control.setAttribute('aria-busy', 'true'); if (spinner) spinner.hidden = false;
 		try { await action(); } catch (error) { if (error.name !== 'AbortError' && !/cancelled/.test(error.message)) this.notify(error.message, 'error'); }
-		finally { delete control.dataset.aiBusy; if (control.isConnected) { control.disabled = false; const root = this.config(control); if (root) this.routeControls(root); } this.update(); }
+		finally { delete control.dataset.aiBusy; control.removeAttribute('aria-busy'); if (spinner) spinner.hidden = true; if (control.isConnected) { control.disabled = false; const root = this.config(control); if (root) this.routeControls(root); } this.update(); }
 	}
 	async change(event) {
 		const control = event.target;
