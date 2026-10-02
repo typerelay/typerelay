@@ -18,11 +18,13 @@ Source for the Zed API limitation: <https://github.com/zed-industries/zed/blob/m
 
 User confirmation covers the reported Zed/Obsidian result on this machine; specific email/URL, notification timing, review-flow and sustained-use checks were not individually reported. Windows and macOS testing is deferred by the user.
 
-## Open live-capture regression
+## Live acceptance and prior capture regression
 
 The user's two different paragraphs/signatures containing “I wish you all the best.” pass deterministic passage and physical-US-key replay tests, but the initial live run retained only one closing. The first diagnostic retry reported shortcut resets with zero expired input, transport errors or context errors. Additional metadata-only counters now distinguish editing/navigation shortcuts, active modifier state and repaired key releases.
 
 The selected-device owner's repaired releases and releases consumed while waiting for expansion now also reach the observation translator. Previously only the forwarding side received those releases. This mismatch is fixed and unit-tested; it is not yet proven to be the cause of the reported missed closing. End-to-end acceptance of that live example remains pending. Do not treat replay success as proof that the real failure is resolved.
+
+On 2026-10-02, after build `47eabdc`, the user confirmed successful live discovery of “Hope this helps for today.” inside two different paragraphs with different signatures. This verifies the intended repeated-passage behavior on this Linux machine. The earlier exact “I wish you all the best.” case and the causal role of the key-release repair were not separately verified; broader edit-provider and platform limitations below remain.
 
 ## Repeated-passage engine
 
