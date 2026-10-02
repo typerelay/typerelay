@@ -48,3 +48,25 @@ test('an older initial snapshot cannot remove a newer event',async()=>{
 		resolve({epoch:1,settings:{enabled:true,notifications:false,threshold:4,retention_days:30,excluded_apps:[]},status:'Active',candidates:[],changes:[]});await request;assert.equal(f.ui.list.children.length,1);
 	}finally{f.dom.window.close();}
 });
+
+
+test('setup checks update in place, preserve drafts, and explain disabled VS Code accessibility',async()=>{
+	const f=await Fixture.create();try{
+		const document=f.dom.window.document;f.ui.change(Fixture.change(Fixture.row()));const candidate=f.ui.list.firstElementChild;document.querySelector('#suggestion-text').value='Keep my unfinished draft';
+		const disabled={epoch:1,platform:'linux',enabled:true,notifications_enabled:true,status:'Waiting for a supported editable field',observed_app:null,vscode:'off'};
+		f.ui.setup(disabled);const check=document.querySelector('[data-id="typing"]');const button=document.querySelector('#observation-check');button.focus();
+		assert.match(document.querySelector('[data-id="vscode"]').textContent,/Accessibility is switched off/);assert.equal(document.querySelector('#observation-app-help').open,true);
+		f.panel.invoke=async(name,args)=>{f.calls.push({name,args});assert.equal(args.action,'check');return {...disabled,observed_app:'code',vscode:'on'};};await f.ui.check();
+		assert.equal(document.querySelector('[data-id="typing"]'),check);assert.match(check.textContent,/Typing received from VS Code/);assert.equal(document.activeElement,button);assert.equal(f.ui.list.firstElementChild,candidate);assert.equal(document.querySelector('#suggestion-text').value,'Keep my unfinished draft');
+		f.ui.setup({...disabled,epoch:0});assert.match(check.textContent,/Typing received from VS Code/);
+	}finally{f.dom.window.close();}
+});
+
+test('setup shows macOS permission actions and test notification uses only the notification command',async()=>{
+	const f=await Fixture.create();try{
+		const document=f.dom.window.document;f.ui.setup({platform:'macos',enabled:true,notifications_enabled:true,notifications_allowed:false,accessibility:false,input_monitoring:false,status:'Permission needed',observed_app:null});
+		f.panel.invoke=async(name,args)=>{f.calls.push({name,args});return {};};await document.querySelector('[data-id="accessibility"] button').onclick({currentTarget:document.querySelector('[data-id="accessibility"] button')});
+		assert.equal(f.calls[0].name,'open_accessibility_settings');await document.querySelector('#observation-test-notification').onclick({currentTarget:document.querySelector('#observation-test-notification')});
+		assert.equal(f.calls[1].args.action,'test-notification');assert.match(document.querySelector('#observation-notification-result').textContent,/Test sent/);assert.equal(f.ui.rows.size,0);
+	}finally{f.dom.window.close();}
+});

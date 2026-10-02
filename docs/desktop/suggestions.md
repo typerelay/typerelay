@@ -7,6 +7,10 @@ description: "Find repeated wording locally and review it before creating a Type
 
 Open **Settings → Suggestions** and enable **Observe repeated text**. Observation and automatic notifications are off initially. This feature uses no AI model or cloud processing.
 
+The **Check setup** section checks observation settings, macOS permissions, notification settings, and whether typing was received from an application in the last minute. It appears automatically when opening Suggestions. Type a few words in your editor, return to Suggestions, and click **Check setup**. A successful typing check names that app; it does not claim that every field in every app is supported. This check retains only the last app identifier and time in memory, never a separate typing transcript.
+
+Use **Send test notification** to verify system delivery without waiting for repeated text or consuming the normal notification cooldown. If it does not appear, the app explains notification permissions and Focus/Do Not Disturb. Missing macOS permissions have buttons to the corresponding System Settings pages. **Help with your app** includes VS Code setup and platform-specific troubleshooting.
+
 Typerelay observes newly entered text in supported, focused editable fields. After four separate occurrences of a sentence or completed typing burst, it offers a snippet suggestion. A burst completes after five seconds without typing. Short fragments, uncertain edits, paste, recognized automated insertion, and Typerelay expansions are excluded.
 
 The tray's **Suggestions** action opens the review list. Choose:
@@ -15,7 +19,7 @@ The tray's **Suggestions** action opens the review list. Choose:
 - **Dismiss:** hide the candidate for at least seven days and four additional occurrences.
 - **Never suggest this again:** discard the candidate and remember only a keyed fingerprint for suppression.
 
-Notifications contain no observed wording. They appear after a typing pause, at most once per hour, and open the local review list. Notification delivery also requires the operating system's permission.
+Notifications contain no observed wording. They appear after a typing pause, including after you switch away from the editor, at most once per hour, and open the local review list. Notification delivery also requires the operating system's permission.
 
 ## Settings and privacy
 
@@ -30,8 +34,12 @@ Observed candidates are held in a private `observations/private.sqlite3` databas
 | Platform | Observation requirements |
 | --- | --- |
 | macOS | Accessibility and Input Monitoring; an identifiable editable field and caret. Restart Typerelay after granting missing monitoring permission. |
-| Windows | A normal user desktop, UI Automation support, editable field metadata, and identifiable selection. Protected/elevated or unsupported controls are skipped. |
+| Windows | A normal user desktop and UI Automation editable field metadata. Standard Edit controls and accessible document editors are supported; protected/elevated controls are skipped. |
 | Linux | AT-SPI 2, accessible text and direct key events, and an active unlocked login1/elogind session. The observer does not use Hyprland sockets or raw keyboard devices. |
+
+Linux observes direct keyboard events in the focused accessible editor. It does not require the application to emit a matching single-character text change: Electron editors can update their accessibility text as a whole without losing the typed sentence.
+
+For VS Code, set **Editor: Accessibility Support** to **On** (`editor.accessibilitySupport: "on"`). An explicit **Off** setting hides the editor from assistive applications, including Typerelay. This is a VS Code setting, separate from enabling observation in Typerelay. No document text is imported when enabling it.
 
 Linux observation targets GNOME, KDE, Hyprland, and other AT-SPI desktops on Wayland and X11. Application/toolkit accessibility support still varies. A field without direct key provenance is skipped; Typerelay never falls back to unrestricted keyboard recording. AppImage users need the host AT-SPI library (`libatspi.so.0`). This does not broaden the existing Linux abbreviation-expansion support.
 
@@ -41,7 +49,7 @@ Password fields, terminals, unsupported controls, uncertain composition, and fie
 
 Build checks are not live application certification. Test a native text editor and browser composer on macOS and Windows; repeat on GNOME/KDE Wayland and X11 and on Hyprland/Omarchy:
 
-1. Enable observation, enter the same sentence in four separate entries, and review exactly one candidate.
+1. Enable observation and notifications, enter the same sentence in four separate entries (or lower the threshold to two), and review exactly one candidate. End each occurrence with Enter or a five-second pause. Include capitals and punctuation, and repeat in VS Code with accessibility support enabled. Switch to Settings immediately after the final Enter and confirm a notification still arrives after five seconds.
 2. Verify password fields, excluded apps, paste, and snippet expansion produce no candidates.
 3. Try accents/composed input, corrections, field switches, screen lock/unlock, and permission revocation.
 4. Create, edit, choose a local or synced library, save, and cancel. Confirm only reviewed saves create snippets.

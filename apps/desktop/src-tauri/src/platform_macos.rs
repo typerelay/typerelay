@@ -32,7 +32,7 @@ unsafe impl Sync for NativeNotificationDelegate {}
 pub struct NativeNotifications;
 impl NativeNotifications {
     fn suggestion_app()->&'static std::sync::OnceLock<tauri::AppHandle> {static APP:std::sync::OnceLock<tauri::AppHandle>=std::sync::OnceLock::new();&APP}
-    pub fn suggestion(app:tauri::AppHandle)->Result<()> {let _=Self::suggestion_app().set(app);Self::deliver("Repeated text is ready to review in Typerelay.",false,true)}
+    pub fn suggestion(app:tauri::AppHandle,message:&str)->Result<()> {let _=Self::suggestion_app().set(app);Self::deliver(message,false,true)}
     fn activate_suggestion(){if let Some(app)=Self::suggestion_app().get(){let handle=app.clone();let _=app.run_on_main_thread(move||crate::observation::Observation::open(&handle));}}
 
     pub fn allowed()->Option<bool> {
@@ -198,7 +198,7 @@ impl ObservationAdapter {
                 let enabled=Target::attribute(field,"AXEnabled")?;let valid=bool::from(CFBoolean::wrap_under_get_rule(enabled.cast()));CFRelease(enabled);ensure!(valid,"Disabled field");
                 let focus=Target::attribute(field,"AXFocused")?;let valid=bool::from(CFBoolean::wrap_under_get_rule(focus.cast()));CFRelease(focus);ensure!(valid,"Unfocused field");
                 let range=Target::attribute(field,"AXSelectedTextRange")?;let mut selected=[0isize;2];let valid=AXValueGetValue(range,4,selected.as_mut_ptr().cast());CFRelease(range);ensure!(valid&&selected[1]==0,"Unknown caret");
-                let key=core_foundation::string::CFString::new("AXValue");use core_foundation::base::TCFType;let mut settable=false;ensure!(AXUIElementIsAttributeSettable(field,key.as_concrete_TypeRef().cast(),&mut settable)==0&&settable,"Read-only field");
+                // Electron/contenteditable fields accept typing without exposing a writable AXValue.
                 Ok((format!("{pid}:{}",CFHash(field.cast())),name,selected[0]))
             })().ok();CFRelease(field);result
         }
@@ -218,11 +218,9 @@ impl ObservationAdapter {
                 if let Some((event_epoch,at,edit))=raw {
                     let stable=previous.as_ref().zip(current.as_ref()).is_some_and(|(old,new):(&(String,String,isize),&(String,String,isize))|old.0==new.0&&old.1==new.1);
                     if stable&&event_epoch==epoch&&crate::observation::Observation::now()-at<250 {
-                        let (field,app,caret)=current.clone().unwrap();let before=previous.as_ref().unwrap().2;
-                        let expected=match &edit{Edit::Text(text)=>before+text.encode_utf16().count() as isize,Edit::Backspace=>before-1,Edit::Enter=>caret,Edit::Reset=>-1};
-                        if caret==expected {state.feed(Event{epoch,field,app,safe:true,direct:true,edit});}else{state.reset();}
+                        let (field,app,_)=current.clone().unwrap();state.feed(Event{epoch,field,app,safe:true,direct:true,edit});
                     }else{state.reset();}
-                }else if previous.as_ref().zip(current.as_ref()).is_none_or(|(old,new)|old!=new){state.reset();}
+                }else if previous.as_ref().zip(current.as_ref()).is_none_or(|(old,new)|old.0!=new.0||old.1!=new.1){state.reset();}
                 state.status(if current.is_some(){"Active"}else if !accessibility(false)||!input_monitoring(false){"Permission needed: Accessibility and Input Monitoring"}else{"Waiting for a supported editable field"});previous=current;
             }
         });
@@ -242,5 +240,3 @@ impl ObservationAdapter {
 }
 #[link(name="Carbon",kind="framework")]
 unsafe extern "C" {fn IsSecureEventInputEnabled()->bool;}
-#[link(name="ApplicationServices",kind="framework")]
-unsafe extern "C" {fn AXUIElementIsAttributeSettable(element:Ref,attribute:Ref,settable:*mut bool)->i32;}

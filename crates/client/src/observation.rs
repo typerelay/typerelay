@@ -27,7 +27,7 @@ impl Settings {
 pub enum Edit { Text(String), Backspace, Enter, Reset }
 pub struct Event { pub epoch:u64, pub field:String, pub app:String, pub safe:bool, pub direct:bool, pub edit:Edit }
 #[derive(Default)]
-pub struct Detector { field:String, pending:String, last_ms:i64, paused:bool }
+pub struct Detector { field:String, pending:String, last_ms:i64, last_input_ms:i64, paused:bool }
 impl Detector {
     pub fn normalize(text:&str)->String { text.nfc().collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ") }
     pub fn reset(&mut self) { self.field.clear();self.pending.clear();self.paused=false;self.last_ms=0; }
@@ -35,6 +35,7 @@ impl Detector {
         if event.epoch!=epoch||!event.safe||!event.direct||!settings.allows(&event.app)||matches!(event.edit,Edit::Reset) {self.reset();return None;}
         if self.field!=event.field {self.reset();self.field=event.field;}
         self.last_ms=now_ms;
+        self.last_input_ms=now_ms;
         match event.edit {
             Edit::Text(text)=>{
                 if text.chars().any(|c|c.is_control()&&!c.is_whitespace())||text.chars().count()>16 {self.reset();return None;}
@@ -51,7 +52,7 @@ impl Detector {
         None
     }
     pub fn idle(&mut self,now_ms:i64)->Option<String> {if !self.paused&&self.last_ms>0&&now_ms-self.last_ms>=5000 {self.paused=true;return self.complete();}None}
-    pub fn quiet(&self,now_ms:i64)->bool {self.last_ms>0&&now_ms-self.last_ms>=5000}
+    pub fn quiet(&self,now_ms:i64)->bool {self.last_input_ms>0&&now_ms-self.last_input_ms>=5000}
     fn complete(&mut self)->Option<String> {
         // Taking the buffer makes completion idempotent; subsequent newly typed
         // sentences remain distinct occurrences even in the same field.
@@ -196,6 +197,17 @@ mod tests {
         let mut detector=Detector::default();let phrase="A useful repeated typing burst";
         for _ in 0..4{assert!(type_text(&mut detector,phrase).is_none());assert_eq!(detector.idle(6000),Some(phrase.into()));assert!(detector.idle(7000).is_none());}
         detector.event(event(Edit::Reset),&settings(),1,8000);assert!(detector.idle(14000).is_none());
+    }
+    #[test]
+    fn completed_sentence_can_notify_after_focus_moves_to_settings() {
+        let root=tempfile::tempdir().unwrap();let store=Store::open(root.path()).unwrap();let mut detector=Detector::default();let settings=Settings{enabled:true,notifications:true,threshold:2,..Settings::default()};
+        for at in [1000,2000] {
+            for c in "Please send the purple notebook tomorrow.".chars(){detector.event(event(Edit::Text(c.to_string())),&settings,1,at);}
+            let text=detector.event(event(Edit::Enter),&settings,1,at).unwrap();store.observe(&text,at/1000,&settings,&HashSet::new()).unwrap();
+        }
+        detector.event(event(Edit::Reset),&settings,1,2100);
+        assert!(!detector.quiet(6999));assert!(detector.quiet(7000));assert!(detector.idle(7000).is_none());
+        assert!(store.notification(7,&settings).unwrap());assert!(!store.notification(8,&settings).unwrap());
     }
     #[test]
     fn threshold_retention_ignore_forget_and_notifications() {

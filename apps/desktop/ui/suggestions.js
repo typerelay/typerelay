@@ -1,7 +1,9 @@
 export class Suggestions {
 	constructor(panel) {
 		this.panel=panel;this.rows=new Map();this.revisions=new Map();this.epoch=0;this.sequence=0;this.loaded=false;this.draft=null;this.changeSequence=0;this.updated=new Map();
-		this.form=document.querySelector('#observation-form');this.list=document.querySelector('#suggestions-list');
+		this.checkSequence=0;this.form=document.querySelector('#observation-form');this.list=document.querySelector('#suggestions-list');
+		document.querySelector('#observation-check').onclick=event=>this.run(event.currentTarget,()=>this.check());
+		document.querySelector('#observation-test-notification').onclick=event=>this.run(event.currentTarget,async()=>{await this.invoke('test-notification');document.querySelector('#observation-notification-result').textContent='Test sent. If no notification appeared, allow Typerelay notifications in your system settings and check Do Not Disturb or Focus mode.';});
 		document.querySelector('#suggestions-review').onclick=()=>{document.querySelector('#suggestion-heading').focus();};
 		this.form.onsubmit=event=>{event.preventDefault();void this.run(document.querySelector('#observation-save'),()=>this.configure());};
 		document.querySelector('#observation-enabled').onchange=()=>{if(!document.querySelector('#observation-enabled').checked&&this.settings?.enabled)void this.run(document.querySelector('#observation-enabled'),()=>this.configure({...this.settings,enabled:false}));};
@@ -17,15 +19,29 @@ export class Suggestions {
 	async run(button,operation){if(button.disabled)return;button.disabled=true;try{await operation();}catch(error){await Swal.fire({icon:'error',title:'Snippet suggestions',text:String(error),confirmButtonText:'OK'});}finally{button.disabled=false;}}
 	async open(){this.panel.settingsTab='suggestions';await this.panel.settings(true);}
 	async load(){
-		const sequence=++this.sequence;const started=this.changeSequence;const startEpoch=this.epoch;const snapshot=await this.invoke('list');if(sequence!==this.sequence||snapshot.epoch<this.epoch||startEpoch!==this.epoch&&snapshot.epoch!==this.epoch)return;
-		this.epoch=snapshot.epoch;this.settings=snapshot.settings;this.loaded=true;
+		const sequence=++this.sequence;const checkSequence=this.checkSequence;const started=this.changeSequence;const startEpoch=this.epoch;const snapshot=await this.invoke('list');if(sequence!==this.sequence||snapshot.epoch<this.epoch||startEpoch!==this.epoch&&snapshot.epoch!==this.epoch)return;
+		this.epoch=snapshot.epoch;this.settings=snapshot.settings;this.loaded=true;if(snapshot.setup&&checkSequence===this.checkSequence)this.setup(snapshot.setup);
 		document.querySelector('#observation-enabled').checked=this.settings.enabled;document.querySelector('#observation-notifications').checked=this.settings.notifications;document.querySelector('#observation-threshold').value=this.settings.threshold;document.querySelector('#observation-retention').value=this.settings.retention_days;document.querySelector('#observation-exclusions').value=this.settings.excluded_apps.join('\n');document.querySelector('#observation-status').textContent=snapshot.status;
 		const changes=snapshot.changes||snapshot.candidates.map(candidate=>({id:candidate.id,revision:candidate.revision,candidate}));const present=new Set(changes.map(row=>row.id));for(const [id,row]of this.rows)if(!present.has(id)&&(this.updated.get(id)||0)<=started)this.change({epoch:this.epoch,change:{id,revision:row.revision+1,candidate:null}});
 		for(const change of changes)this.change({epoch:this.epoch,change});this.empty();
 	}
+	async check(){const sequence=++this.checkSequence;const result=await this.invoke('check');if(sequence===this.checkSequence)this.setup(result);}
+	setup(value){
+		if(value.epoch!==undefined&&value.epoch<this.epoch)return;
+		const checks=[{id:'enabled',label:'Observation',detail:value.enabled?'Enabled on this device.':'Enable Observe repeated text above and save settings.'}];
+		if(value.platform==='macos')for(const [key,label,action]of [['accessibility','Accessibility','open_accessibility_settings'],['input_monitoring','Input Monitoring','open_input_monitoring_settings']])checks.push({id:key,label,detail:value[key]?'Allowed.':'Allow Typerelay in System Settings, then restart Typerelay.',action:value[key]?null:action,button:'Open '+label+' settings'});
+		checks.push({id:'typing',label:'Typing check',detail:value.observed_app?'Typing received from '+(value.observed_app==='code'?'VS Code':value.observed_app)+' in the last minute.':value.enabled?'No typing verified in the last minute. Type in another app, then click Check setup.':'Enable observation before testing typing.'});
+		checks.push({id:'status',label:'Observer status',detail:value.status});
+		if(value.vscode)checks.push({id:'vscode',label:'VS Code',detail:value.vscode==='off'?'Accessibility is switched off. In VS Code Settings, set Editor: Accessibility Support to On.':value.vscode==='on'?'Accessibility is enabled in user settings. Run the typing check to verify the current editor.':'In VS Code Settings, set Editor: Accessibility Support to On if the typing check does not pass.'});
+		checks.push({id:'notifications',label:'Suggestion notifications',detail:!value.notifications_enabled?'Enable Show suggestion notifications above and save settings.':value.notifications_allowed===false?'Allow Typerelay notifications in System Settings.':'Enabled in Typerelay. Send a test notification to check system delivery.',action:value.platform==='macos'&&value.notifications_allowed===false?'open_notification_settings':null,button:'Open notification settings'});
+		const list=document.querySelector('#observation-checks');const nodes=new Map([...list.children].map(node=>[node.dataset.id,node]));
+		for(const check of checks){let node=nodes.get(check.id);nodes.delete(check.id);if(!node){node=document.querySelector('#observation-check-template').content.firstElementChild.cloneNode(true);node.dataset.id=check.id;list.append(node);}node.querySelector('.observation-check-label').textContent=check.label;node.querySelector('.observation-check-detail').textContent=check.detail;const button=node.querySelector('button');button.hidden=!check.action;button.textContent=check.button||'';button.onclick=event=>this.run(event.currentTarget,()=>this.panel.invoke(check.action));}for(const node of nodes.values())node.remove();
+		if(value.vscode==='off')document.querySelector('#observation-app-help').open=true;
+		document.querySelector('#observation-platform-help').textContent=value.platform==='macos'?'macOS: allow Accessibility and Input Monitoring for Typerelay, then restart it.':value.platform==='windows'?'Windows: run the editor as your normal user. Administrator windows and protected controls may block observation.':'Linux: enable accessibility in your desktop and editor. If the observer reports missing accessibility components, install AT-SPI 2 and restart Typerelay.';
+	}
 	async configure(value){
 		const settings=value||{enabled:document.querySelector('#observation-enabled').checked,notifications:document.querySelector('#observation-notifications').checked,threshold:Number(document.querySelector('#observation-threshold').value),retention_days:Number(document.querySelector('#observation-retention').value),excluded_apps:[...new Set(document.querySelector('#observation-exclusions').value.split('\n').map(value=>value.trim()).filter(Boolean))]};
-		const result=await this.invoke('configure',settings);if(result.epoch<this.epoch)return;this.epoch=result.epoch;for(const change of result.changes||[])this.change({epoch:result.epoch,change});this.settings=settings;document.querySelector('#observation-status').textContent=settings.enabled?'Waiting for a supported editable field':'Disabled';await Swal.fire({toast:true,position:'bottom-end',icon:'success',title:'Settings saved',showConfirmButton:false,timer:2000});
+		const result=await this.invoke('configure',settings);if(result.epoch<this.epoch)return;this.epoch=result.epoch;for(const change of result.changes||[])this.change({epoch:result.epoch,change});this.settings=settings;await this.check();document.querySelector('#observation-status').textContent=settings.enabled?'Waiting for a supported editable field':'Disabled';await Swal.fire({toast:true,position:'bottom-end',icon:'success',title:'Settings saved',showConfirmButton:false,timer:2000});
 	}
 	change(envelope){
 		if(envelope.epoch<this.epoch)return;this.epoch=envelope.epoch;const {id,revision,candidate}=envelope.change;if(revision<=(this.revisions.get(id)||0))return;this.revisions.set(id,revision);this.updated.set(id,++this.changeSequence);

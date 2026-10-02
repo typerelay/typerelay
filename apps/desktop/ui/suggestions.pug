@@ -25,6 +25,19 @@ section#settings-suggestions.settings-page(hidden)
 		.form-actions
 			button#observation-forget.secondary.btn-sm(type="button") Forget learned text
 			button#observation-save.primary.btn-sm(type="submit") Save settings
+	section#observation-setup.setting-section.mb-5(aria-labelledby="observation-setup-heading")
+		h3#observation-setup-heading Check setup
+		p.settings-description Enable observation above, then type a few words in the app you want to use. Return here and check setup to confirm Typerelay receives your typing.
+		#observation-checks(aria-live="polite")
+		.observation-setup-actions.mb-3
+			button#observation-check.secondary.btn-sm(type="button") Check setup
+			button#observation-test-notification.secondary.btn-sm(type="button") Send test notification
+		p#observation-notification-result.settings-description(role="status")
+		details#observation-app-help
+			summary Help with your app
+			p.settings-description In VS Code: open Settings, search for Editor: Accessibility Support, and choose On. This lets Typerelay receive typing from the editor. Repeat the typing check after changing it.
+			p#observation-platform-help.settings-description
+			p.settings-description Password fields, terminals, excluded apps, and Typerelay settings are skipped. A successful check applies to the app and field you just typed in.
 	button#suggestions-review.secondary.btn-sm(type="button") Review suggestions
 	section#suggestion-review.setting-section
 		h3#suggestion-heading(tabindex="-1") Suggestions
@@ -59,3 +72,8 @@ section#settings-suggestions.settings-page(hidden)
 				button.suggestion-create.primary.btn-sm(type="button") Create snippet
 	template#suggestion-library-option
 		option
+	template#observation-check-template
+		article.observation-check.mb-3
+			h6.observation-check-label
+			p.observation-check-detail.settings-description
+			button.observation-check-action.secondary.btn-sm(type="button" hidden)

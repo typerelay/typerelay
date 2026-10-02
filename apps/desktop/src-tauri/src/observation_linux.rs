@@ -1,4 +1,4 @@
-//! AT-SPI only: no compositor socket, evdev device, or root privileges.
+//! Observe direct AT-SPI keys in focused editable controls without reading document text.
 use std::{ffi::{c_char,c_void,CStr,CString},sync::Arc,time::{Duration,Instant}};
 use anyhow::{Result,ensure};
 use typerelay_client::observation::{Edit,Event};
@@ -10,6 +10,21 @@ struct Value { kind:usize, data:[u64;2] }
 struct AccessibleEvent { kind:*const c_char,source:Object,detail1:i32,detail2:i32,data:Value,sender:Object }
 #[repr(C)]
 struct KeyEvent { kind:i32,id:u32,hardware:u16,modifiers:u16,timestamp:u32,text:*const c_char,is_text:i32 }
+impl KeyEvent {
+    unsafe fn edit(&self)->Option<Edit> {unsafe{
+        if self.kind!=0||[0xffe1,0xffe2,0xffe5].contains(&self.id){return None;}
+        if self.modifiers&!(1|2)!=0{return Some(Edit::Reset);}
+        Some(match self.id {
+            0xff0d|0xff8d=>Edit::Enter,
+            0xff08=>Edit::Backspace,
+            _=>{
+                if self.is_text==0||self.text.is_null(){return Some(Edit::Reset);}
+                let text=CStr::from_ptr(self.text).to_string_lossy().into_owned();
+                if text.is_empty()||text.chars().count()>16{Edit::Reset}else{Edit::Text(text)}
+            },
+        })
+    }}
+}
 struct Api { library:libloading::Library }
 impl Api {
     unsafe fn symbol<T:Copy>(&self,name:&[u8])->T {unsafe{*self.library.get::<T>(name).expect("validated AT-SPI symbol")}}
@@ -27,7 +42,7 @@ impl Api {
         let path=std::fs::read_link(format!("/proc/{pid}/exe")).ok()?;let app=path.file_name()?.to_string_lossy().into_owned();typerelay_client::observation::Settings::supported_app(&app).then_some(app)
     }}
 }
-struct Listener { event_listener:Object,key_listener:Object,registered:Vec<CString>,modifiers:Vec<u32>,unlocked:Arc<std::sync::atomic::AtomicBool>,api:Api,state:Arc<Observation>,field:Object,key:Option<(Instant,u64,String)>,epoch:u64,caret:Option<i32> }
+struct Listener { event_listener:Object,key_listener:Object,registered:Vec<CString>,modifiers:Vec<u32>,unlocked:Arc<std::sync::atomic::AtomicBool>,api:Api,state:Arc<Observation>,field:Object,key:Option<Instant>,epoch:u64,caret:Option<i32> }
 impl Drop for Listener {
     fn drop(&mut self) {unsafe {
         for kind in &self.registered {self.api.symbol::<unsafe extern "C" fn(Object,*const c_char,*mut Object)->i32>(b"atspi_event_listener_deregister")(self.event_listener,kind.as_ptr(),std::ptr::null_mut());}
@@ -36,20 +51,17 @@ impl Drop for Listener {
     }}
 }
 impl Listener {
+    fn typing(&self)->bool {self.key.is_some_and(|at|at.elapsed()<Duration::from_millis(400))}
     fn discard(&mut self){self.key=None;self.caret=None;self.state.reset();}
     fn reset(&mut self){self.discard();unsafe{self.api.unref(self.field);}self.field=std::ptr::null_mut();self.state.reset();}
     unsafe extern "C" fn key(raw:*const KeyEvent,data:Object)->i32 {unsafe{
-        let this=&mut *(data as *mut Self);let key=&*raw;this.key=None;
+        let this=&mut *(data as *mut Self);let key=&*raw;
         if !this.state.enabled.load(std::sync::atomic::Ordering::SeqCst)||!this.unlocked.load(std::sync::atomic::Ordering::SeqCst){return 0;}
-        if this.api.safe(this.field).is_none(){this.discard();return 0;}
+        let Some(app)=this.api.safe(this.field)else{this.discard();return 0;};
         let epoch=this.state.epoch.load(std::sync::atomic::Ordering::SeqCst);if epoch!=this.epoch{this.reset();this.epoch=epoch;return 0;}
-        if key.kind!=0||[0xffe1,0xffe2,0xffe5].contains(&key.id){return 0;}
-        if key.modifiers&!(1|2)!=0 {this.discard();return 0;}
-        if key.id==0xff0d {if let Some(app)=this.api.safe(this.field){this.state.feed(Event{epoch,field:format!("{:p}",this.field),app,safe:true,direct:true,edit:Edit::Enter});}return 0;}
-        if key.id==0xff08 {this.key=Some((Instant::now(),epoch,"\u{8}".into()));return 0;}
-        if key.is_text==0||key.text.is_null(){this.discard();return 0;}
-        let text=CStr::from_ptr(key.text).to_string_lossy().into_owned();if text.chars().count()>16||text.is_empty(){this.discard();return 0;}
-        this.key=Some((Instant::now(),epoch,text));0
+        let Some(edit)=key.edit()else{return 0;};
+        this.key=Some(Instant::now());this.state.safety(true);
+        this.state.feed(Event{epoch,field:format!("{:p}",this.field),app,safe:true,direct:true,edit});this.state.status("Active");0
     }}
     unsafe extern "C" fn event(raw:*const AccessibleEvent,data:Object) {unsafe{
         let this=&mut *(data as *mut Self);let event=&*raw;
@@ -61,21 +73,21 @@ impl Listener {
         let epoch=self.state.epoch.load(std::sync::atomic::Ordering::SeqCst);if epoch!=self.epoch{self.reset();self.epoch=epoch;}
         let kind=CStr::from_ptr(event.kind).to_string_lossy();
         if kind.starts_with("object:state-changed:focused") {
-            if event.detail1==0{if event.source==self.field{self.reset();}return;}
-            self.reset();if self.api.safe(event.source).is_some(){self.field=self.api.symbol::<unsafe extern "C" fn(Object)->Object>(b"g_object_ref")(event.source);self.state.status("Waiting for direct keyboard events from this application");}return;
+            if event.detail1==0{if event.source==self.field{self.reset();self.state.status("Waiting for a supported editable field");}return;}
+            self.reset();if self.api.safe(event.source).is_some(){self.field=self.api.symbol::<unsafe extern "C" fn(Object)->Object>(b"g_object_ref")(event.source);self.state.status("Ready to observe typing");}return;
         }
         if kind.starts_with("window:"){if !self.field.is_null()&&self.api.process(event.source)==self.api.process(self.field){self.reset();}return;}
         if event.source!=self.field||self.field.is_null(){return;}
-        let Some(app)=self.api.safe(event.source)else{self.discard();return;};
-        if kind.starts_with("object:text-caret-moved") {if self.caret!=Some(event.detail1)&&self.key.as_ref().is_none_or(|(time,_,_)|time.elapsed()>Duration::from_millis(400)){self.state.reset();}self.caret=Some(event.detail1);return;}
+        if self.api.safe(event.source).is_none(){self.discard();return;}
+        // Editable controls often emit selection/caret and full text replacement
+        // events for each key (notably Electron). Direct keys are the source;
+        // accessibility updates must not replay document contents or erase a burst.
+        if kind.starts_with("object:text-selection-changed"){return;}
+        if kind.starts_with("object:text-caret-moved") {
+            if self.caret!=Some(event.detail1)&&!self.typing(){self.state.reset();}self.caret=Some(event.detail1);return;
+        }
         if kind.starts_with("object:text-changed:") {
-            let Some((at,key_epoch,key))=self.key.take()else{self.state.reset();self.state.status("Unavailable in this field: direct keyboard events are not exposed");return;};
-            if at.elapsed()>Duration::from_millis(400)||key_epoch!=epoch{self.state.reset();return;}
-            let edit=if kind.starts_with("object:text-changed:delete")&&key=="\u{8}"&&event.detail2==1{Edit::Backspace}else if kind.starts_with("object:text-changed:insert")&&!kind.contains("system")&&event.data.kind==64 {
-                let raw=self.api.symbol::<unsafe extern "C" fn(*const Value)->*const c_char>(b"g_value_get_string")(&event.data);if raw.is_null(){self.state.reset();return;}
-                let text=CStr::from_ptr(raw).to_string_lossy();if text!=key{self.state.reset();return;}Edit::Text(key)
-            }else{self.state.reset();return;};
-            self.caret=Some(event.detail1+if matches!(edit,Edit::Text(_)){event.detail2}else{0});self.state.feed(Event{epoch,field:format!("{:p}",self.field),app,safe:true,direct:true,edit});self.state.status("Active");return;
+            if !self.typing(){self.discard();self.state.status("Waiting for direct keyboard input from this application");}return;
         }
         self.discard();
     }}
@@ -126,6 +138,24 @@ impl ObservationAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_keys_complete_repeated_sentences_without_text_change_payloads() {
+        use typerelay_client::observation::{Detector,Settings};
+        let settings=Settings{enabled:true,..Settings::default()};let mut detector=Detector::default();let mut completed=vec![];
+        let mut send=|key:KeyEvent|{if let Some(edit)=unsafe{key.edit()}&&let Some(text)=detector.event(Event{epoch:1,field:"editor".into(),app:"code".into(),safe:true,direct:true,edit},&settings,1,1000){completed.push(text);}};
+        for _ in 0..2 {
+            for c in "Please send the purple notebook tomorrow.".chars() {
+                // Shift and releases must not clear a sentence or duplicate a key.
+                send(KeyEvent{kind:0,id:0xffe1,hardware:50,modifiers:0,timestamp:0,text:std::ptr::null(),is_text:0});
+                let text=CString::new(c.to_string()).unwrap();
+                send(KeyEvent{kind:0,id:c as u32,hardware:0,modifiers:if c.is_uppercase(){1}else{0},timestamp:0,text:text.as_ptr(),is_text:1});
+                send(KeyEvent{kind:1,id:c as u32,hardware:0,modifiers:0,timestamp:0,text:text.as_ptr(),is_text:1});
+            }
+            send(KeyEvent{kind:0,id:0xff0d,hardware:36,modifiers:0,timestamp:0,text:std::ptr::null(),is_text:0});
+        }
+        assert_eq!(completed,vec!["Please send the purple notebook tomorrow.";2]);
+        let shortcut=KeyEvent{kind:0,id:'v' as u32,hardware:0,modifiers:4,timestamp:0,text:c"v".as_ptr(),is_text:1};assert!(matches!(unsafe{shortcut.edit()},Some(Edit::Reset)));
+    }
     #[test]
     fn atspi_abi_and_runtime_symbols_are_available() {
         assert_eq!(std::mem::size_of::<AccessibleEvent>(),56);

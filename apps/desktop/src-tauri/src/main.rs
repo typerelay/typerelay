@@ -409,6 +409,8 @@ async fn suggestions(app:tauri::AppHandle,action:String,value:Option<Value>)->st
         let state=app.try_state::<std::sync::Arc<observation::Observation>>().context("Local observation storage is unavailable")?;let value=value.unwrap_or(Value::Null);let root=&app.state::<Runtime>().root;
         match action.as_str(){
             "list"=>state.snapshot(),
+            "check"=>state.diagnostics(),
+            "test-notification"=>{observation::Observation::notify(&app,true)?;Ok(json!({"sent":true}))},
             "configure"=>{let result=state.configure(serde_json::from_value(value)?)?;if let Some(changes)=result["changes"].as_array(){for change in changes{let _=app.emit("suggestion-change",json!({"epoch":result["epoch"],"change":change}));}}Ok(result)},
             "forget"=>{let epoch=state.forget()?;let _=app.emit("suggestions-forgotten",json!({"epoch":epoch}));Ok(json!({"epoch":epoch}))},
             "libraries"=>observation::Observation::libraries(root),
