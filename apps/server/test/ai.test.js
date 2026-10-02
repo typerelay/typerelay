@@ -125,9 +125,10 @@ test('authoring yields a validated proposal without changing snippets', async ()
 
 test('authoring generates from an empty editor while retaining input and proposal validation', async () => {
 	const ctx = await Fixture.context(); await Fixture.configure(ctx); const count = await Snippet.countDocuments();
+	const library = await Library.create({ account: ctx.account, creator: ctx.user, name: 'New snippets', shared: false, state: 'active', revision: 1 });
 	for (const content of [{ version: 1, type: 'plain_text', text: '' }, { version: 1, type: 'code', language: 'JavaScript', text: '' }, { version: 2, type: 'rich_text', markdown: '', variables: {} }]) {
 		await Fixture.provider(async calls => {
-			const result = await Ai.author(ctx, Fixture.author({ action: 'generate', prompt: 'Request a meeting', entry: { title: '', trigger: null, content } }));
+			const result = await Ai.author(ctx, Fixture.author({ action: 'generate', library: String(library._id), prompt: 'Request a meeting', entry: { title: '', trigger: null, content } }));
 			assert.equal(result.proposal.content.markdown ?? result.proposal.content.text, 'Hello, friend'); assert.equal(result.proposal.content.type, content.type); assert.equal(result.proposal.trigger, null); assert.equal(calls.length, 1); assert.equal(JSON.parse(calls[0].body.input).text, '');
 		});
 	}
@@ -137,6 +138,18 @@ test('authoring generates from an empty editor while retaining input and proposa
 		assert.equal(calls.length, 0);
 	});
 	await Fixture.provider(() => assert.rejects(Ai.author(ctx, Fixture.author({ action: 'generate', entry: { content: { version: 1, type: 'plain_text', text: '' } } })), /Replacements must/), () => ({ status: 'completed', output_text: '{"title":"Empty","text":""}' }));
+});
+
+test('authoring checks library edit access before contacting the provider', async () => {
+	const owner = await Fixture.context(); const account = await Account.findById(owner.account).lean(); const member = await Fixture.context('member', account); const outsider = await Fixture.context(); await Fixture.configure(member);
+	const library = await Library.create({ account: owner.account, creator: owner.user, name: 'Shared authoring', shared: true, editable: false, members: [member.user], state: 'active', revision: 1 });
+	await Fixture.provider(async calls => {
+		await assert.rejects(Ai.author(member, Fixture.author({ library: String(library._id) })), error => error.status === 403 && error.message === 'Library is read-only');
+		await assert.rejects(Ai.author(outsider, Fixture.author({ library: String(library._id) })), error => error.status === 404 && error.message === 'Library not found');
+		assert.equal(calls.length, 0);
+		await Library.updateOne({ _id: library._id }, { $set: { editable: true } });
+		const result = await Ai.author(member, Fixture.author({ library: String(library._id) })); assert.equal(result.proposal.content.text, 'Hello, friend'); assert.equal(calls.length, 1);
+	});
 });
 
 test('disabled policies block all authoring/search inference and keep connections', async () => {
@@ -233,6 +246,7 @@ test('provider rejections before inference release managed allowance', async () 
 
 test('HTTP settings, fragments, verification, proposal and OpenAPI contracts', async () => {
 	const ctx = await Fixture.context(); const app = express(); app.use(express.json()); app.use((req, res, next) => { req.ctx = ctx; next(); }); Ai.mount(app); app.use((error, req, res, next) => res.status(error.status || 500).json({ error: error.message }));
+	const library = await Library.create({ account: ctx.account, creator: ctx.user, name: 'HTTP authoring', shared: false, state: 'active', revision: 1 });
 	const server = app.listen(0, '127.0.0.1'); await new Promise(resolve => server.once('listening', resolve)); const origin = 'http://127.0.0.1:' + server.address().port + '/api/v2/ai';
 	const request = async (path, method = 'GET', body) => { const response = await fetch(origin + path, { method, headers: { 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) }); return { status: response.status, value: await response.json() }; };
 	try {
@@ -240,7 +254,7 @@ test('HTTP settings, fragments, verification, proposal and OpenAPI contracts', a
 		const saved = await request('/settings', 'PATCH', { enabled: true, routes: { authoring: { connection: created.value.id, model: 'gpt-6-luna' } } }); assert.equal(saved.status, 200);
 		const settings = await request('/settings?scope=personal'); assert.match(settings.value.html, /data-ai-configuration/);
 		const schema = await request('/openapi.json'); assert.equal(schema.value.openapi, '3.1.0'); assert.ok(schema.value.paths['/author'].post);
-		await Fixture.provider(async () => { const verified = await request('/verify', 'POST', { connection: created.value.id, model: 'gpt-6-luna' }); assert.equal(verified.status, 200); const proposal = await request('/author', 'POST', Fixture.author()); assert.equal(proposal.status, 200); assert.equal(proposal.value.proposal.content.text, 'Hello, friend'); });
+		await Fixture.provider(async () => { const verified = await request('/verify', 'POST', { connection: created.value.id, model: 'gpt-6-luna' }); assert.equal(verified.status, 200); const proposal = await request('/author', 'POST', Fixture.author({ action: 'generate', library: String(library._id), entry: { title: '', trigger: null, content: { version: 1, type: 'plain_text', text: '' } } })); assert.equal(proposal.status, 200); assert.equal(proposal.value.proposal.content.text, 'Hello, friend'); });
 		const disabled = await request('/settings', 'PATCH', { enabled: false, routes: saved.value.settings.routes }); assert.equal(disabled.status, 200); assert.equal(disabled.value.status.enabled, false);
 		await Fixture.provider(async calls => { const blocked = await request('/author', 'POST', Fixture.author()); assert.equal(blocked.status, 403); assert.equal(calls.length, 0); });
 	} finally { await new Promise(resolve => server.close(resolve)); }
