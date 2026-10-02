@@ -14,7 +14,14 @@ pub struct Settings { pub model: Option<String>, pub enabled: Option<bool> }
 pub struct Endpoint { pub address: SocketAddr, pub token: String }
 pub struct NativeAi;
 impl NativeAi {
-    pub fn prompt(kind: &str, input: Value) -> String { let instructions: Value = serde_json::from_str(include_str!("ai-prompts.json")).expect("AI instructions"); let text=input["snippet"].as_str().unwrap_or("");let content_type=input["content_type"].as_str().unwrap_or("plain_text");let constraints=if content_type!="plain_text"||text.contains("{{"){format!("\n{}\nContent type: {}",instructions["preserve"].as_str().unwrap(),content_type)}else{String::new()};format!("{}{}\n{}: {}", instructions[kind].as_str().expect("Writing action"), constraints, if kind=="create"{"Request"}else{"Message"},text) }
+    pub fn prompt(kind: &str, input: Value) -> String {
+        let instructions: Value = serde_json::from_str(include_str!("ai-prompts.json")).expect("AI instructions");
+        let text=input["snippet"].as_str().unwrap_or("");let content_type=input["content_type"].as_str().unwrap_or("plain_text");let normalized=text.trim_start().to_lowercase();let request=normalized.strip_prefix("please ").unwrap_or(&normalized);
+        let drafting=content_type!="code"&&(["write ","draft ","compose ","create ","generate ","help me write ","i would like to write ","i want to write ","can you write ","could you write "].iter().any(|prefix|request.starts_with(prefix))||["i need a ","i need an ","i want a ","i want an ","i would like a ","i would like an "].iter().any(|prefix|request.starts_with(prefix))&&request.split(|c:char|!c.is_alphanumeric()).any(|word|["response","reply","message","email","letter","snippet","template"].contains(&word)));
+        let kind=if kind=="refine"{if drafting{"create"}else{"rewrite"}}else{kind};let constraints=if content_type!="plain_text"||text.contains("{{"){format!("\n{}\nContent type: {}",instructions["preserve"].as_str().unwrap(),content_type)}else{String::new()};
+        format!("{}{}\n{}: {}",instructions[kind].as_str().expect("Writing action"),constraints,if kind=="create"{"Request"}else{"Message"},text)
+    }
+
     pub fn catalog() -> Vec<Model> { serde_json::from_str(include_str!("ai-models.json")).expect("pinned catalog") }
     pub fn model(id: &str) -> Result<Model> { Self::catalog().into_iter().find(|model| model.id == id).context("Unknown model") }
     pub fn directory(root: &Path) -> Result<PathBuf> {
@@ -74,7 +81,7 @@ impl NativeAi {
         fs::rename(partial, target)?; Ok(())
     }
     pub fn author(root: &Path, draft: &Match, action: &str, id: &str) -> Result<Match> {
-        ensure!(["create", "rewrite"].contains(&action), "Unknown writing action");
+        ensure!(["create", "rewrite", "refine"].contains(&action), "Unknown writing action");
         ensure!(!draft.replace.trim().is_empty(), "Write a request or some text first");
         ensure!(draft.replace.len() <= if action == "create" {2000} else {16000}, "Draft or instruction too long");
         let proposal = Self::request(root, json!({"op":"infer","kind":"author","id":id,"prompt":Self::prompt(action,json!({"snippet":draft.replace,"content_type":draft.kind}))}))?;
@@ -115,6 +122,10 @@ mod tests {
     #[test]
     fn plain_text_creation_uses_a_focused_request_prompt() {
         let text="I would like to write a message to cancel a meeting.";let input=json!({"snippet":text,"content_type":"plain_text"});let create=NativeAi::prompt("create",input.clone());assert!(create.starts_with("Write a short, polite, ready-to-send message"));assert!(create.ends_with(&format!("Request: {text}")));assert!(!create.contains("Input.action"));assert!(!create.contains("Content type:"));let rewrite=NativeAi::prompt("rewrite",input);assert!(rewrite.starts_with("Improve the following message"));assert!(rewrite.ends_with(&format!("Message: {text}")));assert_ne!(create,rewrite);
+    }
+    #[test]
+    fn refine_routes_requests_without_turning_existing_messages_or_code_into_requests() {
+        for(text,kind,action)in [("I need a canned response for proposing a later meeting date.","plain_text","create"),("I would like to write a message to cancel a meeting.","plain_text","create"),("Please write a reply thanking {{name}}.","template","create"),("cant make the meeting today sorry lets reschedule","plain_text","rewrite"),("I need your response by Friday.","plain_text","rewrite"),("Can you confirm our meeting?","plain_text","rewrite"),("CREATE TABLE messages (id INT);","code","rewrite")] {let input=json!({"snippet":text,"content_type":kind});assert_eq!(NativeAi::prompt("refine",input.clone()),NativeAi::prompt(action,input),"{text}");}
     }
     #[test]
     fn proposals_preserve_tokens_actions_images_and_type() {
