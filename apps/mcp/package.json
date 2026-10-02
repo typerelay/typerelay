@@ -15,7 +15,7 @@
     "@typerelay/observability": "workspace:*",
     "express": "^5.2.1",
     "express-rate-limit": "^8.7.0",
-    "mongoose": "^9.10.2",
+    "mongoose": "^9.10.3",
     "zod": "^4.6.5"
   }
 }
