@@ -5,7 +5,7 @@ description: "Use the TypeRelay CLI to validate, connect, synchronize, import, e
 
 # Command line
 
-The `typerelay` command manages local storage, synchronization and the Omarchy installation. Run `typerelay --help` for the exact commands in the installed version.
+The `typerelay` command manages local storage and synchronization. Linux releases provide it through the distribution package or AppImage's one-time terminal integration. Run `typerelay --help` for the exact commands in the installed version.
 
 Common commands:
 
@@ -23,7 +23,7 @@ typerelay trash
 
 `connect` opens a browser unless `--no-browser` is passed. `trash` prints recoverable items; use `--restore ID` to restore one. Permanent emptying requires both `--empty` and `--yes`.
 
-On Omarchy, `typerelay doctor`, `install`, `install --dry-run`, `uninstall` and `uninstall --dry-run` inspect or manage the user service and scoped device access. Other platforms receive the engine/CLI through their desktop package but do not expose the Omarchy installer commands.
+On Omarchy, `typerelay doctor` inspects the session and required tools. Current desktop packages configure input access through the app and do not expose the legacy `install`, `setup` or `uninstall` commands. Those commands remain available only in standalone developer builds with `legacy-install` enabled.
 
 ## Imports and legacy migration
 

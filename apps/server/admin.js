@@ -4,6 +4,7 @@ import { rateLimit } from 'express-rate-limit';
 import pug from 'pug';
 import { AdminAccounts } from './services/admin_accounts.js';
 import { AdminSettings } from './services/admin_settings.js';
+import { Ai } from './ai/index.js';
 import { Auth } from './services/auth.js';
 import { Security } from './services/security.js';
 import { Support } from './services/support.js';
@@ -47,6 +48,7 @@ export class Admin {
 			next();
 		});
 		router.post('/logout', async (req, res) => { await new Promise((resolve, reject) => req.session.destroy(error => error ? reject(error) : resolve())); res.json({ redirect: '/admin/login' }); });
+		Ai.mountAdmin(router);
 		router.get('/', async (req, res) => res.render('admin/accounts', await AdminAccounts.list(req.query)));
 		router.get('/api/accounts', async (req, res) => res.json(await AdminAccounts.list(req.query)));
 		router.get('/api/accounts/new/form', (req, res) => res.render('ajax/admin-account-form', { account: null, password: Security.generatedPassword() }));

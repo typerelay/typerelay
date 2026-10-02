@@ -41,6 +41,7 @@
   },
   "bundle": {
     "active": true,
+    "resources": { "../../../docs/desktop/ai-notices.txt": "licenses/native-ai.txt" },
     "targets": "all",
     "icon": [
       "icons/icon.png",

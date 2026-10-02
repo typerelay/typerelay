@@ -1,5 +1,6 @@
 import { send } from './messages.js';
 import { promptFields } from './prompt.js';
+import { AiClient } from './ai.js';
 
 const $ = selector => document.querySelector(selector);
 let items = [];
@@ -7,6 +8,10 @@ let matches = [];
 let selectedIndex = -1;
 let openingOptions = false;
 let copying = false;
+let aiOrigin='';
+const ai=new AiClient({request:(path,method='GET',body)=>send({type:'ai-request',path,method,body}),identity:()=>aiOrigin+':'+ai.status?.identity?.account+':'+ai.status?.identity?.user,notify:(message,icon)=>Swal.fire({toast:true,position:"top-end",title:message,icon:icon||"success",timer:4000,showConfirmButton:false}),manage:()=>chrome.tabs.create({url:aiOrigin+'/?account='+encodeURIComponent(ai.status?.identity?.account||'')+'#settings-ai'})});
+ai.bindSearch(document.querySelector('[data-ai-search]'),async()=>({libraries:[...new Set(items.map(item=>item.library))]}),async result=>{const current=await send({type:'snapshot'});const item=current.items?.find(item=>item.id===result.id&&item.library===result.library);if(!item||item.revision!==result.revision)throw Error('This snippet changed. Sync and search again.');await copy(item);});
+void send({type:'status'}).then(async value=>{aiOrigin=value.origin;if(value.connected)await ai.refresh();document.querySelector('#ai-create').href=aiOrigin+'/?account='+encodeURIComponent(ai.status?.identity?.account||'')+'#ai-create';}).catch(()=>ai.update());
 
 function status(message) { $('#status').textContent = message; $('#status').hidden = !message; }
 
@@ -135,3 +140,5 @@ $('#search').addEventListener('keydown', event => {
 	if (event.key === 'Enter' && !event.isComposing && !event.repeat && selectedIndex >= 0) { event.preventDefault(); void copy(matches[selectedIndex]); }
 });
 void refresh().catch(error => status(error.message));
+
+chrome.storage.onChanged.addListener((changes,area)=>{const old=changes.tokens?.oldValue;const next=changes.tokens?.newValue;if(area==="local"&&(changes.server||changes.origin||(changes.tokens&&(!old||!next||old.account!==next.account||old.device!==next.device)))){ai.reset();void send({type:"status"}).then(async value=>{aiOrigin=value.origin;if(value.connected)await ai.refresh();}).catch(()=>ai.update());}});

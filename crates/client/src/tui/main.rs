@@ -1,4 +1,5 @@
 mod app;
+mod ai_dialog;
 mod template_dialog;
 mod terminal;
 use anyhow::{Result, ensure};
@@ -32,6 +33,7 @@ impl Cli {
         let mut dirty = true;
         let mut sync_status = Vec::new();
         while !app.quit && running.load(Ordering::SeqCst) && terminal::TerminalSession::connected() {
+            if app.ai_tick() { dirty = true; }
             if let Ok(next) = database.generation() && next != generation { generation = next; app.refresh(); dirty = true; }
             let next_status = Paths::config_dir().ok().and_then(|root| std::fs::read(root.join("sync/status")).ok()).unwrap_or_default();
             if next_status != sync_status { sync_status = next_status; dirty = true; }

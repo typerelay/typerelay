@@ -1,0 +1,14 @@
+section.ai-search.mb-3(data-ai-search)
+	details
+		summary.cursor-pointer AI search
+		p.text-muted.small.mt-3(data-ai-effective="search")
+		label.form-label
+			span Describe the snippet you need, or paste context
+			textarea.form-control.form-control-sm(data-ai-query rows="2" maxlength="4000")
+		div(data-ai-local-libraries hidden)
+			p.small Select local-only libraries to include in this request. Their text is sent to your server and the selected AI provider.
+			div(data-ai-local-choices)
+		.d-flex.justify-content-end.mt-3
+			button.btn.btn-outline-primary.btn-sm(type="button" data-ai-search-run) Find snippets
+		p.text-muted.small(data-ai-search-status role="status")
+		div(data-ai-results)

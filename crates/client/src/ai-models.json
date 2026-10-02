@@ -1,0 +1,41 @@
+[
+  {
+    "id": "qwen3.5-2b-gguf",
+    "name": "Qwen 3.5 2B",
+    "publisher": "unsloth",
+    "repository": "unsloth/Qwen3.5-2B-GGUF",
+    "revision": "f6d5376be1edb4d416d56da11e5397a961aca8ae",
+    "filename": "Qwen3.5-2B-Q4_K_M.gguf",
+    "bytes": 1280835840,
+    "sha256": "aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223",
+    "license": "apache-2.0",
+    "recommended": false,
+    "ram_bytes": null
+  },
+  {
+    "id": "qwen3.5-4b-gguf",
+    "name": "Qwen 3.5 4B",
+    "publisher": "unsloth",
+    "repository": "unsloth/Qwen3.5-4B-GGUF",
+    "revision": "e87f176479d0855a907a41277aca2f8ee7a09523",
+    "filename": "Qwen3.5-4B-Q4_K_M.gguf",
+    "bytes": 2740937888,
+    "sha256": "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4",
+    "license": "apache-2.0",
+    "recommended": true,
+    "ram_bytes": null
+  },
+  {
+    "id": "gemma-4-e2b-it-qat-q4_0-gguf",
+    "name": "Gemma 4 E2B",
+    "publisher": "google",
+    "repository": "google/gemma-4-E2B-it-qat-q4_0-gguf",
+    "revision": "675cff42a74c774d6cb76f76d8eacb49b48c9b93",
+    "filename": "gemma-4-E2B_q4_0-it.gguf",
+    "bytes": 3349516256,
+    "sha256": "fa401b55b07ee70a54c6dae3903c783a6e65064312529ea57175cb5f8dec6634",
+    "license": "apache-2.0",
+    "recommended": false,
+    "ram_bytes": null
+  }
+]

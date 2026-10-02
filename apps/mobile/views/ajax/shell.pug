@@ -28,6 +28,7 @@ main.mobile-app#workspace
 					span.material-symbols-outlined close
 			select#library.visually-hidden(aria-label="Selected snippet library")
 				option(value="") All libraries
+			include ../../../server/views/ajax/ai-search.pug
 			#library-filters.library-filters(role="group" aria-label="Filter by library")
 				button.library-filter.is-active(type="button" data-library-filter="") All
 			.notice-stack
@@ -57,6 +58,7 @@ main.mobile-app#workspace
 				div
 					span.eyebrow TypeRelay
 					h1 Settings
+			include ../../../server/views/ajax/ai-controls.pug
 			section.settings-section
 				header.settings-section-header
 					span.settings-icon

@@ -1,4 +1,5 @@
 import { PasswordField } from './password-field.js';
+import { AiClient } from './ai.js';
 
 export class AdminUI {
 	static versions = new Map();
@@ -125,3 +126,4 @@ export class AdminUI {
 	static start() { document.addEventListener('submit', AdminUI.submit); document.addEventListener('click', AdminUI.click); document.addEventListener('keydown', AdminUI.panelKeys); window.addEventListener('hashchange', AdminUI.restorePanel); AdminUI.restorePanel(); if (document.getElementById('admin-accounts')) setInterval(AdminUI.poll, 3000); }
 }
 AdminUI.start();
+if (document.querySelector('[data-ai-settings]')) { AdminUI.ai = new AiClient({ admin: true, request: (path, method, body) => AdminUI.request('/admin/api/ai' + path, method, body), identity: () => 'installation:' + location.origin, notify: (message, icon = 'success') => Swal.fire({ toast: true, icon, title: message, timer: 4000, showConfirmButton: false }), manage: () => {} }); AdminUI.ai.loadSettings(document.querySelector('[data-ai-settings]')).catch(error => AdminUI.toast(error.message)); }

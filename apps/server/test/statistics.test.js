@@ -1,6 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { parse } from 'csv-parse/sync';
 import { mongoose, Account, User, Member, Library, Snippet, UsageEvent, StatisticsPreference } from '../model/index.js';
 import { Statistics } from '../services/statistics.js';
 import { Support } from '../services/support.js';
@@ -29,6 +30,7 @@ test('defaults, estimates, validation and CSV formula escaping', () => {
 	assert.throws(() => Statistics.options({ timezone: 'bad-zone' }));
 	const csv = Statistics.csv({ settings: Statistics.defaults, days: [], snippets: [{ name: '=SUM(1)', library: 'a,"b', uses: 1, copies: 1, insertions: 0, characters: 1, minutes: 1, money: 0.5 }], libraries: [], members: [] });
 	assert.match(csv, /'=SUM/); assert.match(csv, /a,""b/);
+	const exported = parse(csv); assert.deepEqual(exported[0], ['Report', 'Name', 'Library', 'Uses', 'Characters saved', 'Estimated minutes saved', 'Estimated money saved', 'Currency', 'WPM', 'Hourly rate']); assert.equal(exported[1].length, exported[0].length); assert.equal(exported[1][2], 'a,"b'); assert.deepEqual(exported[1].slice(3), ['1', '1', '1.00', '0.50', 'USD', '50', '30']);
 });
 test('retry deduplication, account binding and personal/team isolation', async () => {
 	const event = Fixture.event(Fixture.shared);
@@ -38,6 +40,7 @@ test('retry deduplication, account binding and personal/team isolation', async (
 	await Statistics.ingest(Fixture.owner, { events: [Fixture.event(Fixture.private, { action: 'copy' })] });
 	await Statistics.ingest(Fixture.member, { events: [Fixture.event(Fixture.shared, { characters: 250 })] });
 	const personal = await Statistics.report(Fixture.owner, Fixture.query); assert.equal(personal.totals.uses, 2); assert.equal(personal.totals.money, 60);
+	assert.equal(personal.totals.copies, 1); assert.equal(personal.totals.insertions, 1); const total = parse(Statistics.csv(personal)).find(row => row[0] === 'totals'); assert.deepEqual(total.slice(3, 7), ['2', '30000', '120.00', '60.00']);
 	const member = await Statistics.report(Fixture.member, Fixture.query); assert.equal(member.totals.uses, 1);
 	const team = await Statistics.report(Fixture.owner, { ...Fixture.query, scope: 'team' }); assert.equal(team.totals.uses, 2); assert.equal(team.members.length, 2); assert.equal(team.snippets.length, 1); assert.equal(team.snippets[0].name, 'shared'); assert.equal(team.libraries[0].name, 'shared');
 	await assert.rejects(Statistics.report(Fixture.member, { ...Fixture.query, scope: 'team' }), /Admin required/);

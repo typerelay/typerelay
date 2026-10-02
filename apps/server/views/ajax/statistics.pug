@@ -26,16 +26,57 @@
 					.col-md-3.mb-3(data-statistics-custom hidden)
 						label.form-label(for="statistics-end") End date
 						input#statistics-end.form-control.form-control-sm(type="date" name="end")
-					.col-12.d-flex.justify-content-end
+					.col-12.col-md-auto.ms-md-auto.d-flex.justify-content-end.mb-3.statistics-filter-actions
 						button#statistics-export.btn.btn-outline-secondary.btn-sm.me-3(type="button") Export CSV
 						button.btn.btn-primary.btn-sm(type="submit") Refresh
-				#statistics-summary.row.mb-5(aria-live="polite")
-					each label, key in { uses: 'Total uses', copies: 'Copies', insertions: 'Insertions', characters: 'Characters saved', minutes: 'Estimated minutes saved', money: 'Estimated money saved' }
-						.col-sm-6.col-lg-4.mb-3
-							div.text-muted= label
-							strong(data-statistics-total=key) —
-				p#statistics-estimate.text-muted.small
-				p.text-muted.small Counts successful copies and insertions from synced libraries since this update. Copying does not confirm pasting. Offline activity appears after synchronization. Time and money savings are estimates; images and Enter key actions add no text savings.
+				#statistics-summary.row.g-3(aria-live="polite")
+					each label, key in { uses: 'Uses', characters: 'Characters saved', minutes: 'Time saved', money: 'Money saved' }
+						.col-6.col-lg-3
+							.statistics-metric.h-100
+								.statistics-metric-label
+									svg(viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false")
+										if key === 'minutes'
+											circle(cx="12" cy="12" r="9")
+										path(d={ uses: 'M13 2 3 14h8l-1 8 11-12h-8l1-8Z', characters: 'M4 5V3h16v2M12 3v18M8 21h8', minutes: 'M12 8v4l3 2', money: 'M20 8V5a2 2 0 0 0-2-2H6a3 3 0 0 0 0 6h14v12H6a3 3 0 0 1-3-3V6M20 12h-5v5h5M16 14.5h.01' }[key])
+									span= label
+								.statistics-metric-value
+									strong(data-statistics-total=key) —
+									if key === 'minutes'
+										span.small.text-muted.ms-1 min
+				p#statistics-estimate.text-muted.small.mt-3.mb-5
+				p#statistics-empty.text-muted No usage in this period.
+				section#statistics-trend-section.statistics-trend-section.mb-5(hidden)
+					.d-flex.flex-wrap.align-items-center.justify-content-between.gap-2.mb-3
+						h2.h6.mb-0 Usage over time
+						span#statistics-trend-period.small.text-muted
+					svg#statistics-trend.statistics-trend(role="img" aria-labelledby="statistics-trend-title statistics-trend-description")
+						title#statistics-trend-title Daily Uses
+						desc#statistics-trend-description
+						defs
+							linearGradient#statistics-trend-gradient(x1="0" y1="0" x2="0" y2="1")
+								stop(offset="0" stop-color="currentColor" stop-opacity=".18")
+								stop(offset="1" stop-color="currentColor" stop-opacity=".02")
+						text.statistics-trend-axis(x="0" y="14") Uses
+						each index in [0, 1, 2, 3]
+							line.statistics-trend-grid(data-statistics-grid=index)
+							text.statistics-trend-axis(data-statistics-y=index text-anchor="end")
+						path.statistics-trend-area(fill="url(#statistics-trend-gradient)")
+						path.statistics-trend-line
+						circle.statistics-trend-point(r="4" visibility="hidden")
+						each index in [0, 1, 2, 3]
+							text.statistics-trend-axis(data-statistics-x=index)
+				div#statistics-tables
+					each label, kind in { days: 'Daily activity', snippets: 'Snippets', libraries: 'Libraries', members: 'Members' }
+						section.mb-5(data-statistics-section=kind hidden=kind === 'members')
+							h2.h6= label
+							.table-responsive
+								table.table.table-sm.statistics-table
+									thead
+										tr
+											each title, key in { name: 'Name', uses: 'Uses', characters: 'Characters', minutes: 'Minutes saved', money: 'Money saved' }
+												th(scope="col")
+													button.btn.btn-sm.btn-link.p-0(type="button" data-statistics-sort=key data-statistics-kind=kind)= kind === 'days' && key === 'name' ? 'Date' : title
+									tbody(data-statistics-rows=kind)
 				form#statistics-preferences.mb-5
 					h2.h6 Estimate settings
 					.row.align-items-center
@@ -52,16 +93,4 @@
 									option(value=currency selected=currency === 'USD')= currency === 'USD' ? 'USD ($)' : currency
 					.d-flex.justify-content-end
 						button.btn.btn-primary.btn-sm(type="submit") Save
-				p#statistics-empty.text-muted No usage in this period.
-				div#statistics-tables
-					each label, kind in { days: 'Daily activity', snippets: 'Snippets', libraries: 'Libraries', members: 'Members' }
-						section.mb-5(data-statistics-section=kind hidden=kind === 'members')
-							h2.h6= label
-							.table-responsive
-								table.table.table-sm
-									thead
-										tr
-											each title, key in { name: 'Name', uses: 'Uses', copies: 'Copies', insertions: 'Insertions', characters: 'Characters', minutes: 'Minutes saved', money: 'Money saved' }
-												th(scope="col")
-													button.btn.btn-sm.btn-link.p-0(type="button" data-statistics-sort=key data-statistics-kind=kind)= title
-									tbody(data-statistics-rows=kind)
+				p.text-muted.small Uses include successful copies and insertions from synced libraries since this update. Copying does not confirm pasting. Offline activity appears after synchronization. Time and money savings are estimates; images and Enter key actions add no text savings.

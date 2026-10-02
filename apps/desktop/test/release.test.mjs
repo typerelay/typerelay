@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { PanelRelease, SigningBridge } from '../../../scripts/release-panel.mjs';
+import { NativeTools } from '../scripts/stage-native-tools.mjs';
 import { DesktopVersion } from '../../../scripts/desktop-version.mjs';
 
 test('release mode requires the right host and rejects publishing/unsupported targets', () => {
@@ -65,7 +66,7 @@ test('release tooling creates signed updater artifacts for every supported platf
 	const source = await fs.readFile(path.join(PanelRelease.root, 'scripts/release-panel.mjs'), 'utf8');
 	const config = JSON.parse(await fs.readFile(path.join(PanelRelease.root, 'apps/desktop/src-tauri/tauri.conf.json'), 'utf8'));
 	assert.match(source, /createUpdaterArtifacts: true/);
-	assert.match(source, /TypeRelay-Omarchy-\$\{config\.version\}-x86_64\.tar\.gz/);
+	assert.match(source, /TypeRelay-Linux-legacy-\$\{config\.version\}-x86_64\.tar\.gz/);
 	assert.match(source, /windows-x86_64/);
 	assert.match(source, /darwin-aarch64/);
 	assert.match(source, /TypeRelay_\$\{config\.version\}_\$\{macArchitecture\}\.app\.tar\.gz/);
@@ -96,4 +97,25 @@ test('changing only the desktop package version changes the release version', as
 		DesktopVersion.root=root;
 		assert.equal(await DesktopVersion.version(),'9.8.7');assert.equal((await DesktopVersion.config()).version,'9.8.7');
 	}finally{DesktopVersion.root=originalRoot;await fs.rm(root,{recursive:true,force:true});}
+});
+
+test('Linux packages stage the engine and TUI together for all formats', async () => {
+	const plan = NativeTools.plan('x86_64-unknown-linux-gnu', { environment: {} });
+	assert.equal(plan.command, 'cargo');
+	assert.deepEqual(plan.args.slice(-6), ['--bin', 'typerelay', '--bin', 'typerelay-tui', '--bin', 'typerelay-ai']);
+	assert.deepEqual(plan.files.map(file => path.basename(file.destination)), ['typerelay-x86_64-unknown-linux-gnu', 'typerelay-tui-x86_64-unknown-linux-gnu', 'typerelay-ai-x86_64-unknown-linux-gnu']);
+	assert.equal(NativeTools.hostTarget('linux', 'x64'), 'x86_64-unknown-linux-gnu');
+	const config = JSON.parse(await fs.readFile(path.join(PanelRelease.root, 'apps/desktop/src-tauri/tauri.linux.conf.json'), 'utf8'));
+	assert.deepEqual(config.bundle.externalBin, ['binaries/typerelay', 'binaries/typerelay-tui', 'binaries/typerelay-ai']);
+	assert.equal(config.build.beforeBundleCommand, 'node scripts/stage-native-tools.mjs');
+});
+
+test('legacy updater panel does not inherit the last packaged format', () => {
+	for (const format of ['APP', 'DEB', 'RPM', 'UNK']) {
+		const bytes = Buffer.from(`before__TAURI_BUNDLE_TYPE_VAR_${format}after`);
+		const legacy = PanelRelease.legacyPanel(bytes);
+		assert.equal(legacy.toString(), 'before__TAURI_BUNDLE_TYPE_VAR_UNKafter');
+		assert.equal(legacy.length, bytes.length);
+		assert.equal(bytes.toString(), `before__TAURI_BUNDLE_TYPE_VAR_${format}after`);
+	}
 });

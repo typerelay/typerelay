@@ -6,42 +6,116 @@ import pug from 'pug';
 
 class Fixture {
  static async create() {
-  const dom=new JSDOM(pug.renderFile('ui/index.pug'),{runScripts:'outside-only',pretendToBeVisual:true});
+  const dom=new JSDOM(pug.renderFile('ui/index.pug'),{url:'http://tauri.localhost',runScripts:'outside-only',pretendToBeVisual:true});
   const calls=[];const callbacks={};const pending=[];
   const style=dom.window.document.createElement('style');style.textContent=await readFile('ui/panel.css','utf8');dom.window.document.head.append(style);
   dom.window.HTMLElement.prototype.scrollIntoView=()=>{};
 	  dom.window.Swal={fire:async()=>({isConfirmed:true})};
-  dom.window.__TAURI__={core:{invoke:async(name,args)=>{calls.push({name,args});if(name==='initialize')return{config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},theme:{os:'linux'},settings:false,accessibility:false,input_monitoring:false,empty:false,version:'1.2.0'};if(name==='search')return new Promise(resolve=>pending.push({query:args.query,resolve}));if(name==='libraries'||name==='conflicts')return[];if(name==='prepare_template')return{fields:[],steps:[{kind:'text',text:'Literal'}],text:'Literal',enter_actions:0,template:{text:'Literal',variables:{}}};return null;}},event:{listen:(name,callback)=>{callbacks[name]=callback;}}};
-  dom.window.eval((await readFile('ui/panel.js','utf8')).replace('new Panel();','window.panel = new Panel();'));
+  dom.window.__TAURI__={core:{invoke:async(name,args)=>{calls.push({name,args});if(name==='initialize')return{config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},theme:{os:'linux'},settings:false,accessibility:false,input_monitoring:false,empty:false,version:'1.2.0'};if(name==='search')return new Promise(resolve=>pending.push({query:args.query,resolve}));if(name==='native_ai')return{model:null,models:[{id:'small',name:'Small',bytes:1000000,publisher:'test',license:'apache-2.0',recommended:true,installed:false,downloaded:0}],download:null};if(name==='libraries'||name==='conflicts')return[];if(name==='prepare_template')return{fields:[],steps:[{kind:'text',text:'Literal'}],text:'Literal',enter_actions:0,template:{text:'Literal',variables:{}}};return null;}},event:{listen:(name,callback)=>{callbacks[name]=callback;}}};
+  dom.window.eval((await readFile('ui/panel.js','utf8')).replace("import { AiClient } from './ai.js';",'').replace('new Panel();','window.panel = new Panel();'));
   await new Promise(resolve=>setTimeout(resolve,0));
   return {dom,panel:dom.window.panel,calls,pending,callbacks};
  }
  static hit(id){return{id,library:'one',revision:2,library_name:'Personal',title:'Title '+id,abbreviation:id,preview:'<b>literal</b>\n\tCode'};}
 }
 
-test('personal abbreviation save updates the selected result without rebuilding search or other rows',async()=>{
- const {dom,panel,calls}=await Fixture.create();
- try {
-  const hit={...Fixture.hit('one'),can_personal:true,personal:{revision:0,trigger:null,conflicts:[]}};
-  panel.rows=[hit,Fixture.hit('two')];panel.render();
-  const list=panel.list;const sibling=list.children[1];const original=list.children[0];
-  const invoke=panel.invoke;panel.invoke=async(name,args)=>{if(name==='personal_abbreviation')return{shared_trigger:'tw',can_edit:true,personal:{revision:0,trigger:args.change?.trigger||null,pending:!!args.change,conflicts:[]}};return invoke(name,args);};
-  await panel.openPersonal(hit);dom.window.document.querySelector('#personal-trigger').value='mine';
-  const searches=calls.filter(call=>call.name==='search').length;
-  panel.render=()=>{throw Error('No whole-list render allowed');};
-  await panel.savePersonal();
-  assert.equal(panel.list,list);assert.equal(list.children[0],original);assert.equal(list.children[1],sibling);
-  assert.equal(original.querySelector('.result-abbreviation').textContent,'mine');
-  assert.match(original.querySelector('.result-personal-status').textContent,/waiting to sync/);
-  assert.equal(calls.filter(call=>call.name==='search').length,searches);
- } finally {dom.window.close();}
+test('native AI uses one input and never exposes remote authoring or provider controls',async()=>{
+ const f=await Fixture.create();try{
+  const document=f.dom.window.document;
+  assert.equal(document.querySelectorAll('input[type="search"]').length,1);
+  assert.equal(document.querySelector('#ai-create,#ai-edit,[data-ai-search],[data-ai-controls]'),null);
+  assert.ok(document.querySelector('#native-model'));
+  assert.equal(f.calls.some(call=>['ai_request','ai_web','ai_inventory'].includes(call.name)),false);
+ }finally{f.dom.window.close();}
 });
 
+test('combined search updates retain matching nodes, selection, focus and scroll and reject stale replies',async()=>{
+ const f=await Fixture.create();try{
+  f.panel.aiStatus={model:'small'};f.panel.query.value='describe a reply';f.panel.rows=[Fixture.hit('one'),Fixture.hit('two')];f.panel.index=1;f.panel.render();f.panel.query.focus();f.panel.list.scrollTop=25;
+  const node=f.panel.list.children[1];const sequence=f.panel.sequence;let finish;f.panel.invoke=async(name,args)=>{if(name==='search')return new Promise(resolve=>{finish=resolve;});throw Error('No section loader or unrelated command allowed');};
+  const task=f.panel.search(sequence);finish([Fixture.hit('two'),Fixture.hit('three')]);await task;
+  assert.equal(f.panel.rows[f.panel.index].id,'two');assert.equal(f.panel.list.children[0],node);assert.equal(f.dom.window.document.activeElement,f.panel.query);assert.equal(f.panel.list.scrollTop,25);
+  const stale=f.panel.search(sequence);f.panel.sequence++;finish([Fixture.hit('stale')]);await stale;assert.equal(f.panel.rows[0].id,'two');
+ }finally{f.dom.window.close();}
+});
+
+test('search runs immediately, coalesces typing and publishes only the latest list',async()=>{
+ const f=await Fixture.create();try{
+  f.panel.query.value='first';const task=f.panel.search(f.panel.sequence);assert.equal(f.pending.length,1);assert.equal(f.dom.window.document.querySelector('#hint').textContent,'Searching…');
+  f.panel.query.value='second';f.panel.query.dispatchEvent(new f.dom.window.Event('input'));f.panel.query.value='latest';f.panel.query.dispatchEvent(new f.dom.window.Event('input'));assert.equal(f.pending.length,1);
+  f.pending[0].resolve([Fixture.hit('stale')]);await new Promise(resolve=>setTimeout(resolve,0));assert.equal(f.pending.length,2);assert.equal(f.pending[1].query,'latest');assert.equal(f.panel.rows.length,0);
+  f.pending[1].resolve([Fixture.hit('latest')]);await task;assert.equal(f.panel.rows[0].id,'latest');assert.equal(f.panel.searching,false);assert.equal(f.calls.some(call=>call.args?.request?.op==='search'),false);assert.equal(f.calls.filter(call=>call.name==='search').length,2);
+ }finally{f.dom.window.close();}
+});
+
+test('cancelled model consent starts no download',async()=>{
+ const f=await Fixture.create();try{
+  f.dom.window.Swal.fire=async()=>({isConfirmed:false});await f.panel.modelAction('download',f.dom.window.document.querySelector('#native-enable'));assert.equal(f.calls.some(call=>call.args?.request?.op==='download'),false);
+ }finally{f.dom.window.close();}
+});
+
+test('AI checkbox and model rows update in place without reloading settings',async()=>{
+ const f=await Fixture.create();try{
+  const document=f.dom.window.document;const checkbox=document.querySelector('#native-ai-enabled');const card=document.querySelector('#native-ai-card');const row=document.querySelector('#native-model').firstElementChild;
+  const status={enabled:false,model:null,models:[{id:'small',name:'Small',bytes:1000000,installed:true,downloaded:0}],download:null};
+  f.panel.aiStatus=status;f.panel.modelInfo();assert.equal(card.hidden,true);assert.equal(checkbox.checked,false);
+  const requests=[];let finish;
+  f.panel.invoke=async(name,args)=>{assert.equal(name,'native_ai');requests.push(args.request);if(args.request.op==='status')return status;return new Promise(resolve=>{finish=()=>{status.enabled=args.request.op==='enable';status.model=status.enabled?'small':null;resolve();};});};
+  f.panel.render=()=>{throw Error('No whole-view rendering');};f.panel.settings=()=>{throw Error('No settings reload');};
+  checkbox.checked=true;const pending=f.panel.modelAction('enable',checkbox);assert.equal(card.hidden,false);assert.equal(checkbox.disabled,true);
+  await f.panel.refreshAi();assert.equal(checkbox.checked,true);assert.equal(checkbox.disabled,true);
+  await f.panel.modelAction('enable',checkbox);assert.equal(requests.filter(request=>request.op==='enable').length,1);
+  finish();await pending;assert.equal(checkbox.checked,true);assert.equal(checkbox.disabled,false);assert.equal(document.querySelector('#native-download-area').hidden,true);assert.equal(row.querySelector('.native-model-downloaded').hidden,false);
+  checkbox.checked=false;const disabling=f.panel.modelAction('disable',checkbox);finish();await disabling;assert.equal(card.hidden,true);
+  assert.equal(document.querySelector('#native-ai-card'),card);assert.equal(document.querySelector('#native-model').firstElementChild,row);
+  assert.equal(document.querySelector('#native-remove,#native-disable'),null);
+  status.enabled=true;status.models[0].installed=false;f.panel.modelInfo();assert.equal(row.querySelector('.native-model-downloaded').hidden,true);assert.equal(card.hidden,false);assert.equal(document.querySelector('#native-enable').textContent,'Download 0.00 GB Model');assert.equal(document.querySelector('#native-enable').hidden,false);
+  assert.equal(f.dom.window.getComputedStyle(document.querySelector('#settings-advanced')).overflowY,'auto');
+ }finally{f.dom.window.close();}
+});
+
+test('Advanced cards retain controls and save through the existing settings form',async()=>{
+ const f=await Fixture.create();try{
+  await f.panel.settings(true);const document=f.dom.window.document;const form=document.querySelector('#settings-form');const keyboard=document.querySelector('#keyboard');const shortcut=document.querySelector('#shortcut');
+  assert.equal(document.querySelector('#native-model').closest('.settings-page').id,'settings-advanced');assert.equal(keyboard.closest('.settings-page').id,'settings-advanced');
+  assert.equal(document.querySelector('#ai-settings-card h2').textContent,'AI options');assert.equal(document.querySelector('#keyboard-card h2').textContent,'Miscellaneous');assert.equal(document.querySelector('#shortcut-help').previousElementSibling,shortcut);
+  assert.equal(document.querySelector('#settings-sync [data-about-url="\u0023statistics"]'),null);
+  f.panel.render=()=>{throw Error('Settings tab switches and saves must retain existing views');};document.querySelector('[data-settings-tab="advanced"]').click();
+  assert.equal(document.querySelector('#settings-advanced').hidden,false);assert.equal(document.querySelector('#settings-general').hidden,true);assert.equal(document.querySelector('#keyboard'),keyboard);
+  const save=document.querySelector('#keyboard-card button[type="submit"]');assert.equal(save.form,form);save.click();await new Promise(resolve=>setTimeout(resolve,0));
+  assert.ok(f.calls.some(call=>call.name==='save_settings'));assert.equal(document.querySelector('#settings-form'),form);assert.equal(document.querySelector('#shortcut'),shortcut);assert.equal(document.querySelector('#settings-advanced').hidden,false);
+ }finally{f.dom.window.close();}
+});
+
+test('keyboard selection saves any device and preserves the settings form and search results',async()=>{
+ const f=await Fixture.create();try{
+  const config={shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false,keyboard:'Composite device'};
+  f.panel.rows=[Fixture.hit('one')];f.panel.configure({config,theme:{os:'linux'},keyboards:['Laptop device','Composite device']});
+  const select=f.dom.window.document.querySelector('#keyboard');const form=f.dom.window.document.querySelector('#settings-form');const result=f.panel.list.firstElementChild;
+  const selected=select.selectedOptions[0];assert.equal(select.value,'Composite device');assert.equal(f.dom.window.document.querySelector('#keyboard-setting').hidden,false);
+  f.panel.configureKeyboard({config,theme:{os:'linux'},keyboards:['Composite device','Another device']});assert.equal(select.selectedOptions[0],selected);assert.equal(f.panel.list.firstElementChild,result);
+  select.value='Another device';f.panel.render=()=>{throw Error('No surrounding view render allowed');};form.dispatchEvent(new f.dom.window.Event('submit',{cancelable:true}));await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(f.calls.find(call=>call.name==='save_settings').args.config.keyboard,'Another device');assert.equal(f.dom.window.document.querySelector('#settings-form'),form);assert.equal(f.panel.list.firstElementChild,result);
+  f.panel.configureKeyboard({config,theme:{os:'macos'},keyboards:[]});assert.equal(f.dom.window.document.querySelector('#keyboard-setting').hidden,true);assert.equal(select.value,'Composite device');
+ }finally{f.dom.window.close();}
+});
+
+test('search has no magnifier or reserved left icon space',async()=>{
+ const f=await Fixture.create();try{
+  const document=f.dom.window.document;assert.equal(document.querySelector('.search-icon'),null);f.panel.query.value='meeting';f.panel.query.focus();f.panel.render();assert.equal(document.querySelector('#clear-search').hidden,false);assert.equal(f.dom.window.getComputedStyle(f.panel.query).paddingLeft,'0.85rem');document.querySelector('#clear-search').click();assert.equal(document.querySelector('.search-icon'),null);assert.equal(document.activeElement,f.panel.query);
+ }finally{f.dom.window.close();}
+});
+
+test('search results have no abbreviation editor and Clear keeps focus',async()=>{
+ const f=await Fixture.create();try{
+  f.panel.rows=[{...Fixture.hit('one'),can_personal:true}];f.panel.query.value='meeting';f.panel.render();assert.equal(f.dom.window.document.querySelector('.result-personal,#personal-view'),null);assert.equal(f.dom.window.document.querySelector('.result-library').tagName,'SPAN');f.dom.window.document.querySelector('#clear-search').click();assert.equal(f.panel.query.value,'');assert.equal(f.dom.window.document.activeElement,f.panel.query);assert.equal(f.panel.rows.length,0);
+ }finally{f.dom.window.close();}
+});
 test('stale search cannot insert an old result; Enter waits for current query',async()=>{
  const f=await Fixture.create();try {
   f.panel.query.value='old';const old=f.panel.search(0);f.pending[0].resolve([Fixture.hit('old')]);await old;
   f.panel.query.value='new';f.panel.query.dispatchEvent(new f.dom.window.Event('input'));
-  assert.equal(f.panel.rows.length,0);
+  assert.equal(f.panel.list.inert,true);assert.equal(f.dom.window.document.querySelector('#hint').textContent,'Searching…');
   f.panel.insert();await new Promise(resolve=>setTimeout(resolve,0));
   assert.ok(!f.calls.some(call=>call.name==='insert'));
   const request=f.pending.find(item=>item.query==='new');request.resolve([Fixture.hit('new')]);
@@ -53,9 +127,9 @@ test('stale search cannot insert an old result; Enter waits for current query',a
 });
 test('late responses are ignored; keyboard selection, Copy and Escape use explicit commands',async()=>{
  const f=await Fixture.create();try{
-  const old=f.panel.search(0);f.panel.sequence=1;const next=f.panel.search(1);
-  f.pending[1].resolve([Fixture.hit('one'),Fixture.hit('two')]);await next;
-  f.pending[0].resolve([Fixture.hit('stale')]);await old;assert.equal(f.panel.rows[0].id,'one');
+  f.panel.query.value='old';const old=f.panel.search(0);f.panel.query.value='new';f.panel.sequence=1;const next=f.panel.search(1);
+  assert.equal(f.pending.length,1);f.pending[0].resolve([Fixture.hit('stale')]);await new Promise(resolve=>setTimeout(resolve,0));
+  f.pending[1].resolve([Fixture.hit('one'),Fixture.hit('two')]);await next;await old;assert.equal(f.panel.rows[0].id,'one');
   f.dom.window.document.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'ArrowDown'}));
   f.dom.window.document.querySelector('#copy').click();await new Promise(resolve=>setTimeout(resolve,0));
   assert.equal(f.calls.find(call=>call.name==='copy_snippet').args.hit.id,'two');
@@ -66,7 +140,7 @@ test('late responses are ignored; keyboard selection, Copy and Escape use explic
 
 test('Ctrl+C and Super+C copy the highlighted result while search has focus',async()=>{
  const f=await Fixture.create();try{
-  const search=f.panel.search(f.panel.sequence);f.pending[0].resolve([Fixture.hit('one'),Fixture.hit('two')]);await search;
+  f.panel.query.value='query';const search=f.panel.search(f.panel.sequence);f.pending[0].resolve([Fixture.hit('one'),Fixture.hit('two')]);await search;
   f.panel.query.focus();
   f.dom.window.document.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'ArrowDown'}));
   for(const modifier of [{ctrlKey:true},{metaKey:true}]){
@@ -88,10 +162,11 @@ test('copy waits for the current search and ignores empty or stale results',asyn
   const copy=new f.dom.window.KeyboardEvent('keydown',{key:'c',ctrlKey:true,bubbles:true,cancelable:true});
   f.panel.query.dispatchEvent(copy);
   assert.equal(copy.defaultPrevented,true);
+  f.pending.find(item=>item.query==='old').resolve([Fixture.hit('old')]);await new Promise(resolve=>setTimeout(resolve,0));
   const current=f.pending.find(item=>item.query==='new');
   assert.ok(current);
   current.resolve([Fixture.hit('new')]);await new Promise(resolve=>setTimeout(resolve,0));
-  f.pending.find(item=>item.query==='old').resolve([Fixture.hit('old')]);await old;
+  await old;
   assert.deepEqual(f.calls.filter(call=>call.name==='copy_snippet').map(call=>call.args.hit.id),['new']);
   f.panel.query.value='missing';f.panel.query.dispatchEvent(new f.dom.window.Event('input'));
   f.panel.query.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'c',metaKey:true,bubbles:true,cancelable:true}));
@@ -103,7 +178,7 @@ test('copy waits for the current search and ignores empty or stale results',asyn
 
 test('one result click inserts the clicked snippet',async()=>{
  const f=await Fixture.create();try{
-  const search=f.panel.search(f.panel.sequence);f.pending[0].resolve([Fixture.hit('one'),Fixture.hit('two')]);await search;
+  f.panel.query.value='query';const search=f.panel.search(f.panel.sequence);f.pending[0].resolve([Fixture.hit('one'),Fixture.hit('two')]);await search;
   f.panel.list.children[1].click();await new Promise(resolve=>setTimeout(resolve,0));
   assert.equal(f.calls.find(call=>call.name==='insert').args.hit.id,'two');
  }finally{f.dom.window.close();}
@@ -246,6 +321,7 @@ test('template fields wait for confirmation, retain literal answers and clear on
 
 test('manual sync relies on notifications without adding panel status',async()=>{
  const f=await Fixture.create();try{
+  f.panel.connection('connected');
   f.panel.lastStatus='';
   await f.dom.window.document.querySelector('#sync').onclick();
   assert.ok(f.calls.some(call=>call.name==='sync_now'));
@@ -257,8 +333,9 @@ test('manual sync relies on notifications without adding panel status',async()=>
 for(const os of ['macos','windows','linux'])test(`${os} native sync events update only the initiating button`,async()=>{
  const f=await Fixture.create();try{
   f.dom.window.document.body.dataset.os=os;
+  f.panel.connection('connected');
   const button=f.dom.window.document.querySelector('#sync');
-  const server=f.dom.window.document.querySelector('#server');server.value='https://example.test';server.focus();
+  const server=f.dom.window.document.querySelector('#server');server.value='https://example.test';f.panel.query.focus();
   const before=f.calls.length;
   f.callbacks['sync-notice']({payload:{message:'Starting to sync…',running:true,visible:true}});
   assert.equal(button.disabled,true);assert.equal(button.textContent,'Syncing…');
@@ -266,7 +343,7 @@ for(const os of ['macos','windows','linux'])test(`${os} native sync events updat
    f.callbacks['sync-notice']({payload:{message,running:false,visible:true}});
    assert.equal(button.disabled,false);assert.equal(button.textContent,'Sync now');
   }
-  assert.ok(f.calls.slice(before).every(call=>['libraries','conflicts'].includes(call.name)));assert.equal(server.value,'https://example.test');assert.equal(f.dom.window.document.activeElement,server);
+  assert.ok(f.calls.slice(before).every(call=>['libraries','conflicts'].includes(call.name)));assert.equal(server.value,'https://example.test');assert.equal(f.dom.window.document.activeElement,f.panel.query);
   f.callbacks['sync-notice']({payload:{message:'Sync successful',running:false,visible:false}});
  }finally{f.dom.window.close();}
 });
@@ -312,12 +389,38 @@ for(const os of ['macos','windows','linux'])test(`${os} search gear opens native
  }finally{f.dom.window.close();}
 });
 
-test('empty upload selection reports a native error without adding a footer or reloading settings',async()=>{
+test('library sync without a selection runs normally and retains the current tab and rows',async()=>{
  const f=await Fixture.create();try{
-  await f.panel.settings(true);f.panel.settingsPage('sync');const before=f.calls.length;
-	  f.dom.window.document.querySelector('#upload-selected').click();await new Promise(resolve=>setTimeout(resolve,0));
-  const calls=f.calls.slice(before);assert.deepEqual(JSON.parse(JSON.stringify(calls)),[{name:'notify',args:{message:'Select local libraries first',error:true}}]);
-  assert.equal(f.dom.window.document.querySelector('#status'),null);assert.equal(f.dom.window.document.querySelector('#settings-sync').hidden,false);
+  await f.panel.settings(true);f.panel.settingsPage('sync');f.panel.connection('connected');
+  const original=f.panel.invoke;f.panel.invoke=async(name,args)=>name==='libraries'?[{id:'remote',name:'Synced',synced:true,snippets:2},{id:'local',name:'Local',synced:false,snippets:1}]:original(name,args);await f.panel.refreshLibraries();
+  const document=f.dom.window.document;const container=document.querySelector('#local-libraries');const remote=container.children[0];const local=container.children[1];const button=document.querySelector('#sync');container.scrollTop=30;button.focus();
+  f.panel.settings=()=>{throw Error('No settings reload allowed');};f.panel.render=()=>{throw Error('No surrounding render allowed');};const before=f.calls.length;
+  await button.onclick();await f.callbacks['sync-notice']({payload:{running:false}});
+  assert.equal(f.calls.slice(before).filter(call=>call.name==='sync_now').length,1);assert.ok(!f.calls.slice(before).some(call=>['enroll','initialize','set_settings_view'].includes(call.name)));
+  assert.equal(document.querySelector('#settings-sync').hidden,false);assert.equal(container.children[0],remote);assert.equal(container.children[1],local);assert.equal(container.scrollTop,30);assert.equal(document.activeElement,button);
+  assert.equal(button.textContent,'Sync now');assert.equal(button.closest('#enroll-form').id,'enroll-form');assert.equal(button.closest('#local-libraries'),null);assert.equal(document.querySelector('#connect-form #sync'),null);assert.equal(document.querySelector('#upload-selected'),null);
+ }finally{f.dom.window.close();}
+});
+
+test('library sync enrolls only selected local libraries and updates their existing rows',async()=>{
+ const f=await Fixture.create();try{
+  await f.panel.settings(true);f.panel.settingsPage('sync');f.panel.connection('connected');let rows=[{id:'remote',name:'Synced',synced:true,snippets:2},{id:'local',name:'Local',synced:false,snippets:1},{id:'other',name:'Other',synced:false,snippets:3}];let enrolled;
+  const original=f.panel.invoke;f.panel.invoke=async(name,args)=>{if(name==='libraries')return structuredClone(rows);if(name==='enroll'){f.calls.push({name,args});return new Promise(resolve=>{enrolled=()=>{rows[1].synced=true;resolve();};});}return original(name,args);};await f.panel.refreshLibraries();
+  const document=f.dom.window.document;const container=document.querySelector('#local-libraries');const nodes=[...container.children];const input=nodes[1].querySelector('input');input.checked=true;container.scrollTop=30;const button=document.querySelector('#sync');button.focus();
+  f.panel.settings=()=>{throw Error('No settings reload allowed');};f.panel.render=()=>{throw Error('No surrounding render allowed');};const before=f.calls.length;const request=button.onclick();
+  assert.equal(button.disabled,true);assert.equal(button.textContent,'Syncing…');await f.callbacks['sync-notice']({payload:{running:false}});assert.equal(button.disabled,true);
+  enrolled();await request;
+  const calls=f.calls.slice(before);assert.deepEqual(JSON.parse(JSON.stringify(calls.find(call=>call.name==='enroll').args)),{names:['Local']});assert.equal(calls.filter(call=>call.name==='sync_now').length,1);assert.ok(!calls.some(call=>['initialize','set_settings_view'].includes(call.name)));
+  assert.deepEqual([...container.children],nodes);assert.equal(nodes[1].querySelector('.library-sync-state').textContent,'Synced');assert.equal(input.checked,false);assert.equal(input.disabled,true);assert.equal(nodes[2].querySelector('.library-sync-state').textContent,'Local only');assert.equal(container.scrollTop,30);assert.equal(document.activeElement,button);assert.equal(button.disabled,false);
+ }finally{f.dom.window.close();}
+});
+
+test('failed library enrollment preserves the selection and restores the sync control',async()=>{
+ const f=await Fixture.create();try{
+  f.panel.connection('connected');const original=f.panel.invoke;f.panel.invoke=async(name,args)=>{if(name==='libraries')return[{id:'local',name:'Local',synced:false,snippets:1}];if(name==='enroll')throw Error('Upload failed');return original(name,args);};await f.panel.refreshLibraries();
+  const container=f.dom.window.document.querySelector('#local-libraries');const row=container.firstElementChild;const input=row.querySelector('input');input.checked=true;container.scrollTop=30;const button=f.dom.window.document.querySelector('#sync');
+  await button.onclick();assert.equal(container.firstElementChild,row);assert.equal(input.checked,true);assert.equal(container.scrollTop,30);assert.equal(button.disabled,false);assert.equal(button.textContent,'Sync now');assert.ok(!f.calls.some(call=>call.name==='sync_now'));assert.equal(f.calls.findLast(call=>call.name==='notify').args.message,'Upload failed');
+  f.panel.connection('disconnected');await f.callbacks['sync-notice']({payload:{running:false}});assert.equal(button.disabled,true);
  }finally{f.dom.window.close();}
 });
 
@@ -351,15 +454,17 @@ test('notification settings show permission and remain reachable when enabled',a
  }finally{f.dom.window.close();}
 });
 
-test('connected clients can disconnect without dismissing the panel',async()=>{
+test('connected clients disconnect through the URL label row without reloading settings',async()=>{
  const f=await Fixture.create();try{
+  await f.panel.settings(true);f.panel.settingsPage('sync');
   f.panel.configure({config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},connected:true,accessibility:false,input_monitoring:false});
-  const button=f.dom.window.document.querySelector('#disconnect');assert.equal(button.hidden,false);assert.equal(button.disabled,false);
-  button.click();await new Promise(resolve=>setTimeout(resolve,0));
+  const document=f.dom.window.document;const button=document.querySelector('#disconnect');assert.equal(button.hidden,false);assert.equal(button.disabled,false);assert.equal(button.parentElement.querySelector('label').htmlFor,'server');assert.equal(document.querySelector('#connection-status').hidden,true);assert.equal(document.querySelector('#connection-status').textContent,'');
+  assert.equal(document.querySelector('#authenticate').parentElement,document.querySelector('#server').parentElement);f.panel.settings=()=>{throw Error('No settings reload allowed');};f.panel.render=()=>{throw Error('No surrounding render allowed');};const before=f.calls.length;
+  await button.onclick();
   assert.ok(f.calls.some(call=>call.name==='disconnect'));
   assert.equal((f.panel.lastStatus||''),'Disconnected');
-  assert.ok(!f.calls.some(call=>call.name==='dismiss'));
-  f.panel.configure({config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},connected:false,accessibility:false,input_monitoring:false});assert.equal(button.hidden,false);assert.equal(button.disabled,false);
+  assert.ok(!f.calls.slice(before).some(call=>['dismiss','initialize','set_settings_view'].includes(call.name)));assert.equal(document.querySelector('#settings-sync').hidden,false);assert.equal(document.querySelector('#sync').disabled,true);assert.equal(document.querySelector('#server').disabled,false);assert.equal(button.hidden,true);
+  f.panel.connection('authenticating');assert.equal(button.hidden,true);f.panel.connection('connected','Connected');assert.equal(button.hidden,false);assert.equal(document.querySelector('#connection-status').hidden,true);
  }finally{f.dom.window.close();}
 });
 

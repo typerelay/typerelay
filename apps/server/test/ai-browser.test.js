@@ -1,0 +1,221 @@
+// Frontend regression tests: intentionally left for user execution.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { JSDOM } from 'jsdom';
+import pug from 'pug';
+import { AiProvider } from '../ai/index.js';
+
+class BrowserFixture {
+	static status = { identity: { account: 'account', user: 'user' }, revisions: { personal: 0, team: 0, installation: 0 }, enabled: true, personal_enabled: true, team_enabled: true, installation_enabled: true, effective: { authoring: { name: 'Test', model: 'test', managed: false }, search: { name: 'Test', model: 'test', managed: false } } };
+	static settings = { enabled: true, revision: 0, routes: {}, connections: [{ id: 'a', name: 'A', provider: 'openai', key_configured: true }, { id: 'b', name: 'B', provider: 'openai', key_configured: true }], private_endpoints: [] };
+	static create(request, admin = false) {
+		const html = pug.renderFile('views/ajax/ai-settings.pug', { canManageTeam: false });
+		const dom = new JSDOM(html, { url: 'https://example.test', runScripts: 'outside-only', pretendToBeVisual: true }); const window = dom.window;
+		window.structuredClone = structuredClone; window.AbortController = AbortController; window.crypto.randomUUID = randomUUID; window.Swal = { fire: async () => ({ isConfirmed: true }) };
+		window.eval(readFileSync('node_modules/tom-select/dist/js/tom-select.complete.min.js', 'utf8'));
+		window.eval(readFileSync('public/ai.js', 'utf8').replace('export class AiClient', 'class AiClient') + '\nwindow.AiClient = AiClient;');
+		const errors = []; const client = new window.AiClient({ request, identity: () => 'fixture', notify: (message, icon) => { if (icon === 'error') errors.push(message); }, manage: () => {}, admin }); client.acceptStatus(structuredClone(BrowserFixture.status));
+		return { dom, window, document: window.document, client, errors };
+	}
+	static html(settings, scope = 'personal') { return pug.renderFile('views/ajax/ai-configuration.pug', { settings, scope, providers: AiProvider.catalog, protocols: AiProvider.protocols }); }
+	static tick() { return new Promise(resolve => setTimeout(resolve, 0)); }
+	static async editor(fixture, snippet = null) {
+		const library = { _id: 'library', name: 'Library', shared: false, permissions: { edit: true } };
+		const form = fixture.document.createElement('form'); form.id = 'record-form'; form.innerHTML = pug.renderFile('views/ajax/form.pug', { kind: 'snippet', library, snippet, destinations: [] }); fixture.document.body.append(form);
+		const style = fixture.document.createElement('style'); style.textContent = readFileSync('public/ai.css', 'utf8'); fixture.document.head.append(style);
+		fixture.window.eval(readFileSync('public/app.js', 'utf8').replace(/^import .*;$/gm, '').replace('const client = new TypeRelay();', '').replace('export { client };', 'window.TypeRelay = TypeRelay;'));
+		const web = Object.create(fixture.window.TypeRelay.prototype); web.ai = fixture.client; web.templateEditor = { variables: {} }; web.form = async () => {}; web.codeEditor = async () => {};
+		await web.editSnippet(library, snippet?.id);
+		web.form = web.request = web.poll = () => { throw new Error('No save, page, section, or library reload allowed'); };
+		return { form, root: form.querySelector('[data-ai-author]'), web };
+	}
+}
+
+test('new web snippets show only the compact AI prompt and Submit above regular fields', async () => {
+	const fixture = BrowserFixture.create(async () => ({ status: BrowserFixture.status }));
+	try {
+		const { form, root } = await BrowserFixture.editor(fixture);
+		assert.equal(form.firstElementChild, root); assert.equal(form.querySelectorAll('[data-ai-author]').length, 1); assert.equal(root.classList.contains('ai-author-compact'), true); assert.equal(root.hidden, false);
+		assert.equal(root.classList.contains('card'), true); assert.equal(form.querySelector('#replace').closest('.card'), root.nextElementSibling); assert.equal(root.nextElementSibling.classList.contains('card-body'), true);
+		assert.equal(root.querySelector('[data-ai-action]'), null); assert.equal(root.querySelector('[data-ai-effective]'), null); assert.equal(root.querySelector('h3'), null);
+		const prompt = root.querySelector('[data-ai-prompt]'); assert.equal(prompt.closest('label').querySelector('span').textContent, 'What would you like to do?'); assert.equal(prompt.closest('.col-12') !== null, true);
+		const button = root.querySelector('[data-ai-generate]'); assert.equal(button.textContent, 'Submit'); assert.equal(button.type, 'button'); assert.equal(button.parentElement.classList.contains('justify-content-end'), true);
+		assert.equal(button.querySelector('[data-ai-spinner]').hidden, true);
+		assert.equal(fixture.window.getComputedStyle(root.querySelector('[data-ai-author-status]')).display, 'none'); assert.equal(root.querySelector('[data-ai-proposal]').hidden, true);
+		for (const selector of ['#trigger', '#snippet-title', '#snippet-type', '#replace']) assert.ok(form.querySelector(selector));
+	} finally { fixture.dom.window.close(); }
+});
+
+test('saved web snippets have collapsed AI choices while mobile keeps its controls', async () => {
+	const fixture = BrowserFixture.create(async () => ({ status: BrowserFixture.status }));
+	try {
+		const { form, root } = await BrowserFixture.editor(fixture, { id: 'saved', trigger: 'hello', title: 'Greeting', replace: 'Hello', content: { version: 1, type: 'plain_text', text: 'Hello' } });
+		assert.notEqual(form.firstElementChild, root); assert.equal(form.querySelectorAll('[data-ai-author]').length, 1); assert.equal(root.classList.contains('ai-author-compact'), false);
+		const library = { _id: 'library', name: 'Library', permissions: { edit: true } }; const mobile = fixture.client.fragment(pug.renderFile('../mobile/views/ajax/edit.pug', { library, libraries: [library], snippet: null, draft: null }));
+		assert.equal(root.tagName, 'DETAILS'); assert.equal(root.open, false); assert.equal(root.querySelector('summary').textContent, 'Use AI'); assert.equal(root.querySelector('[data-ai-effective]'), null); assert.equal(root.querySelector('[data-ai-action]'), null);
+		assert.deepEqual([...root.querySelectorAll('[data-ai-edit-action]')].map(button => button.dataset.aiEditAction), ['improve', 'translate', 'template']);
+		assert.equal(root.querySelector('[aria-pressed="true"]').dataset.aiEditAction, 'improve'); assert.equal(root.querySelector('[data-ai-generate]').textContent, 'Preview changes');
+		for (const author of [mobile.querySelector('[data-ai-author]')]) {
+			assert.deepEqual([...author.querySelector('[data-ai-action]').options].map(option => option.value), ['generate', 'improve', 'translate', 'template']);
+			assert.equal(author.querySelector('h3').textContent, 'Write with AI'); assert.ok(author.querySelector('[data-ai-effective]')); assert.equal(author.querySelector('[data-ai-generate]').textContent, 'Generate proposal');
+		}
+	} finally { fixture.dom.window.close(); }
+});
+
+test('saved snippet AI choices preserve inputs, validate translation, and preview/apply without reloads', async () => {
+	const requests = []; const fixture = BrowserFixture.create(async (path, method, body) => { requests.push({ path, body }); return path === '/author' ? { status: BrowserFixture.status, proposal: { title: 'Greeting', content: { version: 1, type: 'plain_text', text: 'Updated greeting' } } } : { status: BrowserFixture.status }; });
+	try {
+		const { form, root } = await BrowserFixture.editor(fixture, { id: 'saved', trigger: 'hello', title: 'Greeting', replace: 'Hello', content: { version: 1, type: 'plain_text', text: 'Hello' } });
+		root.open = true; const preview = root.querySelector('[data-ai-generate]'); const prompt = root.querySelector('[data-ai-prompt]'); const language = root.querySelector('[data-ai-language]'); const area = form.querySelector('#replace');
+		for (const action of ['improve', 'template']) {
+			const before = requests.length; await fixture.client.click({ target: root.querySelector('[data-ai-edit-action="' + action + '"]') });
+			assert.equal(prompt.value, ''); assert.equal(requests.length, before);
+			await fixture.client.click({ target: preview }); assert.equal(requests.at(-1).body.action, action); assert.ok(requests.at(-1).body.prompt.length); assert.equal(area.value, 'Hello');
+			await fixture.client.click({ target: root.querySelector('[data-ai-discard]') }); assert.equal(root.querySelector('[data-ai-proposal]').hidden, true); assert.equal(area.value, 'Hello');
+		}
+		const before = requests.length; await fixture.client.click({ target: root.querySelector('[data-ai-edit-action="translate"]') }); assert.equal(requests.length, before);
+		assert.equal(root.querySelector('[data-ai-language-field]').hidden, false); assert.equal(root.querySelector('[data-ai-author-hint]').textContent, 'Use an informal tone.');
+		language.value = '   '; await fixture.client.click({ target: preview }); assert.equal(requests.length, before); assert.match(fixture.errors.at(-1), /language/); assert.equal(fixture.document.activeElement, language);
+		language.value = 'French (Canada)'; prompt.value = 'Use an informal tone.'; root.open = false; root.open = true;
+		await fixture.client.click({ target: root.querySelector('[data-ai-edit-action="improve"]') }); assert.equal(root.querySelector('[data-ai-language-field]').hidden, true);
+		await fixture.client.click({ target: root.querySelector('[data-ai-edit-action="translate"]') }); assert.equal(language.value, 'French (Canada)'); assert.equal(prompt.value, 'Use an informal tone.'); assert.equal(requests.length, before);
+		form.scrollTop = 175; await fixture.client.click({ target: preview }); assert.equal(requests.at(-1).body.action, 'translate'); assert.match(requests.at(-1).body.prompt, /French \(Canada\)/); assert.match(requests.at(-1).body.prompt, /Use an informal tone/); assert.equal(area.value, 'Hello');
+		root.querySelector('[data-ai-draft]').value = 'Reviewed greeting'; await fixture.client.click({ target: root.querySelector('[data-ai-apply]') }); assert.equal(area.value, 'Reviewed greeting'); assert.equal(root.hidden, false); assert.equal(root.open, true); assert.equal(form.scrollTop, 175);
+		language.value = ''; assert.equal(form.checkValidity(), true, 'AI language must not prevent normal Save');
+	} finally { fixture.dom.window.close(); }
+});
+
+test('saved snippet AI retains edits on failure and rejects stale proposals', async () => {
+	let fail = true; const fixture = BrowserFixture.create(async path => { if (path === '/author') { if (fail) throw Error('Provider unavailable'); return { status: BrowserFixture.status, proposal: { title: 'Greeting', content: { version: 1, type: 'plain_text', text: 'AI greeting' } } }; } return { status: BrowserFixture.status }; });
+	try {
+		const { form, root } = await BrowserFixture.editor(fixture, { id: 'saved', trigger: 'hello', title: 'Greeting', replace: 'Hello', content: { version: 1, type: 'plain_text', text: 'Hello' } }); root.open = true;
+		const area = form.querySelector('#replace'); const prompt = root.querySelector('[data-ai-prompt]'); const preview = root.querySelector('[data-ai-generate]'); prompt.value = 'Make it shorter';
+		await fixture.client.click({ target: preview }); assert.equal(area.value, 'Hello'); assert.equal(prompt.value, 'Make it shorter'); assert.equal(preview.disabled, false); assert.equal(preview.hasAttribute('aria-busy'), false); assert.match(fixture.errors.at(-1), /Provider unavailable/);
+		fail = false; await fixture.client.click({ target: preview }); area.value = 'Manual changes'; await fixture.client.click({ target: root.querySelector('[data-ai-apply]') }); assert.equal(area.value, 'Manual changes'); assert.match(fixture.errors.at(-1), /snippet changed/);
+	} finally { fixture.dom.window.close(); }
+});
+
+test('compact Submit generates an editable proposal and Use draft updates fields without saving or reloading', async () => {
+	let resolveAuthor; const requests = []; const fixture = BrowserFixture.create(async (path, method, body) => { requests.push({ path, method, body }); if (path === '/author') return new Promise(resolve => { resolveAuthor = resolve; }); assert.equal(path, '/settings'); return { status: BrowserFixture.status }; });
+	try {
+		const { form, root } = await BrowserFixture.editor(fixture); const area = form.querySelector('#replace'); const title = form.querySelector('#snippet-title'); const trigger = form.querySelector('#trigger');
+		area.value = 'Original'; title.value = 'Original title'; trigger.value = 'reply'; trigger.focus(); form.scrollTop = 175;
+		root.querySelector('[data-ai-prompt]').value = 'Write a friendly reply'; const button = root.querySelector('[data-ai-generate]'); const generation = fixture.client.click({ target: button }); await BrowserFixture.tick();
+		assert.equal(button.disabled, true); assert.equal(trigger.disabled, false); assert.equal(area.disabled, false); assert.equal(requests.at(-1).body.action, 'generate'); assert.equal(requests.at(-1).body.prompt, 'Write a friendly reply'); assert.equal(requests.at(-1).body.entry.content.text, 'Original');
+		assert.equal(button.querySelector('[data-ai-spinner]').hidden, false); assert.equal(button.getAttribute('aria-busy'), 'true');
+		resolveAuthor({ proposal: { title: 'Reply', trigger: 'reply', content: { version: 1, type: 'plain_text', text: 'AI draft' } }, status: BrowserFixture.status }); await generation;
+		assert.equal(button.querySelector('[data-ai-spinner]').hidden, true); assert.equal(button.hasAttribute('aria-busy'), false);
+		assert.equal(area.value, 'Original'); assert.equal(root.querySelector('[data-ai-proposal]').hidden, false); assert.equal(root.querySelector('[data-ai-draft]').value, 'AI draft'); assert.notEqual(fixture.window.getComputedStyle(root.querySelector('[data-ai-author-status]')).display, 'none');
+		root.querySelector('[data-ai-draft]').value = 'Reviewed reply'; await fixture.client.click({ target: root.querySelector('[data-ai-apply]') });
+		assert.equal(area.value, 'Reviewed reply'); assert.equal(title.value, 'Reply'); assert.equal(trigger.value, 'reply'); assert.equal(root.querySelector('[data-ai-proposal]').hidden, true);
+		assert.equal(root.hidden, true); assert.equal(fixture.window.getComputedStyle(root).display, 'none');
+		assert.equal(form.querySelector('#replace'), area); assert.equal(fixture.document.querySelector('#record-form'), form); assert.equal(fixture.document.activeElement, trigger); assert.equal(form.scrollTop, 175);
+		assert.deepEqual(requests.map(request => request.path), ['/settings', '/author', '/settings']); assert.deepEqual(fixture.errors, []);
+	} finally { fixture.dom.window.close(); }
+});
+
+test('compact generation errors preserve the editor and report an error', async () => {
+	const fixture = BrowserFixture.create(async path => { if (path === '/author') throw Error('Provider unavailable'); assert.equal(path, '/settings'); return { status: BrowserFixture.status }; });
+	try {
+		const { form, root } = await BrowserFixture.editor(fixture); const area = form.querySelector('#replace'); area.value = 'Keep my edits'; root.querySelector('[data-ai-prompt]').value = 'Write a reply';
+		const button = root.querySelector('[data-ai-generate]'); await fixture.client.click({ target: button });
+		assert.equal(form.querySelector('#replace'), area); assert.equal(area.value, 'Keep my edits'); assert.equal(root.querySelector('[data-ai-proposal]').hidden, true); assert.equal(root.hidden, false); assert.equal(button.disabled, false); assert.deepEqual(fixture.errors, ['Provider unavailable']);
+		assert.equal(button.querySelector('[data-ai-spinner]').hidden, true); assert.equal(button.hasAttribute('aria-busy'), false);
+	} finally { fixture.dom.window.close(); }
+});
+
+test('empty rich-text creation reaches AI generation without rendering an empty template', async () => {
+	let submitted; const fixture = BrowserFixture.create(async (path, method, body) => { if (path === '/author') { submitted = body; return { proposal: { title: 'Greeting', content: { version: 2, type: 'rich_text', markdown: '**Hello**', variables: {} } }, status: BrowserFixture.status }; } assert.equal(path, '/settings'); return { status: BrowserFixture.status }; });
+	try {
+		const { form, root } = await BrowserFixture.editor(fixture); form.querySelector('#snippet-type').value = 'rich_text'; form.querySelector('#replace').value = ''; root.querySelector('[data-ai-prompt]').value = 'Write a greeting';
+		await fixture.client.click({ target: root.querySelector('[data-ai-generate]') });
+		assert.equal(submitted.action, 'generate'); assert.equal(submitted.entry.content.type, 'rich_text'); assert.equal(submitted.entry.content.markdown, ''); assert.equal(root.querySelector('[data-ai-draft]').value, '**Hello**'); assert.equal(form.querySelector('#replace').value, ''); assert.deepEqual(fixture.errors, []);
+	} finally { fixture.dom.window.close(); }
+});
+
+test('connection updates affect one row and preserve other fields, focus and scroll', async () => {
+	const settings = structuredClone(BrowserFixture.settings); const changed = { ...settings, revision: 1, connections: settings.connections.map(connection => connection.id === 'b' ? { ...connection, name: 'Changed B' } : connection) };
+	const response = { id: 'b', settings: changed, connection: changed.connections[1], html: pug.renderFile('views/ajax/ai-connection.pug', { connection: changed.connections[1], scope: 'personal', providers: AiProvider.catalog }), status: { ...BrowserFixture.status, revisions: { personal: 1 } } };
+	const fixture = BrowserFixture.create(async path => path.startsWith('/settings') ? { settings, html: BrowserFixture.html(settings), status: BrowserFixture.status } : response);
+	try {
+		await fixture.client.loadSettings(fixture.document.querySelector('[data-ai-settings]'));
+		const root = fixture.document.querySelector('[data-ai-configuration]'); const a = root.querySelector('[data-ai-connection="a"]'); const b = root.querySelector('[data-ai-connection="b"]');
+		a.querySelector("form").hidden = false; const other = a.querySelector('[name="api_key"]'); other.value = 'unsaved-other-key'; other.focus(); root.scrollTop = 175;
+		const form = b.querySelector('form'); form.hidden = false; form.elements.name.value = 'Changed B'; await fixture.client.submit(form);
+		assert.equal(root.querySelector('[data-ai-connection="a"]'), a); assert.equal(other.value, 'unsaved-other-key'); assert.equal(fixture.document.activeElement, other); assert.equal(root.scrollTop, 175);
+		assert.match(root.querySelector('[data-ai-connection="b"]').textContent, /Changed B/); assert.deepEqual(fixture.errors, []);
+	} finally { fixture.dom.window.close(); }
+});
+
+test('AI tabs preserve forms, focus and configuration nodes without requesting a section reload', async () => {
+	let requests = 0; const fixture = BrowserFixture.create(async () => { requests++; return { settings: BrowserFixture.settings, html: BrowserFixture.html(BrowserFixture.settings), status: BrowserFixture.status }; });
+	try {
+		await fixture.client.loadSettings(fixture.document.querySelector('[data-ai-settings]')); const root = fixture.document.querySelector('[data-ai-configuration]'); const providers = root.querySelector('[data-ai-config-panel="providers"]'); const defaults = root.querySelector('[data-ai-config-panel="defaults"]'); const key = providers.querySelector('[name="api_key"]'); key.value = 'unsaved-key'; root.scrollTop = 120;
+		const tab = root.querySelector('[data-ai-config-tab="defaults"]'); tab.click(); tab.focus(); assert.equal(providers.hidden, true); assert.equal(defaults.hidden, false); assert.equal(fixture.document.activeElement, tab);
+		tab.dispatchEvent(new fixture.window.KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true })); assert.equal(providers.hidden, false); assert.equal(defaults.hidden, true); assert.equal(key.value, 'unsaved-key'); assert.equal(root.scrollTop, 120); assert.equal(requests, 1); assert.equal(root.querySelector('[data-ai-config-panel="providers"]'), providers); assert.equal(root.querySelector('[data-ai-config-panel="defaults"]'), defaults);
+	} finally { fixture.dom.window.close(); }
+});
+
+test('both model selectors discover automatically and discard delayed replies after switching providers', async () => {
+	const pending = []; const fixture = BrowserFixture.create(async (path, method, body, signal) => path === '/models' ? new Promise(resolve => pending.push({ body, signal, resolve })) : { settings: BrowserFixture.settings, html: BrowserFixture.html(BrowserFixture.settings), status: BrowserFixture.status });
+	try {
+		await fixture.client.loadSettings(fixture.document.querySelector('[data-ai-settings]')); const root = fixture.document.querySelector('[data-ai-configuration]'); const author = root.querySelector('[data-ai-route="authoring"]'); const search = root.querySelector('[data-ai-route="search"]'); const model = author.querySelector('[data-ai-model]'); assert.ok(model.tomselect); assert.ok(search.querySelector('[data-ai-model]').tomselect);
+		const provider = author.querySelector('[name="authoring_connection"]'); provider.value = 'a'; provider.dispatchEvent(new fixture.window.Event('change', { bubbles: true })); assert.equal(pending.length, 1);
+		provider.value = 'b'; provider.dispatchEvent(new fixture.window.Event('change', { bubbles: true })); assert.equal(pending.length, 2); assert.equal(pending[0].signal.aborted, true);
+		pending[1].resolve({ models: [{ id: 'b-model', name: 'B model' }] }); await BrowserFixture.tick(); pending[0].resolve({ models: [{ id: 'a-model', name: 'A model' }] }); await BrowserFixture.tick(); assert.ok(model.tomselect.options['b-model']); assert.equal(model.tomselect.options['a-model'], undefined);
+		model.tomselect.createItem('manual-model'); assert.equal(model.value, 'manual-model'); const searchProvider = search.querySelector('[name="search_connection"]'); searchProvider.value = 'a'; searchProvider.dispatchEvent(new fixture.window.Event('change', { bubbles: true })); assert.equal(pending.length, 3); pending[2].resolve({ models: [{ id: 'search-model', name: 'Search model' }] }); await BrowserFixture.tick(); assert.ok(search.querySelector('[data-ai-model]').tomselect.options['search-model']);
+		searchProvider.value = ''; searchProvider.dispatchEvent(new fixture.window.Event('change', { bubbles: true })); assert.equal(search.querySelector('[data-ai-model]').tomselect.isDisabled, true); assert.equal(search.querySelector('[data-ai-models]').disabled, true); assert.deepEqual(fixture.errors, []);
+	} finally { fixture.dom.window.close(); }
+});
+
+test('model discovery failure preserves a saved model and allows refresh without replacing the form', async () => {
+	const settings = { ...BrowserFixture.settings, routes: { authoring: { connection: 'a', model: 'saved-model', protocol: 'auto' } } }; let discoveries = 0;
+	const fixture = BrowserFixture.create(async path => { if (path !== '/models') return { settings, html: BrowserFixture.html(settings), status: BrowserFixture.status }; if (++discoveries === 1) throw Error('Provider unavailable'); return { models: [{ id: 'new-model', name: 'New model' }] }; });
+	try {
+		await fixture.client.loadSettings(fixture.document.querySelector('[data-ai-settings]')); await BrowserFixture.tick(); const root = fixture.document.querySelector('[data-ai-configuration]'); const row = root.querySelector('[data-ai-route="authoring"]'); const model = row.querySelector('[data-ai-model]'); assert.equal(model.value, 'saved-model'); assert.deepEqual(fixture.errors, ['Provider unavailable']);
+		row.querySelector('[data-ai-models]').click(); await BrowserFixture.tick(); assert.equal(model.value, 'saved-model'); assert.ok(model.tomselect.options['new-model']); assert.equal(fixture.document.querySelector('[data-ai-configuration]'), root);
+	} finally { fixture.dom.window.close(); }
+});
+
+test('saving endpoint approvals sends only approvals and preserves unsaved defaults and editor fields', async () => {
+	const settings = { ...BrowserFixture.settings, daily_limit: 50 }; let saved; const fixture = BrowserFixture.create(async (path, method, body) => { if (method === 'PATCH') { saved = body; return { settings: { ...settings, revision: 1, private_endpoints: ['http://127.0.0.1:11434'] } }; } return { settings, html: BrowserFixture.html(settings, 'installation') }; }, true);
+	try {
+		await fixture.client.loadSettings(fixture.document.querySelector('[data-ai-settings]')); const root = fixture.document.querySelector('[data-ai-configuration]'); const quota = root.querySelector('[name="daily_limit"]'); quota.value = '90'; const key = root.querySelector('[name="api_key"]'); key.value = 'unsaved-key'; const form = root.querySelector('[data-ai-endpoints-form]'); form.elements.private_endpoints.value = 'http://127.0.0.1:11434'; await fixture.client.submit(form);
+		assert.deepEqual(JSON.parse(JSON.stringify(saved)), { scope: 'installation', revision: 0, private_endpoints: 'http://127.0.0.1:11434' }); assert.equal(quota.value, '90'); assert.equal(key.value, 'unsaved-key'); assert.equal(fixture.document.querySelector('[data-ai-configuration]'), root); assert.equal(root.dataset.aiTab, 'providers');
+	} finally { fixture.dom.window.close(); }
+});
+
+test('late HTTP responses cannot restore deleted rows or older enabled policies', async () => {
+	const fixture = BrowserFixture.create(async () => ({ settings: BrowserFixture.settings, html: BrowserFixture.html(BrowserFixture.settings), status: BrowserFixture.status }));
+	try {
+		await fixture.client.loadSettings(fixture.document.querySelector('[data-ai-settings]')); const root = fixture.document.querySelector('[data-ai-configuration]');
+		fixture.client.updateConfig(root, { id: 'b', deleted: true, settings: { ...BrowserFixture.settings, revision: 2, connections: [BrowserFixture.settings.connections[0]] } });
+		fixture.client.updateConfig(root, { id: 'b', settings: { ...BrowserFixture.settings, revision: 1 }, html: pug.renderFile('views/ajax/ai-connection.pug', { connection: BrowserFixture.settings.connections[1], scope: 'personal', providers: AiProvider.catalog }) });
+		assert.equal(root.querySelector('[data-ai-connection="b"]'), null); assert.equal(root.querySelector('option[value="b"]'), null);
+		fixture.client.acceptStatus({ ...BrowserFixture.status, enabled: false, personal_enabled: false, revisions: { personal: 3 } }); fixture.client.acceptStatus(BrowserFixture.status);
+		assert.equal(fixture.client.status.enabled, false);
+	} finally { fixture.dom.window.close(); }
+});
+
+test('app opt-out during status loading prevents authoring dispatch', async () => {
+	let resolveStatus; let calls = 0; const fixture = BrowserFixture.create(async () => { calls++; return new Promise(resolve => { resolveStatus = resolve; }); });
+	try {
+		const ready = fixture.client.ready('authoring'); await BrowserFixture.tick(); fixture.window.localStorage.setItem(fixture.client.localKey(), 'false'); fixture.client.update();
+		resolveStatus({ status: BrowserFixture.status }); await assert.rejects(ready, /disabled in this app/); assert.equal(calls, 1);
+	} finally { fixture.dom.window.close(); }
+});
+
+for (const compact of [false, true]) test(`${compact ? 'compact' : 'full'} editor discards delayed proposals without saving or replacing surrounding UI`, async () => {
+	let resolveAuthor; let submitted = false; const fixture = BrowserFixture.create(async path => path === '/author' ? new Promise(resolve => { submitted = true; resolveAuthor = resolve; }) : { status: BrowserFixture.status });
+	try {
+		const { form, root } = await BrowserFixture.editor(fixture, compact ? null : { id: 'saved', title: 'Title', replace: 'Original', content: { version: 1, type: 'plain_text', text: 'Original' } });
+		const area = form.querySelector('#replace'); area.value = 'Original';
+		root.querySelector('[data-ai-prompt]').value = 'Improve this';
+		root.querySelector('[data-ai-generate]').click(); for (let count = 0; count < 10 && !submitted; count++) await BrowserFixture.tick(); assert.equal(submitted, true);
+		area.value = 'New user edit'; area.dispatchEvent(new fixture.window.Event('input', { bubbles: true })); assert.equal(fixture.client.bindings.get(root).job.signal.aborted, true);
+		resolveAuthor({ proposal: { title: 'Title', content: { version: 1, type: 'plain_text', text: 'Delayed proposal' } }, status: BrowserFixture.status }); await BrowserFixture.tick();
+		assert.equal(root.querySelector('[data-ai-proposal]').hidden, true); assert.equal(area.value, 'New user edit'); assert.equal(form.querySelector('#replace'), area); assert.equal(form.isConnected, true); assert.deepEqual(fixture.errors, []);
+	} finally { fixture.dom.window.close(); }
+});

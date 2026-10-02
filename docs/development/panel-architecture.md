@@ -24,11 +24,11 @@ Omarchy private runtime files live under `$XDG_RUNTIME_DIR/typerelay-panel`. Sta
 
 The GUI has its own Cargo workspace under `apps/desktop/src-tauri`, so server/helper builds do not acquire GTK/WebKit dependencies. UI files are generated from Pug using `pnpm build` in `apps/desktop`.
 
-On Omarchy, build the ordinary release binaries, run `sh scripts/build-panel.sh`, then `target/release/typerelay install`. The GitHub bootstrap includes the panel by default; `--without-panel` keeps the engine/TUI-only path. Builds require Node, pnpm, GTK3 and WebKitGTK 4.1 development packages. Build/validation completes before the running engine stops.
+On Omarchy, build the ordinary release binaries, run `sh scripts/build-panel.sh`, then `target/release/typerelay install`. Builds require Node, pnpm, GTK3 and WebKitGTK 4.1 development packages. Build/validation completes before the running engine stops.
 
 The installer validates matching binaries, tracks optional panel ownership, adds a launcher, starts the panel in the background and preserves snippets/settings on upgrade/uninstall. The panel manages its own login entry. `typerelay-panel --quit` stops the resident panel. On macOS, run the app executable with `--uninstall` before removing the app to unregister startup; data remains. The Windows NSIS uninstall hook performs this cleanup automatically.
 
-The Desktop panel builds workflow produces an Omarchy bundle containing engine, TUI and panel, plus Linux AppImage/deb, a macOS app/dmg containing the panel and TUI, and a Windows x64 NSIS build containing the panel, CLI and TUI. A shared staging script prepares platform-native bundled tools for CI and signed releases, including universal macOS TUI binaries. The Linux GUI packages alone do not install the Omarchy input service. Beta artifacts are unsigned/not notarized; signing is needed before broad public distribution. No non-Hyprland Linux insertion support is claimed.
+The desktop release tooling produces complete Linux AppImage/deb/rpm packages, a macOS app/dmg containing the panel and TUI, and a Windows x64 NSIS build containing the panel, CLI and TUI. A shared staging script prepares platform-native bundled tools for CI and signed releases, including universal macOS TUI binaries. Linux packages include the engine and TUI; first launch offers expansion service setup. Beta artifacts are unsigned/not notarized; signing is needed before broad public distribution. No non-Hyprland Linux insertion support is claimed.
 
 ## Verification status
 

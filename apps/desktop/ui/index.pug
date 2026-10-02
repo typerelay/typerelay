@@ -7,7 +7,7 @@ html(lang="en")
 		link(rel="stylesheet" href="panel.css")
 		link(rel="stylesheet" href="sweetalert2.min.css")
 		script(src="sweetalert2.all.min.js" defer)
-		script(src="panel.js" defer)
+		script(src="panel.js" type="module" defer)
 	body
 		main
 			header.titlebar(data-tauri-drag-region)
@@ -19,9 +19,9 @@ html(lang="en")
 				button#close.icon-button(type="button" aria-label="Close TypeRelay") ×
 			section#search-view
 				.search-field
-					span.search-icon(aria-hidden="true")
 					label.visually-hidden(for="query") Search snippets
 					input#query(type="search" autocomplete="off" spellcheck="false" aria-controls="results")
+					button#clear-search.icon-button(type="button" hidden aria-label="Clear search" title="Clear search") ×
 				#empty-state(hidden)
 					p Hey there, you have no snippets yet. Connect to your server to sync, create your first snippet in the TypeRelay web app, or use TypeRelay TUI.
 					.empty-actions
@@ -39,21 +39,6 @@ html(lang="en")
 						span.keycap esc
 						span Close
 					button#copy.secondary(type="button" disabled aria-keyshortcuts="Control+C Meta+C" title="Copy highlighted snippet") Copy
-			section#personal-view(hidden)
-				form#personal-form
-					h2 My abbreviation
-					p#personal-shared
-					label(for="personal-trigger") My abbreviation
-					input#personal-trigger(maxlength="63" pattern="[a-z0-9-]{1,63}")
-					button#personal-reset(type="button") Use shared default
-					p#personal-status
-					label#personal-conflict-label(for="personal-conflict") Conflict to resolve
-					select#personal-conflict
-					button#personal-use-pending(type="button") Use pending value
-					button#personal-use-rejected(type="button" hidden) Use rejected value
-					.form-actions
-						button#personal-cancel(type="button") Cancel
-						button#personal-save.primary(type="submit") Save
 			section#fill-view(hidden)
 				form#fill-form
 					h2 Fill template
@@ -73,6 +58,7 @@ html(lang="en")
 				nav.settings-tabs(aria-label="Settings sections")
 					button(type="button" data-settings-tab="general" aria-selected="true") General
 					button(type="button" data-settings-tab="sync" aria-selected="false") Sync
+					button(type="button" data-settings-tab="advanced" aria-selected="false") Advanced
 					button(type="button" data-settings-tab="about" aria-selected="false") About
 				section#settings-general.settings-page
 					form#settings-form.settings-list
@@ -82,8 +68,8 @@ html(lang="en")
 								p Open TypeRelay from any app.
 							.setting-control.shortcut-control
 								label.visually-hidden(for="shortcut") Search shortcut
-								input#shortcut(required)
-								small Ctrl, Shift, Alt or Super + key
+								input#shortcut.form-control.form-control-sm(required aria-describedby="shortcut-help")
+								p#shortcut-help Ctrl, Shift, Alt or Super + key
 						.setting-row
 							.setting-copy
 								h3 Start at login
@@ -121,28 +107,67 @@ html(lang="en")
 								p Edit local libraries and snippets in Terminal.
 							button#open-tui.secondary(type="button") Open
 				section#settings-sync.settings-page(hidden)
-					button.secondary(type="button" data-about-url="#statistics") Statistics
-					.settings-list
-						form#connect-form.setting-section
+					form#connect-form.settings-list.setting-section
+						.row
 							label(for="server") Sync server URL
-							input#server(type="url" value="https://app.typerelay.com" required)
-							.form-actions
-								button#sync.secondary(type="button") Sync now
-								span.action-group
-									button#disconnect.secondary(type="button") Disconnect
-									button#authenticate.primary(type="submit") Authenticate
-							p#connection-status.settings-description(role="status" aria-live="polite") Not connected
+							button#disconnect.link-button(type="button" hidden) Disconnect
+						.input-group
+							input#server.form-control-sm(type="url" value="https://app.typerelay.com" required)
+							button#authenticate.primary.btn-sm(type="submit") Authenticate
+						p#connection-status.settings-description(role="status" aria-live="polite") Not connected
+					#sync-libraries-card.settings-list
 						section#enroll-form.setting-section
 							h3 Libraries on this device
 							p Synced libraries are available offline. Select local-only libraries to upload.
 							div#local-libraries
 							.form-actions
 								span
-								button#upload-selected.primary(type="button") Upload selected
+								button#sync.primary.btn-sm(type="button" disabled) Sync now
 						section#conflict-section.setting-section(hidden)
 							h3 Needs review
 							p#conflict-count.settings-description
 							div#sync-conflicts
+				section#settings-advanced.settings-page(hidden)
+					section#ai-settings-card.settings-list
+						.setting-section
+							h2.settings-card-title AI options
+							label.check(for="native-ai-enabled")
+								span Enable AI
+								input#native-ai-enabled(type="checkbox")
+					section#native-ai-card.settings-list(hidden)
+						.setting-section
+							h2#native-model-heading.settings-card-title Choose local AI model
+							#native-model(role="radiogroup" aria-labelledby="native-model-heading")
+							#native-download-area
+								p#native-download-label Download to continue
+								progress#native-download(hidden max="100" aria-label="Model download progress")
+								button#native-enable.primary(type="button") Download Model
+								button#native-cancel.secondary(type="button" hidden) Cancel download
+							p#native-ai-status(role="status" aria-live="polite")
+							template#native-model-option
+								label.native-model-row
+									input(type="radio" name="native-model")
+									span.native-model-copy
+										span.native-model-title
+											strong.native-model-name
+											span.native-model-recommended Recommended
+											span.native-model-downloaded(hidden) Downloaded
+										small.native-model-description
+									span.native-model-size
+					section#keyboard-card.settings-list(hidden)
+						.setting-section
+							h2.settings-card-title Miscellaneous
+							.setting-row#keyboard-setting(hidden)
+								.setting-copy
+									label(for="keyboard") Keyboard
+									p Choose the keyboard used for expansion.
+								.setting-control
+									select#keyboard.form-select.form-select-sm(form="settings-form")
+										option(value="") Automatic selection
+										template#keyboard-option-template
+											option
+						.settings-actions
+							button.primary(type="submit" form="settings-form") Save changes
 				section#settings-about.settings-page(hidden)
 					.about-identity
 						img.about-logo(src="typerelay-logo.svg" alt="TypeRelay")
@@ -193,20 +218,19 @@ html(lang="en")
 				code.result-abbreviation
 				pre.result-preview
 				small.result-personal-status
-				button.result-personal(type="button" hidden) My abbreviation
 		template#library-template
 			div.library-row
 				label.check
 					input(type="checkbox")
 					span.library-name
 					span.library-sync-state.status-pill
-				button.library-merge.secondary(type="button") Merge…
+				button.library-merge.secondary.btn-sm(type="button") Merge…
 				div.library-merge-form(hidden)
 					label Destination
 					select.library-merge-destination.form-select-sm
 					.form-actions
-						button.library-merge-cancel.secondary(type="button") Cancel
-						button.library-merge-submit.primary(type="button") Merge library
+						button.library-merge-cancel.secondary.btn-sm(type="button") Cancel
+						button.library-merge-submit.primary.btn-sm(type="button") Merge library
 		template#merge-option-template
 			option
 		template#conflict-template

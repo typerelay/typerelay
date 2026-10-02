@@ -55,62 +55,68 @@ if kind === 'move'
 		p.text-muted No other editable libraries are available.
 	p.text-muted Moved snippets inherit the destination library’s sharing and editing permissions.
 if kind === 'snippet' || kind === 'conflict'
-	.row.align-items-center.g-0
-		.col-md-4
-			label.form-label.snippet-label(for="trigger")= library && library.shared ? 'Shared abbreviation' : 'Abbreviation'
-			.input-group.input-group-sm.mb-3
-				span.input-group-text(aria-hidden="true") ;
-				input#trigger.form-control.form-control-sm(name="trigger" value=snippet ? snippet.trigger : '' pattern="[a-z0-9\\-]{1,63}" autocapitalize="off" spellcheck="false")
-		.col-md-5
-			label.form-label.snippet-label(for="snippet-title") Title (optional)
-			input#snippet-title.form-control.form-control-sm.mb-3(name="title" value=snippet ? snippet.title : '' maxlength="500")
-		.col-md-3
-			label.form-label.snippet-label(for="snippet-type") Type
-			select#snippet-type.form-select.form-select-sm.mb-3(name="type")
-				option(value="plain_text" selected=!snippet || ['plain_text', 'template'].includes(snippet.content && snippet.content.type)) Text
-				option(value="code" selected=snippet && (snippet.content && snippet.content.type) === 'code') Code
-				option(value="rich_text" selected=snippet && (snippet.content && snippet.content.type) === 'rich_text') Rich text
-	label.form-label.snippet-label(for="replace") Expansion
-	include template-editor
-	textarea#replace.form-control.form-control-sm.mb-4(name="replace" rows="8")= '\n' + (snippet ? snippet.replace : '')
-	include rich-editor
-	#code-editor.mb-3
-	#code-options.mb-3(hidden=!snippet || (snippet.content && snippet.content.type) !== 'code')
-		.row.align-items-center
-			.col-md-6
-				label.form-label(for="code-language") Language
-				select#code-language.form-select.form-select-sm.mb-2(name="language" data-language=(snippet && snippet.content && snippet.content.language) || 'plain_text')
-					option(value="plain_text") Plain text
+	- const aiAuthorCompact = kind === 'snippet' && !snippet
+	if aiAuthorCompact
+		include ai-author
+	div(class=aiAuthorCompact ? 'card card-body' : '')
+		.row.align-items-center.g-0
+			.col-md-4
+				label.form-label.snippet-label(for="trigger")= library && library.shared ? 'Shared abbreviation' : 'Abbreviation'
+				.input-group.input-group-sm.mb-3
+					span.input-group-text(aria-hidden="true") ;
+					input#trigger.form-control.form-control-sm(name="trigger" value=snippet ? snippet.trigger : '' pattern="[a-z0-9\\-]{1,63}" autocapitalize="off" spellcheck="false")
+			.col-md-5
+				label.form-label.snippet-label(for="snippet-title") Title (optional)
+				input#snippet-title.form-control.form-control-sm.mb-3(name="title" value=snippet ? snippet.title : '' maxlength="500")
 			.col-md-3
-				label.form-label(for="code-indent") Tab inserts
-				select#code-indent.form-select.form-select-sm.mb-2
-					option(value="tabs") Literal tab
-					option(value="spaces") Spaces
-			.col-md-3
-				label.form-label(for="code-width") Width
-				select#code-width.form-select.form-select-sm.mb-2
-					each width in [2, 4, 8]
-						option(value=width selected=width === 4)= width
-		p.small.text-muted Tab indents; Shift+Tab outdents. Press Escape then Tab to leave the editor. Existing whitespace stays unchanged.
-	if kind === 'snippet' && snippet
-		details.snippet-advanced.mb-3
-			summary.small.mb-3 Advanced
-			label.form-label.fw-bold(for="destination-library") Move to library
-			select#destination-library.form-select.form-select-sm.mb-3(name="destination_library" disabled=!library.permissions.edit)
-				option(value=library._id selected)= library.name + (library.shared ? ' · Shared' : ' · Personal')
-				each destination in destinations
-					option(value=destination._id)= destination.name + (destination.shared ? ' · Shared' : ' · Personal')
-			p.small.text-muted.mb-0 Changing the library moves this snippet when you save. Destination sharing permissions apply.
-	if kind === 'conflict'
-		label.form-label.fw-bold(for="choice") Resolution
-		select#choice.form-select.form-select-sm(name="choice")
-			option(value="merged") Use fields above
-			option(value="local") Use local version (including deletion)
-			option(value="server") Keep current server version
-		h3.h6.mt-3.fw-bold Local version
-		pre= JSON.stringify(conflict.local, null, 2)
-		h3.h6.fw-bold Current server version
-		pre= JSON.stringify(current, null, 2)
+				label.form-label.snippet-label(for="snippet-type") Type
+				select#snippet-type.form-select.form-select-sm.mb-3(name="type")
+					option(value="plain_text" selected=!snippet || ['plain_text', 'template'].includes(snippet.content && snippet.content.type)) Text
+					option(value="code" selected=snippet && (snippet.content && snippet.content.type) === 'code') Code
+					option(value="rich_text" selected=snippet && (snippet.content && snippet.content.type) === 'rich_text') Rich text
+		label.form-label.snippet-label(for="replace") Expansion
+		include template-editor
+		textarea#replace.form-control.form-control-sm.mb-4(name="replace" rows="8")= '\n' + (snippet ? snippet.replace : '')
+		include rich-editor
+		if kind === 'snippet' && snippet
+			include ai-author
+		#code-editor.mb-3
+		#code-options.mb-3(hidden=!snippet || (snippet.content && snippet.content.type) !== 'code')
+			.row.align-items-center
+				.col-md-6
+					label.form-label(for="code-language") Language
+					select#code-language.form-select.form-select-sm.mb-2(name="language" data-language=(snippet && snippet.content && snippet.content.language) || 'plain_text')
+						option(value="plain_text") Plain text
+				.col-md-3
+					label.form-label(for="code-indent") Tab inserts
+					select#code-indent.form-select.form-select-sm.mb-2
+						option(value="tabs") Literal tab
+						option(value="spaces") Spaces
+				.col-md-3
+					label.form-label(for="code-width") Width
+					select#code-width.form-select.form-select-sm.mb-2
+						each width in [2, 4, 8]
+							option(value=width selected=width === 4)= width
+			p.small.text-muted Tab indents; Shift+Tab outdents. Press Escape then Tab to leave the editor. Existing whitespace stays unchanged.
+		if kind === 'snippet' && snippet
+			details.snippet-advanced.mb-3
+				summary.small.mb-3 Advanced
+				label.form-label.fw-bold(for="destination-library") Move to library
+				select#destination-library.form-select.form-select-sm.mb-3(name="destination_library" disabled=!library.permissions.edit)
+					option(value=library._id selected)= library.name + (library.shared ? ' · Shared' : ' · Personal')
+					each destination in destinations
+						option(value=destination._id)= destination.name + (destination.shared ? ' · Shared' : ' · Personal')
+				p.small.text-muted.mb-0 Changing the library moves this snippet when you save. Destination sharing permissions apply.
+		if kind === 'conflict'
+			label.form-label.fw-bold(for="choice") Resolution
+			select#choice.form-select.form-select-sm(name="choice")
+				option(value="merged") Use fields above
+				option(value="local") Use local version (including deletion)
+				option(value="server") Keep current server version
+			h3.h6.mt-3.fw-bold Local version
+			pre= JSON.stringify(conflict.local, null, 2)
+			h3.h6.fw-bold Current server version
+			pre= JSON.stringify(current, null, 2)
 if kind === 'snippetslab' || kind === 'import'
 	label.form-label.fw-bold(for="import-file")= importFormat.name + ' export'
 	.input-group.input-group-sm.mb-3
@@ -120,4 +126,6 @@ if kind === 'snippetslab' || kind === 'import'
 	if importFormat.beta
 		p.small.text-muted Beta: export layouts may vary between app versions. Review the preview before importing.
 	p.small.text-muted Imported libraries are private. Existing libraries are never replaced.
+	#import-error.alert.alert-danger(hidden role="alert")
+	#import-summary
 	#import-preview

@@ -1,0 +1,12 @@
+section.ai-controls.mb-5(data-ai-controls)
+	h2.h5 AI
+	.form-check.mb-3
+		label.form-check-label
+			input.form-check-input.h-20px.w-30px(type="checkbox" data-ai-personal checked)
+			span.ms-3 AI for my account on all apps
+	.form-check.mb-3
+		label.form-check-label
+			input.form-check-input.h-20px.w-30px(type="checkbox" data-ai-local checked)
+			span.ms-3 AI in this app
+	p.ai-status.text-muted.small(data-ai-status role="status") Checking AI settings…
+	button.btn.btn-outline-secondary.btn-sm(type="button" data-ai-manage) Manage providers and models

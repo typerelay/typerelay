@@ -1,17 +1,17 @@
 use std::collections::BTreeMap;
 use anyhow::{Result,ensure};
-use ratatui::{Frame,layout::{Constraint,Layout,Rect},style::{Style,Color},widgets::{Block,Borders,List,ListItem,ListState,Paragraph,Wrap}};
-use ratatui::crossterm::event::{Event,KeyCode,KeyEventKind,KeyModifiers};
+use ratatui::{Frame,layout::{Constraint,Layout,Rect,Position},style::{Style,Color},widgets::{Block,Borders,List,ListItem,ListState,Paragraph,Wrap}};
+use ratatui::crossterm::event::{Event,KeyCode,KeyEventKind,KeyModifiers,KeyEvent,MouseButton,MouseEventKind};
 use ratatui_textarea::TextArea;
 use typerelay_core::template::{Template,Variable,Rendered,Step};
 use typerelay_client::templates::Templates;
 
 pub enum Outcome { Cancel, Definition { name:String, variable:Option<Variable>, insert:bool }, Copy { rendered:Rendered, values:BTreeMap<String,String> } }
-pub struct Dialog { template:Template, fill:bool, choosing:bool, names:Vec<String>, labels:Vec<String>, inputs:Vec<TextArea<'static>>, index:usize, name:String, variable:Variable, error:String }
+pub struct Dialog { template:Template, fill:bool, choosing:bool, names:Vec<String>, labels:Vec<String>, inputs:Vec<TextArea<'static>>, index:usize, name:String, variable:Variable, error:String, buttons:Vec<(Rect,KeyCode,KeyModifiers)> }
 impl Dialog {
     fn text(value:&str)->TextArea<'static>{TextArea::new(value.split('\n').map(str::to_owned).collect())}
-    pub fn variables(template:Template)->Result<Self>{let template=template.normalize().map_err(anyhow::Error::msg)?;let mut names=vec!["New text field".into(),"date".into(),"time".into(),"timestamp".into(),"key:enter".into()];names.extend(template.variables.keys().filter(|name|!Template::builtin(name)).cloned());Ok(Self{template,fill:false,choosing:true,names,labels:vec![],inputs:vec![],index:0,name:String::new(),variable:Variable::default(),error:String::new()})}
-    pub fn fill(template:Template)->Result<Self>{let template=template.normalize().map_err(anyhow::Error::msg)?;let names=template.fields().map_err(anyhow::Error::msg)?;let labels=names.iter().map(|name|template.variables[name].label.clone()).collect();let inputs=names.iter().map(|name|Self::text(&template.variables[name].default)).collect();Ok(Self{template,fill:true,choosing:false,names,labels,inputs,index:0,name:String::new(),variable:Variable::default(),error:String::new()})}
+    pub fn variables(template:Template)->Result<Self>{let template=template.normalize().map_err(anyhow::Error::msg)?;let mut names=vec!["New text field".into(),"date".into(),"time".into(),"timestamp".into(),"key:enter".into()];names.extend(template.variables.keys().filter(|name|!Template::builtin(name)).cloned());Ok(Self{template,fill:false,choosing:true,names,labels:vec![],inputs:vec![],index:0,name:String::new(),variable:Variable::default(),error:String::new(),buttons:Vec::new()})}
+    pub fn fill(template:Template)->Result<Self>{let template=template.normalize().map_err(anyhow::Error::msg)?;let names=template.fields().map_err(anyhow::Error::msg)?;let labels=names.iter().map(|name|template.variables[name].label.clone()).collect();let inputs=names.iter().map(|name|Self::text(&template.variables[name].default)).collect();Ok(Self{template,fill:true,choosing:false,names,labels,inputs,index:0,name:String::new(),variable:Variable::default(),error:String::new(),buttons:Vec::new()})}
     fn answers(&self)->BTreeMap<String,String>{self.names.iter().zip(&self.inputs).map(|(name,input)|(name.clone(),input.lines().join("\n"))).collect()}
     fn render(&self,preview:bool)->Result<Rendered>{Templates::render(&serde_json::json!({"type":"template","text":self.template.text,"variables":self.template.variables}),self.answers(),preview)}
     fn definition(&self)->Result<(String,Variable)> {
@@ -27,6 +27,8 @@ impl Dialog {
     }
     pub fn event(&mut self,event:Event)->Option<Outcome>{match self.handle(event){Ok(value)=>value,Err(error)=>{self.error=error.to_string();None}}}
     fn handle(&mut self,event:Event)->Result<Option<Outcome>>{
+        if let Event::Mouse(mouse)=&event{if mouse.kind==MouseEventKind::Down(MouseButton::Left){if let Some((_,code,modifiers))=self.buttons.iter().find(|(area,_,_)|area.contains(Position::new(mouse.column,mouse.row))){return self.handle(Event::Key(KeyEvent::new(*code,*modifiers)));}}}
+
         let key=match event { Event::Key(key)=>key,Event::Paste(text)=>{if !self.choosing&&self.index<self.inputs.len(){let label=self.labels[self.index].as_str();if self.fill||matches!(label,"Name"|"Label"|"Default"){let multiline=if self.fill{self.template.variables[&self.names[self.index]].multiline}else{label=="Default"&&self.variable.multiline};let text=text.replace("\r\n","\n");ensure!(multiline||!text.contains('\n'),"Enable multiline before pasting multiple lines");self.inputs[self.index].insert_str(text);}}return Ok(None)},_=>return Ok(None)};if key.kind==KeyEventKind::Release{return Ok(None)};
         if key.code==KeyCode::Esc{return Ok(Some(Outcome::Cancel))}
         if self.choosing {
@@ -64,20 +66,20 @@ impl Dialog {
         self.inputs[self.index].input(Event::Key(key));Ok(None)
     }
     pub fn draw(&mut self,frame:&mut Frame,area:Rect){
-        let rows=Layout::vertical([Constraint::Length(2),Constraint::Min(5),Constraint::Length(3)]).split(area);
-        frame.render_widget(Paragraph::new(if self.choosing{"Insert/edit variable · Enter chooses"}else if self.fill{"Fill and copy · Values stay local"}else{"Variable settings"}),rows[0]);
+        let labels:&[&str]=if self.choosing{&["Choose (enter)","Cancel (esc)"]}else if self.fill{&["Copy (ctrl+c)","Next field (f2)","Insert tab (ctrl+t)","Cancel (esc)"]}else{&["Insert (ctrl+s)","Save settings (f4)","Next field (f2)","Cancel (esc)"]};let height=crate::app::App::button_layout(Rect::new(0,0,area.width,0),labels).last().unwrap().bottom();let rows=Layout::vertical([Constraint::Length(2),Constraint::Min(5),Constraint::Length(2),Constraint::Length(height)]).split(area);self.buttons.clear();
+        frame.render_widget(Paragraph::new(if self.choosing{"Insert/edit variable"}else if self.fill{"Fill and copy · Values stay local"}else{"Variable settings"}),rows[0]);
         if self.choosing {let items=self.names.iter().map(|name|ListItem::new(name.as_str())).collect::<Vec<_>>();frame.render_stateful_widget(List::new(items).block(Block::default().borders(Borders::ALL)).highlight_style(Style::default().bg(Color::DarkGray)),rows[1],&mut ListState::default().with_selected(Some(self.index)));}
         else {
             let columns=Layout::horizontal([Constraint::Percentage(32),Constraint::Percentage(68)]).split(rows[1]);
             let labels=self.labels.iter().map(|label|ListItem::new(label.as_str())).collect::<Vec<_>>();frame.render_stateful_widget(List::new(labels).block(Block::default().borders(Borders::ALL)).highlight_style(Style::default().bg(Color::DarkGray)),columns[0],&mut ListState::default().with_selected(Some(self.index)));
             let parts=Layout::vertical([Constraint::Length(5),Constraint::Min(3)]).split(columns[1]);
             if let Some(label)=self.labels.get(self.index){let selected=if !self.fill{match label.as_str(){"Required"=>Some(self.variable.required.to_string()),"Multiline"=>Some(self.variable.multiline.to_string()),"Format"=>Some(if self.variable.format.is_empty(){"Default".into()}else{self.variable.format.clone()}),"Timezone"=>Some(self.variable.timezone.clone()),_=>None}}else{None};
-                if let Some(value)=selected{frame.render_widget(Paragraph::new(format!("{value}\nSpace / Left / Right changes")).block(Block::default().borders(Borders::ALL).title(label.as_str())),parts[0]);}else{self.inputs[self.index].set_block(Block::default().borders(Borders::ALL).title(label.clone()));frame.render_widget(&self.inputs[self.index],parts[0]);}
+                if let Some(value)=selected{crate::app::App::button(frame,parts[0],&format!("{label}: {value} (space)"),true);self.buttons.push((parts[0],KeyCode::Char(' '),KeyModifiers::NONE));}else{self.inputs[self.index].set_block(Block::default().borders(Borders::ALL).title(label.clone()));frame.render_widget(&self.inputs[self.index],parts[0]);}
             }
-            let preview=if self.fill{self.render(true).map(|result|result.steps.iter().map(|step|match step{Step::Text{text}=>text.clone(),Step::Enter=>"⏎ [Enter key]".into()}).collect::<String>())}else{self.definition().and_then(|(name,variable)|Templates::render(&serde_json::json!({"type":"template","text":format!("{{{{{name}}}}}"),"variables":{name:variable}}),BTreeMap::new(),true).map(|r|r.text))};
-            frame.render_widget(Paragraph::new(preview.unwrap_or_default()).block(Block::default().borders(Borders::ALL).title("Preview · Copy omits Enter actions")).wrap(Wrap{trim:false}),parts[1]);
+            let preview=if self.fill{self.render(true).map(|result|result.steps.iter().map(|step|match step{Step::Text{text}=>text.clone(),Step::Enter=>"⏎ [enter key]".into()}).collect::<String>())}else{self.definition().and_then(|(name,variable)|Templates::render(&serde_json::json!({"type":"template","text":format!("{{{{{name}}}}}"),"variables":{name:variable}}),BTreeMap::new(),true).map(|r|r.text))};
+            frame.render_widget(Paragraph::new(preview.unwrap_or_default()).block(Block::default().borders(Borders::ALL).title("Preview · copy omits enter actions")).wrap(Wrap{trim:false}),parts[1]);
         }
-        frame.render_widget(Paragraph::new(format!("{}\n{}",self.error,if self.fill{"Tab / F2 next · Ctrl+T tab character · Ctrl+C Copy · Esc cancel"}else{"Tab / F2 next · Ctrl+T tab character · Ctrl+S Insert · F4 save settings only · Esc cancel"})).wrap(Wrap{trim:false}),rows[2]);
+        frame.render_widget(Paragraph::new(self.error.as_str()).wrap(Wrap{trim:false}),rows[2]);let keys=if self.choosing{vec![(KeyCode::Enter,KeyModifiers::NONE),(KeyCode::Esc,KeyModifiers::NONE)]}else if self.fill{vec![(KeyCode::Char('c'),KeyModifiers::CONTROL),(KeyCode::F(2),KeyModifiers::NONE),(KeyCode::Char('t'),KeyModifiers::CONTROL),(KeyCode::Esc,KeyModifiers::NONE)]}else{vec![(KeyCode::Char('s'),KeyModifiers::CONTROL),(KeyCode::F(4),KeyModifiers::NONE),(KeyCode::F(2),KeyModifiers::NONE),(KeyCode::Esc,KeyModifiers::NONE)]};for(index,(rect,(key,modifiers)))in crate::app::App::button_layout(rows[3],labels).into_iter().zip(keys).enumerate(){crate::app::App::button(frame,rect,labels[index],true);self.buttons.push((rect,key,modifiers));}
     }
 }
 

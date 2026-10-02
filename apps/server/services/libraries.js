@@ -311,12 +311,21 @@ export class Libraries {
 		const preview = await Libraries.previewImport(format, body);
 		Support.assert(Array.isArray(body.selected) && body.selected.length > 0 && new Set(body.selected.map(item => item.key)).size === body.selected.length, 'Select valid fragments first');
 		const groups = new Map();
-		for (const selected of body.selected) {
-			const entry = preview.entries.find(entry => entry.key === selected.key);
-			Support.assert(entry && !entry.error, 'Selected fragment is invalid');
-			const key = entry.folder;
-			if (!groups.has(key)) groups.set(key, { name: entry.name, snippets: [] });
-			groups.get(key).snippets.push({ ...Libraries.value(entry), trigger: entry.review ? null : Abbreviation.normalize(selected.trigger === undefined ? entry.trigger : selected.trigger) || null });
+		const occupied = new Set((await Libraries.list(ctx, session)).flatMap(library => library.snippets.flatMap(snippet => [snippet.trigger, snippet.effective_trigger])).filter(Boolean));
+		const selectedByKey = new Map(body.selected.map(item => [item.key, item]));
+		Support.assert(body.selected.every(item => preview.entries.some(entry => entry.key === item.key && !entry.error)), 'Selected fragment is invalid');
+		const reserved = new Set(preview.entries.filter(entry => selectedByKey.has(entry.key) && !entry.review).map(entry => Abbreviation.normalize(selectedByKey.get(entry.key).trigger === undefined ? entry.trigger : selectedByKey.get(entry.key).trigger)).filter(Boolean));
+		const renamed = [];
+		for (const entry of preview.entries.filter(entry => selectedByKey.has(entry.key))) {
+			const selected = selectedByKey.get(entry.key);
+			const original = entry.review ? null : Abbreviation.normalize(selected.trigger === undefined ? entry.trigger : selected.trigger) || null;
+			if (original) Support.assert(/^[a-z0-9-]{1,63}$/.test(original), 'Invalid abbreviation');
+			let trigger = original; let suffix = 2;
+			if (trigger && occupied.has(trigger)) { do { const ending = '-' + suffix++; trigger = original.slice(0, 63 - ending.length) + ending; } while (occupied.has(trigger) || reserved.has(trigger)); }
+			if (trigger) occupied.add(trigger);
+			if (trigger !== original) renamed.push({ key: entry.key, title: entry.title, original, trigger });
+			if (!groups.has(entry.folder)) groups.set(entry.folder, { name: entry.name, snippets: [] });
+			groups.get(entry.folder).snippets.push({ ...Libraries.value(entry), trigger });
 		}
 		const libraries = [];
 		const used = new Set((await Library.find({ account: ctx.account, creator: ctx.user }).session(session).select('name').lean()).map(item => item.name));
@@ -327,7 +336,7 @@ export class Libraries {
 			libraries.push(await Libraries.create(ctx, { name, snippets: group.snippets }, session));
 		}
 		await Libraries.validateVisible(ctx, session);
-		return { libraries };
+		return { libraries, import_summary: { imported: body.selected.length, skipped: preview.warnings || [], renamed } };
 	}
 	static async create(ctx, body, session) {
 		const sourceEntries = body.yaml !== undefined ? (await Yaml.run(body.yaml)).matches : (body.snippets || []);

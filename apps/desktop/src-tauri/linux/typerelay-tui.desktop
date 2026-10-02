@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Typerelay TUI
+Exec=foot --app-id=com.typerelay.tui --title="Typerelay TUI" /usr/bin/typerelay-tui
+Icon=typerelay-panel
+Terminal=false
+Categories=Utility;

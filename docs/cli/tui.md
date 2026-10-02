@@ -7,6 +7,8 @@ description: "Use the keyboard-first TypeRelay TUI to browse libraries, search s
 
 Run `typerelay-tui` to edit the same local SQLite libraries used by the engine and desktop panel. It works offline. Normal exit prompts before discarding a draft; closing the terminal does not save unsaved changes.
 
+On Linux, deb/rpm install the command directly. AppImage's one-time setup installs a terminal launcher that runs its bundled TUI in the current terminal. It remains available when the desktop app is closed. No source build is required; see [installation](../desktop/installation).
+
 The library picker shows each library's active snippet count, such as `mysnippets (6)`. Its search field finds snippets across all active local libraries by title, abbreviation, or expansion. Results show the source library and a preview. Select a result and press Enter to edit it, or Ctrl+C to copy it. Copy also works while the search field has focus. Returning from the editor keeps the global query. Search inside an opened library stays limited to that library.
 
 ## Library and list controls

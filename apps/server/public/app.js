@@ -5,6 +5,7 @@ import { TemplateEditor, TemplateFill } from './template-editor.js';
 import { Abbreviation } from './abbreviation.js';
 import { RichTextRuntime } from './rich-text-runtime.js';
 import { PasswordField } from './password-field.js';
+import { AiClient } from './ai.js';
 class TypeRelay {
 	account = document.querySelector('#workspace')?.dataset.account;
 	libraries = new Map();
@@ -27,6 +28,8 @@ class TypeRelay {
 	searchFocus = null;
 	submit = null;
 	constructor() {
+		this.ai = new AiClient({ request: (path, method, body) => this.request('ai' + path, method, body), identity: () => location.origin + ':' + this.account + ':' + document.querySelector('#workspace')?.dataset.user, notify: (message, icon) => this.toast(message, icon), manage: () => { bootstrap.Modal.getOrCreateInstance(document.querySelector('#settings')).show(); this.settingsTab('ai'); } });
+		this.ai.bindSearch(document.querySelector('[data-ai-search]'), async () => ({}), async result => { await this.open(result.library); const snippet = this.libraries.get(result.library)?.snippets.find(item => item.id === result.id); if (!snippet || snippet.revision !== result.revision) throw Error('This snippet changed. Search again.'); bootstrap.Modal.getOrCreateInstance(document.querySelector('#search-modal')).hide(); const node = document.querySelector('[data-snippet="' + CSS.escape(result.id) + '"]'); node?.focus(); node?.scrollIntoView({ block: 'center' }); });
 		this.statistics = new Statistics(this);
 		this.templateEditor = new TemplateEditor(this); this.templateFill = new TemplateFill(this);
 		this.trialCountdown = new TrialCountdown(this);
@@ -62,6 +65,7 @@ class TypeRelay {
 		document.querySelector('#form-modal')?.addEventListener('hidden.bs.modal', () => {
 			const modal = document.querySelector('#form-modal');
 			if (modal.dataset.preserveEditor === 'true') { delete modal.dataset.preserveEditor; return; }
+			this.ai.cancel();
 			this.codeVersion = (this.codeVersion || 0) + 1; this.codeView?.destroy(); this.codeView = null; this.richView?.destroy(); this.richView = null;
 			if (this.returnSettings) { this.returnSettings = false; bootstrap.Modal.getOrCreateInstance(document.querySelector('#settings')).show(); }
 		});
@@ -72,6 +76,10 @@ class TypeRelay {
 		this.updateScrollTop();
 		if (document.querySelector('#team-member-form')) this.rotateTeamPassword(false);
 		if (this.account) {
+			this.ai.refresh().catch(() => this.ai.update());
+			if (location.hash === '#settings-ai') { bootstrap.Modal.getOrCreateInstance(document.querySelector('#settings')).show(); this.settingsTab('ai'); }
+			if (location.hash === '#ai-create') { const library = [...this.libraries.values()].find(item => item.permissions.edit); if (library) this.editSnippet(library, null).catch(error => this.toast(error.message, 'error')); }
+			if (location.hash === '#ai-edit') { const query = new URL(location.href).searchParams; const library = this.libraries.get(query.get('library')); if (library?.permissions.edit) this.editSnippet(library, query.get('snippet')).catch(error => this.toast(error.message, 'error')); }
 			this.poll().catch(error => this.toast(error.message, 'error'));
 			setInterval(() => this.poll().catch(() => {}), 30000);
 			this.devices().catch(() => {});
@@ -220,6 +228,7 @@ class TypeRelay {
 		if (focus) tab.focus();
 		if (id === 'tokens') Promise.all([this.tokens(), this.oauth()]).catch(error => this.toast(error.message, 'error'));
 		if (id === 'devices') this.devices().catch(error => this.toast(error.message, 'error'));
+		if (id === 'ai') this.ai.loadSettings(document.querySelector('#settings-pane-ai')).catch(error => this.toast(error.message, 'error'));
 		if (id === 'whiteLabel') this.refreshWhiteLabel().catch(error => this.toast(error.message, 'error'));
 		if (id === 'subscription') this.refreshBilling().catch(error => this.toast(error.message, 'error'));
 	}
@@ -315,7 +324,7 @@ class TypeRelay {
 		});
 
 	}
-	async snippetValue(fields) { const type = fields.get('type') || 'plain_text'; const text = fields.get('replace'); const dynamic = type !== 'code' && (type === 'rich_text' || Object.keys(this.templateEditor.variables || {}).length || /(^|[^\\])\{\{/.test(text)); const template = dynamic ? await this.templateEditor.content() : null; if (type === 'rich_text') return { trigger: fields.get('trigger') || null, title: fields.get('title') || '', content: { version: 2, type, markdown: this.richView?.content() || text, variables: template?.variables || {} } }; const storedType = type === 'plain_text' && dynamic ? 'template' : type; return { trigger: fields.get('trigger') || null, title: fields.get('title') || '', content: { version: 1, type: storedType, text, ...(storedType === 'template' ? { variables: template.variables } : {}), ...(type === 'code' ? { language: fields.get('language') || 'plain_text' } : {}) } }; }
+	async snippetValue(fields) { const type = fields.get('type') || 'plain_text'; const text = fields.get('replace'); const dynamic = type !== 'code' && (type === 'rich_text' || Object.keys(this.templateEditor.variables || {}).length || /(^|[^\\])\{\{/.test(text)); const template = dynamic && text ? await this.templateEditor.content() : { variables: this.templateEditor.variables || {} }; if (type === 'rich_text') return { trigger: fields.get('trigger') || null, title: fields.get('title') || '', content: { version: 2, type, markdown: this.richView?.content() || text, variables: template?.variables || {} } }; const storedType = type === 'plain_text' && dynamic ? 'template' : type; return { trigger: fields.get('trigger') || null, title: fields.get('title') || '', content: { version: 1, type: storedType, text, ...(storedType === 'template' ? { variables: template.variables } : {}), ...(type === 'code' ? { language: fields.get('language') || 'plain_text' } : {}) } }; }
 	async assetFile(file) { const response = await fetch('/api/v2/assets', { method: 'POST', headers: { 'Content-Type': file.type, 'X-CSRF-Token': document.querySelector('meta[name=csrf-token]').content, 'X-Account-Id': this.account || '', 'X-TypeRelay-Personal-Abbreviations': '1' }, body: file }); if (!response.ok) throw new Error((await response.json()).error); return response.json(); }
 	async richAssets(content) { const first = await RichTextRuntime.render(content, {}, true); const assets = {}; for (const id of first.assets) { const response = await fetch('/api/v2/assets/' + id, { headers: { 'X-Account-Id': this.account || '' } }); if (!response.ok) throw new Error('Could not load rich-text image'); const blob = await response.blob(); assets[id] = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(blob); }); } return assets; }
 	async copyRich(content, values = {}) { const assets = await this.richAssets(content); const rendered = await RichTextRuntime.render(content, values, false, new Date(), assets); try { await navigator.clipboard.write([new ClipboardItem({ 'text/plain': new Blob([rendered.text], { type: 'text/plain' }), 'text/html': new Blob([rendered.html], { type: 'text/html' }) })]); } catch { await navigator.clipboard.writeText(rendered.text); this.toast('This browser copied the plain-text fallback'); } return rendered; }
@@ -360,7 +369,9 @@ class TypeRelay {
 				await this.applyBatch(await this.request('snippets/batch', 'POST', { action: 'move', source_library: library._id, destination_library: destination, items: [{ id, base_revision: item.revision, value }] }), false);
 			} else await this.snippet(id, value, library);
 		});
+		if (library.permissions.edit) this.ai.bindAuthor(document.querySelector('[data-ai-author]'), async () => { this.richView?.content(); return { library: library._id, entry: await this.snippetValue(new FormData(document.querySelector('#record-form'))) }; }, async proposal => { this.codeView?.destroy(); this.codeView = null; this.richView?.destroy(); this.richView = null; document.querySelector('#replace').value = proposal.content.markdown ?? proposal.content.text; document.querySelector('#snippet-title').value = proposal.title; this.templateEditor.variables = proposal.content.variables || {}; document.querySelector('#template-options').dataset.variables = JSON.stringify(this.templateEditor.variables); await this.codeEditor(); document.querySelector('#replace').dispatchEvent(new Event('input', { bubbles: true })); });
 		if (!library.permissions.edit) {
+			const author = document.querySelector('[data-ai-author]'); if (author) author.hidden = true;
 			this.codeReadonly = true; this.codeView?.setReadonly(true); this.richView?.setReadonly(true);
 			document.querySelectorAll('[data-vfield],#insert-variable,#variable-kind,#variable-name').forEach(field => field.disabled = true);
 			document.querySelectorAll('#form-fields select').forEach(field => { field.disabled = true; });
@@ -379,6 +390,8 @@ class TypeRelay {
 		document.querySelector('#record-form button[type="submit"]').disabled = ['snippetslab', 'import'].includes(kind) || (kind === 'move' && !document.querySelector('#destination-library option'));
 		document.querySelector('#record-form button[type="submit"]').textContent = kind === 'move' ? 'Move' : ['import', 'snippetslab'].includes(kind) ? 'Import' : 'Save';
 		await this.codeEditor();
+		document.querySelector('#record-form button[type=submit]').hidden = false;
+		document.querySelector('#record-form [data-bs-dismiss=modal]').textContent = 'Cancel';
 		this.submit = submit;
 		this.formOperation = crypto.randomUUID();
 		const settings = document.querySelector('#settings');
@@ -448,8 +461,8 @@ class TypeRelay {
 				if (!id) { form.reset(); form.classList.add('d-none'); }
 				this.toast('Group saved');
 			}
-			if (form.id === 'record-form') { this.submitting = true; await this.submit(data); bootstrap.Modal.getInstance(document.querySelector('#form-modal')).hide(); this.toast('Saved'); }
-		} catch (error) { this.toast(error.message, 'error'); }
+			if (form.id === 'record-form') { this.submitting = true; if (await this.submit(data) !== false) { bootstrap.Modal.getInstance(document.querySelector('#form-modal')).hide(); this.toast('Saved'); } }
+		} catch (error) { const warning = form.querySelector('#import-error'); if (warning) { warning.textContent = error.message; warning.hidden = false; warning.scrollIntoView?.({ block: 'nearest' }); } this.toast(error.message, 'error'); }
 		finally { this.submitting = false; if (button) button.disabled = false; }
 	}
 	async confirm(title) { return (await Swal.fire({ title, icon: 'warning', showCancelButton: true, allowOutsideClick: false, allowEscapeKey: false, confirmButtonText: 'Confirm' })).isConfirmed; }
@@ -477,7 +490,10 @@ class TypeRelay {
 			all.indeterminate = this.selectedSnippets.size > 0 && !all.checked;
 			document.querySelector('[data-select-all-label]').textContent = all.checked ? 'Deselect all' : 'Select all';
 			document.querySelector('.bulk-actions').hidden = !this.selectedSnippets.size;
-			document.querySelector('[data-selection-count]').textContent = this.selectedSnippets.size + ' selected';
+			document.querySelector('[data-bulk-move-label]').textContent = this.selectedSnippets.size === 1 ? 'Move snippet to...' : 'Move snippets to...';
+			document.querySelector('[data-selection-count]').textContent = all.checked ? 'All snippets selected.' : this.selectedSnippets.size + (this.selectedSnippets.size === 1 ? ' is selected. Do you want to' : ' are selected. Do you want to');
+			document.querySelector('[data-selection-toggle]').textContent = all.checked ? 'Clear selection' : 'select all';
+			document.querySelector('[data-selection-question]').hidden = all.checked;
 		}
 	}
 	selectSnippet(id, checked, range) {
@@ -507,13 +523,16 @@ class TypeRelay {
 		} else await this.form('move', { library: source }, async fields => this.applyBatch(await this.request('snippets/batch', 'POST', { action, source_library: source, destination_library: fields.get('destination_library'), items })));
 	}
 	async onClick(event) {
-		const input = event.target.closest('[data-select-snippet],[data-select-all]');
+		const input = event.target.closest('[data-select-snippet],[data-select-all],[data-clear-selection],[data-selection-toggle]');
 		if (input) {
 			if (input.disabled) return;
-			if (input.hasAttribute('data-select-all')) {
+			if (!input.hasAttribute('data-select-snippet')) {
+				const selectAll = input.checked || (input.hasAttribute('data-selection-toggle') && !document.querySelector('[data-select-all]').checked);
+				const focus = !selectAll && input.tagName === 'BUTTON' ? document.querySelector('[data-select-snippet]:checked') : null;
 				this.selectedSnippets.clear();
-				if (input.checked) for (const item of this.libraries.get(this.selected)?.snippets || []) this.selectedSnippets.add(item.id);
+				if (selectAll) for (const item of this.libraries.get(this.selected)?.snippets || []) this.selectedSnippets.add(item.id);
 				this.selectionAnchor = null; this.syncSelection();
+				focus?.focus({ preventScroll: true });
 			} else this.selectSnippet(input.dataset.selectSnippet, input.checked, event.shiftKey);
 			return;
 		}
@@ -585,7 +604,17 @@ class TypeRelay {
 		if (button.dataset.importPage) { const controls = button.closest('[data-import-pagination]'); this.renderImportPage(Number(controls.dataset.page) + (button.dataset.importPage === 'next' ? 1 : -1)); return; }
 		if (button.dataset.importFormat) { this.importSource = null; this.importFormat = button.dataset.importFormat; return this.form('import', { format: this.importFormat }, async () => {
 			const selected = [...document.querySelectorAll('[data-import-key]:checked')].map(input => ({ key: input.dataset.importKey, trigger: Abbreviation.normalize(document.querySelector('[data-import-trigger="' + input.dataset.importKey + '"]').value) }));
-			await this.applyBatch(await this.request('import/' + this.importFormat, 'POST', { source: this.importSource, filename: this.importFilename, selected }), false);
+			document.querySelector('#import-error').hidden = true;
+			const result = await this.request('import/' + this.importFormat, 'POST', { source: this.importSource, filename: this.importFilename, selected });
+			await this.applyBatch(result, false);
+			document.querySelector('#import-summary').replaceChildren(this.fragment(result.import_summary_html));
+			document.querySelector('#import-preview').hidden = true;
+			document.querySelector('#import-file').disabled = true;
+			document.querySelector('#preview-import').disabled = true;
+			for (const button of document.querySelectorAll('#record-form button[type=submit]')) button.hidden = true;
+			document.querySelector('#record-form [data-bs-dismiss=modal]').textContent = 'Close';
+			document.querySelector('#import-summary').scrollIntoView?.({ block: 'start' });
+			return false;
 		}); }
 		if (button.id === 'preview-import') {
 			const file = document.querySelector('#import-file').files[0];

@@ -31,6 +31,28 @@ impl Database {
         db.migrate()?;
         Ok(db)
     }
+    pub fn search_index(&self) -> Result<()> {
+        if !self.connection.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='search_state')",[],|row|row.get::<_,bool>(0))? {
+            let transaction=rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?;
+            self.connection.execute_batch("CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(id UNINDEXED, library UNINDEXED, revision UNINDEXED, library_name UNINDEXED, abbreviation, title, body, tokenize='unicode61 remove_diacritics 2', prefix='2 3 4'); CREATE VIRTUAL TABLE IF NOT EXISTS search_vocab USING fts5vocab(search_fts, 'row'); CREATE TABLE IF NOT EXISTS search_state(id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL, built INTEGER NOT NULL); INSERT OR IGNORE INTO search_state VALUES(1,1,0);")?;
+            for table in ["snippets","libraries","meta","outbox"] { for operation in ["INSERT","UPDATE","DELETE"] { self.connection.execute_batch(&format!("CREATE TRIGGER IF NOT EXISTS search_dirty_{table}_{operation} AFTER {operation} ON {table} BEGIN UPDATE search_state SET version=version+1 WHERE id=1; END;"))?; } }
+            transaction.commit()?;
+        }
+        if !self.connection.query_row("SELECT version!=built FROM search_state WHERE id=1",[],|row|row.get::<_,bool>(0))? {return Ok(());}
+        let transaction=rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?;
+        if self.connection.query_row("SELECT version!=built FROM search_state WHERE id=1",[],|row|row.get::<_,bool>(0))? {
+            self.connection.execute("DELETE FROM search_fts",[])?;
+            let mut insert=self.connection.prepare("INSERT INTO search_fts(id,library,revision,library_name,abbreviation,title,body) VALUES(?1,?2,?3,?4,?5,?6,?7)")?;
+            for library in self.libraries()?.iter().filter(|library|library["state"]=="active"&&library["permissions"]["read"]==true) {
+                let id=library["_id"].as_str().context("Invalid library ID")?;
+                for record in self.effective_records(id)?.iter().filter(|record|record["state"]=="active") {
+                    insert.execute(params![record["id"].as_str(),id,record["revision"].as_i64().unwrap_or(0),library["name"].as_str().unwrap_or(""),record["effective_trigger"].as_str().unwrap_or(""),record["title"].as_str().unwrap_or(""),record["content"]["text"].as_str().or(record["content"]["markdown"].as_str()).unwrap_or("")])?;
+                }
+            }
+            self.connection.execute("UPDATE search_state SET built=version WHERE id=1",[])?;
+        }
+        transaction.commit()?;Ok(())
+    }
     pub fn meta(&self, key: &str) -> Result<Option<Value>> {
         self.connection.query_row("SELECT value FROM meta WHERE key=?1", [key], |row| row.get::<_, String>(0)).optional()?.map(|text| serde_json::from_str(&text).map_err(Into::into)).transpose()
     }
@@ -852,7 +874,7 @@ mod tests {
         let id=&file.ids[0];
         db.apply(&json!({"libraries":[library],"personal_abbreviations":[{"snippet":id,"trigger":"other","revision":1,"conflicts":[]}]}),None).unwrap();
         assert!(db.snapshot().unwrap().is_empty());
-        assert_eq!(crate::panel::Panel::search(&fixture.directory,"other").unwrap().len(),2);
+        assert_eq!(crate::panel::Panel::search(&fixture.directory,"other", None).unwrap().len(),2);
         assert_eq!(db.records(&file.id).unwrap()[0]["content"]["text"],"Shared");
         library["permissions"]["edit"]=json!(false);
         db.apply(&json!({"libraries":[library]}),None).unwrap();
@@ -875,7 +897,7 @@ mod tests {
         let library=|id:&str,name:&str|json!({"_id":id,"name":name,"shared":true,"state":"active","revision":1,"permissions":{"read":true,"edit":true},"records":[{"id":format!("{id}-snippet"),"trigger":"same","title":name,"content":{"version":1,"type":"plain_text","text":name},"revision":1,"state":"active","position":0}]});
         db.apply(&json!({"libraries":[library("first","First"),library("second","Second")],"capabilities":{"personal_abbreviations":1},"personal_abbreviations":[]}),None).unwrap();
         assert!(db.snapshot().unwrap().is_empty());
-        assert_eq!(crate::panel::Panel::search(&fixture.directory,"same").unwrap().len(),2);
+        assert_eq!(crate::panel::Panel::search(&fixture.directory,"same", None).unwrap().len(),2);
         db.personal_edit("first","first-snippet",Some("mine"),0,None).unwrap();
         assert_eq!(db.snapshot().unwrap().len(),2);
         assert_eq!(db.records("first").unwrap()[0]["trigger"],"same");

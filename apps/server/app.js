@@ -1,6 +1,7 @@
 import express from 'express';
 import { Admin } from './admin.js';
 import { AdminSettings } from './services/admin_settings.js';
+import { Ai } from './ai/index.js';
 import { AccountAccess } from './services/account_access.js';
 import pug from 'pug';
 import session from 'express-session';
@@ -70,12 +71,13 @@ export class Server {
 		app.post('/billing/webhook', express.raw({ type: 'application/json' }), async (req, res) => { Support.assert(req.headers['stripe-signature'], 'Missing Stripe-Signature', 400); try { await Billing.handleWebhook(req.body, req.headers['stripe-signature']); res.json({ received: true }); } catch (error) { error.status ||= 400; throw error; } });
 		app.use(express.json({ limit: '12mb' }), express.urlencoded({ extended: false, limit: '32kb' }));
 		const publicAssets = express.static('public');
-		app.use('/assets/generated', express.static('/data/editor'));
+		app.use(['/assets/generated', `/assets/${assetVersion}/generated`], express.static('/data/editor'));
 		app.use('/assets/:assetVersion', (req, res, next) => req.path === '/' ? next() : req.params.assetVersion === assetVersion ? publicAssets(req, res, next) : res.sendStatus(404));
 		app.use('/assets', publicAssets);
 		app.use('/vendor/webauthn', express.static('node_modules/@simplewebauthn/browser/dist/bundle'));
 		app.use('/vendor/bootstrap', express.static('node_modules/bootstrap/dist'));
 		app.use('/vendor/sweetalert2', express.static('node_modules/sweetalert2/dist'));
+		app.use('/vendor/tom-select', express.static('node_modules/tom-select/dist'));
 		app.use('/white-label-assets', express.static(WhiteLabel.assetsRoot(), { index: false, maxAge: '7d' }));
 		app.get('/health', (req, res) => res.json({ ok: true }));
 		// Seconds; retain non-rolling cookies and the separate admin/reauthentication deadlines.
@@ -149,6 +151,7 @@ export class Server {
 		});
 		if (process.env.NODE_ENV === 'development' && process.env.TYPERELAY_MOBILE_PREVIEW_URL) app.get('/api/v2/mobile-preview/identity', (req, res) => { Support.assert(req.ctx.device, 'Device sign-in required', 401); res.json({ user: req.ctx.user, account: req.ctx.account, device: req.ctx.device }); });
 		PublicApi.mountSettings(app);
+		Ai.mount(app);
 		app.post('/api/v2/statistics/events', async (req, res) => res.json(await Statistics.ingest(req.ctx, req.body)));
 		app.get('/api/v2/statistics', async (req, res) => {
 			const report = await Statistics.report(req.ctx, req.query);
@@ -346,6 +349,7 @@ export class Server {
 		return { library, html: pug.renderFile('./views/ajax/library.pug', { library }), fragments: library.snippets.map(snippet => ({ id: snippet.id, revision: snippet.revision, html: pug.renderFile('./views/ajax/snippet.pug', { snippet, library }) })) };
 	}
 	static async result(res, ctx, result) {
+		if (result.import_summary) result.import_summary_html = pug.renderFile('./views/ajax/import-summary.pug', result.import_summary);
 		if (result.libraries) result.libraries = await Libraries.personalize(ctx, result.libraries);
 		if (result.library) [result.library] = await Libraries.personalize(ctx, [result.library]);
 		if (result.libraries) return res.json({ ...result, updates: result.libraries.map(Server.presentation) });

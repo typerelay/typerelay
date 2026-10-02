@@ -6,7 +6,6 @@ import json
 import os
 import pathlib
 import pwd
-import runpy
 import shutil
 import signal
 import subprocess
@@ -18,7 +17,7 @@ import time
 class Installer:
     marker = "# Managed by TypeRelay"
 
-    def __init__(self, binary, permission_source, home=None):
+    def __init__(self, binary, permission_source, home=None, device_name=None, panel_launcher=None):
         self.home = pathlib.Path(home or pathlib.Path.home())
         config = pathlib.Path(os.environ.get("XDG_CONFIG_HOME", self.home / ".config"))
         data = pathlib.Path(os.environ.get("XDG_DATA_HOME", self.home / ".local/share"))
@@ -31,11 +30,21 @@ class Installer:
         self.helper = self.data / "session-access.py"
         self.binary = pathlib.Path(binary).resolve()
         self.permission_source = permission_source
+        self.device_name = device_name
+        self.panel_launcher = pathlib.Path(panel_launcher).absolute() if panel_launcher else None
+
+    def access(self):
+        namespace = {"__name__": "typerelay_session_access"}
+        exec(self.permission_source, namespace)
+        return namespace["SessionAccess"](device_name=self.device_name or "keyd virtual keyboard")
 
     def artifacts(self):
         artifacts = [("typerelay", self.binary, self.destination), ("typerelay-tui", self.binary.with_name("typerelay-tui"), self.destination.with_name("typerelay-tui"))]
+        worker = self.binary.with_name("typerelay-ai")
+        if worker.exists():
+            artifacts.append(("typerelay-ai", worker, self.destination.with_name("typerelay-ai")))
         panel = self.binary.with_name("typerelay-panel")
-        if panel.exists():
+        if panel.exists() and self.panel_launcher is None:
             artifacts.append(("typerelay-panel", panel, self.destination.with_name("typerelay-panel")))
         return artifacts
 
@@ -82,7 +91,7 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-ExecStart={self.quote(self.destination)} run --dir {self.quote(self.snippets)}
+ExecStart={self.quote(self.destination)} run --dir {self.quote(self.snippets)} --device-name auto
 Restart=on-failure
 RestartSec=3
 RestartPreventExitStatus=78
@@ -131,7 +140,7 @@ WantedBy=graphical-session.target
     def permissions_current(self):
         try:
             uid = os.getuid()
-            access = runpy.run_path(str(self.helper))["SessionAccess"]()
+            access = self.access()
             rule = pathlib.Path(f"/etc/udev/rules.d/99-typerelay-{uid}.rules")
             module = pathlib.Path(f"/etc/modules-load.d/typerelay-{uid}.conf")
             saved = pathlib.Path(f"/var/lib/typerelay/access-{uid}.json")
@@ -143,7 +152,7 @@ WantedBy=graphical-session.target
         if action == "install" and self.permissions_current():
             print("Existing persistent input access is current; no administrator changes needed.")
             return
-        arguments = ["/usr/bin/python3", str(self.helper), action, pwd.getpwuid(os.getuid()).pw_name]
+        arguments = ["/usr/bin/python3", str(self.helper), action, pwd.getpwuid(os.getuid()).pw_name, "--device-name", self.device_name or "keyd virtual keyboard"]
         if shutil.which("sudo"):
             arguments.insert(0, "sudo")
         elif shutil.which("pkexec"):
@@ -211,8 +220,11 @@ WantedBy=graphical-session.target
         missing = [name for name in required if not shutil.which(name)]
         if missing:
             raise RuntimeError("Missing dependencies: " + ", ".join(missing))
-        if not automatic and self.command("systemctl", "is-active", "keyd", check=False).returncode:
-            raise RuntimeError("This Omarchy client requires keyd to be running")
+        if self.device_name is None and self.manifest.exists():
+            self.device_name = json.loads(self.manifest.read_text()).get("device_name")
+        self.device_name = self.access().select_keyboard(self.device_name)
+        if automatic and not self.permissions_current():
+            raise RuntimeError("Keyboard access needs administrator setup; run typerelay install before updating")
         if self.unit.exists() and not self.unit.read_text().startswith(self.marker):
             raise RuntimeError("Existing typerelay.service is unmanaged; preserve/move it before installing")
         self.validate_bundle()
@@ -230,6 +242,7 @@ WantedBy=graphical-session.target
         conflicts = self.conflicts()
         print("Binaries: " + ", ".join(str(destination) for _, _, destination in self.artifacts()) + f"\nService: {self.unit}\nSnippets: {self.snippets}")
         print("Starts with your graphical login, runs as your user, restarts after failures.")
+        print("Keyboard: " + (self.device_name or "keyd virtual keyboard"))
         print("Administrator access installs scoped udev rules and loads uinput at boot.")
         if conflicts["manual"]:
             print("Running manual TypeRelay client(s): " + ", ".join(map(str, conflicts["manual"])))
@@ -260,6 +273,9 @@ WantedBy=graphical-session.target
         # Save recovery information before any privileged mutation.
         previous["binaries"] = {**previous.get("binaries", {}), **{name: hashlib.sha256(source.read_bytes()).hexdigest() for name, source, _ in self.artifacts()}}
         previous["binary_sha256"] = previous["binaries"]["typerelay"]
+        if self.panel_launcher:
+            previous["panel_launcher"] = str(self.panel_launcher)
+        previous["device_name"] = self.device_name or "keyd virtual keyboard"
         self.write_private(self.manifest, json.dumps(previous, indent=2) + "\n")
         if not automatic:
             self.privileged("install")
@@ -317,6 +333,21 @@ WantedBy=graphical-session.target
                 launcher = self.data.parent / "applications/typerelay-panel.desktop"
                 self.write_private(launcher, "[Desktop Entry]\nType=Application\nName=TypeRelay\nExec=" + str(panel) + "\nTerminal=false\nCategories=Utility;\n")
                 subprocess.Popen([str(panel), "--background"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            if self.panel_launcher:
+                launcher = self.data.parent / "applications/typerelay-panel.desktop"
+                if self.panel_launcher != self.binary.with_name("typerelay-panel"):
+                    # AppImages need a stable menu entry; deb/rpm already supply one.
+                    executable = str(self.panel_launcher).replace("\\", "\\\\").replace('"', '\\"').replace("`", "\\`").replace("$", "\\$").replace("%", "%%")
+                    self.write_private(launcher, '[Desktop Entry]\nType=Application\nName=TypeRelay\nExec="' + executable + '"\nTerminal=false\nCategories=Utility;\n')
+                elif launcher.exists() and str(self.destination.with_name("typerelay-panel")) in launcher.read_text():
+                    launcher.unlink()
+                # Retire only the panel owned by the former standalone installation.
+                old_panel = self.destination.with_name("typerelay-panel")
+                owned = json.loads(old_manifest).get("binaries", {}).get("typerelay-panel") if old_manifest else None
+                if old_panel != self.panel_launcher and old_panel.is_file() and hashlib.sha256(old_panel.read_bytes()).hexdigest() == owned:
+                    old_panel.unlink()
+                previous["binaries"].pop("typerelay-panel", None)
+                self.write_private(self.manifest, json.dumps(previous, indent=2) + "\n")
             print("Installed. Manage with systemctl --user start|stop|restart typerelay.")
             print("Manage libraries in typerelay-tui. YAML files are import/export only.")
             if storage_backup:
@@ -359,14 +390,32 @@ WantedBy=graphical-session.target
             raise
         finally:
             rollback.cleanup()
-            if automatic:
+            if automatic and self.panel_launcher is None:
                 shutil.rmtree(self.binary.parent, ignore_errors=True)
+
+    def setup(self, check=False, automatic=False):
+        if not self.panel_launcher or not self.panel_launcher.is_file():
+            raise RuntimeError("The Linux package launcher is missing")
+        if check:
+            state = json.loads(self.manifest.read_text()) if self.manifest.exists() else {}
+            self.device_name = state.get("device_name")
+            if state.get("panel_launcher") != str(self.panel_launcher) or not self.unit.exists() or not self.unit.read_text().startswith(self.marker):
+                raise RuntimeError("Linux expansion setup is required")
+            for name, source, destination in self.artifacts():
+                digest = hashlib.sha256(source.read_bytes()).hexdigest()
+                if state.get("binaries", {}).get(name) != digest or not destination.is_file() or hashlib.sha256(destination.read_bytes()).hexdigest() != digest:
+                    raise RuntimeError("Bundled engine and TUI need updating")
+            if not self.permissions_current():
+                raise RuntimeError("Keyboard access needs administrator setup")
+            return
+        self.install(False, automatic=automatic)
 
     def uninstall(self, dry_run):
         if not self.manifest.exists():
             print("No managed installation found. Snippets and standalone binary left untouched.")
             return
         state = json.loads(self.manifest.read_text())
+        self.device_name = state.get("device_name", "keyd virtual keyboard")
         print("Stop TypeRelay clients and remove its service, managed binary and persistent input rules.")
         print("KEEP all snippet/config files: " + str(self.config))
         if dry_run:
@@ -390,7 +439,7 @@ WantedBy=graphical-session.target
         self.systemctl("daemon-reload")
         self.systemctl("reset-failed", "typerelay.service", check=False)
         hashes = state.get("binaries", {"typerelay": state.get("binary_sha256")})
-        for name in ("typerelay", "typerelay-tui", "typerelay-panel"):
+        for name in ("typerelay", "typerelay-tui", "typerelay-panel", "typerelay-ai"):
             destination = self.destination.with_name(name)
             if destination.exists():
                 if hashlib.sha256(destination.read_bytes()).hexdigest() == hashes.get(name):
@@ -399,7 +448,7 @@ WantedBy=graphical-session.target
                     print("Preserved binary changed since installation or not owned: " + str(destination))
         panel = self.destination.with_name("typerelay-panel")
         for path in [self.data.parent / "applications/typerelay-panel.desktop", self.config.parent / "autostart/TypeRelay.desktop"]:
-            if path.exists() and str(panel) in path.read_text():
+            if path.exists() and str(state.get("panel_launcher", panel)) in path.read_text():
                 path.unlink()
         self.helper.unlink(missing_ok=True)
         self.manifest.unlink()
@@ -413,17 +462,23 @@ WantedBy=graphical-session.target
     @classmethod
     def run(cls):
         parser = argparse.ArgumentParser()
-        parser.add_argument("action", choices=["install", "uninstall", "update"])
+        parser.add_argument("action", choices=["install", "uninstall", "update", "setup"])
         parser.add_argument("binary")
         parser.add_argument("permission_source")
         parser.add_argument("--dry-run", action="store_true")
+        parser.add_argument("--device-name")
+        parser.add_argument("--panel-launcher")
+        parser.add_argument("--check", action="store_true")
+        parser.add_argument("--automatic", action="store_true")
         args = parser.parse_args()
         if os.getuid() == 0:
             raise RuntimeError("Run the installer as your desktop user, not root")
-        if args.action != "update" and not args.dry_run and not sys.stdin.isatty():
+        if args.action != "update" and not args.dry_run and not args.check and not args.automatic and not sys.stdin.isatty():
             raise RuntimeError("Run typerelay install/uninstall from an interactive terminal")
-        installer = cls(args.binary, args.permission_source)
-        if args.action == "update":
+        installer = cls(args.binary, args.permission_source, device_name=args.device_name, panel_launcher=args.panel_launcher)
+        if args.action == "setup":
+            installer.setup(args.check, args.automatic)
+        elif args.action == "update":
             installer.install(False, automatic=True)
         else:
             getattr(installer, args.action)(args.dry_run)

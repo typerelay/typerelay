@@ -1,0 +1,14 @@
+include ai-provider-fields
+article.ai-connection.card.p-3.mb-3(data-ai-connection=connection.id data-scope=scope)
+	.d-flex.align-items-center.justify-content-between.flex-wrap.gap-3
+		div
+			h3.h6.mb-1= connection.name
+			span.small.text-muted= providers[connection.provider].name + ' · ' + (connection.key_configured ? 'Key configured' : connection.no_auth ? 'No authentication' : 'Key missing')
+		div.d-flex
+			button.btn.btn-outline-secondary.btn-sm(type="button" data-ai-edit-connection=connection.id) Edit
+			button.btn.btn-outline-danger.btn-sm.ms-3(type="button" data-ai-delete-connection=connection.id) Remove
+	form.mt-4(data-ai-connection-form data-id=connection.id hidden)
+		+aiProviderFields(connection)
+		.d-flex.justify-content-between.align-items-center
+			button.btn.btn-outline-secondary.btn-sm(type="button" data-ai-cancel-connection) Cancel
+			button.btn.btn-primary.btn-sm.ms-3(type="submit") Save provider

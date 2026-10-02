@@ -1,4 +1,8 @@
 import { send } from './messages.js';
+import { AiClient } from './ai.js';
+let aiOrigin='';
+const ai=new AiClient({request:(path,method='GET',body)=>send({type:'ai-request',path,method,body}),identity:()=>aiOrigin+':'+ai.status?.identity?.account+':'+ai.status?.identity?.user,notify:(message,icon)=>Swal.fire({toast:true,position:"top-end",title:message,icon:icon||"success",timer:4000,showConfirmButton:false}),manage:()=>chrome.tabs.create({url:aiOrigin+'/?account='+encodeURIComponent(ai.status?.identity?.account||'')+'#settings-ai'})});
+void send({type:'status'}).then(async value=>{aiOrigin=value.origin;if(value.connected)await ai.refresh();}).catch(()=>ai.update());
 
 const $ = selector => document.querySelector(selector);
 let prefix = ';';
@@ -57,3 +61,5 @@ $('#prefix').addEventListener('change', async event => { const control = event.t
 chrome.storage.onChanged.addListener((changes, area) => { if ((area === 'local' && ['tokens', 'items', 'lastSync'].some(key => key in changes)) || (area === 'session' && ['browserAuth', 'browserAuthError'].some(key => key in changes))) void refresh().catch(error => { $('#auth-error').textContent = error.message; $('#auth-error').hidden = false; }); });
 window.addEventListener('focus', () => void refresh().catch(() => undefined));
 void refresh().catch(error => { $('#auth-error').textContent = error.message; $('#auth-error').hidden = false; });
+
+chrome.storage.onChanged.addListener((changes,area)=>{const old=changes.tokens?.oldValue;const next=changes.tokens?.newValue;if(area==="local"&&(changes.server||changes.origin||(changes.tokens&&(!old||!next||old.account!==next.account||old.device!==next.device)))){ai.reset();void send({type:"status"}).then(async value=>{aiOrigin=value.origin;if(value.connected)await ai.refresh();}).catch(()=>ai.update());}});

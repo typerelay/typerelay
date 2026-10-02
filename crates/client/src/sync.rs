@@ -67,15 +67,24 @@ impl Sync {
     fn request(&self, credentials: &mut Credentials, method: reqwest::Method, path: &str, body: Option<&Value>) -> Result<Value> {
         let send = |credentials: &Credentials| {
             let request = self.client.request(method.clone(), format!("{}/api/v2/{path}", credentials.server)).bearer_auth(&credentials.access_token).header("X-TypeRelay-Sync-Protocol", "6").header("X-TypeRelay-Personal-Abbreviations", "1");
+            let request = if path.starts_with("ai/") { request.timeout(Duration::from_secs(100)) } else { request };
             if let Some(body) = body { request.json(body).send() } else { request.send() }
         };
         let mut response = send(credentials)?;
         if response.status() == reqwest::StatusCode::UNAUTHORIZED && !credentials.refresh_token.is_empty() {
+			let lock = fs::OpenOptions::new().create(true).truncate(false).read(true).write(true).open(self.path("credentials.lock"))?;
+			lock.lock_exclusive()?;
+			let latest = self.credentials()?;
+			ensure!(latest.server == credentials.server && latest.account == credentials.account && latest.device == credentials.device, "Connection changed; retry from the current account");
+			if latest.access_token != credentials.access_token { *credentials = latest; }
+			else {
             let tokens = Self::response(self.client.post(format!("{}/oauth/token", credentials.server)).json(&json!({"grant_type":"refresh_token","refresh_token":credentials.refresh_token})).send()?)?;
             credentials.access_token = tokens["access_token"].as_str().context("Missing access token")?.into();
             credentials.refresh_token = tokens["refresh_token"].as_str().context("Missing refresh token")?.into();
 			credentials.account=tokens["account"].as_str().map(str::to_owned).or(credentials.account.take());credentials.device=tokens["device"].as_str().map(str::to_owned).or(credentials.device.take());
             self.secret(credentials)?;
+			}
+			lock.unlock()?;
             response = send(credentials)?;
         }
         Self::response(response)

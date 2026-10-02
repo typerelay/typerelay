@@ -1,0 +1,6 @@
+div(data-ai-settings)
+	h2.h4.mb-3 AI
+	include ai-controls
+	div(data-ai-configuration-slot="personal")
+	if canManageTeam
+		div(data-ai-configuration-slot="team")

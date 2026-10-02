@@ -42,3 +42,7 @@ typerelay import bundle ./imported.typerelay.zip --name "Imported bundle"
 ```
 
 Export refuses to overwrite an existing destination. Use YAML for snippets without binary assets and a `.typerelay.zip` bundle for complete rich libraries. Editing an export does not synchronize changes or alter the SQLite database. Import it as a new library if you want those changes in TypeRelay.
+
+## Conflicting abbreviations
+
+Imports preserve existing abbreviations. Incoming conflicts receive the first available numeric suffix, such as `hello-2`. Snippets without an abbreviation, including entries that need review, remain unassigned. The completion summary lists imported snippets, skipped macros and renamed abbreviations. Failed imports keep the preview open with a persistent error; successful retries of the same request do not import twice.

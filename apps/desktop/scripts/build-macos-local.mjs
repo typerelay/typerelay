@@ -19,6 +19,7 @@ export class LocalMacBuild {
 		await LocalMacBuild.run('pnpm', ['tauri', 'build', '--target', target.triple, '--bundles', 'app', '--no-sign', '--', '--locked'], LocalMacBuild.working);
 		const release = path.join(LocalMacBuild.working, 'src-tauri/target', target.triple, 'release/bundle'); const app = path.join(release, 'macos/TypeRelay.app'); const tui = path.join(app, 'Contents/MacOS/typerelay-tui');
 		await LocalMacBuild.run('codesign', ['--force', '--sign', identity, '--identifier', 'com.typerelay.tui', '--options', 'runtime', '--timestamp=none', tui]);
+		await LocalMacBuild.run('codesign', ['--force', '--sign', identity, '--identifier', 'com.typerelay.ai', '--options', 'runtime', '--timestamp=none', path.join(app, 'Contents/MacOS/typerelay-ai')]);
 		await LocalMacBuild.run('codesign', ['--force', '--sign', identity, '--identifier', config.identifier, '--options', 'runtime', '--timestamp=none', app]);
 		await LocalMacBuild.run('codesign', ['--verify', '--deep', '--strict', '--verbose=2', app]);
 		const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'typerelay-local-dmg-')); const dmg = path.join(release, 'dmg', `TypeRelay_${config.version}_${target.artifact}.dmg`);

@@ -1,0 +1,55 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "build": {
+    "beforeBundleCommand": "node scripts/stage-native-tools.mjs"
+  },
+  "bundle": {
+    "externalBin": [
+      "binaries/typerelay",
+      "binaries/typerelay-tui",
+      "binaries/typerelay-ai"
+    ],
+    "linux": {
+      "deb": {
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "acl",
+          "udev",
+          "kmod",
+          "libnotify-bin",
+          "pkexec",
+          "foot",
+          "systemd"
+        ],
+        "files": {
+          "/usr/lib/systemd/user/typerelay.service": "linux/typerelay.service",
+          "/usr/lib/udev/rules.d/70-typerelay.rules": "linux/70-typerelay.rules",
+          "/usr/lib/modules-load.d/typerelay.conf": "linux/typerelay.conf",
+          "/usr/share/applications/typerelay-tui.desktop": "linux/typerelay-tui.desktop"
+        },
+        "postInstallScript": "linux/post-install.sh",
+        "postRemoveScript": "linux/post-remove.sh"
+      },
+      "rpm": {
+        "depends": [
+          "webkit2gtk4.1",
+          "acl",
+          "systemd-udev",
+          "kmod",
+          "libnotify",
+          "polkit",
+          "foot",
+          "systemd"
+        ],
+        "files": {
+          "/usr/lib/systemd/user/typerelay.service": "linux/typerelay.service",
+          "/usr/lib/udev/rules.d/70-typerelay.rules": "linux/70-typerelay.rules",
+          "/usr/lib/modules-load.d/typerelay.conf": "linux/typerelay.conf",
+          "/usr/share/applications/typerelay-tui.desktop": "linux/typerelay-tui.desktop"
+        },
+        "postInstallScript": "linux/post-install.sh",
+        "postRemoveScript": "linux/post-remove.sh"
+      }
+    }
+  }
+}

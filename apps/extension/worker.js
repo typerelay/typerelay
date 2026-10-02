@@ -39,7 +39,7 @@ async function request(path, options = {}) {
 	const send = async force => fetch(`${origin}${path}`, { ...options, headers: { ...options.headers, Authorization: `Bearer ${await token(force)}`, 'X-TypeRelay-Sync-Protocol': '6', 'X-TypeRelay-Personal-Abbreviations': '1' }, redirect: 'error' });
 	let response = await send(false);
 	if (response.status === 401) response = await send(true);
-	if (!response.ok) { if (response.status === 401 || response.status === 403) await clear(); throw new Error((await response.json().catch(() => ({}))).error || `TypeRelay request failed (${response.status})`); }
+	if (!response.ok) { if (response.status === 401 || (response.status === 403 && !path.startsWith("/api/v2/ai/"))) await clear(); throw new Error((await response.json().catch(() => ({}))).error || `TypeRelay request failed (${response.status})`); }
 	return response;
 }
 
@@ -160,6 +160,13 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
 	(async () => {
 		await originReady;
 		switch (message.type) {
+			case 'ai-request': {
+				if (!sender.url?.startsWith(chrome.runtime.getURL(''))) throw new Error('AI requests must be initiated from the extension UI.');
+				const method=message.method||'GET';const path=message.path;
+				if (!(method==='GET'&&['/settings','/settings?scope=personal'].includes(path))&&!(method==='PATCH'&&path==='/settings')&&!(method==='POST'&&path==='/search')) throw new Error('Unsupported extension AI request.');
+				const response=await request('/api/v2/ai'+path,{method,headers:{'Content-Type':'application/json'},...(message.body===undefined?{}:{body:JSON.stringify(message.body)})});
+				return response.json();
+			}
 			case 'connect': { if (sender.url && new URL(sender.url).protocol !== 'chrome-extension:') throw new Error('Open extension settings to sign in.'); return connect(message.origin); }
 			case 'disconnect': { await request('/api/v2/connection', { method: 'DELETE' }).catch(() => undefined); await clear(); await chrome.storage.session.remove(['browserAuth', 'browserAuthError']); return { disconnected: true }; }
 			case 'sync': return sync();

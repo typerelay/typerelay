@@ -1,0 +1,21 @@
+section.alert.alert-success(role="status")
+	h2.h6 Import complete
+	p.mb-2= imported + ' snippets imported.'
+	p.mb-0= skipped.length + ' macros skipped.'
+if renamed.length
+	section.mb-3
+		h3.h6 Renamed abbreviations
+		p.small Existing abbreviations were kept. These imported abbreviations were renamed:
+		ul
+			each item in renamed
+				li
+					span= item.title + ': '
+					code= item.original
+					span.mx-2 →
+					code= item.trigger
+if skipped.length
+	details.mb-3
+		summary Skipped macros
+		ul
+			each warning in skipped
+				li= warning

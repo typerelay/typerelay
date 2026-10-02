@@ -7,7 +7,7 @@ description: "Connect TypeRelay Desktop to an account, enroll local libraries, s
 
 Open **Settings → Sync**, enter the server origin and choose **Authenticate**. The browser asks you to sign in, select an account and approve the device. The desktop stores credentials outside the webview in its private sync directory.
 
-After connecting, select local-only libraries under **Local libraries** and choose **Upload selected**. Enrollment is explicit and creates private server libraries. Accessible server libraries, including assigned shared libraries, download automatically.
+After connecting, choose **Sync now** below **Libraries on this device**. Select local-only libraries first to upload them during the same sync. Enrollment is explicit and creates private server libraries. Accessible server libraries, including assigned shared libraries, download automatically. The library list scrolls while the connection controls and sync button stay in place. **Disconnect** appears beside **Sync server URL** while connected.
 
 Choose **Merge…** beside a library to move all its active snippets into another editable library. The destination keeps its name, sharing and sync settings; destination sharing applies to moved snippets. The source moves to 30-day Trash only after the merge succeeds. A local-only source may merge into a synchronized destination, but a synchronized source requires a synchronized destination.
 

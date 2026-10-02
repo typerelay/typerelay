@@ -50,6 +50,7 @@ form#editor-form.mobile-editor
 			textarea#replace(rows="10")= snippet && (snippet.content.markdown || snippet.content.text) || ''
 		include ../../../server/views/ajax/rich-editor.pug
 		include ../../../server/views/ajax/template-editor.pug
+		include ../../../server/views/ajax/ai-author.pug
 		p.draft-caption
 			span.material-symbols-outlined cloud_done
 			span Changes are saved locally while you edit.

@@ -4,7 +4,7 @@ mod omarchy;
 #[cfg(target_os = "linux")]
 use typerelay_client::clipboard;
 #[cfg(target_os = "linux")]
-mod installation;
+use typerelay_client::installation;
 
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
@@ -70,16 +70,22 @@ enum Commands {
     ClipboardServe,
     #[cfg(target_os = "linux")]
     /// Run the text expansion engine.
-    Run { #[command(flatten)] source: ConfigSource, #[arg(long, default_value = "keyd virtual keyboard")] device_name: String },
+    Run { #[command(flatten)] source: ConfigSource, #[arg(long, default_value = "auto")] device_name: String },
     #[cfg(target_os = "linux")]
+    #[command(hide = true)]
+    InputAccess { #[arg(long)] device_name: String },
+    #[cfg(all(target_os = "linux", feature = "legacy-install"))]
     /// Install the Omarchy service and device access.
-    Install { #[arg(long)] dry_run: bool },
-	#[cfg(target_os = "linux")]
+    Install { #[arg(long)] dry_run: bool, #[arg(long)] device_name: Option<String> },
+	#[cfg(all(target_os = "linux", feature = "legacy-install"))]
 	/// Remove the Omarchy installation.
 	Uninstall { #[arg(long)] dry_run: bool },
-	#[cfg(target_os = "linux")]
+	#[cfg(all(target_os = "linux", feature = "legacy-install"))]
 	#[command(hide = true)]
 	Update,
+	#[cfg(all(target_os = "linux", feature = "legacy-install"))]
+	#[command(hide = true)]
+	Setup { #[arg(long)] panel_launcher: std::path::PathBuf, #[arg(long)] check: bool, #[arg(long)] automatic: bool },
 }
 
 #[derive(Subcommand)]
@@ -94,6 +100,8 @@ enum ImportFormat {
 
 impl Cli {
     fn execute(self) -> Result<()> {
+        #[cfg(target_os = "linux")]
+        if let Commands::InputAccess { device_name } = &self.command { return installation::Installer::grant_input_access(device_name); }
         let root = typerelay_client::editor::Paths::config_dir()?;
         match self.command {
             Commands::Connect { server, no_browser } => { let server = server.unwrap_or(typerelay_client::settings::SettingsStore::open(root.join("settings.yml"))?.settings.sync_url); typerelay_client::sync::Sync::new(root.clone(), root.join("snippets"))?.connect(&server, !no_browser, false)?; println!("Connected to {server}."); },
@@ -140,6 +148,8 @@ impl Cli {
             #[cfg(target_os = "linux")]
             Commands::ClipboardServe => clipboard::PasteJob::serve_restored()?,
             #[cfg(target_os = "linux")]
+            Commands::InputAccess { .. } => unreachable!("Input access is handled before user data is opened"),
+            #[cfg(target_os = "linux")]
             Commands::Doctor => omarchy::Session::doctor()?,
             #[cfg(target_os = "linux")]
             Commands::Run { source, device_name } => {
@@ -148,12 +158,14 @@ impl Cli {
                 typerelay_client::sync::Sync::worker(root, path.clone());
                 omarchy::Session::run(typerelay_client::database::DatabaseSnapshot::open(&path)?, &device_name)?;
             },
-            #[cfg(target_os = "linux")]
-            Commands::Install { dry_run } => installation::Installer::run("install", dry_run)?,
-			#[cfg(target_os = "linux")]
-			Commands::Uninstall { dry_run } => installation::Installer::run("uninstall", dry_run)?,
-			#[cfg(target_os = "linux")]
-			Commands::Update => installation::Installer::run("update", false)?,
+            #[cfg(all(target_os = "linux", feature = "legacy-install"))]
+            Commands::Install { dry_run, device_name } => installation::Installer::run("install", dry_run, device_name.as_deref(), None, false, false)?,
+			#[cfg(all(target_os = "linux", feature = "legacy-install"))]
+			Commands::Uninstall { dry_run } => installation::Installer::run("uninstall", dry_run, None, None, false, false)?,
+			#[cfg(all(target_os = "linux", feature = "legacy-install"))]
+			Commands::Update => installation::Installer::run("update", false, None, None, false, false)?,
+			#[cfg(all(target_os = "linux", feature = "legacy-install"))]
+			Commands::Setup { panel_launcher, check, automatic } => installation::Installer::run("setup", false, None, Some(&panel_launcher), check, automatic)?,
         }
         Ok(())
     }

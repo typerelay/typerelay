@@ -38,29 +38,21 @@ TypeRelay does not log keystrokes. Exported YAML is a portable copy, not live st
 | Omarchy / Hyprland, US layout | Continuous expansion, desktop panel and TUI; primary verified target |
 | Windows x64 | Continuous expansion, layout-aware desktop panel and TUI |
 | macOS Apple Silicon | Continuous expansion, desktop search and insertion panel |
-| Other Linux desktops, layouts and architectures | Continuous expansion and safe insertion are unsupported; generic GUI packages do not install the Omarchy input service |
+| Other Linux desktops, layouts and architectures | Continuous expansion and safe insertion are unsupported |
 
 See the [desktop overview](docs/desktop/index.md) and [troubleshooting guide](docs/desktop/troubleshooting.md) for current limitations.
 
-## Quick start on Omarchy
+## Quick start on Linux
 
-Requirements: Rust/Cargo, Python 3 and `tar`. Building the desktop panel also requires Node.js, pnpm, `pkg-config`, GTK 3 and WebKitGTK 4.1 development packages.
+Choose a Linux x86_64 package:
 
-Download and inspect the installer:
+1. [AppImage](https://transfer.typerelay.com/apps/typerelay-desktop-latest-linux-x64.AppImage)
+2. [deb](https://transfer.typerelay.com/apps/typerelay-desktop-latest-linux-x64.deb)
+3. [rpm](https://transfer.typerelay.com/apps/typerelay-desktop-latest-linux-x64.rpm)
 
-```fish
-curl -fsSLo /tmp/typerelay-install.sh https://raw.githubusercontent.com/typerelay/typerelay/main/scripts/install.sh
-less /tmp/typerelay-install.sh
-```
+All three include the expansion engine, TUI, desktop search panel, tray menu, sync and update checking. For AppImage, make the downloaded file executable and launch it. Install deb/rpm with your distribution's package manager, then launch TypeRelay.
 
-Preview every planned change, then install:
-
-```fish
-sh /tmp/typerelay-install.sh --dry-run
-sh /tmp/typerelay-install.sh
-```
-
-The installer builds a pinned source commit, asks before changing the system and runs TypeRelay as your desktop user. It installs scoped device permissions; the expansion service never runs as root. Read the complete [installation and uninstall guide](docs/desktop/omarchy.md) before deploying it across a team.
+On first launch, TypeRelay offers to configure the user expansion service and scoped keyboard permissions. Expansion currently requires Hyprland on x86_64 and a US keyboard layout; Omarchy uses the same AppImage. No separate installer download is needed. See the [installation guide](docs/desktop/installation.md) for requirements, updates and removal.
 
 Create a library and snippets with:
 
@@ -74,7 +66,9 @@ Then type the configured prefix, an abbreviation and Space in another applicatio
 
 The web app stores synchronized libraries in MongoDB. Devices authenticate in the browser, users explicitly enroll local libraries and assigned shared libraries download automatically. Conflicts retain both versions for resolution in the web app.
 
-For an open-source production deployment, export the public URLs and private values from your Fish terminal, then start the production stack:
+For an open-source production deployment, export the public URLs and private values, then start the production stack.
+
+**fish:**
 
 ```fish
 set -x APP_URL https://typerelay.example.com
@@ -83,6 +77,18 @@ set -x SESSION_SECRET (openssl rand -hex 64)
 set -x JWT_SECRET (openssl rand -hex 64)
 set -x SMTP_FROM noreply@example.com
 set -x SMTP_SERVERS '[{"name":"primary","host":"smtp.example.com","port":587,"secure":false,"user":"user","pass":"password","from":"noreply@example.com"}]'
+docker compose -f compose.prod.yml up -d
+```
+
+**bash / zsh:**
+
+```sh
+export APP_URL=https://typerelay.example.com
+export MCP_BASE_URL=https://mcp.typerelay.example.com
+export SESSION_SECRET="$(openssl rand -hex 64)"
+export JWT_SECRET="$(openssl rand -hex 64)"
+export SMTP_FROM=noreply@example.com
+export SMTP_SERVERS='[{"name":"primary","host":"smtp.example.com","port":587,"secure":false,"user":"user","pass":"password","from":"noreply@example.com"}]'
 docker compose -f compose.prod.yml up -d
 ```
 
@@ -98,7 +104,9 @@ See the [MCP setup](docs/mcp/setup.md), [tool catalog](docs/mcp/tools.md) and [A
 
 Requirements: Docker Compose, Rust 1.88+, Node.js 24+ and pnpm 12.
 
-```fish
+These commands work in fish, bash and zsh:
+
+```sh
 git clone https://github.com/typerelay/typerelay.git
 cd typerelay
 git switch develop

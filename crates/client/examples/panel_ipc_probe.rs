@@ -5,7 +5,7 @@ fn main()->anyhow::Result<()> {
     use std::{sync::{Arc,atomic::{AtomicBool,Ordering}},time::{Duration,SystemTime,UNIX_EPOCH}};
     anyhow::ensure!(std::env::var("TYPERELAY_PANEL_PROBE").as_deref()==Ok("1"),"Run through the isolated Python regression test");
     let root=Paths::config_dir()?;let directory=root.join("snippets");let db=Database::open(&directory)?;db.import("Probe","matches: [{trigger: test, replace: Safe}]")?;
-    let hit=Panel::search(&directory,"test")?.remove(0);
+    let hit=Panel::search(&directory,"test", None)?.remove(0);
     let running=Arc::new(AtomicBool::new(true));let (receiver,_)=PanelIpc::engine(running.clone())?;
     assert!(PanelIpc::insert(Request{clock:None,generation:None,values:Default::default(),erase:0,prepare:false,hit:hit.clone(),target:"probe".into(),created_ms:0}).is_err());assert!(receiver.try_recv().is_err());
     let client=std::thread::spawn(move||PanelIpc::insert(Request{clock:None,generation:None,values:Default::default(),erase:0,prepare:false,hit,target:"probe".into(),created_ms:SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis()}));

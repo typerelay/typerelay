@@ -94,3 +94,13 @@ fn state_payload_keeps_legacy_fields_and_reports_phase() {
     {let mut status=state.status.lock().unwrap(); status.begin(); status.phase=Phase::Installing; status.version=Some("9.0.0".into());}
     assert_eq!(state.value(),json!({"checking":true,"installing":true,"version":"9.0.0","phase":"installing"}));
 }
+
+#[cfg(target_os="linux")]
+#[test]
+fn linux_packages_require_their_own_signed_update_target() {
+    use tauri::utils::config::BundleType;
+    for (bundle,suffix) in [(BundleType::AppImage,"appimage"),(BundleType::Deb,"deb"),(BundleType::Rpm,"rpm")] {
+        assert_eq!(UpdateState::linux_target(Some(bundle)),Some(format!("linux-{}-{suffix}",std::env::consts::ARCH)));
+    }
+    assert_eq!(UpdateState::linux_target(None),None,"Legacy installs keep the original updater target");
+}

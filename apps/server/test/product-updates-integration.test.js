@@ -64,6 +64,22 @@ test('real authenticated routes enforce CSRF, persist monotonic seen state and r
 	assert.equal((await Fixture.request('/assets/previous-release/product-updates.js')).status, 404);
 	assert.equal((await Fixture.request('/assets/typerelay-logo.svg')).status, 200);
 	assert.equal((await Fixture.request('/assets/favicon.ico')).status, 200);
+	const appModuleUrl = new URL(dom.window.document.querySelector('script[src$="/app.js"]').getAttribute('src'), Fixture.origin);
+	const appModule = await (await Fixture.request(appModuleUrl.pathname)).text();
+	const editors = [...appModule.matchAll(/import\('(.\/generated\/[^']+)'\)/g)].map(match => new URL(match[1], appModuleUrl));
+	assert.deepEqual(editors.map(url => url.pathname.split('/').at(-1)).sort(), ['code-editor.js', 'rich-editor.js']);
+	for (const editor of editors) {
+		const response = await Fixture.request(editor.pathname);
+		assert.equal(response.status, 200, editor.pathname);
+		assert.match(response.headers.get('content-type'), /javascript/);
+		const source = await response.text();
+		assert.equal(source, await (await Fixture.request(editor.pathname.replace('/news-drawer-test', ''))).text());
+		assert.equal((await Fixture.request(editor.pathname.replace('/news-drawer-test/', '/previous-release/'))).status, 404);
+		const chunks = [...source.matchAll(/(?:from|import\s*\()\s*["'](.\/[^"']+\.js)["']/g)].map(match => new URL(match[1], editor));
+		assert.ok(chunks.length, 'Built editors must exercise split module imports');
+		for (const chunk of chunks) { const response = await Fixture.request(chunk.pathname); assert.equal(response.status, 200, chunk.pathname); assert.match(response.headers.get('content-type'), /javascript/); }
+	}
+	assert.equal((await Fixture.request('/assets/generated/template.wasm')).status, 200);
 	assert.equal(dom.window.document.querySelectorAll('[data-product-update-id]').length, 7);
 	assert.equal(dom.window.document.querySelector('#workspace-content').hidden, false);
 	assert.ok(dom.window.document.querySelector('#product-updates-drawer #product-updates-news'));

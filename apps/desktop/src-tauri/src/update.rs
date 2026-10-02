@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{fs, io::Write, path::Path, sync::Mutex};
+use std::{fs, io::Write, path::Path, sync::Mutex, time::Duration};
 #[cfg(any(target_os="linux",test))]
 use std::path::PathBuf;
 #[cfg(target_os="linux")]
@@ -71,6 +71,12 @@ impl Package {
 }
 
 impl UpdateState {
+    #[cfg(target_os="linux")]
+    fn linux_target(bundle: Option<tauri::utils::config::BundleType>) -> Option<String> {
+        use tauri::utils::config::BundleType;
+        let suffix=match bundle { Some(BundleType::AppImage)=>"appimage", Some(BundleType::Deb)=>"deb", Some(BundleType::Rpm)=>"rpm", _=>return None };
+        Some(format!("linux-{}-{suffix}",std::env::consts::ARCH))
+    }
     pub fn value(&self) -> Value { let status=self.status.lock().unwrap(); json!({"checking":status.busy,"installing":status.phase==Phase::Installing,"version":status.version,"phase":status.phase}) }
     pub fn menu(&self) -> (&'static str, bool) { self.status.lock().unwrap().menu() }
     fn phase(&self, app: &AppHandle, phase: Phase) { self.status.lock().unwrap().phase=phase; emit(app); }
@@ -78,14 +84,21 @@ impl UpdateState {
         let root=app.path().app_cache_dir()?.join("updates");
         // A tray action can use the feed-validated package already offered this session, even offline.
         let ready=if manual { self.ready.lock().unwrap().clone() } else { None };
-        let update=match ready { Some(update)=>Some(update), None=>app.updater()?.check().await? };
-        let Some(update)=update else {
+        let update=match ready { Some(update)=>Some(update), None=>{
+            let builder=app.updater_builder().timeout(Duration::from_secs(30));
+            #[cfg(target_os="linux")]
+            let builder=match Self::linux_target(tauri::utils::platform::bundle_type()) { Some(target)=>builder.target(target), None=>builder };
+            builder.build()?.check().await?
+        } };
+        let Some(mut update)=update else {
             *self.ready.lock().unwrap()=None; self.status.lock().unwrap().version=None; Package::clear(&root)?;
-            if manual { let app=app.clone(); tauri::async_runtime::spawn_blocking(move||message(&app,"Typerelay is up to date","You already have the latest version.",MessageDialogButtons::Ok)).await?; }
+            if manual { app.dialog().message("You already have the latest version.").title("Typerelay is up to date").show(|_|{}); }
             return Ok(());
         };
         *self.ready.lock().unwrap()=None; self.status.lock().unwrap().version=Some(update.version.clone());
         self.phase(app,Phase::Downloading);
+        // The updater plugin does not carry the check timeout over to the download.
+        update.timeout=Some(Duration::from_secs(10*60));
         let pubkey=app.config().plugins.0.get("updater").and_then(|config|config.get("pubkey")).and_then(Value::as_str).context("Missing updater public key")?;
         let package=Package::from_update(&update);
         let bytes=package.prepare(&root,pubkey,async { Ok(update.download(|_,_|{},||{}).await?) }).await?;
@@ -107,15 +120,19 @@ fn message(app: &AppHandle, title: &str, body: impl Into<String>, buttons: Messa
 #[cfg(target_os="linux")]
 fn unpack_linux(bytes: &[u8], version: &str) -> Result<PathBuf> {
     let root=std::env::temp_dir().join(format!("typerelay-update-{}-{}",std::process::id(),uuid::Uuid::new_v4()));fs::create_dir(&root)?;
-    let result=(||->Result<()>{let allowed=BTreeSet::from(["typerelay".to_string(),"typerelay-tui".to_string(),"typerelay-panel".to_string()]);let mut found=BTreeSet::new();let mut archive=tar::Archive::new(flate2::read::GzDecoder::new(Cursor::new(bytes)));for item in archive.entries()?{let mut item=item?;let path=item.path()?.into_owned();let name=path.file_name().and_then(|value|value.to_str()).context("Update contains an invalid path")?;if path.components().count()!=1||!allowed.contains(name)||!item.header().entry_type().is_file(){anyhow::bail!("Update contains an unsafe or unexpected file");}let destination=root.join(name);item.unpack(&destination)?;found.insert(name.to_string());}anyhow::ensure!(found==allowed,"Update must contain matching engine, TUI and panel binaries");for name in allowed{let file=root.join(&name);let output=Command::new(&file).arg("--version").output()?;anyhow::ensure!(output.status.success()&&String::from_utf8_lossy(&output.stdout).trim()==format!("{name} {version}"),"{name} version does not match {version}");}Ok(())})();
+    let result=(||->Result<()>{let allowed=BTreeSet::from(["typerelay".to_string(),"typerelay-tui".to_string(),"typerelay-panel".to_string(),"typerelay-ai".to_string()]);let mut found=BTreeSet::new();let mut archive=tar::Archive::new(flate2::read::GzDecoder::new(Cursor::new(bytes)));for item in archive.entries()?{let mut item=item?;let path=item.path()?.into_owned();let name=path.file_name().and_then(|value|value.to_str()).context("Update contains an invalid path")?;if path.components().count()!=1||!allowed.contains(name)||!item.header().entry_type().is_file(){anyhow::bail!("Update contains an unsafe or unexpected file");}let destination=root.join(name);item.unpack(&destination)?;found.insert(name.to_string());}anyhow::ensure!(found==allowed,"Update must contain matching engine, TUI, panel and AI binaries");for name in allowed{let file=root.join(&name);let output=Command::new(&file).arg("--version").output()?;anyhow::ensure!(output.status.success()&&String::from_utf8_lossy(&output.stdout).trim()==format!("{name} {version}"),"{name} version does not match {version}");}Ok(())})();
     if let Err(error)=result {let _=fs::remove_dir_all(&root);return Err(error);}
     Ok(root)
 }
 
 async fn install(app: AppHandle, update: Update, bytes: Vec<u8>) -> Result<()> {
     tauri::async_runtime::spawn_blocking(move||->Result<()> {
+        typerelay_client::native_ai::NativeAi::stop(&app.state::<crate::Runtime>().root)?;
         #[cfg(target_os="linux")]
-        {let directory=unpack_linux(&bytes,&update.version)?;let engine=directory.join("typerelay");if let Err(error)=Command::new(engine).arg("update").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn(){let _=fs::remove_dir_all(directory);return Err(error.into());}app.exit(0);Ok(())}
+        {
+            if tauri::utils::platform::bundle_type().is_some() { update.install(bytes)?; app.restart(); }
+            let directory=unpack_linux(&bytes,&update.version)?;let engine=directory.join("typerelay");if let Err(error)=Command::new(engine).arg("update").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn(){let _=fs::remove_dir_all(directory);return Err(error.into());}app.exit(0);Ok(())
+        }
         #[cfg(target_os="windows")]
         {let _=app;update.install(bytes)?;Ok(())}
         #[cfg(target_os="macos")]
@@ -130,11 +147,11 @@ pub fn check(app: AppHandle, manual: bool) {
         emit(&app);
         let state=app.state::<UpdateState>(); let result=state.run(&app,manual).await;
         let interactive=manual || matches!(state.status.lock().unwrap().phase,Phase::Prompting|Phase::Installing);
+        let ready=state.ready.lock().unwrap().is_some(); state.status.lock().unwrap().finish(ready); emit(&app);
         if let Err(error)=result {
             eprintln!("Typerelay update failed: {error:#}");
-            if interactive { let app=app.clone(); let text=format!("{error}\nTry again from the update menu."); let _=tauri::async_runtime::spawn_blocking(move||message(&app,"Update failed",text,MessageDialogButtons::Ok)).await; }
+            if interactive { app.dialog().message(format!("{error:#}\nTry again from the update menu.")).title("Update failed").kind(tauri_plugin_dialog::MessageDialogKind::Error).show(|_|{}); }
         }
-        let ready=state.ready.lock().unwrap().is_some(); state.status.lock().unwrap().finish(ready); emit(&app);
     });
 }
 
