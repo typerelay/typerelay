@@ -520,13 +520,15 @@ class TypeRelay {
 		} else await this.form('move', { library: source }, async fields => this.applyBatch(await this.request('snippets/batch', 'POST', { action, source_library: source, destination_library: fields.get('destination_library'), items })));
 	}
 	async onClick(event) {
-		const input = event.target.closest('[data-select-snippet],[data-select-all]');
+		const input = event.target.closest('[data-select-snippet],[data-select-all],[data-clear-selection]');
 		if (input) {
 			if (input.disabled) return;
-			if (input.hasAttribute('data-select-all')) {
+			if (input.hasAttribute('data-select-all') || input.hasAttribute('data-clear-selection')) {
+				const focus = input.hasAttribute('data-clear-selection') ? document.querySelector('[data-select-snippet]:checked') : null;
 				this.selectedSnippets.clear();
 				if (input.checked) for (const item of this.libraries.get(this.selected)?.snippets || []) this.selectedSnippets.add(item.id);
 				this.selectionAnchor = null; this.syncSelection();
+				focus?.focus({ preventScroll: true });
 			} else this.selectSnippet(input.dataset.selectSnippet, input.checked, event.shiftKey);
 			return;
 		}
