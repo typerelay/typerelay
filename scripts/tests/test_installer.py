@@ -280,7 +280,7 @@ class InstallerTests(unittest.TestCase):
         self.assertNotIn("User=root", service)
 
     def test_scoped_rules_restore_previous_acl(self):
-        access = self.session_access.SessionAccess(self.home)
+        access = self.session_access.SessionAccess(self.home, "keyd virtual keyboard")
         access.paths = Mock(return_value=[("uinput", pathlib.Path("/dev/uinput"), "rw"), ("keyd virtual keyboard", pathlib.Path("/dev/input/event16"), "r")])
         access.acl = Mock(return_value=None)
         access.set_acl = Mock()
@@ -322,7 +322,7 @@ class InstallerTests(unittest.TestCase):
     def test_native_keyboard_selection_ignores_virtual_devices_and_security_key(self):
         access = self.session_access.SessionAccess(self.home)
         access.devices = Mock(return_value=[("AT Translated Set 2 keyboard", pathlib.Path("/dev/input/event3"), ["ID_INPUT_KEYBOARD=1", "ID_INTEGRATION=internal"]), ("TypeRelay virtual keyboard", pathlib.Path("/dev/input/event20"), ["ID_INPUT_KEYBOARD=1"]), ("Yubico YubiKey OTP+FIDO+CCID", pathlib.Path("/dev/input/event24"), ["ID_INPUT_KEYBOARD=1", "ID_INTEGRATION=external"])])
-        self.assertEqual(access.select_keyboard(), "AT Translated Set 2 keyboard")
+        self.assertEqual(access.select_keyboard("AT Translated Set 2 keyboard"), "AT Translated Set 2 keyboard")
         self.assertIn('ATTRS{name}=="AT Translated Set 2 keyboard"', access.rules(1234))
         self.assertNotIn("Yubico", access.rules(1234))
         self.assertNotIn("TypeRelay virtual keyboard", access.rules(1234))
@@ -332,16 +332,28 @@ class InstallerTests(unittest.TestCase):
     def test_keyd_preferred_and_ambiguous_native_selection_requires_explicit_name(self):
         access = self.session_access.SessionAccess(self.home)
         access.devices = Mock(return_value=[("keyd virtual keyboard", pathlib.Path("/dev/input/event16"), ["ID_INPUT_KEYBOARD=1"]), ("Built-in keyboard", pathlib.Path("/dev/input/event3"), ["ID_INPUT_KEYBOARD=1", "ID_INTEGRATION=internal"])])
-        self.assertEqual(access.select_keyboard(), "keyd virtual keyboard")
+        self.assertEqual(access.select_keyboard("keyd virtual keyboard"), "keyd virtual keyboard")
         with self.assertRaisesRegex(RuntimeError, "Stop keyd"):
             access.select_keyboard("Built-in keyboard")
         access.devices.return_value = [("USB keyboard", pathlib.Path("/dev/input/event3"), ["ID_INPUT_KEYBOARD=1"]), ("Other keyboard", pathlib.Path("/dev/input/event4"), ["ID_INPUT_KEYBOARD=1"])]
-        with self.assertRaisesRegex(RuntimeError, "--device-name"):
-            access.select_keyboard()
+        self.assertEqual(access.select_keyboard(), "auto")
         self.assertEqual(access.select_keyboard("USB keyboard"), "USB keyboard")
         access.devices.return_value.append(access.devices.return_value[0])
         with self.assertRaisesRegex(RuntimeError, "exactly one"):
             access.select_keyboard("USB keyboard")
+
+    def test_automatic_permissions_cover_hotplug_without_virtual_feedback(self):
+        access = self.session_access.SessionAccess(self.home)
+        access.devices = Mock(return_value=[("Laptop", pathlib.Path("/dev/input/event3"), ["ID_INPUT_KEYBOARD=1", "DEVPATH=/devices/platform/input3/event3"]), ("USB", pathlib.Path("/dev/input/event8"), ["ID_INPUT_KEYBOARD=1", "DEVPATH=/devices/pci/usb/input8/event8"]), ("Bluetooth", pathlib.Path("/dev/input/event10"), ["ID_INPUT_KEYBOARD=1", "DEVPATH=/devices/virtual/misc/uhid/input10/event10"]), ("Output", pathlib.Path("/dev/input/event20"), ["ID_INPUT_KEYBOARD=1", "DEVPATH=/devices/virtual/input/input20/event20"])])
+        self.assertEqual(access.select_keyboard(), "auto")
+        self.assertEqual([name for name, _, _ in access.paths()], ["uinput", "Laptop", "USB", "Bluetooth"])
+        rule = access.rules(1234)
+        self.assertIn('DEVPATH!="/devices/virtual/input/*"', rule)
+        self.assertIn('ENV{ID_INPUT_KEYBOARD}=="1"', rule)
+        self.assertNotIn('ATTRS{name}', rule)
+        access.devices.return_value.append(("New keyboard", pathlib.Path("/dev/input/event30"), ["ID_INPUT_KEYBOARD=1", "DEVPATH=/devices/pci/new/input30/event30"]))
+        self.assertIn("New keyboard", [name for name, _, _ in access.paths()])
+        self.assertEqual(rule, access.rules(1234))
 
     def test_native_access_uninstall_restores_previously_selected_keyboards(self):
         access = self.session_access.SessionAccess(self.home, "Built-in keyboard")

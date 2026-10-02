@@ -31,17 +31,18 @@ impl Translator {
     pub fn wayland_layout()->Result<Layout>{helpers::WaylandMap::read()}
 }
 
-enum Physical { Key{code:u16,value:i32,at:Instant,generation:u64},ReleaseRepair(u16),Reset,Pointer }
+enum Physical { Device(String),Key{code:u16,value:i32,at:Instant,generation:u64},ReleaseRepair(u16),Reset,Pointer }
 pub struct CapturePublisher {sender:SyncSender<Physical>,enabled:Arc<AtomicBool>,generation:Arc<AtomicU64>}
 impl CapturePublisher {
     pub fn now()->i64{std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64}
-    pub fn start(device:String)->Result<Self>{
+    pub fn start(mut device:String)->Result<Self>{
         PanelIpc::register_capture_worker()?;let(socket_sender,receiver)=sync_channel(1024);let enabled=Arc::new(AtomicBool::new(false));let generation=Arc::new(AtomicU64::new(1));let active=enabled.clone();let reset=generation.clone();
         std::thread::spawn(move||{
             let socket=match UnixDatagram::unbound(){Ok(socket)=>socket,Err(_)=>return};if socket.set_nonblocking(true).is_err(){return;}
             let cache=Arc::new(Mutex::new(context::ContextCache::default()));let _helper=helpers::ContextService::start(cache.clone());let mut provider=ContextProvider::new(cache.clone()).ok();let mut translator=None::<Translator>;let mut sequence=0u64;let source_id=uuid::Uuid::new_v4().to_string();let mut control=CaptureControl::default();let mut refresh=Instant::now()-Duration::from_secs(1);let mut current=None::<crate::observation::CaptureContext>;let mut seen_generation=reset.load(Ordering::SeqCst);let mut counters=crate::observation::CaptureCounters::default();
             loop {
                 let event=receiver.recv_timeout(Duration::from_millis(20));if matches!(event,Err(std::sync::mpsc::RecvTimeoutError::Disconnected)){break;}
+                if let Ok(Physical::Device(name)) = &event { device = name.clone(); refresh = Instant::now()-Duration::from_secs(1); }
                 if refresh.elapsed()>=Duration::from_millis(100)||matches!(&event,Ok(Physical::Key{value:1|2,..}|Physical::Pointer)){
                     let next=PanelIpc::capture_control().unwrap_or_default();let available=next.version==1&&next.enabled&&next.expires_ms>Self::now();active.store(available,Ordering::SeqCst);if next.session!=control.session{sequence=0;}if next.session!=control.session||!available{translator=None;current=None;reset.fetch_add(1,Ordering::SeqCst);}control=next;
                     if available{
@@ -69,6 +70,7 @@ impl CapturePublisher {
                     Ok(Physical::Key{at,..})=>{if at.elapsed()>=Duration::from_millis(250){counters.stale+=1;counters.last_reset="physical input expired in capture queue".into();}else{counters.generations+=1;counters.last_reset="physical input crossed capture generation".into();}edits.push(Edit::Reset);},
                     Ok(Physical::ReleaseRepair(code))=>{counters.release_repairs+=1;if let Some(translator)=&mut translator{translator.key(code,0);counters.active_shortcut_modifiers=translator.shortcut_modifiers();}},
                     Ok(Physical::Pointer)=>{counters.pointers+=1;counters.last_reset="pointer click".into();edits.push(Edit::Reset);},
+                    Ok(Physical::Device(_))=>{edits.push(Edit::Reset);},
                     Ok(Physical::Reset)=>{counters.last_reset="expansion or device reset".into();edits.push(Edit::Reset);},_=>{}
                 }
                 for edit in edits{sequence+=1;let frame=CaptureFrame{version:CaptureFrame::VERSION,session:control.session.clone(),source_id:source_id.clone(),sequence,at_ms:Self::now(),context:context.clone(),source:CaptureSource::Keyboard,edit};if PanelIpc::send_capture(&socket,&control.session,CaptureBody::Frame(frame)).is_err(){counters.transport_errors+=1;}}
@@ -76,6 +78,7 @@ impl CapturePublisher {
         });
         Ok(Self{sender:socket_sender,enabled,generation})
     }
+    pub fn device(&self, name: &str) { if self.sender.try_send(Physical::Device(name.into())).is_err() { self.reset(); } }
     pub fn key(&self,event:&evdev::InputEvent){if !self.enabled.load(Ordering::SeqCst){return;}if event.event_type()==evdev::EventType::SYNCHRONIZATION&&event.code()==3{self.reset();return;}if event.event_type()!=evdev::EventType::KEY{return;}let value=Physical::Key{code:event.code(),value:event.value(),at:Instant::now(),generation:self.generation.load(Ordering::SeqCst)};if self.sender.try_send(value).is_err(){self.generation.fetch_add(1,Ordering::SeqCst);}}
     pub fn repair_release(&self,code:u16){if self.enabled.load(Ordering::SeqCst)&&self.sender.try_send(Physical::ReleaseRepair(code)).is_err(){self.reset();}}
     pub fn pointer(&self){if self.enabled.load(Ordering::SeqCst)&&self.sender.try_send(Physical::Pointer).is_err(){self.reset();}}

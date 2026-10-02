@@ -518,3 +518,15 @@ test('notification navigation opens the dedicated suggestions panel and Escape d
   document.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));assert.equal(f.calls.at(-1).name,'dismiss');
  }finally{f.dom.window.close();}
 });
+
+
+test('keyboard health changes update only the status node and preserve editing state',async()=>{
+ const f=await Fixture.create();try{
+  const document=f.dom.window.document;const view=document.querySelector('#settings-view');const query=f.panel.query;query.value='unsaved search';query.focus();const calls=f.calls.length;
+  f.panel.open=f.panel.settings=f.panel.configure=()=>{throw Error('No whole-view loader allowed');};
+  f.callbacks['input-health']({payload:{state:'degraded',message:'Keyboard permission missing',heartbeat_ms:100}});
+  const node=document.querySelector('#input-health');assert.equal(node.textContent,'Keyboard permission missing');assert.equal(node.hidden,false);assert.equal(document.querySelector('#settings-view'),view);assert.equal(document.activeElement,query);assert.equal(query.value,'unsaved search');assert.equal(f.calls.length,calls);
+  f.callbacks['input-health']({payload:{state:'ready',message:'',heartbeat_ms:200}});assert.equal(node.hidden,true);assert.equal(document.activeElement,query);
+  f.callbacks['input-health']({payload:{state:'degraded',message:'Stale error',heartbeat_ms:150}});assert.equal(node.hidden,true);assert.equal(node.textContent,'');
+ }finally{f.dom.window.close();}
+});

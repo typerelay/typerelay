@@ -9,7 +9,7 @@ Download the compiled [Linux x86_64 AppImage](https://transfer.typerelay.com/app
 
 ## First launch
 
-Accept **Keyboard access** and authenticate with Linux once. Setup installs persistent access for your selected keyboard, pointer devices used to cancel abbreviations, and `/dev/uinput`. It also loads uinput at boot. Access returns after reboot or device reconnection without another routine permission prompt. The engine runs as your desktop user while the AppImage is open; Quit stops it. Enable **Launch at login** in Settings for automatic startup.
+Accept **Keyboard access** and authenticate with Linux once. Setup installs persistent access for physical keyboards in Automatic mode (or your explicitly selected keyboard), pointer devices used to cancel abbreviations, and `/dev/uinput`. It also loads uinput at boot. Access returns after reboot or device reconnection without another routine permission prompt. The engine runs as your desktop user while the AppImage is open; Quit stops it. Enable **Launch at login** in Settings for automatic startup.
 
 Setup installs the `typerelay` and `typerelay-tui` terminal launchers in `/usr/local/bin`. They run the matching binaries inside your registered AppImage; no independently updated engine or TUI copies are needed. Each desktop user registers their own AppImage on first launch. The panel/search and TUI also appear in the application menu.
 
@@ -23,13 +23,13 @@ Keep the AppImage at its registered path. If you move it, launch the new locatio
 
 ## Keyboard support
 
-Expansion currently requires Hyprland with a US keyboard layout. When keyd is active, TypeRelay uses `keyd virtual keyboard`; stop keyd before selecting a physical keyboard. Otherwise it selects a single built-in keyboard, or a single non-virtual keyboard when no built-in keyboard exists. If several keyboards qualify, choose **Settings → Advanced → Miscellaneous → Keyboard** and save. Your choice is retained after restart; changing it updates the expansion engine and prompts for access when necessary. Devices are identified by keyboard capabilities, so a mouse or media interface with the same device name is not grabbed as a keyboard.
+Expansion requires Hyprland with a US keyboard layout. **Automatic — all keyboards** listens to connected physical text keyboards together, including the laptop, USB and Bluetooth keyboards. New keyboards receive access through the persistent udev rule. Software-generated virtual keyboards are excluded to prevent feedback; keyd is not required. Existing explicit keyboard selection remains available under **Settings → Advanced → Miscellaneous → Keyboard**. A previous Automatic fallback no longer limits input to one device.
 
-**Automatic selection** uses normal detection when it resolves one keyboard. If detection is ambiguous, it retains your previous keyboard choice while that device remains available. Saving Automatic selection preserves this fallback across restarts. TypeRelay's own virtual output is never a candidate.
+Devices are identified using their kernel identity and capabilities, so a mouse or media interface with the same name is not grabbed as a text keyboard. Numeric Hyprland name suffixes are resolved without choosing a different layout arbitrarily. Ambiguous or incompatible layouts leave that device unavailable and report the reason; other usable keyboards keep working.
 
-If input forwarding stops making progress for five seconds, the engine exits to release its keyboard grab. A stalled template also releases buffered typing after five seconds without progress. Restart TypeRelay to resume expansion after an engine error.
+New keyboards activate after their keys are released and a short idle period. Disconnects release only that device's held keys, cancel pending insertions and preserve the other keyboards. Switching keyboards cancels an unfinished abbreviation. The existing watchdog releases all grabs if forwarding stalls for five seconds. Temporary input/compositor failures reconnect automatically; no startup or pre-reconnect typing is replayed.
 
-Startup uses the saved keyboard setting, including Automatic selection's fallback. After suspend, disconnects or temporary input/compositor errors, the engine releases its previous keyboard and reconnects automatically. Automatic selection rechecks connected devices, so a dock keyboard returning after resume can replace the temporary laptop keyboard. Pending insertions are cancelled during reconnection.
+The panel reports input as ready, degraded or unavailable, independently of observation. **Suggestions → Check setup → Repair keyboard input** repairs persistent permissions when needed and restarts the worker. `typerelay-panel --capture-status` includes an `input` object with active devices, unavailable reasons, and reconciliation/heartbeat timestamps; no typed content is logged. A running process alone does not establish readiness.
 
 For Caps mapped to Ctrl/Escape, use Hyprland's native `caps:ctrl_modifier` consistently for both the selected keyboard and TypeRelay's virtual keyboard. Caps shortcuts cancel pending abbreviations; expansion resumes after releasing Caps. Other native remappings are not supported.
 
@@ -40,7 +40,7 @@ Espanso or another conflicting expander must be stopped before using TypeRelay. 
 - `/usr/local/bin/typerelay` and `/usr/local/bin/typerelay-tui`: shared terminal launchers that resolve each user's registered AppImage.
 - `~/.local/share/typerelay/appimage-path`: the current user's AppImage location.
 - `~/.local/share/applications/typerelay-panel.desktop` and `typerelay-tui.desktop`: menu entries.
-- `/etc/udev/rules.d/99-typerelay-<uid>.rules`: persistent access scoped to the selected keyboard, pointer devices and uinput.
+- `/etc/udev/rules.d/99-typerelay-<uid>.rules`: persistent access covering physical keyboards in Automatic mode (or the explicit selection), pointer devices and uinput.
 - `/etc/modules-load.d/typerelay-<uid>.conf`: load uinput at boot.
 - `~/.config/typerelay/`: settings and local SQLite libraries.
 
@@ -49,3 +49,7 @@ Espanso or another conflicting expander must be stopped before using TypeRelay. 
 ## Legacy source installations
 
 The old standalone installer is retained only for existing installations and developer builds with the `legacy-install` feature. Its `install`, `setup` and `uninstall` commands are excluded from current desktop packages. Install a compiled desktop release for normal use. deb/rpm use their package-managed user service; AppImage runs its bundled engine directly.
+
+## Reliability acceptance for development builds
+
+After installing an input change, verify shortcut and plain/rich/template expansion on both laptop and external keyboards across three cold boots, three unplug/replug cycles and three suspend/resume cycles. Also boot without the external keyboard and attach it afterward. Check ordinary typing, Caps-to-Ctrl and discovery capture after recovery. Automated tests and live device readiness do not replace these physical checks.

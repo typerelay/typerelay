@@ -31,9 +31,9 @@ impl Runtime {
 				ensure!(engine.is_file(),"The Linux package is missing the expansion engine");
 				let appimage=std::env::var_os("APPIMAGE").map(PathBuf::from);
 				if let Some(launcher)=&appimage {Installer::register_appimage(launcher,include_bytes!("../icons/128x128.png"))?;}
-				let keyboard=Installer::keyboard()?;
-				if !Installer::has_access(&keyboard)? || appimage.is_some() && !Installer::appimage_commands(std::path::Path::new("/"),false)? {
-					let message=if appimage.is_some(){"Allow Typerelay to retain keyboard access after reboot and install the typerelay and typerelay-tui terminal commands? Linux will ask for administrator authentication."}else{"Allow Typerelay to read your selected keyboard and insert text? Keyboard access will persist after reboot. Linux will ask for administrator authentication."};
+				let keyboard=Installer::keyboard_mode()?;
+				if !Installer::has_access(&keyboard)? || !Installer::persistent_access(&keyboard) || appimage.is_some() && !Installer::appimage_commands(std::path::Path::new("/"),false)? {
+					let message=if appimage.is_some(){"Allow Typerelay to retain access to physical keyboards after reboot and install the typerelay and typerelay-tui terminal commands? Linux will ask for administrator authentication."}else{"Allow Typerelay to read physical keyboards and insert text? Keyboard access will persist after reboot. Linux will ask for administrator authentication."};
 					let accepted=app.dialog().message(message).title("Keyboard access").buttons(tauri_plugin_dialog::MessageDialogButtons::OkCancelCustom("Allow".into(),"Later".into())).blocking_show();
 					ensure!(accepted,"Keyboard access postponed. Restart Typerelay to allow expansion.");
 					let mut permission=std::process::Command::new("pkexec");
@@ -78,6 +78,12 @@ impl Runtime {
 		*self.target.lock().unwrap()=target;
 		*self.capture_status.lock().unwrap()=message;
 	}
+    fn input_health() -> Value {
+        #[cfg(target_os="linux")]
+        { typerelay_client::panel_ipc::PanelIpc::input_health() }
+        #[cfg(not(target_os="linux"))]
+        { Value::Null }
+    }
 	fn status_message(&self)->String {let status=self.status.lock().unwrap();let capture=self.capture_status.lock().unwrap();[status.as_str(),capture.as_str()].into_iter().filter(|message|!message.is_empty()).collect::<Vec<_>>().join("\n")}
 	fn insertion_target(&self)->std::result::Result<platform::Target,String> {self.target.lock().unwrap().clone().ok_or_else(||"Focus an application, reopen search, then insert—or use Copy.".into())}
 
@@ -130,7 +136,7 @@ impl Runtime {
             else {let _=window.center();}
         } else {let _=window.center();}
         let _=window.show(); let _=window.set_focus();
-        let _=app.emit("panel-open",json!({"prompt":state.prompt_hit.lock().unwrap().clone(),"settings":settings,"suggestions":suggestions,"status":state.status_message(),"theme":Self::theme()}));
+        let _=app.emit("panel-open",json!({"prompt":state.prompt_hit.lock().unwrap().clone(),"settings":settings,"suggestions":suggestions,"status":state.status_message(),"input_health":Runtime::input_health(),"theme":Self::theme()}));
         #[cfg(target_os="linux")]
         {
             let app=app.clone(); std::thread::spawn(move || {
@@ -247,7 +253,7 @@ fn initialize(app:tauri::AppHandle)->std::result::Result<Value,String> {
 		#[cfg(not(target_os="linux"))]
 		let keyboards:Vec<String>=Vec::new();
 		let connected=state.root.join("sync/credentials.json").exists();let authenticating=state.authenticating.load(Ordering::SeqCst);
-		Ok(json!({"config":settings,"keyboards":keyboards,"prompt":state.prompt_hit.lock().unwrap().clone(),"server":typerelay_client::settings::SettingsStore::open(state.root.join("settings.yml")).ok().map(|s|s.settings.sync_url).unwrap_or_default(),"connected":connected,"connection_state":if authenticating{"authenticating"}else if connected{"connected"}else{"disconnected"},"auth_error":*state.auth_error.lock().unwrap(),"theme":Runtime::theme(),"settings":state.settings.load(Ordering::SeqCst),"suggestions":state.suggestions.load(Ordering::SeqCst),"status":state.status_message(),"update":app.state::<update::UpdateState>().value(),"accessibility":accessibility,"input_monitoring":input_monitoring,"notifications":notifications,"empty":empty,"version":app.package_info().version.to_string()}))
+		Ok(json!({"config":settings,"keyboards":keyboards,"prompt":state.prompt_hit.lock().unwrap().clone(),"server":typerelay_client::settings::SettingsStore::open(state.root.join("settings.yml")).ok().map(|s|s.settings.sync_url).unwrap_or_default(),"connected":connected,"connection_state":if authenticating{"authenticating"}else if connected{"connected"}else{"disconnected"},"auth_error":*state.auth_error.lock().unwrap(),"theme":Runtime::theme(),"settings":state.settings.load(Ordering::SeqCst),"suggestions":state.suggestions.load(Ordering::SeqCst),"status":state.status_message(),"input_health":Runtime::input_health(),"update":app.state::<update::UpdateState>().value(),"accessibility":accessibility,"input_monitoring":input_monitoring,"notifications":notifications,"empty":empty,"version":app.package_info().version.to_string()}))
 }
 #[tauri::command]
 async fn search(app:tauri::AppHandle,query:String)->std::result::Result<Value,String> {
@@ -355,7 +361,7 @@ fn save_settings(app:tauri::AppHandle,mut config:PanelSettings)->std::result::Re
     let old=Panel::settings(root).map_err(|e|e.to_string())?;
 	config.keyboard_fallback=if old.keyboard.is_empty(){old.keyboard_fallback.clone()}else{old.keyboard.clone()};
 	#[cfg(target_os="linux")]
-	if config.keyboard!=old.keyboard {if app.state::<Runtime>().linux_setup.load(Ordering::SeqCst){return Err("Keyboard setup is running; finish it before changing keyboards".into());}config.keyboard_fallback=typerelay_client::installation::Installer::configured_keyboard(&typerelay_client::installation::Installer::devices().map_err(|error|error.to_string())?,&config).map_err(|error|error.to_string())?;}
+	if config.keyboard!=old.keyboard {if app.state::<Runtime>().linux_setup.load(Ordering::SeqCst){return Err("Keyboard setup is running; finish it before changing keyboards".into());}if !config.keyboard.is_empty(){config.keyboard_fallback=typerelay_client::installation::Installer::configured_keyboard(&typerelay_client::installation::Installer::devices().map_err(|error|error.to_string())?,&config).map_err(|error|error.to_string())?;}}
     Runtime::shortcut(&app,Some(&old.shortcut),&config.shortcut).map_err(|e|e.to_string())?;
     let result=(||->Result<()>{if config.launch_at_login{app.autolaunch().enable()?;}else{app.autolaunch().disable()?;} Panel::save_settings(root,&config)})();
     if result.is_err(){let _=Runtime::shortcut(&app,Some(&config.shortcut),&old.shortcut);if old.launch_at_login{let _=app.autolaunch().enable();}else{let _=app.autolaunch().disable();}}
@@ -414,7 +420,18 @@ async fn suggestions(app:tauri::AppHandle,action:String,value:Option<Value>)->st
             #[cfg(target_os="linux")]
             "install-context-helper"=>Ok(json!({"message":typerelay_client::installation::Installer::install_capture_helper(&typerelay_client::capture_linux::ContextProvider::desktop())?})),
             #[cfg(target_os="linux")]
-            "restart-capture"=>{ensure!(std::process::Command::new("systemctl").args(["--user","restart","typerelay"]).status()?.success(),"Could not restart the keyboard worker; install the matching desktop package");Ok(json!({"message":"Keyboard worker restarted"}))},
+            "restart-capture"=>{
+                use typerelay_client::installation::Installer;
+                let mode=Installer::keyboard_mode()?;
+                if !Installer::has_access(&mode)? || !Installer::persistent_access(&mode) {
+                    let launcher=std::env::var_os("APPIMAGE").map(PathBuf::from);
+                    let mut command=std::process::Command::new("pkexec");
+                    if let Some(launcher)=launcher {command.arg(launcher).args(["--input-access",&mode]);}else{command.arg(std::env::current_exe()?.with_file_name("typerelay")).args(["input-access","--device-name",&mode]);}
+                    ensure!(command.status()?.success(),"Keyboard access was not granted");
+                }
+                if std::env::var_os("APPIMAGE").is_some(){app.state::<Runtime>().stop_engine();Runtime::setup_linux(app.clone());}else{ensure!(std::process::Command::new("systemctl").args(["--user","restart","typerelay"]).status()?.success(),"Could not restart the keyboard worker; install the matching desktop package");}
+                Ok(json!({"message":"Keyboard input repair started"}))
+            },
             "test-notification"=>{observation::Observation::notify(&app,true)?;Ok(json!({"sent":true}))},
             "configure"=>{let result=state.configure(serde_json::from_value(value)?)?;if let Some(changes)=result["changes"].as_array(){for change in changes{let _=app.emit("suggestion-change",json!({"epoch":result["epoch"],"change":change}));}}Ok(result)},
             "forget"=>{let epoch=state.forget()?;let _=app.emit("suggestions-forgotten",json!({"epoch":epoch}));Ok(json!({"epoch":epoch}))},
@@ -474,6 +491,8 @@ fn main() {
         #[cfg(target_os="linux")]
         {let _=std::fs::remove_file(typerelay_client::panel_ipc::PanelIpc::directory()?.join("ready"));}
         if std::env::args().any(|arg|arg=="--quit"||arg=="--uninstall") {if std::env::args().any(|arg|arg=="--uninstall"){app.autolaunch().disable()?;}app.handle().exit(0);return Ok(());}
+        #[cfg(target_os="linux")]
+        { let handle=app.handle().clone();std::thread::spawn(move||{let mut previous=String::new();let mut previous_message=String::new();std::thread::sleep(std::time::Duration::from_secs(6));loop{let health=typerelay_client::panel_ipc::PanelIpc::input_health();let signature=serde_json::json!({"state":health["state"],"message":health["message"],"active":health["active"],"unavailable":health["unavailable"]}).to_string();if signature!=previous{let _=handle.emit("input-health",&health);previous=signature;}let message=health["message"].as_str().unwrap_or_default();if message!=previous_message{if !message.is_empty(){Runtime::notice(&handle,message,true);}previous_message=message.to_owned();}std::thread::sleep(std::time::Duration::from_secs(1));}}); }
         if let Err(error)=Runtime::shortcut(app.handle(),None,&config.shortcut){*app.state::<Runtime>().status.lock().unwrap()=error.to_string();}
         if config.launch_at_login && let Err(error)=app.autolaunch().enable(){*app.state::<Runtime>().status.lock().unwrap()=format!("Could not enable launch at login: {error}");}
 		if let Err(error)=tray::install(app.handle()){*app.state::<Runtime>().status.lock().unwrap()=format!("Tray unavailable: {error}. Use the shortcut or launcher.");}

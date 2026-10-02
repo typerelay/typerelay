@@ -36,7 +36,7 @@ class Installer:
     def access(self):
         namespace = {"__name__": "typerelay_session_access"}
         exec(self.permission_source, namespace)
-        return namespace["SessionAccess"](device_name=self.device_name or "keyd virtual keyboard")
+        return namespace["SessionAccess"](device_name=self.device_name or "auto")
 
     def artifacts(self):
         artifacts = [("typerelay", self.binary, self.destination), ("typerelay-tui", self.binary.with_name("typerelay-tui"), self.destination.with_name("typerelay-tui"))]
@@ -152,7 +152,7 @@ WantedBy=graphical-session.target
         if action == "install" and self.permissions_current():
             print("Existing persistent input access is current; no administrator changes needed.")
             return
-        arguments = ["/usr/bin/python3", str(self.helper), action, pwd.getpwuid(os.getuid()).pw_name, "--device-name", self.device_name or "keyd virtual keyboard"]
+        arguments = ["/usr/bin/python3", str(self.helper), action, pwd.getpwuid(os.getuid()).pw_name, "--device-name", self.device_name or "auto"]
         if shutil.which("sudo"):
             arguments.insert(0, "sudo")
         elif shutil.which("pkexec"):
@@ -221,7 +221,7 @@ WantedBy=graphical-session.target
         if missing:
             raise RuntimeError("Missing dependencies: " + ", ".join(missing))
         if self.device_name is None and self.manifest.exists():
-            self.device_name = json.loads(self.manifest.read_text()).get("device_name")
+            self.device_name = json.loads((self.config / "panel.json").read_text()).get("keyboard") or "auto" if (self.config / "panel.json").exists() else json.loads(self.manifest.read_text()).get("device_name", "auto")
         self.device_name = self.access().select_keyboard(self.device_name)
         if automatic and not self.permissions_current():
             raise RuntimeError("Keyboard access needs administrator setup; run typerelay install before updating")
@@ -242,7 +242,7 @@ WantedBy=graphical-session.target
         conflicts = self.conflicts()
         print("Binaries: " + ", ".join(str(destination) for _, _, destination in self.artifacts()) + f"\nService: {self.unit}\nSnippets: {self.snippets}")
         print("Starts with your graphical login, runs as your user, restarts after failures.")
-        print("Keyboard: " + (self.device_name or "keyd virtual keyboard"))
+        print("Keyboard: " + (self.device_name or "auto"))
         print("Administrator access installs scoped udev rules and loads uinput at boot.")
         if conflicts["manual"]:
             print("Running manual TypeRelay client(s): " + ", ".join(map(str, conflicts["manual"])))
@@ -275,7 +275,7 @@ WantedBy=graphical-session.target
         previous["binary_sha256"] = previous["binaries"]["typerelay"]
         if self.panel_launcher:
             previous["panel_launcher"] = str(self.panel_launcher)
-        previous["device_name"] = self.device_name or "keyd virtual keyboard"
+        previous["device_name"] = self.device_name or "auto"
         self.write_private(self.manifest, json.dumps(previous, indent=2) + "\n")
         if not automatic:
             self.privileged("install")

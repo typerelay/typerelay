@@ -17,6 +17,7 @@ html(lang="en")
 				button#open-settings.icon-button(type="button" aria-label="Open settings" title="Settings")
 					span(aria-hidden="true") ⚙︎
 				button#close.icon-button(type="button" aria-label="Close TypeRelay") ×
+			p#input-health.settings-description(role="status" aria-live="polite" hidden)
 			section#search-view
 				.search-field
 					label.visually-hidden(for="query") Search snippets
@@ -163,10 +164,10 @@ html(lang="en")
 							.setting-row#keyboard-setting(hidden)
 								.setting-copy
 									label(for="keyboard") Keyboard
-									p Choose the keyboard used for expansion.
+									p Automatic listens to all connected physical keyboards.
 								.setting-control
 									select#keyboard.form-select.form-select-sm(form="settings-form")
-										option(value="") Automatic selection
+										option(value="") Automatic — all keyboards
 										template#keyboard-option-template
 											option
 						.settings-actions

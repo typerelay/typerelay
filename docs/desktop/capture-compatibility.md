@@ -69,3 +69,9 @@ Backend tests: `cargo test -p typerelay-client --lib --no-default-features --fea
 Live metadata probe (no typing content): `cargo test -p typerelay-client --lib --no-default-features --features desktop live_context_and_layout_metadata -- --ignored --nocapture`.
 
 Frontend regression coverage was added but execution and physical acceptance remain assigned to the user.
+
+## Linux multi-keyboard input repair, 2026-10-02
+
+Automatic input now owns all physical text keyboards through one relay, with persistent permissions, per-device held-key recovery and validated Hyprland composite-name resolution. Input readiness is included in `--capture-status` independently of discovery settings. Virtual output is excluded.
+
+The user verified the panel shortcut and snippet expansion on both Kinesis and the laptop keyboard with the installed repair. Backend readiness also reports both devices active with no worker restarts. This does not establish cold-boot, docking, suspend/resume or repeated-passage acceptance for this build; those checks remain pending. The broader workspace test run reported five failures in untouched TUI tests; focused client/relay, panel backend, core, mobile and installer tests passed. Frontend regression tests were added but left to the user.

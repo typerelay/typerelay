@@ -11,7 +11,7 @@ import subprocess
 class SessionAccess:
     marker = "# Managed by TypeRelay"
 
-    def __init__(self, root="/", device_name="keyd virtual keyboard"):
+    def __init__(self, root="/", device_name="auto"):
         self.root = pathlib.Path(root)
         if not device_name or any(c in device_name for c in '\n\r\0"\\*?[]'):
             raise ValueError("Keyboard name contains unsupported udev-rule characters")
@@ -25,6 +25,9 @@ class SessionAccess:
             yield name, path, properties
 
     def select_keyboard(self, requested=None):
+        if requested in (None, "auto"):
+            self.__init__(self.root, "auto")
+            return self.device_name
         keyboards = [(name, properties) for name, _, properties in self.devices() if "ID_INPUT_KEYBOARD=1" in properties]
         keyd = [name for name, _ in keyboards if name == "keyd virtual keyboard"]
         if requested and keyd and requested != "keyd virtual keyboard":
@@ -39,17 +42,18 @@ class SessionAccess:
     def paths(self, previous=()):
         paths = [("uinput", self.root / "dev/uinput", "rw")]
         for name, path, properties in self.devices():
-            if name == self.device_name or name in previous or any(p in properties for p in ["ID_INPUT_MOUSE=1", "ID_INPUT_TOUCHPAD=1", "ID_INPUT_TOUCHSCREEN=1"]):
+            if ("ID_INPUT_KEYBOARD=1" in properties and (name == self.device_name or self.device_name == "auto" and any(p.startswith("DEVPATH=/devices/") and not p.startswith("DEVPATH=/devices/virtual/input/") for p in properties))) or name in previous or any(p in properties for p in ["ID_INPUT_MOUSE=1", "ID_INPUT_TOUCHPAD=1", "ID_INPUT_TOUCHSCREEN=1"]):
                 paths.append((name, path, "r"))
         return paths
 
     def rules(self, uid):
         lines = [self.marker]
         access = f'RUN+="/usr/bin/setfacl -m u:{uid}:r $env{{DEVNAME}}"'
-        lines.append(f'SUBSYSTEM=="input", KERNEL=="event*", ATTRS{{name}}=="{self.device_name}", ' + access)
+        selector = 'DEVPATH!="/devices/virtual/input/*", ' if self.device_name == "auto" else f'ATTRS{{name}}=="{self.device_name}", '
+        lines.append('ACTION!="remove", SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_KEYBOARD}=="1", ' + selector + access)
         for kind in ["MOUSE", "TOUCHPAD", "TOUCHSCREEN"]:
-            lines.append(f'SUBSYSTEM=="input", KERNEL=="event*", ENV{{ID_INPUT_{kind}}}=="1", ' + access)
-        lines.append(f'SUBSYSTEM=="misc", KERNEL=="uinput", RUN+="/usr/bin/setfacl -m u:{uid}:rw $env{{DEVNAME}}"')
+            lines.append(f'ACTION!="remove", SUBSYSTEM=="input", KERNEL=="event*", ENV{{ID_INPUT_{kind}}}=="1", ' + access)
+        lines.append(f'ACTION!="remove", SUBSYSTEM=="misc", KERNEL=="uinput", RUN+="/usr/bin/setfacl -m u:{uid}:rw $env{{DEVNAME}}"')
         return "\n".join(lines) + "\n"
 
     def acl(self, path, uid):

@@ -8,6 +8,10 @@ use typerelay_core::{Engine, Input, Expansion, FeedResult};
 use typerelay_client::{settings::SettingsStore, editor::Paths, browser_lease::BrowserLease};
 use typerelay_client::installation::Installer;
 
+#[path = "omarchy_input.rs"]
+mod input_devices;
+use input_devices::{Keyboards, KeyboardEvent};
+
 pub struct Session;
 
 #[derive(Debug)]
@@ -35,7 +39,7 @@ struct PasteState {
 struct ContextWatch {
     stream: UnixStream,
     pending: String,
-    pointers: Vec<Device>,
+    pointers: Vec<(String, Device)>,
     pointer_changed:bool,
 }
 
@@ -45,16 +49,24 @@ impl ContextWatch {
     fn connect() -> Result<Self> {
         let stream = UnixStream::connect(Hyprland::socket(".socket2.sock")?)?;
         stream.set_nonblocking(true)?;
-        let mut pointers = Vec::new();
-        for (_, path, props) in Installer::devices()? {
-            if props.lines().any(|p| p == "ID_INPUT_MOUSE=1" || p == "ID_INPUT_TOUCHPAD=1" || p == "ID_INPUT_TOUCHSCREEN=1") {
-                let device = Device::open(&path).with_context(|| format!("Pointer access needed for click cancellation: {}", path.display()))?;
-                device.set_nonblocking(true)?;
-                pointers.push(device);
-            }
+        let mut watcher = Self { stream, pending: String::new(), pointers: Vec::new(), pointer_changed:false };
+        watcher.refresh_pointers(&Installer::devices()?)?;
+        Ok(watcher)
+    }
+
+    fn refresh_pointers(&mut self, inputs: &[(String,PathBuf,String)]) -> Result<()> {
+        let mut present = BTreeSet::new();
+        for (_,path,props) in inputs {
+            if !props.lines().any(|p| matches!(p,"ID_INPUT_MOUSE=1"|"ID_INPUT_TOUCHPAD=1"|"ID_INPUT_TOUCHSCREEN=1")) { continue; }
+            let identity = props.lines().find_map(|line|line.strip_prefix("DEVPATH=")).context("Pointer has no kernel identity")?.to_owned();
+            present.insert(identity.clone());
+            if self.pointers.iter().any(|(id,_)|id==&identity) { continue; }
+            let pointer=Device::open(path).with_context(||format!("Pointer access needed for click cancellation: {}",path.display()))?;
+            pointer.set_nonblocking(true)?;
+            self.pointers.push((identity,pointer));
         }
-        if pointers.is_empty() { bail!("No pointer device available for click cancellation"); }
-        Ok(Self { stream, pending: String::new(), pointers,pointer_changed:false })
+        self.pointers.retain(|(id,_)|present.contains(id));
+        Ok(())
     }
 
     fn changed(&mut self, expected:Option<&str>) -> Result<bool> {
@@ -63,7 +75,7 @@ impl ContextWatch {
         let mut bytes = [0; 4096];
         loop {
             match self.stream.read(&mut bytes) {
-                Ok(0) => bail!("Hyprland event connection closed"),
+                Ok(0) => return Err(std::io::Error::new(std::io::ErrorKind::ConnectionReset, "Hyprland event connection closed").into()),
                 Ok(n) => self.pending.push_str(&String::from_utf8_lossy(&bytes[..n])),
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
                 Err(e) => return Err(e.into()),
@@ -77,7 +89,7 @@ impl ContextWatch {
         if window_changed && expected.is_some() && Session::target()?.as_deref() == expected { window_changed = false; }
         let mut index = 0;
         while index < self.pointers.len() {
-            let disconnected = match self.pointers[index].fetch_events() {
+            let disconnected = match self.pointers[index].1.fetch_events() {
                 Ok(events) => {
                     if events.into_iter().any(|event|Self::invalidates(&event)) { changed = true; }
                     false
@@ -107,12 +119,10 @@ impl Session {
     const MODIFIERS: [KeyCode; 8] = [KeyCode::KEY_LEFTSHIFT, KeyCode::KEY_RIGHTSHIFT, KeyCode::KEY_LEFTCTRL, KeyCode::KEY_RIGHTCTRL, KeyCode::KEY_LEFTALT, KeyCode::KEY_RIGHTALT, KeyCode::KEY_LEFTMETA, KeyCode::KEY_RIGHTMETA];
 
     fn caps_control(devices: &serde_json::Value, device_name: &str) -> Result<bool> {
-        let name = device_name.to_lowercase().replace([' ', '\n', ','], "-");
-        let keyboards = devices["keyboards"].as_array().context("No Hyprland keyboard information")?;
-        let keyboard = keyboards.iter().find(|keyboard| keyboard["name"].as_str() == Some(&name)).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotConnected, "Selected keyboard is unavailable in Hyprland"))?;
+        let keyboard = Hyprland::keyboard(devices, device_name)?;
         let native = |keyboard: &serde_json::Value| keyboard["options"].as_str().unwrap_or_default().split(',').any(|option| matches!(option, "ctrl:nocaps" | "caps:ctrl_modifier"));
         let caps_control = native(keyboard);
-        if let Some(output) = keyboards.iter().find(|keyboard| keyboard["name"].as_str() == Some("typerelay-virtual-keyboard")) { anyhow::ensure!(native(output) == caps_control, "Use the same native Caps-to-Ctrl options for the selected keyboard and TypeRelay virtual keyboard"); }
+        if let Ok(output) = Hyprland::keyboard(devices, "TypeRelay virtual keyboard") { anyhow::ensure!(native(output) == caps_control, "Use the same native Caps-to-Ctrl options for the selected keyboard and TypeRelay virtual keyboard"); }
         Ok(caps_control)
     }
 
@@ -122,6 +132,11 @@ impl Session {
 
     fn modifiers_down(pressed: &BTreeSet<u16>, caps_control: bool) -> bool {
         pressed.iter().any(|code| Self::MODIFIERS.iter().any(|modifier| modifier.0 == Self::effective_key(*code, caps_control)))
+    }
+
+    fn switch_keyboard(source: &mut Option<u64>, incoming: u64, engine: &mut Engine, target: &mut Option<String>) -> bool {
+        if *source == Some(incoming) { return false; }
+        *source=Some(incoming);engine.feed(Input::Cancel);*target=None;true
     }
 
     fn feed_input(engine: &mut Engine, event: &InputEvent, pressed: &BTreeSet<u16>, caps_control: bool, caps: &mut bool, allowed: bool) -> FeedResult {
@@ -142,45 +157,27 @@ impl Session {
         Ok(())
     }
 
-    fn wait_for_release(mut active: impl FnMut() -> Result<bool>, deadline: Instant) -> Result<()> {
-        let mut idle_since = None;
-        loop {
-            let now = Instant::now();
-            if now >= deadline { bail!("Keyboard stayed active for 5 seconds; release held keys and try again"); }
-            if active()? {
-                idle_since = None;
-            } else if now.duration_since(*idle_since.get_or_insert(now)) >= Duration::from_millis(50) {
-                return Ok(());
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
-    }
-
     fn release_stale_keys(pressed: &mut BTreeSet<u16>, keys_down: &BTreeSet<u16>,mut emit:impl FnMut(&[InputEvent])->Result<()>,mut observe:impl FnMut(u16)) -> Result<()> {
         let stale: Vec<_> = pressed.iter().filter(|key| !keys_down.contains(key)).copied().collect();
         for code in stale { observe(code);emit(&[InputEvent::new(EventType::KEY.0, code, 0)])?; pressed.remove(&code); }
         Ok(())
     }
 
-    fn wait_for_forwarded_keys(keyboard: &mut Device, output: &mut VirtualDevice, buffered: &mut VecDeque<InputEvent>, pressed: &mut BTreeSet<u16>, deadline: Instant,capture:&typerelay_client::capture_linux::CapturePublisher) -> Result<bool> {
+    fn wait_for_forwarded_keys(keyboard: &mut Keyboards, output: &mut VirtualDevice, buffered: &mut VecDeque<KeyboardEvent>, pressed: &mut BTreeSet<u16>, deadline: Instant,capture:&typerelay_client::capture_linux::CapturePublisher) -> Result<bool> {
         loop {
             let mut pending = VecDeque::new();
-            while let Some(event) = buffered.pop_front() {
-                if event.event_type() == EventType::KEY && pressed.contains(&event.code()) {
-                    if event.value() == 0 { pressed.remove(&event.code());capture.key(&event); }
-                    output.emit(&[event])?;
-                } else if event.event_type() == EventType::KEY { pending.push_back(event); }
+            while let Some(input) = buffered.pop_front() {
+                let event = input.event;
+                if event.event_type() == EventType::KEY && event.value() == 0 && pressed.contains(&event.code()) {
+                    if keyboard.transition(&input) { pressed.remove(&event.code()); capture.key(&event); output.emit(&[event])?; }
+                } else { pending.push_back(input); }
             }
             *buffered = pending;
-            let keys_down: BTreeSet<_> = keyboard.get_key_state()?.iter().map(|key|key.0).collect();
+            let keys_down = keyboard.keys_down()?;
             Self::release_stale_keys(pressed,&keys_down,|events|output.emit(events).map_err(Into::into),|code|capture.repair_release(code))?;
             if pressed.is_empty() { return Ok(true); }
             if Instant::now() >= deadline { return Ok(false); }
-            match keyboard.fetch_events() {
-                Ok(events) => buffered.extend(events),
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => (),
-                Err(error) => return Err(error.into()),
-            }
+            buffered.extend(keyboard.fetch_events(buffered.is_empty())?);
             thread::sleep(Duration::from_millis(1));
         }
     }
@@ -293,7 +290,7 @@ impl Session {
         let running = Arc::new(AtomicBool::new(true));
         let signal = running.clone();
         ctrlc::set_handler(move || signal.store(false, Ordering::SeqCst))?;
-        if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_none()||Hyprland::query("devices")?["keyboards"].as_array().is_some_and(|rows|rows.iter().any(|k|k["layout"].as_str()!=Some("us")||k["capsLock"]==true)){return typerelay_client::capture_linux::CapturePublisher::observe_only(device_name,running);}
+        if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_none(){return typerelay_client::capture_linux::CapturePublisher::observe_only(device_name,running);}
         let panel = typerelay_client::panel_ipc::PanelIpc::engine(running.clone())?;
         let progress=Arc::new(AtomicU64::new(0));let guarded=Arc::new(AtomicBool::new(true));Self::guard_relay(guarded.clone(),progress.clone());
         let mut input_generation = 0u64;
@@ -308,11 +305,16 @@ impl Session {
     }
 
     fn keep_connected(running: &AtomicBool, progress: &AtomicU64, mut relay: impl FnMut() -> Result<()>) -> Result<()> {
+        let mut previous_error=String::new();
         while running.load(Ordering::SeqCst) {
             progress.fetch_add(1, Ordering::SeqCst);
             match relay() {
                 Ok(()) => return Ok(()),
-                Err(error) if error.chain().any(|cause| cause.downcast_ref::<std::io::Error>().is_some_and(|io| io.raw_os_error() == Some(libc::ENODEV) || matches!(io.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut | std::io::ErrorKind::Interrupted | std::io::ErrorKind::NotConnected | std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::BrokenPipe))) => eprintln!("TypeRelay input interrupted: {error:#}; reconnecting keyboard"),
+                Err(error) if error.chain().any(|cause| cause.downcast_ref::<std::io::Error>().is_some_and(|io| io.raw_os_error() == Some(libc::ENODEV) || matches!(io.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut | std::io::ErrorKind::Interrupted | std::io::ErrorKind::NotConnected | std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::BrokenPipe))) => {
+                    let message=format!("Typerelay input unavailable: {error:#}; reconnecting");
+                    let _=typerelay_client::panel_ipc::PanelIpc::write_input_health(serde_json::json!({"state":"unavailable","active":[],"unavailable":[],"message":message,"heartbeat_ms":typerelay_client::capture_linux::CapturePublisher::now()}));
+                    if message!=previous_error { eprintln!("{message}"); previous_error=message; }
+                },
                 Err(error) => return Err(error),
             }
             for _ in 0..10 { if !running.load(Ordering::SeqCst) { break; } progress.fetch_add(1, Ordering::SeqCst); thread::sleep(Duration::from_millis(100)); }
@@ -322,55 +324,24 @@ impl Session {
 
     fn relay(store: &mut DatabaseSnapshot, requested: &str, running: &AtomicBool, progress: &AtomicU64, panel: &(std::sync::mpsc::Receiver<typerelay_client::panel_ipc::Insertion>, std::sync::mpsc::SyncSender<typerelay_client::panel_ipc::Insertion>), input_generation: &mut u64) -> Result<()> {
         let (panel_requests, template_tx) = panel;
-        let device_name = if requested == "auto" { Installer::keyboard()? } else { requested.to_owned() };
         let devices = Hyprland::query("devices")?;
-        let keyboards = devices["keyboards"].as_array().context("No Hyprland keyboard information")?;
-        if keyboards.iter().any(|k| k["layout"].as_str() != Some("us") || k["capsLock"].as_bool() == Some(true)) {bail!("Expansion requires a US layout; restart the worker for observation-only mode");}
         Self::check_interference(&devices)?;
-        let inputs=Installer::devices()?;
-        let selected: Vec<_> = Installer::keyboard_devices(&inputs).into_iter().filter(|(name, _, _)| name == &device_name).collect();
-        if selected.is_empty() { return Err(std::io::Error::new(std::io::ErrorKind::NotConnected, format!("Keyboard {device_name} is disconnected")).into()); }
-        if selected.len() != 1 { bail!("Expected exactly one keyboard named {device_name}"); }
-        let mut keyboard = Device::open(&selected[0].1).context("Keyboard unavailable; allow keyboard access in TypeRelay")?;
-        keyboard.set_nonblocking(true)?;
+        let mut keyboard = Keyboards::default();
         let mut context = ContextWatch::connect()?;
-        // keyd reserves vendor 0x0fac for virtual devices and ignores them, preventing feedback.
-        let mut output = VirtualDevice::builder()?.name("TypeRelay virtual keyboard").input_id(InputId::new(BusType::BUS_VIRTUAL, 0x0fac, 0x5452, 1)).with_keys(keyboard.supported_keys().context("Not a keyboard")?)?.build()?;
-        thread::sleep(Duration::from_millis(300));
-        let mut caps_control = Self::caps_control(&Hyprland::query("devices")?, &device_name)?;
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            Self::wait_for_release(|| {
-                progress.fetch_add(1, Ordering::SeqCst);
-                if !running.load(Ordering::SeqCst) { return Ok(false); }
-                // Startup keystrokes already reached the application; never replay them.
-                let mut activity = false;
-                loop {
-                    match keyboard.fetch_events() {
-                        Ok(events) => {
-                            let count = events.count();
-                            if count == 0 { break; }
-                            activity = true;
-                        }
-                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
-                        Err(error) => return Err(error.into()),
-                    }
-                }
-                Ok(activity || keyboard.get_key_state()?.iter().next().is_some())
-            }, deadline)?;
-            if !running.load(Ordering::SeqCst) { return Ok(()); }
-            keyboard.grab()?;
-            if keyboard.get_key_state()?.iter().next().is_none() { break; }
-            // A key arrived between the idle check and grab. Let it finish normally.
-            keyboard.ungrab()?;
-        }
-        let capture=typerelay_client::capture_linux::CapturePublisher::start(device_name.clone())?;
+        let mut keys = evdev::AttributeSet::<KeyCode>::new();
+        for code in 1..=767 { let key=KeyCode(code); if format!("{key:?}").starts_with("KEY_") { keys.insert(key); } }
+        let mut output = VirtualDevice::builder()?.name("TypeRelay virtual keyboard").input_id(InputId::new(BusType::BUS_VIRTUAL, 0x0fac, 0x5452, 1)).with_keys(&keys)?.build()?;
+        let inputs = Installer::devices()?;
+        let mode = if requested == "auto" { Installer::keyboard_mode()? } else { requested.into() };
+        let capture_name = Installer::input_keyboards(&inputs,&mode).first().map(|row|row.0.clone()).unwrap_or_default();
+        let capture = typerelay_client::capture_linux::CapturePublisher::start(capture_name)?;
+        let mut caps_control = false;
+        let mut source = None;
         let mut settings = SettingsStore::open(Paths::config_dir()?.join("settings.yml"))?;
         let mut engine = Engine::new(store.snapshot.clone());
         engine.set_prefix(&settings.settings.trigger_prefix).map_err(anyhow::Error::msg)?;
         let mut pressed = BTreeSet::new();
-        let mut suppressed_space = false;
-        let mut suppressed_key = None;
+        let mut suppressed = BTreeSet::<(u64,u16)>::new();
         let mut template_wait: Option<TemplateWait> = None;
         let mut panel_shortcut = typerelay_client::panel::Panel::settings(settings.config_dir()).ok().and_then(|value|typerelay_client::panel::Panel::shortcut(&value.shortcut).ok());
         let mut target = None;
@@ -382,16 +353,24 @@ impl Session {
         let mut usage: Option<Expansion> = None;
         let mut last_stroke = Instant::now();
         let mut paste: Option<PasteState> = None;
-        let mut last_conflict_check = Instant::now();
-        eprintln!("TypeRelay running: {} snippets; keyboard {device_name}; configured prefix + abbreviation + Space. Ctrl+C stops. No keystrokes are logged.", store.snapshot.len());
+        let mut last_conflict_check = Instant::now()-Duration::from_secs(2);
+        let mut last_health = String::new();
+        eprintln!("TypeRelay running: {} snippets; automatic keyboard input; configured prefix + abbreviation + Space. Ctrl+C stops. No keystrokes are logged.", store.snapshot.len());
         while running.load(Ordering::SeqCst) {
             progress.fetch_add(1,Ordering::SeqCst);
             if last_conflict_check.elapsed() >= Duration::from_secs(2) {
                 let devices = Hyprland::query("devices")?;
                 Self::check_interference(&devices)?;
-                if requested == "auto" && Installer::keyboard()? != device_name { return Err(std::io::Error::new(std::io::ErrorKind::NotConnected, "Configured keyboard changed").into()); }
-                let updated = Self::caps_control(&devices, &device_name)?;
-                if updated != caps_control { caps_control = updated; caps = false; engine.feed(Input::Cancel); target = None; }
+                let inputs=Installer::devices()?;
+                keyboard.reconcile(requested, &devices, &inputs)?;
+                context.refresh_pointers(&inputs)?;
+                if let Ok(layout)=Hyprland::keyboard(&devices,"TypeRelay virtual keyboard") { caps=layout["capsLock"].as_bool().unwrap_or(false); }
+                let active = keyboard.active();
+                let unavailable = keyboard.issues();
+                let status = if active.is_empty() { "unavailable" } else if unavailable.is_empty() { "ready" } else { "degraded" };
+                let message = if status == "ready" { String::new() } else { format!("Typerelay input {status}: {}", if unavailable.is_empty() { "No physical keyboard is available".into() } else { unavailable.iter().map(|row| format!("{}: {}", row["name"].as_str().unwrap_or_default(), row["reason"].as_str().unwrap_or_default())).collect::<Vec<_>>().join("; ") }) };
+                typerelay_client::panel_ipc::PanelIpc::write_input_health(serde_json::json!({"state":status,"active":active,"unavailable":unavailable,"message":message,"heartbeat_ms":typerelay_client::capture_linux::CapturePublisher::now(),"reconciled_ms":typerelay_client::capture_linux::CapturePublisher::now()}))?;
+                if message != last_health { if !message.is_empty() { eprintln!("{message}"); } else { eprintln!("Typerelay input ready: {} keyboards", active.len()); } last_health = message; }
                 last_conflict_check = Instant::now();
             }
             let context_changed=context.changed(target.as_deref())?;if context.pointer_changed{capture.pointer();}
@@ -414,18 +393,14 @@ impl Session {
                 panel_shortcut = typerelay_client::panel::Panel::settings(settings.config_dir()).ok().and_then(|value|typerelay_client::panel::Panel::shortcut(&value.shortcut).ok());
                 last_reload = Instant::now();
             }
-            let events: Vec<InputEvent> = match keyboard.fetch_events() {
-                Ok(events) => events.collect(),
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Vec::new(),
-                Err(e) => return Err(e.into()),
-            };
-            buffered.extend(events);
+            buffered.extend(keyboard.fetch_events(buffered.is_empty())?);
             if buffered.len() > 8192 { bail!("Input backlog exceeded safety limit; stopping"); }
-            let keys_down: BTreeSet<_> = keyboard.get_key_state()?.iter().map(|key|key.0).collect();
-            if buffered.is_empty() {
-                Self::release_stale_keys(&mut pressed,&keys_down,|events|output.emit(events).map_err(Into::into),|code|capture.repair_release(code))?;
-                if suppressed_space && !keys_down.contains(&KeyCode::KEY_SPACE.0) { suppressed_space = false; }
-                if suppressed_key.is_some_and(|key|!keys_down.contains(&key)) { suppressed_key = None; }
+            let keys_down = keyboard.keys_down()?;
+            if keyboard.changed {
+                keyboard.changed = false; *input_generation = input_generation.wrapping_add(1);
+                capture.reset(); engine.feed(Input::Cancel); target = None; source = None; insertion.clear(); usage = None;
+                if let Some(state) = &mut paste { state.cancelled = true; state.job.cancel(); }
+                template_wait = None;
             }
             if paste.is_none() && insertion.is_empty() && pressed.is_empty() && (buffered.is_empty() || template_wait.is_some()) && !Self::modifiers_down(&keys_down, caps_control) && let Ok(request) = panel_requests.try_recv() {
                     if template_wait.as_ref().is_none_or(|wait|request.generation==Some(wait.generation)) && Instant::now() < request.deadline && request.generation.is_none_or(|expected| expected == *input_generation) && Self::target()? == Some(request.target.clone()) {
@@ -494,23 +469,25 @@ impl Session {
                     Err(std::sync::mpsc::TryRecvError::Disconnected)=>{template_wait=None;}
                 }
             }
-            while let Some(event) = buffered.pop_front() {
-                capture.key(&event);
-                if event.event_type() != EventType::KEY { continue; }
+            while let Some(input) = buffered.pop_front() {
+                let event = input.event;
                 let code = KeyCode(event.code());
-                if suppressed_key == Some(code.0) {
-                    if event.value() == 0 { suppressed_key = None; pressed.remove(&code.0); }
-                    continue;
+                let logical = keyboard.transition(&input);
+                if suppressed.contains(&(input.device,code.0)) { if event.value() == 0 { suppressed.remove(&(input.device,code.0)); if logical { pressed.remove(&code.0); capture.key(&event); } } continue; }
+                if !logical { continue; }
+                if event.value() != 0 && Self::switch_keyboard(&mut source,input.device,&mut engine,&mut target) {
+                    if let Some(name) = keyboard.name(input.device) {
+                        caps_control = keyboard.caps_control(input.device);
+                        capture.device(name);
+                    }
+                    capture.reset();
                 }
-                if suppressed_space && code == KeyCode::KEY_SPACE {
-                    if event.value() == 0 { suppressed_space = false; pressed.remove(&code.0); }
-                    continue;
-                }
+                capture.key(&event);
                 if event.value() == 0 { pressed.remove(&code.0); }
                 if event.value() == 1 { pressed.insert(code.0); *input_generation = input_generation.wrapping_add(1); }
                 let effective_pressed: BTreeSet<_> = pressed.iter().map(|key| Self::effective_key(*key, caps_control)).collect();
                 if event.value() == 1 && panel_shortcut.as_ref().is_some_and(|(key, groups)| *key == code.0 && groups.iter().all(|group|group.iter().any(|key|effective_pressed.contains(key))) && effective_pressed.iter().all(|key|*key == code.0 || groups.iter().any(|group|group.contains(key)))) && typerelay_client::panel_ipc::PanelIpc::notify() {
-                    capture.reset();suppressed_key = Some(code.0); engine.feed(Input::Cancel); target = None; continue;
+                    capture.reset();suppressed.insert((input.device,code.0)); engine.feed(Input::Cancel); target = None; continue;
                 }
                 if event.value() != 0 {
                     last_input = Instant::now();
@@ -518,7 +495,7 @@ impl Session {
                     if context.changed(target.as_deref())? { engine.feed(Input::Cancel); target = None; }
                     if matches!(Self::input(code), Input::Character(c) if c == engine.prefix()) { target = Self::target()?; if std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some() { eprintln!("Candidate target available: {}", target.is_some()); } }
                     let result = Self::feed_input(&mut engine, &event, &pressed, caps_control, &mut caps, target.is_some());
-                    if matches!(result, FeedResult::Suppress) { suppressed_key = Some(code.0); pressed.remove(&code.0); continue; }
+                    if matches!(result, FeedResult::Suppress) { suppressed.insert((input.device,code.0)); pressed.remove(&code.0); continue; }
                     let expansion = if let FeedResult::Expand(expansion) = result { Some(expansion) } else { None };
                     if expansion.is_some() && std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some() { eprintln!("Match found; held-key count {}", pressed.len()); }
                     if let Some(expansion) = expansion
@@ -531,7 +508,7 @@ impl Session {
                                 target = None;
                                 continue;
                             }
-                            suppressed_space = true;
+                            suppressed.insert((input.device,KeyCode::KEY_SPACE.0));
                             if let Some(template) = &expansion.template {
                                 if let Some(identity) = &template.identity {
                                     let hit = typerelay_client::panel::Hit { id: identity.id.clone(), library: identity.library.clone(), revision: identity.revision, library_name: String::new(), title: template.abbreviation.clone(), abbreviation: template.abbreviation.clone(), preview: String::new() };
@@ -561,7 +538,7 @@ impl Session {
         }
         drop(paste);
         for code in pressed { output.emit(&[InputEvent::new(EventType::KEY.0, code, 0)])?; }
-        keyboard.ungrab()?;
+        drop(keyboard);
         eprintln!("TypeRelay stopped");
         Ok(())
     }
@@ -570,6 +547,13 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn keyboard_switch_cancels_partial_trigger_and_both_keyboards_can_expand() {
+        let mut engine=Engine::new(typerelay_core::Snapshot::new(vec![typerelay_core::Snippet{trigger:"brb".into(),replacement:"Be right back.".into()}]).unwrap());let mut source=None;let mut target=Some("window".into());
+        assert!(Session::switch_keyboard(&mut source,1,&mut engine,&mut target));engine.feed(Input::Character(';'));engine.feed(Input::Character('b'));
+        assert!(Session::switch_keyboard(&mut source,2,&mut engine,&mut target));engine.feed(Input::Character('r'));engine.feed(Input::Character('b'));assert!(!matches!(engine.feed_event(Input::Space),FeedResult::Expand(_)));
+        for id in [1,2,1] {Session::switch_keyboard(&mut source,id,&mut engine,&mut target);for c in ";brb".chars(){engine.feed(Input::Character(c));}assert!(matches!(engine.feed_event(Input::Space),FeedResult::Expand(_)));}
+    }
     #[test]
     fn repaired_physical_releases_reach_both_forwarding_and_observation(){let mut pressed=BTreeSet::from([KeyCode::KEY_LEFTCTRL.0]);let mut output=vec![];let mut observed=vec![];Session::release_stale_keys(&mut pressed,&BTreeSet::new(),|events|{output.extend_from_slice(events);Ok(())},|code|observed.push(code)).unwrap();assert!(pressed.is_empty());assert_eq!(output,vec![InputEvent::new(EventType::KEY.0,KeyCode::KEY_LEFTCTRL.0,0)]);assert_eq!(observed,vec![KeyCode::KEY_LEFTCTRL.0]);Session::release_stale_keys(&mut pressed,&BTreeSet::new(),|_|panic!("duplicate release"),|_|panic!("duplicate observation repair")).unwrap();}
     #[test]
@@ -662,19 +646,6 @@ mod tests {
         assert_eq!(expansion.unwrap().text, "Be right back.");
         Session::feed_input(&mut engine, &InputEvent::new(EventType::KEY.0, KeyCode::KEY_CAPSLOCK.0, 1), &held, false, &mut caps, true);
         assert!(caps, "An unremapped Caps Lock retains its existing behavior");
-    }
-    #[test]
-    fn startup_waits_for_launch_key_release_and_a_stable_idle_period() {
-        let mut checks = 0;
-        Session::wait_for_release(|| {
-            checks += 1;
-            Ok(matches!(checks, 1 | 2 | 5))
-        }, Instant::now() + Duration::from_secs(1)).unwrap();
-        assert!(checks >= 11, "A second key must restart the idle interval");
-    }
-    #[test]
-    fn startup_times_out_instead_of_grabbing_a_held_keyboard() {
-        assert!(Session::wait_for_release(|| Ok(true), Instant::now() + Duration::from_millis(20)).is_err());
     }
     #[test]
     fn every_printable_ascii_character_has_a_stroke() {

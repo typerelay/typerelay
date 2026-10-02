@@ -38,6 +38,19 @@ impl Installer {
         devices.iter().filter(|(name, _, properties)| !name.eq_ignore_ascii_case("TypeRelay virtual keyboard") && properties.lines().any(|p| p == "ID_INPUT_KEYBOARD=1")).collect()
     }
 
+    pub fn physical_keyboard(properties: &str) -> bool {
+        properties.lines().any(|p| p == "ID_INPUT_KEYBOARD=1") && properties.lines().any(|p| p.starts_with("DEVPATH=/devices/") && !p.starts_with("DEVPATH=/devices/virtual/input/"))
+    }
+
+    pub fn input_keyboards<'a>(devices: &'a [(String, std::path::PathBuf, String)], requested: &str) -> Vec<&'a (String, std::path::PathBuf, String)> {
+        Self::keyboard_devices(devices).into_iter().filter(|(name, _, properties)| if requested == "auto" { Self::physical_keyboard(properties) } else { name == requested }).collect()
+    }
+
+    pub fn keyboard_mode() -> Result<String> {
+        let settings = crate::panel::Panel::settings(&crate::editor::Paths::config_dir()?)?;
+        Ok(if settings.keyboard.is_empty() { "auto".into() } else { settings.keyboard })
+    }
+
     pub fn select_keyboard(devices: &[(String, std::path::PathBuf, String)], requested: Option<&str>) -> Result<String> {
         let keyboards = Self::keyboard_devices(devices);
         let available=keyboards.iter().map(|(name,_,_)|name.as_str()).collect::<Vec<_>>().join(", ");
@@ -74,13 +87,18 @@ impl Installer {
 
     pub fn input_paths(devices: &[(String, std::path::PathBuf, String)], keyboard: &str) -> Vec<(std::path::PathBuf, bool)> {
         let mut paths = vec![(std::path::PathBuf::from("/dev/uinput"), true)];
-        paths.extend(devices.iter().filter(|(name, _, properties)| properties.lines().any(|p| p == "ID_INPUT_KEYBOARD=1" && name == keyboard || matches!(p, "ID_INPUT_MOUSE=1" | "ID_INPUT_TOUCHPAD=1" | "ID_INPUT_TOUCHSCREEN=1"))).map(|(_, path, _)| (path.clone(), false)));
+        paths.extend(devices.iter().filter(|(name, _, properties)| properties.lines().any(|p| p == "ID_INPUT_KEYBOARD=1" && (name == keyboard || keyboard == "auto" && Self::physical_keyboard(properties)) || matches!(p, "ID_INPUT_MOUSE=1" | "ID_INPUT_TOUCHPAD=1" | "ID_INPUT_TOUCHSCREEN=1"))).map(|(_, path, _)| (path.clone(), false)));
         paths
     }
 
     pub fn has_access(keyboard: &str) -> Result<bool> {
         use std::os::unix::ffi::OsStrExt;
         Ok(Self::input_paths(&Self::devices()?, keyboard).iter().all(|(path, write)| std::ffi::CString::new(path.as_os_str().as_bytes()).is_ok_and(|path| unsafe { libc::access(path.as_ptr(), libc::R_OK | if *write { libc::W_OK } else { 0 }) == 0 })))
+    }
+
+    pub fn persistent_access(keyboard: &str) -> bool {
+        let uid = unsafe { libc::geteuid() };
+        std::fs::read_to_string(format!("/etc/udev/rules.d/99-typerelay-{uid}.rules")).is_ok_and(|rules| rules == Self::input_rules(uid, keyboard))
     }
 
     pub fn install_capture_helper(desktop:&str)->Result<String>{
@@ -98,7 +116,7 @@ impl Installer {
         ensure!(uid > 0, "Input access is only for a desktop user");
         // Select from trusted kernel/udev device information; no caller-provided paths or UID.
         let devices = Self::devices()?;
-        let keyboard = Self::select_keyboard(&devices, Some(requested))?;
+        let keyboard = if requested == "auto" { "auto".to_owned() } else { Self::select_keyboard(&devices, Some(requested))? };
         Self::persist_input_access(std::path::Path::new("/"), uid, &keyboard)?;
         ensure!(Command::new("modprobe").arg("uinput").status()?.success(), "Could not load uinput");
         ensure!(Command::new("/usr/bin/udevadm").args(["control", "--reload-rules"]).status()?.success(), "Could not reload keyboard access rules");
@@ -111,14 +129,20 @@ impl Installer {
     fn persist_input_access(root: &std::path::Path, uid: u32, keyboard: &str) -> Result<()> {
         ensure!(uid > 0, "Input access is only for a desktop user");
         ensure!(!keyboard.is_empty() && !keyboard.chars().any(|c| c.is_control() || "\"\\*?[]|$%".contains(c)), "Keyboard name contains unsupported udev-rule characters");
-        let access = format!("RUN+=\"/usr/bin/setfacl -m u:{uid}:r $env{{DEVNAME}}\"");
-        let mut rules = format!("# Managed by TypeRelay\nACTION!=\"remove\", SUBSYSTEM==\"input\", KERNEL==\"event*\", ENV{{ID_INPUT_KEYBOARD}}==\"1\", ATTRS{{name}}==\"{keyboard}\", {access}\n");
-        for kind in ["MOUSE", "TOUCHPAD", "TOUCHSCREEN"] { rules.push_str(&format!("ACTION!=\"remove\", SUBSYSTEM==\"input\", KERNEL==\"event*\", ENV{{ID_INPUT_{kind}}}==\"1\", {access}\n")); }
-        rules.push_str(&format!("ACTION!=\"remove\", SUBSYSTEM==\"misc\", KERNEL==\"uinput\", RUN+=\"/usr/bin/setfacl -m u:{uid}:rw $env{{DEVNAME}}\"\n"));
+        let rules = Self::input_rules(uid, keyboard);
         Self::write_managed(&[
             (root.join(format!("etc/udev/rules.d/99-typerelay-{uid}.rules")), rules, 0o644),
             (root.join(format!("etc/modules-load.d/typerelay-{uid}.conf")), "# Managed by TypeRelay\nuinput\n".into(), 0o644),
         ])
+    }
+
+    fn input_rules(uid: u32, keyboard: &str) -> String {
+        let access = format!("RUN+=\"/usr/bin/setfacl -m u:{uid}:r $env{{DEVNAME}}\"");
+        let selector = if keyboard == "auto" { "DEVPATH!=\"/devices/virtual/input/*\", ".to_owned() } else { format!("ATTRS{{name}}==\"{keyboard}\", ") };
+        let mut rules = format!("# Managed by TypeRelay\nACTION!=\"remove\", SUBSYSTEM==\"input\", KERNEL==\"event*\", ENV{{ID_INPUT_KEYBOARD}}==\"1\", {selector}{access}\n");
+        for kind in ["MOUSE", "TOUCHPAD", "TOUCHSCREEN"] { rules.push_str(&format!("ACTION!=\"remove\", SUBSYSTEM==\"input\", KERNEL==\"event*\", ENV{{ID_INPUT_{kind}}}==\"1\", {access}\n")); }
+        rules.push_str(&format!("ACTION!=\"remove\", SUBSYSTEM==\"misc\", KERNEL==\"uinput\", RUN+=\"/usr/bin/setfacl -m u:{uid}:rw $env{{DEVNAME}}\"\n"));
+        rules
     }
 
     fn write_managed(files: &[(std::path::PathBuf, String, u32)]) -> Result<()> {
@@ -224,6 +248,17 @@ impl Installer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn automatic_inputs_include_both_physical_keyboards_and_exclude_virtual_and_pointer_interfaces() {
+        let devices=vec![("Laptop".into(),"/dev/input/event3".into(),"ID_INPUT_KEYBOARD=1\nDEVPATH=/devices/platform/i8042/input3/event3".into()),("USB".into(),"/dev/input/event8".into(),"ID_INPUT_KEYBOARD=1\nDEVPATH=/devices/pci/usb/input8/event8".into()),("USB".into(),"/dev/input/event7".into(),"ID_INPUT_MOUSE=1\nDEVPATH=/devices/pci/usb/input7/event7".into()),("Other virtual keyboard".into(),"/dev/input/event9".into(),"ID_INPUT_KEYBOARD=1\nDEVPATH=/devices/virtual/input/input9/event9".into())];
+        let names:Vec<_>=Installer::input_keyboards(&devices,"auto").iter().map(|row|row.0.as_str()).collect();assert_eq!(names,vec!["Laptop","USB"]);
+        assert_eq!(Installer::input_keyboards(&devices,"Laptop").len(),1);
+        let paths=Installer::input_paths(&devices,"auto");assert!(paths.iter().any(|(path,_)|path==std::path::Path::new("/dev/input/event3")));assert!(paths.iter().any(|(path,_)|path==std::path::Path::new("/dev/input/event8")));assert!(!paths.iter().any(|(path,_)|path==std::path::Path::new("/dev/input/event9")));
+    }
+    #[test]
+    fn automatic_permissions_are_persistent_and_not_bound_to_a_name_or_event_number() {
+        let root=tempfile::tempdir().unwrap();Installer::persist_input_access(root.path(),1234,"auto").unwrap();let path=root.path().join("etc/udev/rules.d/99-typerelay-1234.rules");let first=std::fs::read_to_string(&path).unwrap();assert!(first.contains("ENV{ID_INPUT_KEYBOARD}==\"1\""));assert!(first.contains("DEVPATH!=\"/devices/virtual/input/*\""));assert!(!first.contains("ATTRS{name}"));Installer::persist_input_access(root.path(),1234,"auto").unwrap();assert_eq!(first,std::fs::read_to_string(path).unwrap());
+    }
     #[test]
     fn appimage_launchers_keep_paths_and_tui_inside_the_bundle() {
         let path = std::path::Path::new("/home/user/My Apps/TypeRelay%1.AppImage");

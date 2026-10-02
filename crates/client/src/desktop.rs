@@ -4,6 +4,14 @@ use std::{fs, io::{Read, Write}, os::unix::{fs::{MetadataExt, PermissionsExt}, n
 
 pub struct Hyprland;
 impl Hyprland {
+    pub fn keyboard<'a>(devices: &'a serde_json::Value, device: &str) -> Result<&'a serde_json::Value> {
+        let name = device.to_lowercase().replace([' ', '\n', ','], "-");
+        let rows = devices["keyboards"].as_array().context("Keyboard information unavailable")?;
+        let candidates: Vec<_> = rows.iter().filter(|row| row["name"].as_str().is_some_and(|value| value == name || value.strip_prefix(&format!("{name}-")).is_some_and(|suffix| !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())))).collect();
+        let first = candidates.first().copied().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotConnected, format!("Keyboard {device} is unavailable in Hyprland")))?;
+        ensure!(candidates.iter().all(|row| ["layout", "variant", "options", "active_layout_index", "capsLock", "numLock"].iter().all(|field| row[*field] == first[*field])), "Ambiguous Hyprland layout for keyboard {device}; use identical layout and modifier options for these devices");
+        Ok(first)
+    }
     pub fn shortcut_conflicts(value: &str, binds: &serde_json::Value) -> Result<bool> {
         let (code, groups) = crate::panel::Panel::shortcut(value)?;
         let mask = groups.iter().map(|group| match group[0] { 29 => 4, 42 => 1, 56 => 8, 125 => 64, _ => 0 }).sum::<u64>();
@@ -117,5 +125,23 @@ mod tests {
         assert!(!Registration::inhibited_in(dir.path(), "0xabc"));
         drop(registration);
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+}
+
+#[cfg(test)]
+mod keyboard_resolution_tests {
+    use super::*;
+    #[test]
+    fn composite_interface_suffix_is_not_a_disconnected_keyboard() {
+        for suffix in ["", "-1", "-17"] {let name=format!("kinesis-advantage2-keyboard{suffix}");let devices=serde_json::json!({"mice":[{"name":"kinesis-advantage2-keyboard"}],"keyboards":[{"name":name,"layout":"us"}]});assert_eq!(Hyprland::keyboard(&devices,"Kinesis Advantage2 Keyboard").unwrap()["layout"],"us");}
+    }
+    #[test]
+    fn ambiguous_layout_is_rejected_even_when_one_name_is_exact() {
+        let mut devices=serde_json::json!({"keyboards":[{"name":"usb-keyboard","layout":"us","options":"ctrl:nocaps"},{"name":"usb-keyboard-1","layout":"us","options":"ctrl:nocaps"}]});assert!(Hyprland::keyboard(&devices,"USB Keyboard").is_ok());
+        for (field,value) in [("layout","de"),("options",""),("variant","intl")] {let old=devices["keyboards"][1][field].clone();devices["keyboards"][1][field]=value.into();assert!(Hyprland::keyboard(&devices,"USB Keyboard").is_err());devices["keyboards"][1][field]=old;}
+    }
+    #[test]
+    fn consumer_interface_and_main_keyboard_are_never_guessed() {
+        let devices=serde_json::json!({"keyboards":[{"name":"usb-keyboard-consumer-control","main":true},{"name":"usb-keyboard-1-extra"},{"name":"other-keyboard"}]});assert!(Hyprland::keyboard(&devices,"USB Keyboard").is_err());
     }
 }

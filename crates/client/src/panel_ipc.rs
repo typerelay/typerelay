@@ -41,6 +41,22 @@ impl CaptureReceiver {
 impl Drop for CaptureReceiver {fn drop(&mut self){let _=fs::remove_file(&self.path);}}
 pub struct PanelIpc;
 impl PanelIpc {
+    pub fn write_input_health(mut value: serde_json::Value) -> Result<()> {
+        if value.get("reconciled_ms").is_none() { value["reconciled_ms"]=Self::input_health()["reconciled_ms"].clone(); }
+        value["pid"] = std::process::id().into();
+        Paths::atomic_write(&Self::directory()?.join("input-health.json"), &serde_json::to_vec(&value)?, false)
+    }
+    pub fn input_health() -> serde_json::Value {
+        let value = (|| -> Result<serde_json::Value> { Ok(serde_json::from_slice(&fs::read(Self::directory()?.join("input-health.json"))?)?) })();
+        Self::checked_input_health(value.unwrap_or(serde_json::Value::Null), crate::capture_linux::CapturePublisher::now())
+    }
+    pub fn checked_input_health(mut value: serde_json::Value, now: i64) -> serde_json::Value {
+        if value["heartbeat_ms"].as_i64().is_none_or(|at| now < at || now-at > 6000) {
+            value = serde_json::json!({"state":"unavailable","active":[],"unavailable":[],"message":"Typerelay keyboard worker is unavailable. Open Check setup to repair keyboard input.","heartbeat_ms":now});
+        }
+        value
+    }
+
     pub fn capture_control()->Result<CaptureControl>{let path=Self::directory()?.join("capture-control.json");match fs::read(path){Ok(bytes)if bytes.len()<=131072=>Ok(serde_json::from_slice(&bytes)?),Ok(_)=>anyhow::bail!("Capture control exceeds limit"),Err(error)if error.kind()==std::io::ErrorKind::NotFound=>Ok(CaptureControl::default()),Err(error)=>Err(error.into())}}
     pub fn configure_capture(control:&CaptureControl)->Result<()>{Paths::atomic_write(&Self::directory()?.join("capture-control.json"),&serde_json::to_vec(control)?,false)}
     pub fn register_capture_worker()->Result<()> {Paths::atomic_write(&Self::directory()?.join("capture-worker.json"),&serde_json::to_vec(&(std::process::id(),Self::process_start(std::process::id())?))?,false)}
@@ -127,5 +143,15 @@ mod capture_tests {
     #[test]
     fn socket_backpressure_and_disconnect_do_not_block_sender() {
         let directory=tempfile::tempdir().unwrap();let receiver=CaptureReceiver::bind_path(directory.path().join("capture.sock")).unwrap();let sender=UnixDatagram::unbound().unwrap();sender.set_nonblocking(true).unwrap();let start=std::time::Instant::now();let mut full=false;for _ in 0..1000{if sender.send_to(b"metadata",&receiver.path).is_err(){full=true;}}assert!(full);assert!(start.elapsed()<Duration::from_secs(1));let path=receiver.path.clone();drop(receiver);assert!(sender.send_to(b"metadata",path).is_err());
+    }
+}
+
+#[cfg(test)]
+mod input_health_tests {
+    use super::*;
+    #[test]
+    fn stale_or_missing_heartbeat_never_reports_ready() {
+        for value in [serde_json::Value::Null,serde_json::json!({"state":"ready","heartbeat_ms":1000}),serde_json::json!({"state":"ready","heartbeat_ms":9000})] {assert_eq!(PanelIpc::checked_input_health(value,8000)["state"],"unavailable");}
+        assert_eq!(PanelIpc::checked_input_health(serde_json::json!({"state":"degraded","heartbeat_ms":7500}),8000)["state"],"degraded");
     }
 }
