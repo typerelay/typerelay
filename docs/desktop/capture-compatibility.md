@@ -18,15 +18,25 @@ Source for the Zed API limitation: <https://github.com/zed-industries/zed/blob/m
 
 User confirmation covers the reported Zed/Obsidian result on this machine; specific email/URL, notification timing, review-flow and sustained-use checks were not individually reported. Windows and macOS testing is deferred by the user.
 
+## Repeated-passage engine
+
+The detector now retains a 4,096-character editable window across pauses and Enter. It mines Unicode word-boundary passages of 12 non-whitespace characters to 1,000 characters, including multiple sentences. Email addresses and URLs are atomic. Matching normalizes Unicode NFC and whitespace; words, case and punctuation are not fuzzily matched.
+
+Discovery stores keyed fingerprints and opaque context/range/revision receipts in the existing private database. Only qualifying suggestion text is materialized. Revisions retract changed ranges; repeated analysis cannot create another occurrence. The longest overlapping qualified passage is preferred; shorter passages need independent uses. A growing card retains its ID and notification state. Deletion and ignoring suppress fragments from the rejected occurrences.
+
+The private schema migrates existing exact counts and qualifying cards without manufacturing historical substring matches. Discovery is capped at 250,000 fingerprints, separately from 5,000 cards. Expired patterns are removed before old single-occurrence patterns; Check setup reports capacity pressure. Mining advances in 256-span transactions on the observation worker's database connection. Capture heartbeat publication runs independently of indexing. No raw text/event queues are written to disk.
+
 ## Local test procedure
 
-Keep the existing occurrence threshold (this machine: two), 12 non-whitespace character minimum and notification settings. In each app, manually type a fresh phrase twice, pressing Enter each time, then wait five seconds. Use different phrases in different apps to identify results. Repeat with an email and URL. Pasting is not a keyboard-capture test.
+Keep the existing occurrence threshold (this machine: two). Write two different realistic messages in allowed apps, each containing the same closing, such as “I hope this help. Just reply and I'll help.” Separate them with unrelated writing; use different openings and endings. The complete repeated closing should appear once, without requiring consecutive identical lines. Repeat with embedded emails and URLs.
 
-Check that two different qualifying suggestions notify without an hourly delay. Review each suggestion, verify prefix/library selection, Save/Cancel, Delete/Never suggest again and Escape. Verify ordinary snippet expansion still works. Use Settings → Suggestions → Check setup to see the selected keyboard, desktop, layout, source, blocked reason and recent verified input. Run sustained typing and focus changes to check responsiveness.
+Pause mid-closing, continue across sentences or lines, and correct an end-of-buffer typo with Backspace before and after a pause. Verify the full corrected passage and counts. Verify a growing suggestion updates its existing card without another notification. Then check two independent qualifying passages notify without an hourly delay, review/save with prefix and library selection, Cancel, Delete/Never suggest again, Escape, ordinary snippet expansion and sustained responsiveness.
+
+Frontend regression execution and physical acceptance remain assigned to the user. `typerelay-panel --capture-status` exposes metadata-only diagnostics, including discovery capacity, without returning captured text.
 
 ## Current implementation boundaries
 
-The existing selected-device reader observes physical events through a bounded nonblocking queue before expansion output. There is no second keyboard grab. Unknown fields are permitted only after acknowledgment; known protected fields, excluded apps, terminals and inactive/locked sessions are skipped. Secure-field metadata is best effort. Unfinished text and event queues remain memory-only.
+The existing selected-device reader observes physical events through a bounded nonblocking queue before expansion output. There is no second keyboard grab. Unknown fields are permitted only after acknowledgment; known protected fields, excluded apps, terminals and inactive/locked sessions are skipped. Secure-field metadata is best effort. Unfinished text and event queues remain memory-only. Backspace after idle analysis is covered by a regression test. Verified replacement ranges are supported by the shared contract, but native keyboard-only capture cannot infer arbitrary selections or word-deletion ranges. Those app edit-provider integrations remain release blockers for complete correction coverage; Zed, Obsidian and VS Code selection/replacement behavior has not been claimed as supported.
 
 The observation-only path outside Hyprland does not grab or create a virtual keyboard. Its hotplug/session/helper behavior still needs acceptance. Expansion support has not been broadened. IME services detected without a verified commit source pause native capture rather than learning preedit. IME discovery is incomplete; this test build must not be used to claim IME support.
 

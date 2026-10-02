@@ -7,6 +7,8 @@ use std::{collections::HashSet, path::Path};
 use unicode_normalization::UnicodeNormalization;
 use unicode_segmentation::UnicodeSegmentation;
 use crate::{config::Match, database::Database};
+mod passages;
+pub use passages::{PassageRevision,PassageWork,PassageProgress,DiscoveryStatus};
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
@@ -25,7 +27,7 @@ impl Settings {
 /// Input can come from native keys or a committed edit; never replay document values.
 /// No document values or surrounding text belong in this interface.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-pub enum Edit { Text(String), Commit(String), Backspace, Enter, Boundary, CompositionStart, CompositionEnd, CompositionCancel, Reset }
+pub enum Edit { Text(String), Commit(String), Backspace, Replace {start:i64,end:i64,text:String}, Enter, Boundary, CompositionStart, CompositionEnd, CompositionCancel, Reset }
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all="snake_case")]
 pub enum CaptureSource { #[default] Keyboard, Accessibility, Ime, Bridge }
@@ -43,61 +45,67 @@ pub struct CaptureFrame { pub version:u32, pub session:String, pub source_id:Str
 pub struct CaptureHealth { pub device:String,pub desktop:String,pub layout:String,pub ime:Option<String>,pub app:Option<String>,pub source:String,pub blocked:Option<String>,pub at_ms:i64 }
 impl CaptureFrame {
     pub const VERSION:u32=1;
-    pub fn valid(&self)->bool {self.version==Self::VERSION&&self.session.len()<=128&&!self.session.is_empty()&&!self.source_id.is_empty()&&self.source_id.len()<=128&&self.sequence>0&&self.context.app.len()<=512&&self.context.window.len()<=256&&self.context.field.as_ref().is_none_or(|field|field.len()<=256)&&self.context.layout.len()<=256&&self.context.ime.as_ref().is_none_or(|ime|ime.len()<=256)&&match &self.edit{Edit::Text(text)=>text.chars().count()<=16,Edit::Commit(text)=>text.chars().count()<=1000,_=>true}}
+    pub fn valid(&self)->bool {self.version==Self::VERSION&&self.session.len()<=128&&!self.session.is_empty()&&!self.source_id.is_empty()&&self.source_id.len()<=128&&self.sequence>0&&self.context.app.len()<=512&&self.context.window.len()<=256&&self.context.field.as_ref().is_none_or(|field|field.len()<=256)&&self.context.layout.len()<=256&&self.context.ime.as_ref().is_none_or(|ime|ime.len()<=256)&&match &self.edit{Edit::Text(text)=>text.chars().count()<=16,Edit::Commit(text)=>text.chars().count()<=1000,Edit::Replace{start,end,text}=>*start>=0&&start<=end&&end-start<=4096&&text.chars().count()<=4096,_=>true}}
 }
 #[derive(Default)]
 struct CaptureState { session:String, sequences:std::collections::HashMap<String,u64>, context:Option<CaptureContext>, at_ms:i64, generation:u64, composing:bool, accepted:bool }
 
 pub struct Event { pub epoch:u64, pub field:String, pub app:String, pub safe:bool, pub direct:bool, pub edit:Edit }
+#[derive(Clone,Default,Serialize)]
+pub struct CaptureStats {pub frames:u64,pub text_events:u64,pub boundaries:u64,pub completed:u64,pub resets:u64,pub pending_characters:usize,pub last_reset:String}
 #[derive(Default)]
-pub struct Detector { field:String, pending:String, last_ms:i64, last_input_ms:i64, paused:bool, capture:CaptureState }
+pub struct Detector { stats:CaptureStats, field:String, pending:String, reported:usize, report_start:usize, passage_id:String, passage_revision:i64, passage_base:i64, changed_from:i64, dirty:bool, revisions:std::collections::VecDeque<PassageRevision>, last_ms:i64, last_input_ms:i64, paused:bool, capture:CaptureState }
 impl Detector {
     pub fn normalize(text:&str)->String { text.nfc().collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ") }
-    pub fn reset(&mut self) { self.field.clear();self.pending.clear();self.paused=false;self.last_ms=0; }
+    pub fn reset(&mut self) { self.field.clear();self.pending.clear();self.reported=0;self.report_start=0;self.passage_id.clear();self.passage_revision=0;self.passage_base=0;self.changed_from=0;self.dirty=false;self.paused=false;self.last_ms=0; }
     pub fn event(&mut self,event:Event,settings:&Settings,epoch:u64,now_ms:i64)->Option<String> {
         if event.epoch!=epoch||!event.safe||!event.direct||!settings.allows(&event.app)||matches!(event.edit,Edit::Reset) {self.reset();return None;}
         if self.field!=event.field {self.reset();self.field=event.field;}
+        if self.passage_id.is_empty(){self.passage_id=uuid::Uuid::new_v4().to_string();}
         self.last_ms=now_ms;
         self.last_input_ms=now_ms;
         match event.edit {
             Edit::Text(text)=>{
                 if text.chars().any(|c|c.is_control()&&!c.is_whitespace())||text.chars().count()>16 {self.reset();return None;}
-                // A pause is a boundary. Continued input starts a new burst; prior words are not replayed.
-                if self.paused {self.pending.clear();self.paused=false;}
-                self.pending.push_str(&text);
-                if self.pending.chars().count()>1000 {self.reset();return None;}
+                self.touch(self.passage_base+self.pending.chars().count() as i64);self.paused=false;self.pending.push_str(&text);self.trim_passage();
                 if text.chars().last().is_some_and(char::is_whitespace)&&self.pending.trim_end().ends_with(['.','!','?','。','！','？']) {return self.complete();}
             },
-            Edit::Backspace=>{if self.paused {self.pending.clear();return None;}if let Some((index,_))=self.pending.grapheme_indices(true).next_back(){self.pending.truncate(index);}else{self.reset();}},
-            Edit::Enter|Edit::Boundary=>{let value=self.complete();self.pending.clear();self.paused=false;return value;},
+            Edit::Backspace=>{if let Some((index,_))=self.pending.grapheme_indices(true).next_back(){if index<self.reported{self.reported=self.report_start.min(index);}self.touch(self.passage_base+self.pending[..index].chars().count() as i64);self.pending.truncate(index);self.paused=false;}else{self.reset();}},
+            Edit::Replace{start,end,text}=>{if start<self.passage_base||end>self.passage_base+self.pending.chars().count() as i64||start>end||text.chars().any(|c|c.is_control()&&!c.is_whitespace()){self.discard("replacement outside verified buffer");return None;}let byte=|offset:i64|self.pending.char_indices().nth((offset-self.passage_base) as usize).map_or(self.pending.len(),|(index,_)|index);let from=byte(start);let to=byte(end);self.reported=self.report_start.min(from);self.pending.replace_range(from..to,&text);self.touch(start);self.paused=false;self.trim_passage();},
+            Edit::Enter=>{let value=self.complete();self.touch(self.passage_base+self.pending.chars().count() as i64);self.pending.push('\n');self.reported=self.pending.len();self.paused=false;self.trim_passage();self.analyze();return value;},
+            Edit::Boundary=>{let value=self.complete();self.reset();return value;},
             Edit::Commit(_)|Edit::CompositionStart|Edit::CompositionEnd|Edit::CompositionCancel=>{self.reset();return None;},
             Edit::Reset=>unreachable!(),
         }
         None
     }
+    pub fn capture_stats(&self)->CaptureStats{CaptureStats{pending_characters:self.pending.chars().count(),..self.stats.clone()}}
+    fn discard(&mut self,reason:&str){self.stats.resets+=1;self.stats.last_reset=reason.into();self.reset();}
     pub fn capture(&mut self,frame:CaptureFrame,settings:&Settings,epoch:u64,session:&str,now:i64)->Vec<String> {
-        let mut completed=vec![];self.capture.accepted=false;
+        let mut completed=vec![];self.capture.accepted=false;self.stats.frames+=1;
         if frame.session!=session||!frame.valid()||!(0..=1000).contains(&(now-frame.at_ms)){return completed;}
         if self.capture.session!=session {self.reset();self.capture=CaptureState{session:session.into(),..Default::default()};}
         let previous=self.capture.sequences.get(&frame.source_id).copied();
         if previous.is_some_and(|previous|frame.sequence<=previous){return completed;}
         if !self.capture.sequences.contains_key(&frame.source_id)&&self.capture.sequences.len()>=16{self.reset();return completed;}
         self.capture.sequences.insert(frame.source_id.clone(),frame.sequence);
-        if previous.is_some_and(|previous|frame.sequence!=previous+1){self.reset();self.capture.composing=false;return completed;}
+        if previous.is_some_and(|previous|frame.sequence!=previous+1){self.discard("transport sequence gap");self.capture.composing=false;return completed;}
         if frame.context.generation<self.capture.generation||frame.at_ms<self.capture.at_ms{return completed;}
         self.capture.at_ms=frame.at_ms;self.capture.generation=frame.context.generation;
-        if !settings.enabled||!frame.context.active||frame.context.window.is_empty()||!settings.allows(&frame.context.app)||frame.context.protection==Protection::Protected||frame.context.protection==Protection::Unknown&&!settings.native_capture {self.reset();self.capture.composing=false;self.capture.context=None;return completed;}
+        if !settings.enabled||!frame.context.active||frame.context.window.is_empty()||!settings.allows(&frame.context.app)||frame.context.protection==Protection::Protected||frame.context.protection==Protection::Unknown&&!settings.native_capture {self.discard("inactive, protected or excluded context");self.capture.composing=false;self.capture.context=None;return completed;}
         if !settings.native_capture&&frame.source!=CaptureSource::Accessibility {return completed;}
-        if matches!(frame.edit,Edit::Reset){self.reset();self.capture.composing=false;self.capture.context=Some(frame.context);return completed;}
+        if matches!(frame.edit,Edit::Reset){self.discard("source reset: navigation, pointer, layout or input gap");self.capture.composing=false;self.capture.context=Some(frame.context);return completed;}
         self.last_input_ms=now;
         if frame.source!=frame.context.authority{return completed;}
+        if matches!(frame.edit,Edit::Replace{..})&&frame.source==CaptureSource::Keyboard{self.discard("unverified replacement");return completed;}
         if let Some(previous)=&self.capture.context {
             let changed=previous.generation!=frame.context.generation||previous.window!=frame.context.window||previous.field!=frame.context.field||previous.app!=frame.context.app;
             let layout=previous.layout!=frame.context.layout;
             if changed||layout {if changed&&!layout&&!self.capture.composing&&let Some(text)=self.complete(){completed.push(text);}self.reset();self.capture.composing=false;}
         }
         self.capture.context=Some(frame.context.clone());
-        self.capture.accepted=matches!(&frame.edit,Edit::Text(text) if !text.is_empty()&&!self.capture.composing)||matches!(&frame.edit,Edit::Commit(text) if !text.is_empty()&&frame.source!=CaptureSource::Keyboard);
+        self.capture.accepted=matches!(&frame.edit,Edit::Text(text) if !text.is_empty()&&!self.capture.composing)||matches!(&frame.edit,Edit::Commit(text)|Edit::Replace{text,..} if !text.is_empty()&&frame.source!=CaptureSource::Keyboard);
+        if self.capture.accepted{self.stats.text_events+=1;}if matches!(frame.edit,Edit::Enter|Edit::Boundary){self.stats.boundaries+=1;}
         match frame.edit {
             Edit::CompositionStart=>{self.capture.composing=true;return completed;},
             Edit::CompositionEnd|Edit::CompositionCancel=>{self.capture.composing=false;return completed;},
@@ -116,14 +124,16 @@ impl Detector {
     pub fn accepted_input(&self)->bool{self.capture.accepted}
     pub fn idle(&mut self,now_ms:i64)->Option<String> {if self.capture.composing{return None;}if !self.paused&&self.last_ms>0&&now_ms-self.last_ms>=5000 {self.paused=true;return self.complete();}None}
     pub fn quiet(&self,now_ms:i64)->bool {self.last_input_ms>0&&now_ms-self.last_input_ms>=5000}
+    fn touch(&mut self,at:i64){if !self.dirty{self.changed_from=at;}else{self.changed_from=self.changed_from.min(at);}self.dirty=true;self.passage_revision+=1;}
+    fn trim_passage(&mut self){while self.pending.chars().count()>4096{let covered=self.passage_base+4096;self.analyze();let cut=self.pending.char_indices().nth(1024).map_or(self.pending.len(),|(index,_)|index);self.pending.drain(..cut);self.passage_base+=1024;self.reported=self.reported.saturating_sub(cut);self.report_start=self.report_start.saturating_sub(cut);self.dirty=true;self.changed_from=covered;self.passage_revision+=1;}}
+    fn analyze(&mut self){if !self.dirty||self.passage_id.is_empty(){return;}let revision=PassageRevision{id:self.passage_id.clone(),revision:self.passage_revision,base:self.passage_base,changed_from:self.changed_from,text:self.pending.chars().take(4096).collect(),at_ms:self.last_ms};if let Some(last)=self.revisions.back_mut()&&last.id==revision.id&&last.base==revision.base{let changed=last.changed_from.min(revision.changed_from);*last=revision;last.changed_from=changed;}else if self.revisions.len()<8{self.revisions.push_back(revision);}else{self.stats.last_reset="passage analysis queue full".into();self.stats.resets+=1;}self.dirty=false;}
+    pub fn take_passages(&mut self)->Vec<PassageRevision>{self.revisions.drain(..).collect()}
+    pub fn clear_passages(&mut self){self.revisions.clear();self.reset();}
     fn complete(&mut self)->Option<String> {
-        // Taking the buffer makes completion idempotent; subsequent newly typed
-        // sentences remain distinct occurrences even in the same field.
-        let original=std::mem::take(&mut self.pending).trim().to_owned();let normalized=Self::normalize(&original);
-        let length=normalized.chars().filter(|c|!c.is_whitespace()).count();
-        if !(12..=1000).contains(&length)||!normalized.chars().any(char::is_alphabetic) {return None;}
-        Some(original)
+        self.analyze();let original=self.pending[self.reported.min(self.pending.len())..].trim().to_owned();self.report_start=self.reported;self.reported=self.pending.len();let normalized=Self::normalize(&original);let length=normalized.chars().filter(|c|!c.is_whitespace()).count();
+        if !(12..=1000).contains(&length)||!normalized.chars().any(char::is_alphabetic){return None;}self.stats.completed+=1;Some(original)
     }
+
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -148,7 +158,7 @@ impl Store {
             CREATE INDEX IF NOT EXISTS occurrence_time ON occurrences(at);
             CREATE TABLE IF NOT EXISTS ignored(fingerprint TEXT PRIMARY KEY);")?;
         connection.execute("INSERT OR IGNORE INTO private VALUES('key',?1)",[uuid::Uuid::new_v4().to_string()+&uuid::Uuid::new_v4().to_string()])?;
-        Ok(Self{connection})
+        let store=Self{connection};store.migrate_passages()?;Ok(store)
     }
     #[cfg(windows)]
     fn restrict_windows(path:&Path)->Result<()> {
@@ -165,22 +175,23 @@ impl Store {
     fn fingerprint(&self,text:&str)->Result<String> {let key:String=self.connection.query_row("SELECT value FROM private WHERE key='key'",[],|r|r.get(0))?;let mut mac=Hmac::<sha2::Sha256>::new_from_slice(key.as_bytes()).expect("HMAC accepts this key length");mac.update(Detector::normalize(text).as_bytes());Ok(format!("{:x}",mac.finalize().into_bytes()))}
     pub fn existing(database:&Database)->Result<HashSet<String>> {let mut result=HashSet::new();for library in database.libraries()? {let Some(id)=library["_id"].as_str()else{continue;};for record in database.records(id)? {if record["state"]=="active"&&let Some(text)=record["content"]["text"].as_str(){result.insert(Detector::normalize(text));}}}Ok(result)}
     pub fn prune(&self,now:i64,settings:&Settings)->Result<Vec<Change>> {
-        let cutoff=now-i64::from(settings.retention_days)*86400;let transaction=self.connection.unchecked_transaction()?;
+        let mut passage_changes=self.prune_passages(now,settings)?;let cutoff=now-i64::from(settings.retention_days)*86400;let transaction=self.connection.unchecked_transaction()?;
         let affected=self.connection.prepare("SELECT DISTINCT c.id,c.revision FROM candidates c JOIN occurrences o ON o.candidate=c.id WHERE o.at<=?1")?.query_map([cutoff],|row|Ok((row.get::<_,String>(0)?,row.get::<_,i64>(1)?)))?.collect::<std::result::Result<Vec<_>,_>>()?;
         self.connection.execute("DELETE FROM occurrences WHERE at<=?1",[cutoff])?;
         for (id,_) in &affected {self.connection.execute("UPDATE candidates SET revision=revision+1 WHERE id=?1",[id])?;}
         self.connection.execute("DELETE FROM candidates WHERE id NOT IN (SELECT candidate FROM occurrences)",[])?;
         let ready=self.list(now,settings)?;transaction.commit()?;
-        Ok(affected.into_iter().map(|(id,revision)|Change{candidate:ready.iter().find(|row|row.id==id).cloned(),id,revision:revision+1}).collect())
+        passage_changes.extend(affected.into_iter().map(|(id,revision)|Change{candidate:ready.iter().find(|row|row.id==id).cloned(),id,revision:revision+1}));Ok(passage_changes)
     }
     pub fn changes(&self,now:i64,settings:&Settings)->Result<Vec<Change>> {
         let ready=self.list(now,settings)?;
         Ok(self.connection.prepare("SELECT id,revision FROM candidates")?.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?)))?.collect::<std::result::Result<Vec<_>,_>>()?.into_iter().map(|(id,revision)|Change{candidate:ready.iter().find(|row|row.id==id).cloned(),id,revision}).collect())
     }
     pub fn suppress_existing(&self,existing:&HashSet<String>)->Result<Vec<Change>> {
-        let records=self.connection.prepare("SELECT id,revision,text FROM candidates")?.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?)))?.collect::<std::result::Result<Vec<_>,_>>()?;
+        self.set_existing_passages(existing)?;let records=self.connection.prepare("SELECT id,revision,text FROM candidates")?.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?)))?.collect::<std::result::Result<Vec<_>,_>>()?;
         let mut changes=vec![];for (id,revision,text) in records {if existing.contains(&Detector::normalize(&text)){self.connection.execute("DELETE FROM candidates WHERE id=?1",[&id])?;changes.push(Change{id,revision:revision+1,candidate:None});}}Ok(changes)
     }
+    #[cfg(test)]
     pub fn observe(&self,text:&str,now:i64,settings:&Settings,existing:&HashSet<String>)->Result<Option<Change>> {
         if !settings.enabled||existing.contains(&Detector::normalize(text)){return Ok(None);}
         let fingerprint=self.fingerprint(text)?;
@@ -207,6 +218,7 @@ impl Store {
         let transaction=self.connection.unchecked_transaction()?;
         let (current,fingerprint):(i64,String)=self.connection.query_row("SELECT revision,fingerprint FROM candidates WHERE id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?))).context("Suggestion is no longer available")?;
         ensure!(current==revision,"Suggestion changed; review the latest suggestion");
+        self.reject_passage(&fingerprint,action)?;
         match action {
             "dismiss"=>{self.connection.execute("UPDATE candidates SET dismiss_total=total,dismiss_until=?2,revision=revision+1,notified=0 WHERE id=?1",params![id,now+7*86400])?;},
             "ignore"|"delete"|"saved"=>{if action=="ignore"{self.connection.execute("INSERT OR IGNORE INTO ignored VALUES(?1)",[fingerprint])?;}self.connection.execute("DELETE FROM candidates WHERE id=?1",[id])?;},
@@ -221,7 +233,7 @@ impl Store {
         for candidate in self.list(now,settings)? {self.connection.execute("UPDATE candidates SET notified=1 WHERE id=?1",[candidate.id])?;}
         Ok(true)
     }
-    pub fn forget(&self)->Result<()> {self.connection.execute_batch("BEGIN IMMEDIATE; DELETE FROM occurrences; DELETE FROM candidates; DELETE FROM ignored; DELETE FROM private; COMMIT; VACUUM;")?;self.connection.execute("INSERT INTO private VALUES('key',?1)",[uuid::Uuid::new_v4().to_string()+&uuid::Uuid::new_v4().to_string()])?;Ok(())}
+    pub fn forget(&self)->Result<()> {self.connection.execute_batch("BEGIN IMMEDIATE; DELETE FROM occurrences; DELETE FROM candidates; DELETE FROM ignored; DELETE FROM passage_receipts; DELETE FROM passage_patterns; DELETE FROM passage_contexts; DELETE FROM passage_rejections; DELETE FROM passage_cards; DELETE FROM private; COMMIT; VACUUM;")?;self.connection.execute("INSERT INTO private VALUES('key',?1)",[uuid::Uuid::new_v4().to_string()+&uuid::Uuid::new_v4().to_string()])?;Ok(())}
     /// Save receipt and normal snippet/outbox mutation share the snippet transaction.
     /// Receipts contain random IDs only, never observed text or fingerprints.
     pub fn save(&self,database:&Database,id:&str,revision:i64,library:&str,draft:Match,now:i64)->Result<Change> {
@@ -281,6 +293,12 @@ mod tests {
         f.text("discard expansion trigger");f.send(Edit::Reset);assert!(f.send(Edit::Boundary).is_empty());
         f.text("verified typed text");let old=f.frame(Edit::Text("stale".into()));assert!(f.detector.capture(old,&f.settings,1,"session",f.now+2000).is_empty());assert!(!f.detector.accepted_input());
         f.send(Edit::Boundary);let old_generation=f.context.generation;f.context.generation+=1;f.context.protection=Protection::Protected;f.send(Edit::Reset);f.context.generation=old_generation;f.context.protection=Protection::Unknown;f.send(Edit::Text("late".into()));assert!(!f.detector.accepted_input());
+    }
+    #[test]
+    fn backspace_after_idle_preserves_the_phrase_for_correction() {
+        let mut detector=Detector::default();type_text(&mut detector,"Heute geht es uber allex");assert_eq!(detector.idle(6000),Some("Heute geht es uber allex".into()));
+        detector.event(event(Edit::Backspace),&settings(),1,6100);detector.event(event(Edit::Text("s".into())),&settings(),1,6200);
+        assert_eq!(detector.event(event(Edit::Enter),&settings(),1,6300),Some("Heute geht es uber alles".into()));
     }
     #[test]
     fn boundaries_edits_and_untrusted_input() {

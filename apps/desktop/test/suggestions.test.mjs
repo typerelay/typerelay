@@ -101,3 +101,12 @@ test('native setup preserves rows and does not request per-editor accessibility'
 		const checkbox=document.querySelector('#observation-native');f.dom.window.Swal.fire=async()=>({isConfirmed:false});checkbox.checked=true;await checkbox.onchange({target:checkbox});assert.equal(checkbox.checked,false);
 	}finally{f.dom.window.close();}
 });
+
+test('passage growth updates the same card and leaves an open draft intact',async()=>{
+	const f=await Fixture.create();try{
+		f.ui.change(Fixture.change(Fixture.row()));const card=f.ui.list.firstElementChild;f.dom.window.document.querySelector('#suggestion-text').value='My unsaved edit';
+		f.ui.change(Fixture.change({...Fixture.row('one',6),text:'A useful repeated sentence. And its recurring closing.',count:4}));
+		assert.equal(f.ui.list.firstElementChild,card);assert.match(card.querySelector('.suggestion-text').textContent,/recurring closing/);assert.equal(f.dom.window.document.querySelector('#suggestion-text').value,'My unsaved edit');assert.equal(f.calls.length,0);
+		f.ui.setup({platform:'linux',enabled:true,discovery:{capacity_reached:true},edit_support:'Verified replacements unavailable'});assert.match(f.dom.window.document.querySelector('[data-id="discovery"]').textContent,/reached its limit/);assert.match(f.dom.window.document.querySelector('[data-id="edits"]').textContent,/Verified replacements unavailable/);
+	}finally{f.dom.window.close();}
+});

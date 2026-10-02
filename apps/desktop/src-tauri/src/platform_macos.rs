@@ -258,7 +258,7 @@ impl ObservationAdapter {
                 if !capture.enabled.load(Ordering::SeqCst){return CallbackResult::Keep;}
                 let epoch=capture.epoch.load(Ordering::SeqCst);let flags=event.get_flags();let key=event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE);
                 let direct=matches!(kind,CGEventType::KeyDown)&&event.get_integer_value_field(EventField::EVENT_SOURCE_UNIX_PROCESS_ID)==0&&event.get_integer_value_field(EventField::KEYBOARD_EVENT_AUTOREPEAT)==0&&!flags.intersects(CGEventFlags::CGEventFlagCommand|CGEventFlags::CGEventFlagControl);
-                let edit=if !direct{Edit::Reset}else{match key{36|76|48=>Edit::Boundary,51=>Edit::Backspace,123..=126|117|53=>Edit::Reset,_=>{let mut buffer=[0u16;16];let mut length=0;unsafe{CGEventKeyboardGetUnicodeString(event.as_ptr(),buffer.len(),&mut length,buffer.as_mut_ptr());}match String::from_utf16(&buffer[..length.min(buffer.len())]){Ok(text)if !text.is_empty()=>Edit::Text(text),_=>Edit::Reset}}}};
+                let edit=if !direct{Edit::Reset}else{match key{36|76=>Edit::Enter,48=>Edit::Boundary,51=>Edit::Backspace,123..=126|117|53=>Edit::Reset,_=>{let mut buffer=[0u16;16];let mut length=0;unsafe{CGEventKeyboardGetUnicodeString(event.as_ptr(),buffer.len(),&mut length,buffer.as_mut_ptr());}match String::from_utf16(&buffer[..length.min(buffer.len())]){Ok(text)if !text.is_empty()=>Edit::Text(text),_=>Edit::Reset}}}};
                 if sender.try_send((epoch,crate::observation::Observation::now(),edit)).is_err(){capture.reset();}CallbackResult::Keep
             },move||{active.store(true,Ordering::SeqCst);CFRunLoop::run_current()});
             running.store(false,Ordering::SeqCst);

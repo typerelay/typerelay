@@ -441,6 +441,10 @@ fn main() {
     #[cfg(target_os="macos")]
     if std::env::args().any(|a|a=="--repair-input"){if let Err(error)=platform::release_modifiers(){eprintln!("TypeRelay input repair failed: {error}");std::process::exit(1);}return;}
     #[cfg(target_os="linux")]
+    if std::env::args().any(|a|a=="--capture-status") {
+        let result=(||->Result<String>{let root=typerelay_client::panel_ipc::PanelIpc::directory()?;let path=root.join(format!("capture-status-{}.sock",std::process::id()));let socket=std::os::unix::net::UnixDatagram::bind(&path)?;let result=(||->Result<String>{socket.set_read_timeout(Some(std::time::Duration::from_secs(3)))?;socket.send_to(b"capture-status",root.join("events.sock"))?;let mut bytes=[0;16384];let length=socket.recv(&mut bytes)?;Ok(String::from_utf8(bytes[..length].to_vec())?)})();let _=std::fs::remove_file(path);result})();match result{Ok(value)=>println!("{value}"),Err(error)=>{eprintln!("Capture status unavailable: {error}");std::process::exit(1);}}return;
+    }
+    #[cfg(target_os="linux")]
     if std::env::args().any(|a|a=="--quit") {if let Ok(root)=typerelay_client::panel_ipc::PanelIpc::directory()&& let Ok(socket)=std::os::unix::net::UnixDatagram::unbound(){let _=socket.send_to(b"quit",root.join("events.sock"));}return;}
 
     #[cfg(target_os="linux")]
@@ -479,8 +483,9 @@ fn main() {
         {
             app.manage(typerelay_client::panel_ipc::PanelIpc::register()?);
             let path=typerelay_client::panel_ipc::PanelIpc::directory()?.join("events.sock");let _=std::fs::remove_file(&path);
-            let socket=std::os::unix::net::UnixDatagram::bind(path)?;let handle=app.handle().clone();
-            std::thread::spawn(move||{let mut bytes=[0;16384];loop{if let Ok(length)=socket.recv(&mut bytes){
+            let socket=std::os::unix::net::UnixDatagram::bind(path)?;socket.set_write_timeout(Some(std::time::Duration::from_millis(20)))?;let handle=app.handle().clone();
+            std::thread::spawn(move||{let mut bytes=[0;16384];loop{if let Ok((length,peer))=socket.recv_from(&mut bytes){
+                if &bytes[..length]==b"capture-status" {if let Some(path)=peer.as_pathname()&&path.parent()==typerelay_client::panel_ipc::PanelIpc::directory().ok().as_deref()&&path.file_name().is_some_and(|name|name.to_string_lossy().starts_with("capture-status-")){let result=handle.try_state::<std::sync::Arc<observation::Observation>>().and_then(|state|state.diagnostics().ok());if let Some(value)=result&&let Ok(bytes)=serde_json::to_vec(&value){let _=socket.send_to(&bytes,path);}}continue;}
                 if let Ok(prompt)=serde_json::from_slice::<typerelay_client::panel_ipc::Prompt>(&bytes[..length]) {
                     let prepared=(||->Result<_>{ anyhow::ensure!(!handle.state::<Runtime>().prompting.load(Ordering::SeqCst)&&!handle.state::<Runtime>().busy.load(Ordering::SeqCst),"Finish or cancel the current template first"); let target=platform::Target::capture()?;anyhow::ensure!(target.address==prompt.target,"Original window changed");typerelay_client::panel_ipc::PanelIpc::insert(typerelay_client::panel_ipc::Request{clock:None,generation:Some(prompt.generation),hit:prompt.hit.clone(),target:prompt.target.clone(),created_ms:prompt.created_ms,values:Default::default(),erase:prompt.erase,prepare:true})?;anyhow::ensure!(target.focused()?,"Original window changed");Ok(target) })();
                     let app=handle.clone();let _=handle.run_on_main_thread(move||match prepared { Ok(target)=>{let state=app.state::<Runtime>();*state.target.lock().unwrap()=Some(target);*state.prompt_hit.lock().unwrap()=Some(prompt.hit);Runtime::open(&app,false);state.prompting.store(true,Ordering::SeqCst);},Err(error)=>{let _=app.emit("panel-error",error.to_string());} });

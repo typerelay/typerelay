@@ -136,7 +136,7 @@ impl ObservationAdapter {
                 if !state.enabled.load(Ordering::SeqCst){return;}
                 let mut pid=0;unsafe{GetWindowThreadProcessId(GetForegroundWindow(),Some(&mut pid));}
                 let modified=[0x11,0x12,0x5b,0x5c].iter().any(|key|unsafe{GetAsyncKeyState(*key)<0});
-                let edit=if modified||key.flags.0&0x12!=0||key.dwExtraInfo==TYPERELAY_EVENT_MARKER{Edit::Reset}else{match key.vkCode{0x0d|0x09=>Edit::Boundary,0x08=>Edit::Backspace,0x10|0x14|0xa0|0xa1=>return,_=>match HookState::input(key.vkCode,key.scanCode){Input::Character(c)=>Edit::Text(c.to_string()),Input::Space=>Edit::Text(" ".into()),_=>Edit::Reset}}};
+                let edit=if modified||key.flags.0&0x12!=0||key.dwExtraInfo==TYPERELAY_EVENT_MARKER{Edit::Reset}else{match key.vkCode{0x0d=>Edit::Enter,0x09=>Edit::Boundary,0x08=>Edit::Backspace,0x10|0x14|0xa0|0xa1=>return,_=>match HookState::input(key.vkCode,key.scanCode){Input::Character(c)=>Edit::Text(c.to_string()),Input::Space=>Edit::Text(" ".into()),_=>Edit::Reset}}};
                 if sender.try_send(ObservationKey{epoch:state.epoch.load(Ordering::SeqCst),at:crate::observation::Observation::now(),edit,pid}).is_err(){state.reset();}
             });
         }

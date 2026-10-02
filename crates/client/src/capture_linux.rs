@@ -24,7 +24,7 @@ impl Translator {
         let sym=self.state.key_get_one_sym(key).raw();
         if [0xffe1,0xffe2,0xffe3,0xffe4,0xffe5,0xffe7,0xffe8,0xffe9,0xffea,0xffeb,0xffec,0xfe03,0xff7f].contains(&sym){return vec![];}
         if self.state.mod_name_is_active("Control",xkb::STATE_MODS_EFFECTIVE)||self.state.mod_name_is_active("Mod1",xkb::STATE_MODS_EFFECTIVE)||self.state.mod_name_is_active("Mod4",xkb::STATE_MODS_EFFECTIVE){self.compose.reset();return vec![Edit::Reset];}
-        match sym{0xff0d|0xff8d|0xff09=>{self.compose.reset();return vec![Edit::Boundary];},0xff08=>{self.compose.reset();return vec![Edit::Backspace];},0xff1b|0xff50..=0xff58|0xffff=>{self.compose.reset();return vec![Edit::Reset];},_=>{}}
+        match sym{0xff0d|0xff8d=>{self.compose.reset();return vec![Edit::Enter];},0xff09=>{self.compose.reset();return vec![Edit::Boundary];},0xff08=>{self.compose.reset();return vec![Edit::Backspace];},0xff1b|0xff50..=0xff58|0xffff=>{self.compose.reset();return vec![Edit::Reset];},_=>{}}
         self.compose.feed(self.state.key_get_one_sym(key));match self.compose.status(){xkb::compose::Status::Composing=>vec![],xkb::compose::Status::Cancelled=>{self.compose.reset();vec![Edit::Reset]},xkb::compose::Status::Composed=>{let text=self.compose.utf8().unwrap_or_default();self.compose.reset();if text.is_empty(){vec![]}else{vec![Edit::Text(text)]}},xkb::compose::Status::Nothing=>{let text=self.state.key_get_utf8(key);if text.is_empty(){vec![Edit::Reset]}else{vec![Edit::Text(text)]}}}
     }
     pub fn wayland_layout()->Result<Layout>{helpers::WaylandMap::read()}
