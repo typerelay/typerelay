@@ -121,3 +121,67 @@ impl ClipboardLease {
     }
 }
 impl Drop for ClipboardLease {fn drop(&mut self){let _=self.restore();}}
+
+pub struct ObservationAdapter;
+struct ObservationKey { epoch:u64,at:i64,edit:typerelay_client::observation::Edit,pid:u32 }
+impl ObservationAdapter {
+    fn sender()->&'static std::thread::LocalKey<RefCell<Option<(Arc<crate::observation::Observation>,SyncSender<ObservationKey>)>>> {
+        thread_local!{static SENDER:RefCell<Option<(Arc<crate::observation::Observation>,SyncSender<ObservationKey>)>>=const{RefCell::new(None)};}&SENDER
+    }
+    unsafe extern "system" fn keyboard(code:i32,wparam:WPARAM,lparam:LPARAM)->LRESULT {
+        use typerelay_client::observation::Edit;use std::sync::atomic::Ordering;
+        if code>=0&&(wparam.0 as u32==WM_KEYDOWN||wparam.0 as u32==WM_SYSKEYDOWN){
+            let key=unsafe{&*(lparam.0 as *const KBDLLHOOKSTRUCT)};
+            Self::sender().with(|cell|if let Some((state,sender))=cell.borrow().as_ref(){
+                if !state.enabled.load(Ordering::SeqCst){return;}
+                let mut pid=0;unsafe{GetWindowThreadProcessId(GetForegroundWindow(),Some(&mut pid));}
+                let modified=[0x11,0x12,0x5b,0x5c].iter().any(|key|unsafe{GetAsyncKeyState(*key)<0});
+                let edit=if modified||key.flags.0&0x12!=0||key.dwExtraInfo==TYPERELAY_EVENT_MARKER{Edit::Reset}else{match key.vkCode{0x0d=>Edit::Enter,0x08=>Edit::Backspace,0x10|0x14=>return,_=>match HookState::input(key.vkCode,key.scanCode){Input::Character(c)=>Edit::Text(c.to_string()),Input::Space=>Edit::Text(" ".into()),_=>Edit::Reset}}};
+                if sender.try_send(ObservationKey{epoch:state.epoch.load(Ordering::SeqCst),at:crate::observation::Observation::now(),edit,pid}).is_err(){state.reset();}
+            });
+        }
+        unsafe{CallNextHookEx(None,code,wparam,lparam)}
+    }
+    unsafe extern "system" fn mouse(code:i32,wparam:WPARAM,lparam:LPARAM)->LRESULT {
+        if code>=0&&[WM_LBUTTONDOWN,WM_RBUTTONDOWN,WM_MBUTTONDOWN,WM_XBUTTONDOWN].contains(&(wparam.0 as u32)){Self::sender().with(|cell|if let Some((state,_))=cell.borrow().as_ref(){state.epoch.fetch_add(1,std::sync::atomic::Ordering::SeqCst);state.reset();});}
+        unsafe{CallNextHookEx(None,code,wparam,lparam)}
+    }
+    fn field(automation:&windows::Win32::UI::Accessibility::IUIAutomation)->Result<(windows::Win32::UI::Accessibility::IUIAutomationElement,String,u32)> {
+        use windows::Win32::UI::{Accessibility::*,Input::Ime::{ImmIsIME,ImmGetContext,ImmGetCompositionStringW,ImmReleaseContext,GCS_COMPSTR}};use windows::Win32::System::Threading::{QueryFullProcessImageNameW,PROCESS_NAME_WIN32};
+        unsafe {
+            let thread=GetWindowThreadProcessId(GetForegroundWindow(),None);ensure!(!ImmIsIME(GetKeyboardLayout(thread)).as_bool(),"Input method provenance unavailable");
+            let mut gui=GUITHREADINFO{cbSize:std::mem::size_of::<GUITHREADINFO>() as u32,..Default::default()};GetGUIThreadInfo(thread,&mut gui)?;
+            let context=ImmGetContext(gui.hwndFocus);if !context.0.is_null(){let composing=ImmGetCompositionStringW(context,GCS_COMPSTR,None,0)>0;let _=ImmReleaseContext(gui.hwndFocus,context);ensure!(!composing,"Uncommitted composition");}
+            let field=automation.GetFocusedElement()?;ensure!(field.CurrentHasKeyboardFocus()?.as_bool()&&field.CurrentIsEnabled()?.as_bool()&&!field.CurrentIsPassword()?.as_bool(),"Protected field");
+            ensure!([UIA_EditControlTypeId,UIA_DocumentControlTypeId].contains(&field.CurrentControlType()?),"Unsupported field");
+            if let Ok(value)=field.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId){ensure!(!value.CurrentIsReadOnly()?.as_bool(),"Read-only field");}else{let _:IUIAutomationTextEditPattern=field.GetCurrentPatternAs(UIA_TextEditPatternId)?;}
+            let text:IUIAutomationTextPattern=field.GetCurrentPatternAs(UIA_TextPatternId)?;let selected=text.GetSelection()?;ensure!(selected.Length()?==1,"Unknown selection");let range=selected.GetElement(0)?;ensure!(range.CompareEndpoints(TextPatternRangeEndpoint_Start,&range,TextPatternRangeEndpoint_End)?==0,"Selected text");
+            let mut pid=0;GetWindowThreadProcessId(GetForegroundWindow(),Some(&mut pid));ensure!(pid!=std::process::id()&&field.CurrentProcessId()?==pid as i32,"Foreground changed");
+            let handle=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,false,pid)?;let owned=OwnedHandle::from_raw_handle(handle.0);let mut buffer=[0u16;2048];let mut length=buffer.len() as u32;let result=QueryFullProcessImageNameW(handle,PROCESS_NAME_WIN32,windows::core::PWSTR(buffer.as_mut_ptr()),&mut length);drop(owned);result?;
+            let path=String::from_utf16(&buffer[..length as usize])?;let app=std::path::Path::new(&path).file_name().context("Unknown application")?.to_string_lossy().to_string();ensure!(typerelay_client::observation::Settings::supported_app(&app),"Terminal application");Ok((field,app,pid))
+        }
+    }
+    pub fn start(state:Arc<crate::observation::Observation>) {
+        use windows::Win32::{System::Com::{CoInitializeEx,CoCreateInstance,CoUninitialize,COINIT_MULTITHREADED,CLSCTX_INPROC_SERVER},UI::Accessibility::{CUIAutomation,IUIAutomation}};
+        use std::sync::atomic::Ordering;use typerelay_client::observation::Event;
+        let(sender,receiver)=sync_channel::<ObservationKey>(128);let capture=state.clone();let running=Arc::new(std::sync::atomic::AtomicBool::new(false));let monitored=running.clone();
+        std::thread::spawn(move||unsafe{
+            let result=(||->Result<()>{CoInitializeEx(None,COINIT_MULTITHREADED).ok()?;let automation:IUIAutomation=CoCreateInstance(&CUIAutomation,None,CLSCTX_INPROC_SERVER)?;let mut previous=None;let mut generation=0u64;let mut epoch=0;
+                loop {let raw=receiver.recv_timeout(Duration::from_millis(30)).ok();if !state.enabled.load(Ordering::SeqCst){previous=None;continue;}
+                    if !monitored.load(Ordering::SeqCst){previous=None;state.safety(false);state.status("Unavailable: Windows input monitoring could not start");continue;}
+                    let next_epoch=state.epoch.load(Ordering::SeqCst);if next_epoch!=epoch{previous=None;epoch=next_epoch;}
+                    let current=Self::field(&automation).ok();state.safety(current.is_some());let same=previous.as_ref().zip(current.as_ref()).is_some_and(|(old,new):(&(windows::Win32::UI::Accessibility::IUIAutomationElement,String,u32),&_)|automation.CompareElements(&old.0,&new.0).is_ok_and(|value|value.as_bool())&&old.2==new.2);
+                    if !same{generation+=1;state.reset();}
+                    if let Some(raw)=raw&&same&&raw.epoch==epoch&&crate::observation::Observation::now()-raw.at<250 {let (_,app,pid)=current.as_ref().unwrap();if raw.pid==*pid{state.feed(Event{epoch,field:format!("{pid}:{generation}"),app:app.clone(),safe:true,direct:true,edit:raw.edit});}else{state.reset();}}
+                    state.status(if current.is_some(){"Active"}else{"Waiting for a supported editable field"});previous=current;
+                }
+            })();if result.is_err(){state.status("Unavailable: Windows accessibility could not start");state.reset();}CoUninitialize();
+        });
+        std::thread::spawn(move||{
+            Self::sender().with(|cell|cell.replace(Some((capture.clone(),sender))));
+            let result=(||->Result<()>{let _keyboard=Hook(unsafe{SetWindowsHookExW(WH_KEYBOARD_LL,Some(Self::keyboard),None,0)}?);let _mouse=Hook(unsafe{SetWindowsHookExW(WH_MOUSE_LL,Some(Self::mouse),None,0)}?);running.store(true,Ordering::SeqCst);let mut message=MSG::default();while unsafe{GetMessageW(&mut message,None,0,0)}.as_bool(){unsafe{let _=TranslateMessage(&message);DispatchMessageW(&message);}}Ok(())})();
+            running.store(false,Ordering::SeqCst);
+            if result.is_err(){capture.status("Unavailable: Windows input monitoring could not start");capture.reset();}
+        });
+    }
+}

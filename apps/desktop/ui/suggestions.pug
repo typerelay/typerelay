@@ -1,0 +1,61 @@
+section#settings-suggestions.settings-page(hidden)
+	h2 Snippet suggestions
+	p.settings-description Observed text stays on this device. Typerelay never uploads it or sends it to AI providers. Text becomes a normal snippet only when you review and save it to a library.
+	p#observation-status(role="status" aria-live="polite") Disabled
+	form#observation-form.settings-list.setting-section
+		label.check.mb-3(for="observation-enabled")
+			span Observe repeated text
+			input#observation-enabled.form-check-input.h-20px.w-30px(type="checkbox")
+		label.check.mb-3(for="observation-notifications")
+			span Show suggestion notifications
+			input#observation-notifications.form-check-input.h-20px.w-30px(type="checkbox")
+		.mb-3
+			label(for="observation-threshold") Suggest after this many occurrences
+			input#observation-threshold.form-control-sm(type="number" min="2" max="100" value="4" required)
+		.mb-3
+			label(for="observation-retention") Keep observed candidates
+			select#observation-retention.form-select-sm
+				option(value="7") 7 days
+				option(value="30" selected) 30 days
+				option(value="90") 90 days
+		.mb-3
+			label(for="observation-exclusions") Excluded apps
+			textarea#observation-exclusions.form-control-sm(rows="3" spellcheck="false" aria-describedby="observation-exclusions-help")
+			p#observation-exclusions-help.settings-description One application identifier per line: macOS bundle ID, Windows executable name, or Linux executable name. Password fields, terminals, and unsupported fields are always skipped.
+		.form-actions
+			button#observation-forget.secondary.btn-sm(type="button") Forget learned text
+			button#observation-save.primary.btn-sm(type="submit") Save settings
+	button#suggestions-review.secondary.btn-sm(type="button") Review suggestions
+	section#suggestion-review.setting-section
+		h3#suggestion-heading(tabindex="-1") Suggestions
+		p#suggestions-empty No repeated text to review yet.
+		#suggestions-list
+	form#suggestion-editor.settings-list.setting-section(hidden)
+		h3 Create snippet
+		.mb-3
+			label(for="suggestion-title") Title
+			input#suggestion-title.form-control-sm(maxlength="1000")
+		.mb-3
+			label(for="suggestion-abbreviation") Abbreviation
+			input#suggestion-abbreviation.form-control-sm(maxlength="63" pattern="[a-z0-9-]*" spellcheck="false")
+		.mb-3
+			label(for="suggestion-text") Text
+			textarea#suggestion-text.form-control-sm(rows="6" required maxlength="65536")
+		.mb-3
+			label(for="suggestion-library") Library
+			select#suggestion-library.form-select-sm(required)
+				option(value="") Choose a library
+			p#suggestion-library-notice.settings-description Choose a destination. Synced and shared libraries upload the snippet when you save.
+		.form-actions
+			button#suggestion-cancel.secondary.btn-sm(type="button") Cancel
+			button#suggestion-save.primary.btn-sm(type="submit") Save
+	template#suggestion-template
+		article.suggestion-card
+			h6.suggestion-count
+			pre.suggestion-text
+			.suggestion-actions
+				button.suggestion-dismiss.secondary.btn-sm(type="button") Dismiss
+				button.suggestion-ignore.secondary.btn-sm(type="button") Never suggest this again
+				button.suggestion-create.primary.btn-sm(type="button") Create snippet
+	template#suggestion-library-option
+		option

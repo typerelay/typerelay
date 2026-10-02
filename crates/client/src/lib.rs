@@ -26,6 +26,8 @@ pub mod clipboard;
 pub mod clipboard;
 
 pub mod panel;
+#[cfg(feature = "desktop")]
+pub mod observation;
 
 #[cfg(all(feature = "desktop", target_os = "linux"))]
 pub mod panel_ipc;

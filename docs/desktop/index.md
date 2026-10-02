@@ -7,12 +7,14 @@ description: "Use TypeRelay Desktop to search, expand, edit, and synchronize sni
 
 The TypeRelay desktop app provides a resident search panel, continuous abbreviation expansion, local SQLite storage, background sync and the TypeRelay TUI.
 
+Optional [snippet suggestions](./suggestions) detect repeated wording locally on macOS, Windows, and Linux through supported accessibility interfaces. Review and edit each suggestion before saving it to a library. Observation is independent of abbreviation expansion and requires platform/application compatibility checks.
+
 | Platform | Package | Current scope |
 | --- | --- | --- |
 | Omarchy/Hyprland x86_64 | AppImage, deb or rpm with engine, panel and TUI | Primary verified target; continuous expansion uses keyd/uinput and a US keyboard layout |
 | macOS Apple Silicon | App/DMG with panel and TUI | Beta; Accessibility and Input Monitoring required |
 | Windows x64 | NSIS installer with panel, CLI and TUI | Beta; layout-aware expansion |
-| Other Linux desktops | GUI packages may launch | Continuous expansion and safe insertion are not supported; no non-Hyprland claim |
+| Other Linux desktops | GUI packages may launch | Continuous expansion and safe insertion are not supported; optional observation uses AT-SPI |
 
 Read [Operating system notes](./platforms) before deployment. The resident app checks for signed updates shortly after launch and every six hours. Updates download in the background and prompt once to install and restart. Choose **Later** to keep working; the download stays ready for the next launch or **Install update…** in the tray/menu-bar menu. Use **Check for updates** for an immediate check when no update is ready.
 

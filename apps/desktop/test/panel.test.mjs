@@ -12,7 +12,8 @@ class Fixture {
   dom.window.HTMLElement.prototype.scrollIntoView=()=>{};
 	  dom.window.Swal={fire:async()=>({isConfirmed:true})};
   dom.window.__TAURI__={core:{invoke:async(name,args)=>{calls.push({name,args});if(name==='initialize')return{config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},theme:{os:'linux'},settings:false,accessibility:false,input_monitoring:false,empty:false,version:'1.2.0'};if(name==='search')return new Promise(resolve=>pending.push({query:args.query,resolve}));if(name==='native_ai')return{model:null,models:[{id:'small',name:'Small',bytes:1000000,publisher:'test',license:'apache-2.0',recommended:true,installed:false,downloaded:0}],download:null};if(name==='libraries'||name==='conflicts')return[];if(name==='prepare_template')return{fields:[],steps:[{kind:'text',text:'Literal'}],text:'Literal',enter_actions:0,template:{text:'Literal',variables:{}}};return null;}},event:{listen:(name,callback)=>{callbacks[name]=callback;}}};
-  dom.window.eval((await readFile('ui/panel.js','utf8')).replace("import { AiClient } from './ai.js';",'').replace('new Panel();','window.panel = new Panel();'));
+  dom.window.eval((await readFile('ui/suggestions.js','utf8')).replace('export class Suggestions','window.Suggestions = class Suggestions'));
+  dom.window.eval((await readFile('ui/panel.js','utf8')).replace("import { Suggestions } from './suggestions.js';",'').replace("import { AiClient } from './ai.js';",'').replace('new Panel();','window.panel = new Panel();'));
   await new Promise(resolve=>setTimeout(resolve,0));
   return {dom,panel:dom.window.panel,calls,pending,callbacks};
  }

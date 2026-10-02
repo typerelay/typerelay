@@ -1,3 +1,8 @@
+---
+title: "On-device AI"
+description: "Download and manage local AI models for drafting and rewriting snippets in Typerelay Desktop and TUI."
+---
+
 # On-device AI
 
 Desktop and TUI share one local worker and one active model. AI is off until a model is explicitly downloaded and enabled. No web account or hosted AI provider is needed. The web app's AI is unchanged.

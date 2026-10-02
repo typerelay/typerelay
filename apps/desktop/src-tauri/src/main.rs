@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod platform;
+mod observation;
 mod browser_bridge;
 mod tray;
 mod update;
@@ -18,6 +19,7 @@ struct Runtime { root:PathBuf, target:Mutex<Option<platform::Target>>, last:Mute
 impl Runtime {
 	#[cfg(target_os="linux")]
 	fn setup_linux(app: tauri::AppHandle) {
+		if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_none(){update::schedule(app);return;}
 		let bundle=tauri::utils::platform::bundle_type();
 		if bundle.is_none() { update::schedule(app); return; }
 		if app.state::<Runtime>().linux_setup.swap(true,Ordering::SeqCst) { return; }
@@ -89,6 +91,7 @@ impl Runtime {
 	fn update_permission_status(&self,accessibility:bool,input_monitoring:bool) {let message=Self::permission_message(accessibility,input_monitoring);let mut status=self.status.lock().unwrap();if let Some(message)=message{*status=message.into();}else if status.starts_with("TypeRelay needs Accessibility")||status.starts_with("TypeRelay needs Input Monitoring"){status.clear();}}
 	#[cfg(any(target_os="windows",target_os="macos"))]
 	fn start_expansion(app:&tauri::AppHandle)->Result<()> {let state=app.state::<Runtime>();if state.expansion_started.swap(true,Ordering::SeqCst){return Ok(());}let result=(||{let requests=platform::ExpansionSession::start(state.root.join("snippets"),state.root.join("settings.yml"))?;let handle=app.clone();std::thread::spawn(move||for request in requests{if let Err(error)=Runtime::expand(&handle,request){let message=format!("Expansion failed: {error:#}");Runtime::notice(&handle,&message,true);}});Ok(())})();if result.is_err(){state.expansion_started.store(false,Ordering::SeqCst);}result}
+    fn capture_supported()->bool {cfg!(not(target_os="linux"))||std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some()}
     fn hide_on_focus_loss()->bool { cfg!(not(target_os="linux")) }
     fn notice(app:&tauri::AppHandle,message:&str,error:bool) {
         #[cfg(target_os="macos")]
@@ -112,7 +115,7 @@ impl Runtime {
         if state.prompt_hit.lock().unwrap().is_none(){*state.erase.lock().unwrap()=0;}
         let Some(window)=app.get_webview_window("panel") else{return;};
         if state.prompting.load(Ordering::SeqCst) && window.is_visible().unwrap_or(false) { let _=window.set_focus(); return; }
-        if !window.is_visible().unwrap_or(false) {
+        if !settings&&!window.is_visible().unwrap_or(false) {
             let captured=platform::Target::capture();
             state.update_capture(platform::Target::for_panel(captured,state.last.lock().unwrap().clone()));
         }
@@ -214,6 +217,7 @@ impl Runtime {
         #[cfg(target_os="linux")]
         {
             let _=(app,old);
+            if !Self::capture_supported(){return Ok(());}
             let binds=typerelay_client::desktop::Hyprland::query("binds")?;
             anyhow::ensure!(!typerelay_client::desktop::Hyprland::shortcut_conflicts(value,&binds)?,"Shortcut is assigned in Hyprland; choose another");
             Paths::atomic_write(&typerelay_client::panel_ipc::PanelIpc::directory()?.join("ready"),std::process::id().to_string().as_bytes(),false)?;
@@ -399,6 +403,20 @@ fn open_notification_settings()->std::result::Result<(),String>{#[cfg(target_os=
 fn open_tui()->std::result::Result<(),String>{platform::open_tui().map_err(|e|e.to_string())}
 #[tauri::command]
 fn open_web_app(url:Option<String>)->std::result::Result<(),String>{platform::open_web_app(url.as_deref()).map_err(|e|e.to_string())}
+#[tauri::command]
+async fn suggestions(app:tauri::AppHandle,action:String,value:Option<Value>)->std::result::Result<Value,String> {
+    tauri::async_runtime::spawn_blocking(move||->Result<Value>{
+        let state=app.try_state::<std::sync::Arc<observation::Observation>>().context("Local observation storage is unavailable")?;let value=value.unwrap_or(Value::Null);let root=&app.state::<Runtime>().root;
+        match action.as_str(){
+            "list"=>state.snapshot(),
+            "configure"=>{let result=state.configure(serde_json::from_value(value)?)?;if let Some(changes)=result["changes"].as_array(){for change in changes{let _=app.emit("suggestion-change",json!({"epoch":result["epoch"],"change":change}));}}Ok(result)},
+            "forget"=>{let epoch=state.forget()?;let _=app.emit("suggestions-forgotten",json!({"epoch":epoch}));Ok(json!({"epoch":epoch}))},
+            "libraries"=>observation::Observation::libraries(root),
+            "dismiss"|"ignore"|"save"=>{let id=value["id"].as_str().context("Missing suggestion")?;let revision=value["revision"].as_i64().context("Missing revision")?;let change=if action=="save"{let draft:typerelay_client::config::Match=serde_json::from_value(value["draft"].clone())?;state.save(root,id,revision,value["library"].as_str().context("Choose a library")?,draft)?}else{state.action(id,revision,&action)?};let result=json!({"epoch":state.epoch.load(Ordering::SeqCst),"change":change});let _=app.emit("suggestion-change",&result);Ok(result)},
+            _=>anyhow::bail!("Unknown suggestion action"),
+        }
+    }).await.map_err(|_|"Suggestion operation failed".to_owned())?.map_err(|error|error.to_string())
+}
 fn main() {
     let arguments = std::env::args().collect::<Vec<_>>();
 	#[cfg(target_os="linux")]
@@ -433,6 +451,7 @@ fn main() {
         let config=Panel::settings(&root)?;
 		app.manage(Runtime{root:root.clone(),target:Mutex::new(None),last:Mutex::new(None),erase:Mutex::new(0),busy:AtomicBool::new(false),syncing:AtomicBool::new(false),authenticating:AtomicBool::new(false),cancel_auth:AtomicBool::new(false),auth_error:Mutex::new(String::new()),prompting:AtomicBool::new(false),prompt_hit:Mutex::new(None),settings:AtomicBool::new(false),status:Mutex::new(String::new()),capture_status:Mutex::new(String::new()),#[cfg(any(target_os="windows",target_os="macos"))] expansion_started:AtomicBool::new(false),#[cfg(target_os="linux")] registration:Mutex::new(None),#[cfg(target_os="linux")] engine:Mutex::new(None),#[cfg(target_os="linux")] closing:AtomicBool::new(false),#[cfg(target_os="linux")] linux_setup:AtomicBool::new(false)});
 		app.manage(update::UpdateState::default());
+		if observation::Observation::start(app.handle()).is_err(){*app.state::<Runtime>().status.lock().unwrap()="Snippet suggestions are unavailable: local storage could not be opened".into();}
 		#[cfg(target_os="macos")]
 		let missing_permissions={let (accessibility,input_monitoring)=Runtime::permissions();app.state::<Runtime>().update_permission_status(accessibility,input_monitoring);if accessibility&&input_monitoring&&let Err(error)=Runtime::start_expansion(app.handle()){*app.state::<Runtime>().status.lock().unwrap()=format!("TypeRelay could not start Input Monitoring: {error:#}");}!(accessibility&&input_monitoring)};
         #[cfg(target_os="windows")]
@@ -448,7 +467,7 @@ fn main() {
 		#[cfg(target_os="linux")]
 		Runtime::setup_linux(app.handle().clone());
         let handle=app.handle().clone();
-        std::thread::spawn(move||loop { if let Some(window)=handle.get_webview_window("panel")&& !window.is_visible().unwrap_or(false)&& let Ok(target)=platform::Target::capture(){*handle.state::<Runtime>().last.lock().unwrap()=Some(target);} std::thread::sleep(std::time::Duration::from_millis(150)); });
+        std::thread::spawn(move||loop { if Runtime::capture_supported()&&let Some(window)=handle.get_webview_window("panel")&& !window.is_visible().unwrap_or(false)&& let Ok(target)=platform::Target::capture(){*handle.state::<Runtime>().last.lock().unwrap()=Some(target);} std::thread::sleep(std::time::Duration::from_millis(150)); });
         #[cfg(target_os="linux")]
         {
             app.manage(typerelay_client::panel_ipc::PanelIpc::register()?);
@@ -466,13 +485,13 @@ fn main() {
             #[cfg(target_os="macos")]
             Runtime::open(app.handle(),missing_permissions);
             #[cfg(not(target_os="macos"))]
-            Runtime::open(app.handle(),false);
+            Runtime::open(app.handle(),!Runtime::capture_supported());
         }
         Ok(())
     }).on_window_event(|window,event|match event {
         tauri::WindowEvent::CloseRequested{api,..}=>{api.prevent_close();set_prompt_view(window.app_handle().clone(),false);Runtime::hide(window.app_handle());},
         tauri::WindowEvent::Focused(false)if Runtime::hide_on_focus_loss() && !window.app_handle().state::<Runtime>().busy.load(Ordering::SeqCst) && !window.app_handle().state::<Runtime>().settings.load(Ordering::SeqCst) && !window.app_handle().state::<Runtime>().prompting.load(Ordering::SeqCst)=> {Runtime::hide(window.app_handle());},_=>()
-    }).invoke_handler(tauri::generate_handler![initialize,native_ai,search,personal_status,personal_abbreviation,insert,copy_snippet,prepare_template,set_prompt_view,set_settings_view,dismiss,notify,sync_now,save_settings,connect,cancel_connect,disconnect,libraries,merge_destinations,merge_library,conflicts,resolve_conflict,enroll,open_accessibility_settings,open_input_monitoring_settings,open_notification_settings,open_tui,open_web_app]).build(tauri::generate_context!());
+    }).invoke_handler(tauri::generate_handler![suggestions,initialize,native_ai,search,personal_status,personal_abbreviation,insert,copy_snippet,prepare_template,set_prompt_view,set_settings_view,dismiss,notify,sync_now,save_settings,connect,cancel_connect,disconnect,libraries,merge_destinations,merge_library,conflicts,resolve_conflict,enroll,open_accessibility_settings,open_input_monitoring_settings,open_notification_settings,open_tui,open_web_app]).build(tauri::generate_context!());
     match result {Ok(app)=>app.run(|handle,event|{#[cfg(target_os="linux")]if matches!(event,tauri::RunEvent::Exit|tauri::RunEvent::ExitRequested{..}){handle.state::<Runtime>().stop_engine();}#[cfg(not(target_os="linux"))]let _=(handle,event);}),Err(error)=>{eprintln!("TypeRelay panel: {error}");std::process::exit(1);}}
 }
 

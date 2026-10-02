@@ -93,3 +93,7 @@ mod tests {
 		assert_eq!(Target::identity(&json!({"pid":1,"address":"0x123"})).unwrap(),(1,"0x123".into()));
 	}
 }
+
+#[path="observation_linux.rs"]
+mod observation;
+pub use observation::ObservationAdapter;

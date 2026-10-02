@@ -58,6 +58,7 @@ html(lang="en")
 				nav.settings-tabs(aria-label="Settings sections")
 					button(type="button" data-settings-tab="general" aria-selected="true") General
 					button(type="button" data-settings-tab="sync" aria-selected="false") Sync
+					button(type="button" data-settings-tab="suggestions" aria-selected="false") Suggestions
 					button(type="button" data-settings-tab="advanced" aria-selected="false") Advanced
 					button(type="button" data-settings-tab="about" aria-selected="false") About
 				section#settings-general.settings-page
@@ -127,6 +128,7 @@ html(lang="en")
 							h3 Needs review
 							p#conflict-count.settings-description
 							div#sync-conflicts
+				include suggestions.pug
 				section#settings-advanced.settings-page(hidden)
 					section#ai-settings-card.settings-list
 						.setting-section

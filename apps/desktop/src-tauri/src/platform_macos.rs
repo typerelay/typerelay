@@ -15,6 +15,11 @@ objc2::define_class!(
     struct NativeNotificationDelegate;
     unsafe impl NSObjectProtocol for NativeNotificationDelegate {}
     unsafe impl UNUserNotificationCenterDelegate for NativeNotificationDelegate {
+        #[unsafe(method(userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:))]
+        fn responded(&self,_center:&objc2_user_notifications::UNUserNotificationCenter,response:&objc2_user_notifications::UNNotificationResponse,completion:&block2::DynBlock<dyn Fn()>) {
+            if response.notification().request().identifier().to_string().starts_with("suggestion:"){NativeNotifications::activate_suggestion();}completion.call(());
+        }
+
         #[unsafe(method(userNotificationCenter:willPresentNotification:withCompletionHandler:))]
         fn present(&self,_center:&objc2_user_notifications::UNUserNotificationCenter,_notification:&objc2_user_notifications::UNNotification,completion:&block2::DynBlock<dyn Fn(objc2_user_notifications::UNNotificationPresentationOptions)>) {
             completion.call((objc2_user_notifications::UNNotificationPresentationOptions::Banner|objc2_user_notifications::UNNotificationPresentationOptions::List,));
@@ -26,6 +31,10 @@ unsafe impl Send for NativeNotificationDelegate {}
 unsafe impl Sync for NativeNotificationDelegate {}
 pub struct NativeNotifications;
 impl NativeNotifications {
+    fn suggestion_app()->&'static std::sync::OnceLock<tauri::AppHandle> {static APP:std::sync::OnceLock<tauri::AppHandle>=std::sync::OnceLock::new();&APP}
+    pub fn suggestion(app:tauri::AppHandle)->Result<()> {let _=Self::suggestion_app().set(app);Self::deliver("Repeated text is ready to review in Typerelay.",false,true)}
+    fn activate_suggestion(){if let Some(app)=Self::suggestion_app().get(){let handle=app.clone();let _=app.run_on_main_thread(move||crate::observation::Observation::open(&handle));}}
+
     pub fn allowed()->Option<bool> {
         use objc2_user_notifications::{UNAuthorizationStatus,UNNotificationSetting,UNNotificationSettings,UNUserNotificationCenter};
         let(sender,receiver)=std::sync::mpsc::sync_channel(1);
@@ -33,7 +42,8 @@ impl NativeNotifications {
         receiver.recv_timeout(Duration::from_secs(2)).ok()
     }
     pub fn open_settings()->Result<()> {let status=Command::new("/usr/bin/open").arg("x-apple.systempreferences:com.apple.preference.notifications").status()?;ensure!(status.success(),"Could not open Notifications settings");Ok(())}
-    pub fn show(message:&str,error:bool)->Result<()> {
+    pub fn show(message:&str,error:bool)->Result<()> {Self::deliver(message,error,false)}
+    fn deliver(message:&str,error:bool,suggestion:bool)->Result<()> {
         use objc2::{AnyThread,runtime::ProtocolObject};
         use objc2_foundation::{NSError,NSString};
         use objc2_user_notifications::{UNAuthorizationOptions,UNMutableNotificationContent,UNNotificationRequest,UNUserNotificationCenter};
@@ -45,7 +55,7 @@ impl NativeNotifications {
         let granted=receiver.recv_timeout(Duration::from_secs(60)).context("Notification permission request timed out")?.map_err(anyhow::Error::msg)?;
         ensure!(granted,"Enable TypeRelay notifications in System Settings → Notifications");
         let content=UNMutableNotificationContent::new();content.setTitle(&NSString::from_str(if error{"TypeRelay — Error"}else{"TypeRelay"}));content.setBody(&NSString::from_str(message));
-        let request=UNNotificationRequest::requestWithIdentifier_content_trigger(&NSString::from_str(&uuid::Uuid::new_v4().to_string()),&content,None);
+        let request=UNNotificationRequest::requestWithIdentifier_content_trigger(&NSString::from_str(&format!("{}{}",if suggestion{"suggestion:"}else{""},uuid::Uuid::new_v4())),&content,None);
         let(sender,receiver)=std::sync::mpsc::sync_channel(1);
         center.addNotificationRequest_withCompletionHandler(&request,Some(&block2::RcBlock::new(move|error:*mut NSError|{let result=if error.is_null(){Ok(())}else{Err(unsafe{&*error}.localizedDescription().to_string())};let _=sender.send(result);} )));
         receiver.recv_timeout(Duration::from_secs(10)).context("Notification delivery timed out")?.map_err(anyhow::Error::msg)
@@ -171,3 +181,66 @@ impl ClipboardLease {
     }
 }
 impl Drop for ClipboardLease {fn drop(&mut self){let _=self.restore();}}
+
+// Observation uses its own listen-only tap; accessibility calls never delay expansion.
+pub struct ObservationAdapter;
+impl ObservationAdapter {
+    fn string(value:Ref)->String {use core_foundation::{base::TCFType,string::CFString};unsafe{CFString::wrap_under_get_rule(value.cast()).to_string()}}
+    fn field()->Option<(String,String,isize)> {
+        use core_foundation::{base::CFHash,boolean::CFBoolean};
+        unsafe {
+            if !AXIsProcessTrusted()||!input_monitoring(false)||IsSecureEventInputEnabled(){return None;}
+            let application=NSWorkspace::sharedWorkspace().frontmostApplication()?;let pid=application.processIdentifier();if pid==std::process::id() as i32{return None;}
+            let name=application.bundleIdentifier()?.to_string();if !typerelay_client::observation::Settings::supported_app(&name){return None;}let app=AXUIElementCreateApplication(pid);let field=Target::attribute(app,"AXFocusedUIElement");CFRelease(app);let field=field.ok()?;
+            let result=(||->Result<_>{
+                let role=Target::attribute(field,"AXRole")?;let role_name=Self::string(role);CFRelease(role);ensure!(["AXTextField","AXTextArea"].contains(&role_name.as_str()),"Unsupported field");
+                if let Ok(subrole)=Target::attribute(field,"AXSubrole"){let subtype=Self::string(subrole);CFRelease(subrole);ensure!(!subtype.contains("Secure"),"Protected field");}else{ensure!(role_name=="AXTextArea","Unknown protection state");}
+                let enabled=Target::attribute(field,"AXEnabled")?;let valid=bool::from(CFBoolean::wrap_under_get_rule(enabled.cast()));CFRelease(enabled);ensure!(valid,"Disabled field");
+                let focus=Target::attribute(field,"AXFocused")?;let valid=bool::from(CFBoolean::wrap_under_get_rule(focus.cast()));CFRelease(focus);ensure!(valid,"Unfocused field");
+                let range=Target::attribute(field,"AXSelectedTextRange")?;let mut selected=[0isize;2];let valid=AXValueGetValue(range,4,selected.as_mut_ptr().cast());CFRelease(range);ensure!(valid&&selected[1]==0,"Unknown caret");
+                let key=core_foundation::string::CFString::new("AXValue");use core_foundation::base::TCFType;let mut settable=false;ensure!(AXUIElementIsAttributeSettable(field,key.as_concrete_TypeRef().cast(),&mut settable)==0&&settable,"Read-only field");
+                Ok((format!("{pid}:{}",CFHash(field.cast())),name,selected[0]))
+            })().ok();CFRelease(field);result
+        }
+    }
+    pub fn start(state:Arc<crate::observation::Observation>) {
+        use typerelay_client::observation::{Edit,Event};use std::sync::atomic::Ordering;
+        let(sender,receiver)=sync_channel(128);let capture=state.clone();let running=Arc::new(std::sync::atomic::AtomicBool::new(false));let monitored=running.clone();
+        std::thread::spawn(move||{
+            let mut previous=None;let mut epoch=0;
+            loop {
+                let raw=receiver.recv_timeout(Duration::from_millis(25)).ok();
+                if !state.enabled.load(Ordering::SeqCst){previous=None;continue;}
+                if !monitored.load(Ordering::SeqCst){previous=None;state.safety(false);state.status("Permission needed: Input Monitoring; restart Typerelay after granting access");continue;}
+                let current_epoch=state.epoch.load(Ordering::SeqCst);if epoch!=current_epoch{previous=None;epoch=current_epoch;}
+                if raw.is_some(){std::thread::sleep(Duration::from_millis(12));}
+                let current=Self::field();state.safety(current.is_some());
+                if let Some((event_epoch,at,edit))=raw {
+                    let stable=previous.as_ref().zip(current.as_ref()).is_some_and(|(old,new):(&(String,String,isize),&(String,String,isize))|old.0==new.0&&old.1==new.1);
+                    if stable&&event_epoch==epoch&&crate::observation::Observation::now()-at<250 {
+                        let (field,app,caret)=current.clone().unwrap();let before=previous.as_ref().unwrap().2;
+                        let expected=match &edit{Edit::Text(text)=>before+text.encode_utf16().count() as isize,Edit::Backspace=>before-1,Edit::Enter=>caret,Edit::Reset=>-1};
+                        if caret==expected {state.feed(Event{epoch,field,app,safe:true,direct:true,edit});}else{state.reset();}
+                    }else{state.reset();}
+                }else if previous.as_ref().zip(current.as_ref()).is_none_or(|(old,new)|old!=new){state.reset();}
+                state.status(if current.is_some(){"Active"}else if !accessibility(false)||!input_monitoring(false){"Permission needed: Accessibility and Input Monitoring"}else{"Waiting for a supported editable field"});previous=current;
+            }
+        });
+        std::thread::spawn(move||{
+            let failure=capture.clone();let active=running.clone();
+            let result=CGEventTap::with_enabled(CGEventTapLocation::HID,CGEventTapPlacement::HeadInsertEventTap,CGEventTapOptions::ListenOnly,vec![CGEventType::KeyDown,CGEventType::LeftMouseDown,CGEventType::RightMouseDown,CGEventType::OtherMouseDown],move|_,kind,event|{
+                if !capture.enabled.load(Ordering::SeqCst){return CallbackResult::Keep;}
+                let epoch=capture.epoch.load(Ordering::SeqCst);let flags=event.get_flags();let key=event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE);
+                let direct=matches!(kind,CGEventType::KeyDown)&&event.get_integer_value_field(EventField::EVENT_SOURCE_UNIX_PROCESS_ID)==0&&event.get_integer_value_field(EventField::KEYBOARD_EVENT_AUTOREPEAT)==0&&!flags.intersects(CGEventFlags::CGEventFlagCommand|CGEventFlags::CGEventFlagControl);
+                let edit=if !direct{Edit::Reset}else{match key{36|76=>Edit::Enter,51=>Edit::Backspace,123..=126|117|48|53=>Edit::Reset,_=>{let mut buffer=[0u16;16];let mut length=0;unsafe{CGEventKeyboardGetUnicodeString(event.as_ptr(),buffer.len(),&mut length,buffer.as_mut_ptr());}match String::from_utf16(&buffer[..length.min(buffer.len())]){Ok(text)if !text.is_empty()=>Edit::Text(text),_=>Edit::Reset}}}};
+                if sender.try_send((epoch,crate::observation::Observation::now(),edit)).is_err(){capture.reset();}CallbackResult::Keep
+            },move||{active.store(true,Ordering::SeqCst);CFRunLoop::run_current()});
+            running.store(false,Ordering::SeqCst);
+            if result.is_err(){failure.status("Permission needed: Input Monitoring; restart Typerelay after granting access");failure.reset();}
+        });
+    }
+}
+#[link(name="Carbon",kind="framework")]
+unsafe extern "C" {fn IsSecureEventInputEnabled()->bool;}
+#[link(name="ApplicationServices",kind="framework")]
+unsafe extern "C" {fn AXUIElementIsAttributeSettable(element:Ref,attribute:Ref,settable:*mut bool)->i32;}

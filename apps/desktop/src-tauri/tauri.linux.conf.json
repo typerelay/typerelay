@@ -13,6 +13,7 @@
       "deb": {
         "depends": [
           "libwebkit2gtk-4.1-0",
+          "libatspi2.0-0",
           "acl",
           "udev",
           "kmod",
@@ -33,6 +34,7 @@
       "rpm": {
         "depends": [
           "webkit2gtk4.1",
+          "at-spi2-core",
           "acl",
           "systemd-udev",
           "kmod",

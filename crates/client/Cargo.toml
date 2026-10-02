@@ -55,6 +55,9 @@ tempfile = "3.27.0"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls-native-roots"] }
 uuid = { version = "1", features = ["v4"] }
 sha2 = "0.10"
+hmac = "0.12"
+unicode-normalization = "0.1"
+unicode-segmentation = "1"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 rusqlite = { version = "0.38", features = ["bundled", "backup"] }
@@ -74,7 +77,7 @@ wl-clipboard-rs = "0.9.3"
 llama-cpp-2 = { version = "=0.1.158", default-features = false, optional = true }
 clipboard-win = { version = "5", features = ["std"] }
 
-windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console", "Win32_Security", "Win32_Security_Authorization", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 llama-cpp-2 = { version = "=0.1.158", default-features = false, features = ["metal"], optional = true }

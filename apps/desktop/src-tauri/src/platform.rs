@@ -69,3 +69,5 @@ pub fn paste(target: &Target, erase: usize, payload: Option<typerelay_client::cl
     if let Some(clipboard)=&mut clipboard { clipboard.restore()?; }
     insertion
 }
+
+pub fn start_observation(state:std::sync::Arc<crate::observation::Observation>) {native::ObservationAdapter::start(state);}
