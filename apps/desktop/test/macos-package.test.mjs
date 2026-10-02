@@ -86,3 +86,23 @@ test('Omarchy empty-state actions open the web app and installed TUI', async () 
 	assert.match(platform, /Command::new\("foot"\)/);
 	assert.match(platform, /with_file_name\("typerelay-tui"\)/);
 });
+
+
+test('macOS observer reads Carbon input-source properties on the main queue', async () => {
+	const source = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/platform_macos.rs'), 'utf8');
+	const context = source.slice(source.indexOf('fn native_context('), source.indexOf('fn native_window('));
+	const callback = context.slice(context.indexOf('run_on_main_thread(move||{'), context.indexOf('}).ok()?;'));
+	for (const symbol of ['TISCopyCurrentKeyboardInputSource()', 'TISGetInputSourceProperty(source,kTISPropertyInputSourceID)', 'TISGetInputSourceProperty(source,kTISPropertyInputSourceType)', 'CFRelease(source)']) {
+		assert.ok(callback.includes(symbol), symbol + ' must stay on the main queue');
+		assert.equal(context.split(symbol).length, 2, symbol + ' must not also run on the observer worker');
+	}
+	assert.match(context, /receiver\.recv\(\)/);
+	assert.doesNotMatch(context, /recv_timeout/);
+});
+
+test('macOS tray uses the full product icon without template masking', async () => {
+	const source = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/tray.rs'), 'utf8');
+	assert.match(source, /let icon: &\[u8\]=include_bytes!\("\.\.\/icons\/icon\.png"\)/);
+	assert.match(source, /icon_as_template\(false\)/);
+	assert.doesNotMatch(source, /tray-template/);
+});

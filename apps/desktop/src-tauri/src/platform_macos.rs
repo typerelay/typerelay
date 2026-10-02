@@ -203,7 +203,7 @@ impl ObservationAdapter {
             })().ok();CFRelease(field);result
         }
     }
-    fn native_context()->Option<typerelay_client::observation::CaptureContext>{
+    fn native_context(app_handle:&tauri::AppHandle)->Option<typerelay_client::observation::CaptureContext>{
         use typerelay_client::observation::{CaptureContext,CaptureSource,Protection};use core_foundation::base::CFHash;
         unsafe{
             if !AXIsProcessTrusted()||!input_monitoring(false){return None;}
@@ -213,7 +213,14 @@ impl ObservationAdapter {
             let window_id=window.map(|window|{let id=CFHash(window.cast());CFRelease(window);id.to_string()}).or_else(||Self::native_window(pid).map(|id|id.to_string()))?;
             let mut protection=if IsSecureEventInputEnabled(){Protection::Protected}else{Protection::Unknown};
             if let Some(field)=field{if let Ok(role)=Target::attribute(field,"AXSubrole"){if Self::string(role).contains("Secure"){protection=Protection::Protected;}CFRelease(role);}CFRelease(field);}
-            let source=TISCopyCurrentKeyboardInputSource();if source.is_null(){return None;}let id=TISGetInputSourceProperty(source,kTISPropertyInputSourceID);let kind=TISGetInputSourceProperty(source,kTISPropertyInputSourceType);let layout=if id.is_null(){String::new()}else{Self::string(id)};let ime=!kind.is_null()&&Self::string(kind).contains("InputMode");CFRelease(source);
+            // Carbon input-source properties assert the main queue on macOS 27.
+            // Wait for this one request so a busy main thread cannot accumulate callbacks.
+            let(sender,receiver)=sync_channel(1);
+            app_handle.run_on_main_thread(move||{
+                let source=TISCopyCurrentKeyboardInputSource();if source.is_null(){let _=sender.send(None);return;}let id=TISGetInputSourceProperty(source,kTISPropertyInputSourceID);let kind=TISGetInputSourceProperty(source,kTISPropertyInputSourceType);let layout=if id.is_null(){String::new()}else{Self::string(id)};let ime=!kind.is_null()&&Self::string(kind).contains("InputMode");CFRelease(source);
+                let _=sender.send(Some((layout,ime)));
+            }).ok()?;
+            let(layout,ime)=receiver.recv().ok()??;
             Some(CaptureContext{app:app_name,window:format!("{pid}:{window_id}"),protection,active:!IsSecureEventInputEnabled(),layout,ime:ime.then_some("macOS input method".into()),authority:if ime{CaptureSource::Ime}else{CaptureSource::Keyboard},..Default::default()})
         }
     }
@@ -234,7 +241,7 @@ impl ObservationAdapter {
                 let current_epoch=state.epoch.load(Ordering::SeqCst);if epoch!=current_epoch{previous=None;epoch=current_epoch;}
                 if state.native(){
                     use typerelay_client::observation::{CaptureHealth,CaptureSource,Edit,Protection};
-                    if let Some(mut context)=Self::native_context(){
+                    if let Some(mut context)=Self::native_context(&state.app){
                         if native_previous.as_ref().is_none_or(|old|old.app!=context.app||old.window!=context.window||old.layout!=context.layout){if let Some(old)=&native_previous{native_sequence+=1;state.native_event(old.clone(),CaptureSource::Keyboard,native_sequence,if old.layout==context.layout{Edit::Boundary}else{Edit::Reset},crate::observation::Observation::now());}native_generation+=1;}context.generation=native_generation;
                         state.native_health(CaptureHealth{desktop:"macos".into(),layout:context.layout.clone(),ime:context.ime.clone(),app:Some(context.app.clone()),source:"keyboard".into(),blocked:if context.protection==Protection::Protected{Some("Learning paused in secure input".into())}else if context.ime.is_some(){Some("IME active: verified composition integration required".into())}else{None},at_ms:crate::observation::Observation::now(),..Default::default()});
                         if let Some((event_epoch,at,edit))=raw&&event_epoch==epoch&&crate::observation::Observation::now()-at<250{native_sequence+=1;state.native_event(context.clone(),CaptureSource::Keyboard,native_sequence,edit,at);}native_previous=Some(context);

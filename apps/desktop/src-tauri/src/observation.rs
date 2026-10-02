@@ -6,7 +6,7 @@ use typerelay_client::observation::{CaptureContext,CaptureSource};
 use typerelay_client::{observation::{Change,Detector,Edit,Event,Settings,Store,CaptureFrame,CaptureHealth,CaptureStats,PassageWork,PassageProgress,PassageRevision},database::Database,config::Match};
 
 enum Input { Legacy(Event),Captured(CaptureFrame) }
-pub struct Observation { app:tauri::AppHandle, pub epoch:AtomicU64, pub enabled:AtomicBool, native:AtomicBool,session:Mutex<String>,health:Mutex<CaptureHealth>,stats:Mutex<CaptureStats>,protected:Mutex<Option<String>>,excluded:Mutex<Vec<String>>,verified:AtomicI64, pub status:Mutex<String>, observed:Mutex<Option<(String,i64)>>, store:Mutex<Store>, sender:SyncSender<Input> }
+pub struct Observation { pub(crate) app:tauri::AppHandle, pub epoch:AtomicU64, pub enabled:AtomicBool, native:AtomicBool,session:Mutex<String>,health:Mutex<CaptureHealth>,stats:Mutex<CaptureStats>,protected:Mutex<Option<String>>,excluded:Mutex<Vec<String>>,verified:AtomicI64, pub status:Mutex<String>, observed:Mutex<Option<(String,i64)>>, store:Mutex<Store>, sender:SyncSender<Input> }
 impl Observation {
     pub fn now()->i64 {std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64}
     pub fn start(app:&tauri::AppHandle)->Result<()> {
