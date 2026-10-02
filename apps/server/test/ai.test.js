@@ -123,6 +123,22 @@ test('authoring yields a validated proposal without changing snippets', async ()
 	await Fixture.provider(() => assert.rejects(Ai.author(ctx, Fixture.author()), /Enter action/), () => ({ status: 'completed', output_text: '{"title":"Bad","text":"Run {{key:enter}}"}' }));
 });
 
+test('authoring generates from an empty editor while retaining input and proposal validation', async () => {
+	const ctx = await Fixture.context(); await Fixture.configure(ctx); const count = await Snippet.countDocuments();
+	for (const content of [{ version: 1, type: 'plain_text', text: '' }, { version: 1, type: 'code', language: 'JavaScript', text: '' }, { version: 2, type: 'rich_text', markdown: '', variables: {} }]) {
+		await Fixture.provider(async calls => {
+			const result = await Ai.author(ctx, Fixture.author({ action: 'generate', prompt: 'Request a meeting', entry: { title: '', trigger: null, content } }));
+			assert.equal(result.proposal.content.markdown ?? result.proposal.content.text, 'Hello, friend'); assert.equal(result.proposal.content.type, content.type); assert.equal(result.proposal.trigger, null); assert.equal(calls.length, 1); assert.equal(JSON.parse(calls[0].body.input).text, '');
+		});
+	}
+	assert.equal(await Snippet.countDocuments(), count);
+	await Fixture.provider(async calls => {
+		for (const text of ['', '\u0000', 'x'.repeat(65537)]) await assert.rejects(Ai.author(ctx, Fixture.author({ action: text === '' ? 'improve' : 'generate', entry: { content: { version: 1, type: 'plain_text', text } } })), /Replacements must/);
+		assert.equal(calls.length, 0);
+	});
+	await Fixture.provider(() => assert.rejects(Ai.author(ctx, Fixture.author({ action: 'generate', entry: { content: { version: 1, type: 'plain_text', text: '' } } })), /Replacements must/), () => ({ status: 'completed', output_text: '{"title":"Empty","text":""}' }));
+});
+
 test('disabled policies block all authoring/search inference and keep connections', async () => {
 	const ctx = await Fixture.context(); await Fixture.configure(ctx);
 	await Ai.save(ctx, 'personal', { enabled: false, routes: (await Ai.setting(ctx, 'personal')).routes });

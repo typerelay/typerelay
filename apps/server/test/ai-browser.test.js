@@ -38,6 +38,7 @@ test('new web snippets show only the compact AI prompt and Submit above regular 
 	try {
 		const { form, root } = await BrowserFixture.editor(fixture);
 		assert.equal(form.firstElementChild, root); assert.equal(form.querySelectorAll('[data-ai-author]').length, 1); assert.equal(root.classList.contains('ai-author-compact'), true);
+		assert.equal(root.classList.contains('card'), true); assert.equal(form.querySelector('#replace').closest('.card'), root.nextElementSibling); assert.equal(root.nextElementSibling.classList.contains('card-body'), true);
 		assert.equal(root.querySelector('[data-ai-action]'), null); assert.equal(root.querySelector('[data-ai-effective]'), null); assert.equal(root.querySelector('h3'), null);
 		const prompt = root.querySelector('[data-ai-prompt]'); assert.equal(prompt.closest('label').querySelector('span').textContent, 'What would you like to do?'); assert.equal(prompt.closest('.col-12') !== null, true);
 		const button = root.querySelector('[data-ai-generate]'); assert.equal(button.textContent, 'Submit'); assert.equal(button.type, 'button'); assert.equal(button.parentElement.classList.contains('justify-content-end'), true);
@@ -81,6 +82,15 @@ test('compact generation errors preserve the editor and report an error', async 
 		const { form, root } = await BrowserFixture.editor(fixture); const area = form.querySelector('#replace'); area.value = 'Keep my edits'; root.querySelector('[data-ai-prompt]').value = 'Write a reply';
 		const button = root.querySelector('[data-ai-generate]'); await fixture.client.click({ target: button });
 		assert.equal(form.querySelector('#replace'), area); assert.equal(area.value, 'Keep my edits'); assert.equal(root.querySelector('[data-ai-proposal]').hidden, true); assert.equal(button.disabled, false); assert.deepEqual(fixture.errors, ['Provider unavailable']);
+	} finally { fixture.dom.window.close(); }
+});
+
+test('empty rich-text creation reaches AI generation without rendering an empty template', async () => {
+	let submitted; const fixture = BrowserFixture.create(async (path, method, body) => { if (path === '/author') { submitted = body; return { proposal: { title: 'Greeting', content: { version: 2, type: 'rich_text', markdown: '**Hello**', variables: {} } }, status: BrowserFixture.status }; } assert.equal(path, '/settings'); return { status: BrowserFixture.status }; });
+	try {
+		const { form, root } = await BrowserFixture.editor(fixture); form.querySelector('#snippet-type').value = 'rich_text'; form.querySelector('#replace').value = ''; root.querySelector('[data-ai-prompt]').value = 'Write a greeting';
+		await fixture.client.click({ target: root.querySelector('[data-ai-generate]') });
+		assert.equal(submitted.action, 'generate'); assert.equal(submitted.entry.content.type, 'rich_text'); assert.equal(submitted.entry.content.markdown, ''); assert.equal(root.querySelector('[data-ai-draft]').value, '**Hello**'); assert.equal(form.querySelector('#replace').value, ''); assert.deepEqual(fixture.errors, []);
 	} finally { fixture.dom.window.close(); }
 });
 

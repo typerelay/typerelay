@@ -1,5 +1,5 @@
 - const compactAuthor = typeof aiAuthorCompact !== 'undefined' && aiAuthorCompact
-section.ai-author.mb-5(class=compactAuthor ? 'ai-author-compact' : '' data-ai-author)
+section.ai-author.mb-5(class=compactAuthor ? 'ai-author-compact card card-body' : '' data-ai-author)
 	if !compactAuthor
 		h3.h6 Write with AI
 		p.text-muted.small(data-ai-effective="authoring")
