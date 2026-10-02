@@ -174,7 +174,7 @@ export class AiClient {
 				}
 				binding.job?.abort(); await this.ready('authoring'); const entry = await binding.read(); if (!this.localEnabled() || !this.status.enabled) return; const snapshot = JSON.stringify(entry); const job = new AbortController(); binding.job = job; this.jobs.add(job); binding.snapshot = snapshot;
 				try {
-					const result = await this.request('/author', 'POST', { request_id: crypto.randomUUID(), action: root.querySelector('[data-ai-action]').value, prompt: root.querySelector('[data-ai-prompt]').value, entry: entry.entry || entry, library: entry.library }, job.signal);
+					const result = await this.request('/author', 'POST', { request_id: crypto.randomUUID(), action: root.querySelector('[data-ai-action]')?.value || 'generate', prompt: root.querySelector('[data-ai-prompt]').value, entry: entry.entry || entry, library: entry.library }, job.signal);
 					if (job.signal.aborted || !root.isConnected || JSON.stringify(await binding.read()) !== snapshot || !this.localEnabled()) return;
 					this.acceptStatus(result.status); if (!this.status.enabled || job.signal.aborted) return; binding.proposal = result.proposal; root.querySelector('[data-ai-draft]').value = result.proposal.content.markdown ?? result.proposal.content.text; root.querySelector('[data-ai-proposal]').hidden = false; root.querySelector('[data-ai-author-status]').textContent = 'Review the proposal before applying it.';
 				} finally { this.jobs.delete(job); }

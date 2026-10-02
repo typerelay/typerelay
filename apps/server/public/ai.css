@@ -4,7 +4,8 @@
 .ai-author textarea,.ai-search textarea { min-height: 4rem; }
 .ai-author button,.ai-search button,.ai-controls button,.ai-configuration button,.ai-search summary,.ai-configuration summary { cursor: pointer; }
 .ai-controls,.ai-author,.ai-search,.ai-configuration { margin-bottom: 1.5rem; }
-.ai-search details[open],.ai-author { padding: 1rem; border: .0625rem solid color-mix(in srgb,currentColor 20%,transparent); border-radius: .5rem; }
+.ai-search details[open],.ai-author:not(.ai-author-compact) { padding: 1rem; border: .0625rem solid color-mix(in srgb,currentColor 20%,transparent); border-radius: .5rem; }
+.ai-author-compact [data-ai-author-status]:empty { display: none; }
 .ai-result { width: 100%; display: block; text-align: left; margin-bottom: .75rem; padding: .75rem; border: .0625rem solid color-mix(in srgb,currentColor 20%,transparent); border-radius: .5rem; }
 .ai-result strong,.ai-result span { display: block; }
 .ai-result-preview { white-space: pre-wrap; max-height: 6rem; overflow: hidden; }
