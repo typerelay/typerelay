@@ -59,7 +59,7 @@ impl Detector {
         // sentences remain distinct occurrences even in the same field.
         let original=std::mem::take(&mut self.pending).trim().to_owned();let normalized=Self::normalize(&original);
         let length=normalized.chars().filter(|c|!c.is_whitespace()).count();
-        if !(20..=1000).contains(&length)||normalized.unicode_words().count()<3||!normalized.chars().any(char::is_alphabetic) {return None;}
+        if !(12..=1000).contains(&length)||!normalized.chars().any(char::is_alphabetic) {return None;}
         Some(original)
     }
 }
@@ -154,11 +154,8 @@ impl Store {
     }
     pub fn notification(&self,now:i64,settings:&Settings)->Result<bool> {
         if !settings.enabled||!settings.notifications{return Ok(false);}
-        let last:Option<String>=self.connection.query_row("SELECT value FROM private WHERE key='notification'",[],|r|r.get(0)).optional()?;
-        if last.and_then(|s|s.parse::<i64>().ok()).is_some_and(|last|now-last<3600){return Ok(false);}
         let pending=self.list(now,settings)?.into_iter().any(|row|self.connection.query_row("SELECT notified=0 FROM candidates WHERE id=?1",[row.id],|r|r.get::<_,bool>(0)).unwrap_or(false));
         if !pending{return Ok(false);}
-        self.connection.execute("INSERT INTO private VALUES('notification',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[now.to_string()])?;
         for candidate in self.list(now,settings)? {self.connection.execute("UPDATE candidates SET notified=1 WHERE id=?1",[candidate.id])?;}
         Ok(true)
     }
@@ -192,6 +189,29 @@ mod tests {
         type_text(&mut detector,"This is another long phrase");assert!(detector.idle(5999).is_none());assert!(detector.idle(6000).is_some());assert!(detector.idle(9000).is_none());
         for unsafe_event in [Event{safe:false,..event(Edit::Text("secret".into()))},Event{direct:false,..event(Edit::Text("paste".into()))},Event{epoch:0,..event(Edit::Text("stale".into()))}] {type_text(&mut detector,"Discard this pending phrase");detector.event(unsafe_event,&settings(),1,1000);assert!(detector.idle(6000).is_none());}
         assert_eq!(Detector::normalize("cafe\u{301}  is\n nice"),"café is nice");
+    }
+    #[test]
+    fn twelve_character_words_emails_and_urls_are_candidates() {
+        for phrase in ["confirmation","me@email.com","https://x.io","tomorrow we go"] {
+            let mut detector=Detector::default();type_text(&mut detector,phrase);assert_eq!(detector.event(event(Edit::Enter),&settings(),1,1100),Some(phrase.into()));
+        }
+        for phrase in ["abcdefghijk","please send","............."] {
+            let mut detector=Detector::default();type_text(&mut detector,phrase);assert!(detector.event(event(Edit::Enter),&settings(),1,1100).is_none());
+        }
+    }
+    #[test]
+    fn new_email_and_url_candidates_notify_without_an_hourly_cooldown() {
+        let root=tempfile::tempdir().unwrap();let store=Store::open(root.path()).unwrap();let settings=Settings{enabled:true,notifications:true,threshold:2,..Default::default()};
+        // A timestamp left by an older installation must not suppress new alerts.
+        store.connection.execute("INSERT INTO private VALUES('notification','100')",[]).unwrap();
+        for (index,phrase) in ["me@email.com","https://x.io"].into_iter().enumerate() {
+            for _ in 0..2 {
+                let mut detector=Detector::default();type_text(&mut detector,phrase);let text=detector.event(event(Edit::Enter),&settings,1,1100).unwrap();store.observe(&text,101+index as i64,&settings,&HashSet::new()).unwrap();
+            }
+            assert!(store.notification(101+index as i64,&settings).unwrap());assert!(!store.notification(101+index as i64,&settings).unwrap());
+        }
+        assert_eq!(store.list(103,&settings).unwrap().len(),2);
+        store.observe("me@email.com",103,&settings,&HashSet::new()).unwrap();assert!(!store.notification(103,&settings).unwrap());
     }
     #[test]
     fn separate_bursts_in_one_field_count_once_each_without_revisiting_old_text() {

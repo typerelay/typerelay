@@ -9,9 +9,9 @@ Open **Settings → Suggestions** and enable **Observe repeated text**. Observat
 
 The **Check setup** section checks observation settings, macOS permissions, notification settings, and whether typing was received from an application in the last minute. It appears automatically when opening Suggestions. Type a few words in your editor, return to Suggestions, and click **Check setup**. A successful typing check names that app; it does not claim that every field in every app is supported. This check retains only the last app identifier and time in memory, never a separate typing transcript.
 
-Use **Send test notification** to verify system delivery without waiting for repeated text or consuming the normal notification cooldown. If it does not appear, the app explains notification permissions and Focus/Do Not Disturb. Missing macOS permissions have buttons to the corresponding System Settings pages. **Help with your app** includes VS Code setup and platform-specific troubleshooting.
+Use **Send test notification** to verify system delivery without waiting for repeated text. If it does not appear, the app explains notification permissions and Focus/Do Not Disturb. Missing macOS permissions have buttons to the corresponding System Settings pages. **Help with your app** includes VS Code setup and platform-specific troubleshooting.
 
-Typerelay observes newly entered text in supported, focused editable fields. After four separate occurrences of a sentence or completed typing burst, it offers a snippet suggestion. A burst completes after five seconds without typing. Short fragments, uncertain edits, bulk paste, recognized automated insertion, and existing snippets are excluded.
+Typerelay observes newly entered text in supported, focused editable fields. After four separate occurrences by default, it offers a snippet suggestion. Single words, email addresses, URLs, and phrases qualify when they contain at least 12 characters excluding spaces; there is no minimum word count. A burst completes after five seconds without typing. Short fragments, uncertain edits, bulk paste, recognized automated insertion, and existing snippets are excluded.
 
 The tray's **Suggestions** action opens the review list. Choose:
 
@@ -19,7 +19,7 @@ The tray's **Suggestions** action opens the review list. Choose:
 - **Dismiss:** hide the candidate for at least seven days and four additional occurrences.
 - **Never suggest this again:** discard the candidate and remember only a keyed fingerprint for suppression.
 
-Notifications contain no observed wording. They appear after a typing pause, including after you switch away from the editor, at most once per hour, and open the local review list. Notification delivery also requires the operating system's permission.
+Notifications contain no observed wording. They appear after a typing pause, including after you switch away from the editor, with no hourly limit, and open the local review list. Each newly eligible candidate is notified once; additional occurrences update its count without repeatedly notifying for the same pending candidate. Notification delivery also requires the operating system's permission.
 
 ## Settings and privacy
 
