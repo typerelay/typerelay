@@ -28,3 +28,7 @@
 .ai-configuration .ts-dropdown .option,.ai-configuration .ts-control .item { overflow-wrap: anywhere; }
 @media (max-width: 65rem) { .ai-route-fields { grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); } .ai-route-fields > button { justify-self: start; } }
 @media (max-width: 40rem) { .ai-route-fields { grid-template-columns: minmax(0, 1fr); } }
+.ai-author summary { cursor: pointer; }
+.ai-author-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
+.ai-author-actions [aria-pressed="true"] { color: var(--bs-btn-active-color); background-color: var(--bs-btn-active-bg); border-color: var(--bs-btn-active-border-color); }
+@media (max-width: 40rem) { .ai-author-actions { grid-template-columns: minmax(0, 1fr); } }

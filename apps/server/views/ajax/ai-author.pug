@@ -1,10 +1,24 @@
 - const compactAuthor = typeof aiAuthorCompact !== 'undefined' && aiAuthorCompact
-section.ai-author.mb-5(class=compactAuthor ? 'ai-author-compact card card-body' : '' data-ai-author)
-	if !compactAuthor
+- const editingAuthor = typeof kind !== 'undefined' && kind === 'snippet' && !!snippet
+#{editingAuthor ? 'details' : 'section'}.ai-author.mb-5(class=compactAuthor ? 'ai-author-compact card card-body' : '' data-ai-author)
+	if editingAuthor
+		summary.fw-semibold Use AI
+	if !compactAuthor && !editingAuthor
 		h3.h6 Write with AI
 		p.text-muted.small(data-ai-effective="authoring")
+	if editingAuthor
+		.ai-author-actions.mt-3.mb-3(role="group" aria-label="AI action")
+			each action in [{ value: 'improve', label: 'Refine text', description: 'Improve wording, tone, grammar, or length', hint: 'Make it shorter and friendlier.' }, { value: 'translate', label: 'Translate text', description: 'Convert it into your requested language', hint: 'Use an informal tone.' }, { value: 'template', label: 'Add reusable fields', description: 'Turn “Hello Sarah” into “Hello {{name}}”', hint: 'Make the name and company fillable.' }]
+				button.btn.btn-outline-primary.btn-sm.text-start(type="button" data-ai-edit-action=action.value data-ai-hint=action.hint aria-pressed=action.value === 'improve')
+					span.d-block.fw-semibold= action.label
+					span.d-block.small= action.description
+		.mb-3(data-ai-language-field hidden)
+			label.form-label
+				span Translate into
+				input.form-control.form-control-sm(type="text" data-ai-language aria-required="true" maxlength="100")
+			p.form-text.mb-0 For example, Spanish or French (Canada).
 	.row.align-items-center
-		if !compactAuthor
+		if !compactAuthor && !editingAuthor
 			.col-md-4.mb-3
 				label.form-label
 					span Action
@@ -13,15 +27,17 @@ section.ai-author.mb-5(class=compactAuthor ? 'ai-author-compact card card-body' 
 						option(value="improve") Improve
 						option(value="translate") Translate
 						option(value="template") Make a template
-		.mb-3(class=compactAuthor ? 'col-12' : 'col-md-8')
+		.mb-3(class=compactAuthor || editingAuthor ? 'col-12' : 'col-md-8')
 			label.form-label
-				span= compactAuthor ? 'What would you like to do?' : 'What would you like to write or change?'
-				textarea.form-control.form-control-sm(data-ai-prompt rows="2" maxlength="4000")
+				span= compactAuthor ? 'What would you like to do?' : editingAuthor ? 'Custom instructions (optional)' : 'What would you like to write or change?'
+				textarea.form-control.form-control-sm(data-ai-prompt rows="2" maxlength=editingAuthor ? "3600" : "4000" aria-describedby=editingAuthor ? "ai-author-hint" : undefined)
+			if editingAuthor
+				p#ai-author-hint.form-text.mb-0(data-ai-author-hint) Make it shorter and friendlier.
 	.d-flex.justify-content-end.mb-3
 		button.btn.btn-outline-primary.btn-sm(type="button" data-ai-generate)
-			if compactAuthor
+			if compactAuthor || editingAuthor
 				span.spinner-border.spinner-border-sm.me-2(data-ai-spinner hidden aria-hidden="true")
-			span= compactAuthor ? 'Submit' : 'Generate proposal'
+			span= compactAuthor ? 'Submit' : editingAuthor ? 'Preview changes' : 'Generate proposal'
 	p.text-muted.small(data-ai-author-status role="status")
 	div(data-ai-proposal hidden)
 		label.form-label

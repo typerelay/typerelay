@@ -145,6 +145,12 @@ export class AiClient {
 	async click(event) {
 		const launch = event.target.closest('[data-ai-launch]'); if (launch && (!this.localEnabled() || !this.status?.enabled)) { event.preventDefault(); return; }
 		const button = event.target.closest('button'); if (!button) return;
+		if (button.matches('[data-ai-edit-action]')) {
+			const root = button.closest('[data-ai-author]');
+			for (const choice of root.querySelectorAll('[data-ai-edit-action]')) choice.setAttribute('aria-pressed', String(choice === button));
+			root.querySelector('[data-ai-language-field]').hidden = button.dataset.aiEditAction !== 'translate'; root.querySelector('[data-ai-author-hint]').textContent = button.dataset.aiHint;
+			return;
+		}
 		if (button.matches('[data-ai-config-tab]')) { this.selectTab(this.config(button), button.dataset.aiConfigTab); return; }
 		if (button.matches('[data-ai-refresh-scope]')) return this.busy(button, async () => { if (!await this.confirm('Refresh saved AI settings? Unsaved changes in this section will be discarded.', 'Refresh')) return; const root = this.config(button); const result = await this.request(this.admin ? '/settings' : '/settings?scope=' + root.dataset.aiConfiguration); const node = this.fragment(result.html); const tab = root.dataset.aiTab; this.destroyConfig(root); root.replaceWith(node); this.selectTab(node, tab); this.routeControls(node); this.acceptStatus(result.status); this.update(); });
 		if (button.matches('[data-ai-manage]')) { event.preventDefault(); await this.manage(); return; }
@@ -175,9 +181,16 @@ export class AiClient {
 					if (root.classList.contains('ai-author-compact')) root.hidden = true;
 					return;
 				}
+				const selected = root.querySelector('[data-ai-edit-action][aria-pressed="true"]'); const action = selected?.dataset.aiEditAction || root.querySelector('[data-ai-action]')?.value || 'generate'; let prompt = root.querySelector('[data-ai-prompt]').value;
+				if (selected) {
+					const language = root.querySelector('[data-ai-language]');
+					if (action === 'translate' && !language.value.trim()) { language.focus(); throw Error('Enter the language to translate into.'); }
+					const instruction = action === 'translate' ? 'Translate the snippet into ' + language.value.trim() + '.' : action === 'template' ? 'Replace reusable values with named fields such as {{name}}.' : 'Improve the snippet’s wording, tone, grammar, or length.';
+					prompt = instruction + (prompt.trim() ? '\nCustom instructions: ' + prompt.trim() : '');
+				}
 				binding.job?.abort(); await this.ready('authoring'); const entry = await binding.read(); if (!this.localEnabled() || !this.status.enabled) return; const snapshot = JSON.stringify(entry); const job = new AbortController(); binding.job = job; this.jobs.add(job); binding.snapshot = snapshot;
 				try {
-					const result = await this.request('/author', 'POST', { request_id: crypto.randomUUID(), action: root.querySelector('[data-ai-action]')?.value || 'generate', prompt: root.querySelector('[data-ai-prompt]').value, entry: entry.entry || entry, library: entry.library }, job.signal);
+					const result = await this.request('/author', 'POST', { request_id: crypto.randomUUID(), action, prompt, entry: entry.entry || entry, library: entry.library }, job.signal);
 					if (job.signal.aborted || !root.isConnected || JSON.stringify(await binding.read()) !== snapshot || !this.localEnabled()) return;
 					this.acceptStatus(result.status); if (!this.status.enabled || job.signal.aborted) return; binding.proposal = result.proposal; root.querySelector('[data-ai-draft]').value = result.proposal.content.markdown ?? result.proposal.content.text; root.querySelector('[data-ai-proposal]').hidden = false; root.querySelector('[data-ai-author-status]').textContent = 'Review the proposal before applying it.';
 				} finally { this.jobs.delete(job); }

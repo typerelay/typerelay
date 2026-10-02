@@ -9,7 +9,19 @@ AI is enabled by default. Requests run when you explicitly choose an AI action. 
 
 ## Write a snippet
 
-In the web or mobile editor, use **Write with AI**. Choose Generate, Improve, Translate, or Make a template, then describe what you want. Review and edit the proposal. **Use draft** applies it to the editor; **Save** uses the existing snippet save workflow.
+For a new web snippet, describe what you want in the AI card and choose **Submit**.
+
+When editing an existing web snippet, expand **Use AI** and select an action:
+
+- **Refine text:** improve wording, tone, grammar, or length.
+- **Translate text:** convert the snippet into the language you enter in **Translate into** (required).
+- **Add reusable fields:** turn values such as “Hello Sarah” into “Hello {{name}}”.
+
+Add **Custom instructions (optional)** to guide the result, then choose **Preview changes**. Selecting an action alone makes no AI request. Instructions and language remain when switching actions or collapsing the card.
+
+The mobile editor retains **Write with AI**, with Generate, Improve, Translate, and Make a template.
+
+Review and edit the proposal. **Discard** leaves your snippet unchanged; **Use draft** applies the proposal to the editor; **Save** uses the existing snippet save workflow.
 
 The proposal preserves the selected content type, existing field definitions, dates, Enter actions, and image asset references. Code remains literal. Unsupported or incomplete output is rejected.
 

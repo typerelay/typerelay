@@ -48,16 +48,52 @@ test('new web snippets show only the compact AI prompt and Submit above regular 
 	} finally { fixture.dom.window.close(); }
 });
 
-test('editing saved web snippets and mobile creation keep the full AI controls', async () => {
+test('saved web snippets have collapsed AI choices while mobile keeps its controls', async () => {
 	const fixture = BrowserFixture.create(async () => ({ status: BrowserFixture.status }));
 	try {
 		const { form, root } = await BrowserFixture.editor(fixture, { id: 'saved', trigger: 'hello', title: 'Greeting', replace: 'Hello', content: { version: 1, type: 'plain_text', text: 'Hello' } });
 		assert.notEqual(form.firstElementChild, root); assert.equal(form.querySelectorAll('[data-ai-author]').length, 1); assert.equal(root.classList.contains('ai-author-compact'), false);
 		const library = { _id: 'library', name: 'Library', permissions: { edit: true } }; const mobile = fixture.client.fragment(pug.renderFile('../mobile/views/ajax/edit.pug', { library, libraries: [library], snippet: null, draft: null }));
-		for (const author of [root, mobile.querySelector('[data-ai-author]')]) {
+		assert.equal(root.tagName, 'DETAILS'); assert.equal(root.open, false); assert.equal(root.querySelector('summary').textContent, 'Use AI'); assert.equal(root.querySelector('[data-ai-effective]'), null); assert.equal(root.querySelector('[data-ai-action]'), null);
+		assert.deepEqual([...root.querySelectorAll('[data-ai-edit-action]')].map(button => button.dataset.aiEditAction), ['improve', 'translate', 'template']);
+		assert.equal(root.querySelector('[aria-pressed="true"]').dataset.aiEditAction, 'improve'); assert.equal(root.querySelector('[data-ai-generate]').textContent, 'Preview changes');
+		for (const author of [mobile.querySelector('[data-ai-author]')]) {
 			assert.deepEqual([...author.querySelector('[data-ai-action]').options].map(option => option.value), ['generate', 'improve', 'translate', 'template']);
 			assert.equal(author.querySelector('h3').textContent, 'Write with AI'); assert.ok(author.querySelector('[data-ai-effective]')); assert.equal(author.querySelector('[data-ai-generate]').textContent, 'Generate proposal');
 		}
+	} finally { fixture.dom.window.close(); }
+});
+
+test('saved snippet AI choices preserve inputs, validate translation, and preview/apply without reloads', async () => {
+	const requests = []; const fixture = BrowserFixture.create(async (path, method, body) => { requests.push({ path, body }); return path === '/author' ? { status: BrowserFixture.status, proposal: { title: 'Greeting', content: { version: 1, type: 'plain_text', text: 'Updated greeting' } } } : { status: BrowserFixture.status }; });
+	try {
+		const { form, root } = await BrowserFixture.editor(fixture, { id: 'saved', trigger: 'hello', title: 'Greeting', replace: 'Hello', content: { version: 1, type: 'plain_text', text: 'Hello' } });
+		root.open = true; const preview = root.querySelector('[data-ai-generate]'); const prompt = root.querySelector('[data-ai-prompt]'); const language = root.querySelector('[data-ai-language]'); const area = form.querySelector('#replace');
+		for (const action of ['improve', 'template']) {
+			const before = requests.length; await fixture.client.click({ target: root.querySelector('[data-ai-edit-action="' + action + '"]') });
+			assert.equal(prompt.value, ''); assert.equal(requests.length, before);
+			await fixture.client.click({ target: preview }); assert.equal(requests.at(-1).body.action, action); assert.ok(requests.at(-1).body.prompt.length); assert.equal(area.value, 'Hello');
+			await fixture.client.click({ target: root.querySelector('[data-ai-discard]') }); assert.equal(root.querySelector('[data-ai-proposal]').hidden, true); assert.equal(area.value, 'Hello');
+		}
+		const before = requests.length; await fixture.client.click({ target: root.querySelector('[data-ai-edit-action="translate"]') }); assert.equal(requests.length, before);
+		assert.equal(root.querySelector('[data-ai-language-field]').hidden, false); assert.equal(root.querySelector('[data-ai-author-hint]').textContent, 'Use an informal tone.');
+		language.value = '   '; await fixture.client.click({ target: preview }); assert.equal(requests.length, before); assert.match(fixture.errors.at(-1), /language/); assert.equal(fixture.document.activeElement, language);
+		language.value = 'French (Canada)'; prompt.value = 'Use an informal tone.'; root.open = false; root.open = true;
+		await fixture.client.click({ target: root.querySelector('[data-ai-edit-action="improve"]') }); assert.equal(root.querySelector('[data-ai-language-field]').hidden, true);
+		await fixture.client.click({ target: root.querySelector('[data-ai-edit-action="translate"]') }); assert.equal(language.value, 'French (Canada)'); assert.equal(prompt.value, 'Use an informal tone.'); assert.equal(requests.length, before);
+		form.scrollTop = 175; await fixture.client.click({ target: preview }); assert.equal(requests.at(-1).body.action, 'translate'); assert.match(requests.at(-1).body.prompt, /French \(Canada\)/); assert.match(requests.at(-1).body.prompt, /Use an informal tone/); assert.equal(area.value, 'Hello');
+		root.querySelector('[data-ai-draft]').value = 'Reviewed greeting'; await fixture.client.click({ target: root.querySelector('[data-ai-apply]') }); assert.equal(area.value, 'Reviewed greeting'); assert.equal(root.hidden, false); assert.equal(root.open, true); assert.equal(form.scrollTop, 175);
+		language.value = ''; assert.equal(form.checkValidity(), true, 'AI language must not prevent normal Save');
+	} finally { fixture.dom.window.close(); }
+});
+
+test('saved snippet AI retains edits on failure and rejects stale proposals', async () => {
+	let fail = true; const fixture = BrowserFixture.create(async path => { if (path === '/author') { if (fail) throw Error('Provider unavailable'); return { status: BrowserFixture.status, proposal: { title: 'Greeting', content: { version: 1, type: 'plain_text', text: 'AI greeting' } } }; } return { status: BrowserFixture.status }; });
+	try {
+		const { form, root } = await BrowserFixture.editor(fixture, { id: 'saved', trigger: 'hello', title: 'Greeting', replace: 'Hello', content: { version: 1, type: 'plain_text', text: 'Hello' } }); root.open = true;
+		const area = form.querySelector('#replace'); const prompt = root.querySelector('[data-ai-prompt]'); const preview = root.querySelector('[data-ai-generate]'); prompt.value = 'Make it shorter';
+		await fixture.client.click({ target: preview }); assert.equal(area.value, 'Hello'); assert.equal(prompt.value, 'Make it shorter'); assert.equal(preview.disabled, false); assert.equal(preview.hasAttribute('aria-busy'), false); assert.match(fixture.errors.at(-1), /Provider unavailable/);
+		fail = false; await fixture.client.click({ target: preview }); area.value = 'Manual changes'; await fixture.client.click({ target: root.querySelector('[data-ai-apply]') }); assert.equal(area.value, 'Manual changes'); assert.match(fixture.errors.at(-1), /snippet changed/);
 	} finally { fixture.dom.window.close(); }
 });
 
