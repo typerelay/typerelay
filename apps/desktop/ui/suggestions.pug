@@ -1,15 +1,17 @@
 section#settings-suggestions.settings-page(hidden)
-	h2 Snippet suggestions
-	p.settings-description Observed text stays on this device. Typerelay never uploads it or sends it to AI providers. Text becomes a normal snippet only when you review and save it to a library.
-	p.settings-description Suggestions accept single words, email addresses, URLs, and phrases with at least 12 characters excluding spaces. New suggestions notify after a typing pause, with no hourly limit.
-	p#observation-status(role="status" aria-live="polite") Disabled
+	.setting-section
+		h2 Snippet suggestions
+		p.settings-description Observed text stays on this device. Typerelay never uploads it or sends it to AI providers. Text becomes a normal snippet only when you review and save it to a library.
+		p.settings-description Suggestions accept single words, email addresses, URLs, and phrases with at least 12 characters excluding spaces. New suggestions notify after a typing pause, with no hourly limit.
+		p#observation-status(role="status" aria-live="polite") Disabled
 	form#observation-form.settings-list.setting-section
-		label.check.mb-3(for="observation-enabled")
-			span Observe repeated text
-			input#observation-enabled.form-check-input.h-20px.w-30px(type="checkbox")
-		label.check.mb-3(for="observation-native")
-			span Capture typing across apps
-			input#observation-native.form-check-input.h-20px.w-30px(type="checkbox")
+		.setting-copy
+			label.check.mb-3(for="observation-enabled")
+				h3 Observe repeated text
+				input#observation-enabled.form-check-input.h-20px.w-30px(type="checkbox")
+			label.check.mb-3(for="observation-native")
+				h3 Capture typing across apps
+				input#observation-native.form-check-input.h-20px.w-30px(type="checkbox")
 		p.settings-description Uses your permitted keyboard input when apps do not expose editable fields. Password fields that apps do not identify as protected may be learned. Exclude apps where you enter sensitive text.
 		label.check.mb-3(for="observation-notifications")
 			span Show suggestion notifications
