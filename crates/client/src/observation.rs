@@ -21,7 +21,8 @@ impl Settings {
     }
 }
 
-/// Adapters must attest focus, editable/non-protected field, and direct input.
+/// Adapters must attest focus, editable/non-protected field, and bounded new input.
+/// Input can come from native keys or a committed edit; never replay document values.
 /// No document values or surrounding text belong in this interface.
 #[derive(Clone)]
 pub enum Edit { Text(String), Backspace, Enter, Reset }

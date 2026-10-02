@@ -11,7 +11,7 @@ The **Check setup** section checks observation settings, macOS permissions, noti
 
 Use **Send test notification** to verify system delivery without waiting for repeated text or consuming the normal notification cooldown. If it does not appear, the app explains notification permissions and Focus/Do Not Disturb. Missing macOS permissions have buttons to the corresponding System Settings pages. **Help with your app** includes VS Code setup and platform-specific troubleshooting.
 
-Typerelay observes newly entered text in supported, focused editable fields. After four separate occurrences of a sentence or completed typing burst, it offers a snippet suggestion. A burst completes after five seconds without typing. Short fragments, uncertain edits, paste, recognized automated insertion, and Typerelay expansions are excluded.
+Typerelay observes newly entered text in supported, focused editable fields. After four separate occurrences of a sentence or completed typing burst, it offers a snippet suggestion. A burst completes after five seconds without typing. Short fragments, uncertain edits, bulk paste, recognized automated insertion, and existing snippets are excluded.
 
 The tray's **Suggestions** action opens the review list. Choose:
 
@@ -35,13 +35,13 @@ Observed candidates are held in a private `observations/private.sqlite3` databas
 | --- | --- |
 | macOS | Accessibility and Input Monitoring; an identifiable editable field and caret. Restart Typerelay after granting missing monitoring permission. |
 | Windows | A normal user desktop and UI Automation editable field metadata. Standard Edit controls and accessible document editors are supported; protected/elevated controls are skipped. |
-| Linux | AT-SPI 2, accessible text and direct key events, and an active unlocked login1/elogind session. The observer does not use Hyprland sockets or raw keyboard devices. |
+| Linux | AT-SPI 2 committed text-change events from an editable field, and an active unlocked login1/elogind session. The observer does not use Hyprland sockets or raw keyboard devices. |
 
-Linux observes direct keyboard events in the focused accessible editor. It does not require the application to emit a matching single-character text change: Electron editors can update their accessibility text as a whole without losing the typed sentence.
+Linux observes newly committed text changes in the focused accessible editor. Keyboard events are optional: Electron on Wayland can expose text changes without key events. When an editor replaces its accessibility text, Typerelay reduces the paired delete/insert events to the changed characters. The old event payload is held briefly in memory and is never learned as a candidate. Duplicate refreshes are ignored. Large insertions and rewrites are discarded; small programmatic edits that look identical to typing cannot always be distinguished by the application interface.
 
 For VS Code, set **Editor: Accessibility Support** to **On** (`editor.accessibilitySupport: "on"`). An explicit **Off** setting hides the editor from assistive applications, including Typerelay. This is a VS Code setting, separate from enabling observation in Typerelay. No document text is imported when enabling it.
 
-Linux observation targets GNOME, KDE, Hyprland, and other AT-SPI desktops on Wayland and X11. Application/toolkit accessibility support still varies. A field without direct key provenance is skipped; Typerelay never falls back to unrestricted keyboard recording. AppImage users need the host AT-SPI library (`libatspi.so.0`). This does not broaden the existing Linux abbreviation-expansion support.
+Linux observation targets GNOME, KDE, Hyprland, and other AT-SPI desktops on Wayland and X11. Application/toolkit accessibility support still varies. Fields without accessible edit events are skipped; Typerelay never falls back to unrestricted keyboard recording. AppImage users need the host AT-SPI library (`libatspi.so.0`). This does not broaden the existing Linux abbreviation-expansion support.
 
 Password fields, terminals, unsupported controls, uncertain composition, and fields whose safety cannot be established are excluded on every platform. Supported composed characters retain their Unicode text. Not every input method exposes enough information for safe observation.
 

@@ -1,5 +1,5 @@
-//! Observe direct AT-SPI keys in focused editable controls without reading document text.
-use std::{ffi::{c_char,c_void,CStr,CString},sync::Arc,time::{Duration,Instant}};
+//! Observe committed AT-SPI edits; keyboard callbacks are optional cancellation hints.
+use std::{ffi::{c_char,c_void,CStr,CString},sync::Arc,time::Duration};
 use anyhow::{Result,ensure};
 use typerelay_client::observation::{Edit,Event};
 use crate::observation::Observation;
@@ -10,20 +10,48 @@ struct Value { kind:usize, data:[u64;2] }
 struct AccessibleEvent { kind:*const c_char,source:Object,detail1:i32,detail2:i32,data:Value,sender:Object }
 #[repr(C)]
 struct KeyEvent { kind:i32,id:u32,hardware:u16,modifiers:u16,timestamp:u32,text:*const c_char,is_text:i32 }
-impl KeyEvent {
-    unsafe fn edit(&self)->Option<Edit> {unsafe{
-        if self.kind!=0||[0xffe1,0xffe2,0xffe5].contains(&self.id){return None;}
-        if self.modifiers&!(1|2)!=0{return Some(Edit::Reset);}
-        Some(match self.id {
-            0xff0d|0xff8d=>Edit::Enter,
-            0xff08=>Edit::Backspace,
-            _=>{
-                if self.is_text==0||self.text.is_null(){return Some(Edit::Reset);}
-                let text=CStr::from_ptr(self.text).to_string_lossy().into_owned();
-                if text.is_empty()||text.chars().count()>16{Edit::Reset}else{Edit::Text(text)}
-            },
-        })
-    }}
+// Keep replacement payloads only long enough to reduce an editor refresh to
+// the newly committed characters. Never query or persist a document snapshot.
+#[derive(Default)]
+struct TextEdits { deleted:Option<(i32,String,i64)>, cursor:Option<i32>, changed:i64 }
+impl TextEdits {
+    fn reset(&mut self){*self=Self::default();}
+    fn flush(&mut self,now:i64)->Vec<Edit> {
+        if self.deleted.as_ref().is_none_or(|(_,_,at)|now-at<75){return vec![];}
+        let (offset,text,_)=self.deleted.take().unwrap();self.apply(offset,text.chars().count(),"")
+    }
+    fn change(&mut self,insert:bool,offset:i32,text:&str,now:i64)->Vec<Edit> {
+        let mut edits=self.flush(now);self.changed=now;
+        if offset<0||text.chars().count()>4096 {self.reset();return vec![Edit::Reset];}
+        if !insert {
+            if self.deleted.is_some(){self.reset();edits.push(Edit::Reset);}
+            self.deleted=Some((offset,text.into(),now));return edits;
+        }
+        if let Some((before,old,_))=self.deleted.take() {
+            if before==offset {
+                let old:Vec<char>=old.chars().collect();let new:Vec<char>=text.chars().collect();
+                let prefix=old.iter().zip(&new).take_while(|(a,b)|a==b).count();
+                let suffix=old[prefix..].iter().rev().zip(new[prefix..].iter().rev()).take_while(|(a,b)|a==b).count();
+                edits.extend(self.apply(offset+prefix as i32,old.len()-prefix-suffix,&new[prefix..new.len()-suffix].iter().collect::<String>()));return edits;
+            }
+            edits.extend(self.apply(before,old.chars().count(),""));
+        }
+        edits.extend(self.apply(offset,0,text));edits
+    }
+    fn apply(&mut self,offset:i32,removed:usize,text:&str)->Vec<Edit> {
+        let mut edits=vec![];let length=text.chars().count();
+        // Bulk paste, document loading, and large rewrites are never learned.
+        if removed>16||length>16 {self.cursor=None;return vec![Edit::Reset];}
+        if removed==0&&length==0{return edits;}
+        if self.cursor.is_some_and(|cursor|cursor!=offset+removed as i32){edits.push(Edit::Reset);}
+        edits.extend((0..removed).map(|_|Edit::Backspace));
+        for part in text.split_inclusive('\n') {
+            let text=part.trim_end_matches(['\r','\n']);if !text.is_empty(){edits.push(Edit::Text(text.into()));}
+            if part.ends_with('\n'){edits.push(Edit::Enter);}
+        }
+        self.cursor=Some(offset+length as i32);edits
+    }
+    fn moved(&self,offset:i32,now:i64)->bool {self.cursor.is_some_and(|cursor|cursor!=offset)&&now-self.changed>=400&&self.deleted.is_none()}
 }
 struct Api { library:libloading::Library }
 impl Api {
@@ -42,7 +70,7 @@ impl Api {
         let path=std::fs::read_link(format!("/proc/{pid}/exe")).ok()?;let app=path.file_name()?.to_string_lossy().into_owned();typerelay_client::observation::Settings::supported_app(&app).then_some(app)
     }}
 }
-struct Listener { event_listener:Object,key_listener:Object,registered:Vec<CString>,modifiers:Vec<u32>,unlocked:Arc<std::sync::atomic::AtomicBool>,api:Api,state:Arc<Observation>,field:Object,key:Option<Instant>,epoch:u64,caret:Option<i32> }
+struct Listener { event_listener:Object,key_listener:Object,registered:Vec<CString>,modifiers:Vec<u32>,unlocked:Arc<std::sync::atomic::AtomicBool>,api:Api,state:Arc<Observation>,field:Object,edits:TextEdits,epoch:u64 }
 impl Drop for Listener {
     fn drop(&mut self) {unsafe {
         for kind in &self.registered {self.api.symbol::<unsafe extern "C" fn(Object,*const c_char,*mut Object)->i32>(b"atspi_event_listener_deregister")(self.event_listener,kind.as_ptr(),std::ptr::null_mut());}
@@ -51,17 +79,13 @@ impl Drop for Listener {
     }}
 }
 impl Listener {
-    fn typing(&self)->bool {self.key.is_some_and(|at|at.elapsed()<Duration::from_millis(400))}
-    fn discard(&mut self){self.key=None;self.caret=None;self.state.reset();}
+    fn discard(&mut self){self.edits.reset();self.state.reset();}
     fn reset(&mut self){self.discard();unsafe{self.api.unref(self.field);}self.field=std::ptr::null_mut();self.state.reset();}
+    fn feed(&self,app:&str,edits:Vec<Edit>){for edit in edits{self.state.feed(Event{epoch:self.epoch,field:format!("{:p}",self.field),app:app.into(),safe:true,direct:true,edit});}}
     unsafe extern "C" fn key(raw:*const KeyEvent,data:Object)->i32 {unsafe{
         let this=&mut *(data as *mut Self);let key=&*raw;
-        if !this.state.enabled.load(std::sync::atomic::Ordering::SeqCst)||!this.unlocked.load(std::sync::atomic::Ordering::SeqCst){return 0;}
-        let Some(app)=this.api.safe(this.field)else{this.discard();return 0;};
-        let epoch=this.state.epoch.load(std::sync::atomic::Ordering::SeqCst);if epoch!=this.epoch{this.reset();this.epoch=epoch;return 0;}
-        let Some(edit)=key.edit()else{return 0;};
-        this.key=Some(Instant::now());this.state.safety(true);
-        this.state.feed(Event{epoch,field:format!("{:p}",this.field),app,safe:true,direct:true,edit});this.state.status("Active");0
+        if key.kind==0&&(key.modifiers&!(1|2)!=0||matches!(key.id,0xff09|0xff1b|0xff50..=0xff58|0xffff)){this.discard();}
+        0
     }}
     unsafe extern "C" fn event(raw:*const AccessibleEvent,data:Object) {unsafe{
         let this=&mut *(data as *mut Self);let event=&*raw;
@@ -78,16 +102,14 @@ impl Listener {
         }
         if kind.starts_with("window:"){if !self.field.is_null()&&self.api.process(event.source)==self.api.process(self.field){self.reset();}return;}
         if event.source!=self.field||self.field.is_null(){return;}
-        if self.api.safe(event.source).is_none(){self.discard();return;}
-        // Editable controls often emit selection/caret and full text replacement
-        // events for each key (notably Electron). Direct keys are the source;
-        // accessibility updates must not replay document contents or erase a burst.
+        let Some(app)=self.api.safe(event.source)else{self.discard();return;};let now=Observation::now();self.state.safety(true);
         if kind.starts_with("object:text-selection-changed"){return;}
-        if kind.starts_with("object:text-caret-moved") {
-            if self.caret!=Some(event.detail1)&&!self.typing(){self.state.reset();}self.caret=Some(event.detail1);return;
-        }
+        if kind.starts_with("object:text-caret-moved") {if self.edits.moved(event.detail1,now){self.discard();}return;}
         if kind.starts_with("object:text-changed:") {
-            if !self.typing(){self.discard();self.state.status("Waiting for direct keyboard input from this application");}return;
+            if kind.contains("system")||event.data.kind!=64{self.discard();return;}
+            let raw=self.api.symbol::<unsafe extern "C" fn(*const Value)->*const c_char>(b"g_value_get_string")(&event.data);if raw.is_null(){self.discard();return;}
+            let text=CStr::from_ptr(raw).to_string_lossy();if text.chars().count()!=event.detail2 as usize{self.discard();return;}
+            let edits=self.edits.change(kind.starts_with("object:text-changed:insert"),event.detail1,&text,now);self.feed(&app,edits);self.state.status("Active");return;
         }
         self.discard();
     }}
@@ -116,19 +138,19 @@ impl ObservationAdapter {
 
     pub fn start(state:Arc<Observation>) {std::thread::spawn(move||{let result=Self::run(state.clone());if result.is_err(){state.reset();state.status("Unavailable: enable desktop accessibility and install AT-SPI 2, then restart Typerelay");}});}
     fn run(state:Arc<Observation>)->Result<()> {unsafe{
-        let api=Api::load()?;let context=api.symbol::<unsafe extern "C" fn()->Object>(b"g_main_context_new")();api.symbol::<unsafe extern "C" fn(Object)>(b"atspi_set_main_context")(context);ensure!(api.symbol::<unsafe extern "C" fn()->i32>(b"atspi_init")()==0,"AT-SPI unavailable");
+        let api=Api::load()?;ensure!([0,1].contains(&api.symbol::<unsafe extern "C" fn()->i32>(b"atspi_init")()),"AT-SPI unavailable");let context=api.symbol::<unsafe extern "C" fn()->Object>(b"g_main_context_new")();api.symbol::<unsafe extern "C" fn(Object)>(b"atspi_set_main_context")(context);
         let unlocked=Arc::new(std::sync::atomic::AtomicBool::new(false));let session=unlocked.clone();std::thread::spawn(move||Self::watch_session(session));
-        let mut listener=Box::new(Listener{event_listener:std::ptr::null_mut(),key_listener:std::ptr::null_mut(),registered:vec![],modifiers:vec![],unlocked,api,state,field:std::ptr::null_mut(),key:None,epoch:0,caret:None});let pointer=(&mut *listener as *mut Listener).cast();
+        let mut listener=Box::new(Listener{event_listener:std::ptr::null_mut(),key_listener:std::ptr::null_mut(),registered:vec![],modifiers:vec![],unlocked,api,state,field:std::ptr::null_mut(),edits:TextEdits::default(),epoch:0});let pointer=(&mut *listener as *mut Listener).cast();
         let events=listener.api.symbol::<unsafe extern "C" fn(unsafe extern "C" fn(*const AccessibleEvent,Object),Object,Object)->Object>(b"atspi_event_listener_new")(Listener::event,pointer,std::ptr::null_mut());listener.event_listener=events;ensure!(!events.is_null(),"AT-SPI listener unavailable");
         for kind in [c"object:state-changed:focused",c"object:text-changed",c"object:text-selection-changed",c"object:text-caret-moved",c"window:deactivate"] {ensure!(listener.api.symbol::<unsafe extern "C" fn(Object,*const c_char,*mut Object)->i32>(b"atspi_event_listener_register")(events,kind.as_ptr(),std::ptr::null_mut())!=0,"AT-SPI registration failed");listener.registered.push(kind.to_owned());}
-        let keys=listener.api.symbol::<unsafe extern "C" fn(unsafe extern "C" fn(*const KeyEvent,Object)->i32,Object,Object)->Object>(b"atspi_device_listener_new")(Listener::key,pointer,std::ptr::null_mut());listener.key_listener=keys;ensure!(!keys.is_null(),"AT-SPI keyboard listener unavailable");
-        for modifiers in [0,1,2,3,4,8,64] {ensure!(listener.api.symbol::<unsafe extern "C" fn(Object,Object,u32,u32,u32,*mut Object)->i32>(b"atspi_register_keystroke_listener")(keys,std::ptr::null_mut(),modifiers,1,0,std::ptr::null_mut())!=0,"AT-SPI key provenance unavailable");listener.modifiers.push(modifiers);}
+        let keys=listener.api.symbol::<unsafe extern "C" fn(unsafe extern "C" fn(*const KeyEvent,Object)->i32,Object,Object)->Object>(b"atspi_device_listener_new")(Listener::key,pointer,std::ptr::null_mut());listener.key_listener=keys;
+        for modifiers in [0,1,2,3,4,8,64] {if !keys.is_null()&&listener.api.symbol::<unsafe extern "C" fn(Object,Object,u32,u32,u32,*mut Object)->i32>(b"atspi_register_keystroke_listener")(keys,std::ptr::null_mut(),modifiers,1,0,std::ptr::null_mut())!=0{listener.modifiers.push(modifiers);}}
         listener.state.status("Waiting for a supported editable field");
         loop {
             while listener.api.symbol::<unsafe extern "C" fn(Object,i32)->i32>(b"g_main_context_iteration")(context,0)!=0{}
             let unlocked=listener.unlocked.load(std::sync::atomic::Ordering::SeqCst);let safe=unlocked&&listener.api.safe(listener.field).is_some();listener.state.safety(safe);
             if !unlocked{listener.state.status("Session locked or session safety unavailable");}
-            if !listener.state.enabled.load(std::sync::atomic::Ordering::SeqCst)||listener.epoch!=listener.state.epoch.load(std::sync::atomic::Ordering::SeqCst)||!unlocked{listener.reset();}else if !safe{listener.discard();}
+            if !listener.state.enabled.load(std::sync::atomic::Ordering::SeqCst)||listener.epoch!=listener.state.epoch.load(std::sync::atomic::Ordering::SeqCst)||!unlocked{listener.reset();}else if !safe{listener.discard();}else if let Some(app)=listener.api.safe(listener.field){let edits=listener.edits.flush(Observation::now());listener.feed(&app,edits);}
             std::thread::sleep(Duration::from_millis(20));
         }
     }}
@@ -138,23 +160,47 @@ impl ObservationAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn native_keys_complete_repeated_sentences_without_text_change_payloads() {
-        use typerelay_client::observation::{Detector,Settings};
-        let settings=Settings{enabled:true,..Settings::default()};let mut detector=Detector::default();let mut completed=vec![];
-        let mut send=|key:KeyEvent|{if let Some(edit)=unsafe{key.edit()}&&let Some(text)=detector.event(Event{epoch:1,field:"editor".into(),app:"code".into(),safe:true,direct:true,edit},&settings,1,1000){completed.push(text);}};
-        for _ in 0..2 {
-            for c in "Please send the purple notebook tomorrow.".chars() {
-                // Shift and releases must not clear a sentence or duplicate a key.
-                send(KeyEvent{kind:0,id:0xffe1,hardware:50,modifiers:0,timestamp:0,text:std::ptr::null(),is_text:0});
-                let text=CString::new(c.to_string()).unwrap();
-                send(KeyEvent{kind:0,id:c as u32,hardware:0,modifiers:if c.is_uppercase(){1}else{0},timestamp:0,text:text.as_ptr(),is_text:1});
-                send(KeyEvent{kind:1,id:c as u32,hardware:0,modifiers:0,timestamp:0,text:text.as_ptr(),is_text:1});
-            }
-            send(KeyEvent{kind:0,id:0xff0d,hardware:36,modifiers:0,timestamp:0,text:std::ptr::null(),is_text:0});
+    struct Fixture { edits:TextEdits,detector:typerelay_client::observation::Detector,completed:Vec<String>,now:i64 }
+    impl Fixture {
+        fn new()->Self {Self{edits:TextEdits::default(),detector:Default::default(),completed:vec![],now:1000}}
+        fn change(&mut self,insert:bool,offset:i32,text:&str) {
+            self.now+=10;let settings=typerelay_client::observation::Settings{enabled:true,..Default::default()};
+            for edit in self.edits.change(insert,offset,text,self.now){if let Some(text)=self.detector.event(Event{epoch:1,field:"editor".into(),app:"code".into(),safe:true,direct:true,edit},&settings,1,self.now){self.completed.push(text);}}
         }
-        assert_eq!(completed,vec!["Please send the purple notebook tomorrow.";2]);
-        let shortcut=KeyEvent{kind:0,id:'v' as u32,hardware:0,modifiers:4,timestamp:0,text:c"v".as_ptr(),is_text:1};assert!(matches!(unsafe{shortcut.edit()},Some(Edit::Reset)));
+    }
+    #[test]
+    fn committed_inserts_complete_sentences_without_keyboard_events() {
+        let mut f=Fixture::new();let mut offset=30;
+        for _ in 0..2 {for c in "Please send the purple notebook tomorrow.\n".chars(){f.change(true,offset,&c.to_string());offset+=1;}}
+        assert_eq!(f.completed,vec!["Please send the purple notebook tomorrow.";2]);
+    }
+    #[test]
+    fn electron_replacements_learn_only_new_characters_not_existing_document_text() {
+        let mut f=Fixture::new();let mut document="Existing private document contents.\n".to_owned();
+        for _ in 0..2 {
+            for c in "Please send the purple notebook tomorrow.\n".chars(){
+                f.change(false,0,&document);assert!(!f.edits.moved(0,f.now));document.push(c);f.change(true,0,&document);
+                // A duplicate accessibility refresh is not another occurrence.
+                f.change(false,0,&document);f.change(true,0,&document);
+            }
+        }
+        assert_eq!(f.completed,vec!["Please send the purple notebook tomorrow.";2]);
+    }
+    #[test]
+    fn committed_unicode_edits_and_bulk_insertions_are_bounded() {
+        let mut f=Fixture::new();let text="Café and a purple notebook";
+        for (i,c) in text.chars().enumerate(){f.change(true,i as i32,&c.to_string());}
+        let offset=text.chars().count() as i32;f.change(true,offset,"x");f.change(false,offset,"x");f.change(true,offset,".\n");
+        assert_eq!(f.completed,vec!["Café and a purple notebook."]);
+        f.change(true,0,"A whole pasted sentence must never be learned.\n");assert_eq!(f.completed.len(),1);
+        f.change(false,0,"A whole old sentence.");f.change(true,0,"An entirely new pasted sentence.\n");assert_eq!(f.completed.len(),1);
+        assert!(matches!(f.edits.change(true,0,&"x".repeat(4097),f.now+1).as_slice(),[Edit::Reset]));
+    }
+    #[test]
+    fn unpaired_deletion_and_caret_move_reset_unfinished_input() {
+        let mut edits=TextEdits::default();edits.change(true,12,"text",1000);assert!(!edits.moved(0,1100));assert!(edits.moved(0,1400));
+        edits.change(false,15,"t",1500);assert!(edits.flush(1574).is_empty());assert!(matches!(edits.flush(1575).as_slice(),[Edit::Backspace]));
+        edits.reset();assert!(edits.flush(2000).is_empty());
     }
     #[test]
     fn atspi_abi_and_runtime_symbols_are_available() {
