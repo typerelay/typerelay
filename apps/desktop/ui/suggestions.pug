@@ -1,25 +1,24 @@
 section#settings-suggestions.settings-page(hidden)
-	.setting-section
-		h2 Snippet suggestions
+	form#observation-form.settings-list.setting-section
+		h2.settings-card-title Snippet suggestions
 		p.settings-description Observed text stays on this device. Typerelay never uploads it or sends it to AI providers. Text becomes a normal snippet only when you review and save it to a library.
 		p.settings-description Suggestions accept single words, email addresses, URLs, and phrases with at least 12 characters excluding spaces. New suggestions notify after a typing pause, with no hourly limit.
 		p#observation-status(role="status" aria-live="polite") Disabled
-	form#observation-form.settings-list.setting-section
 		.setting-copy
 			label.check.mb-3(for="observation-enabled")
-				h3 Observe repeated text
-				input#observation-enabled.form-check-input.h-20px.w-30px(type="checkbox")
+				span Observe repeated text
+				input#observation-enabled.switch(type="checkbox" role="switch")
 			label.check.mb-3(for="observation-native")
-				h3 Capture typing across apps
-				input#observation-native.form-check-input.h-20px.w-30px(type="checkbox")
+				span Capture typing across apps
+				input#observation-native.switch(type="checkbox" role="switch")
 		p.settings-description Uses your permitted keyboard input when apps do not expose editable fields. Password fields that apps do not identify as protected may be learned. Exclude apps where you enter sensitive text.
 		label.check.mb-3(for="observation-notifications")
 			span Show suggestion notifications
-			input#observation-notifications.form-check-input.h-20px.w-30px(type="checkbox")
-		.mb-3
+			input#observation-notifications.switch(type="checkbox" role="switch")
+		.observation-field.mb-3
 			label(for="observation-threshold") Suggest after this many occurrences
 			input#observation-threshold.form-control-sm(type="number" min="2" max="100" value="4" required)
-		.mb-3
+		.observation-field.mb-3
 			label(for="observation-retention") Keep observed candidates
 			select#observation-retention.form-select-sm
 				option(value="7") 7 days
@@ -30,10 +29,9 @@ section#settings-suggestions.settings-page(hidden)
 			textarea#observation-exclusions.form-control-sm(rows="3" spellcheck="false" aria-describedby="observation-exclusions-help")
 			p#observation-exclusions-help.settings-description One application identifier per line: macOS bundle ID, Windows executable name, or Linux executable name. Password fields, terminals, and unsupported fields are always skipped.
 		.form-actions
-			button#observation-forget.secondary.btn-sm(type="button") Forget learned text
 			button#observation-save.primary.btn-sm(type="submit") Save settings
-	section#observation-setup.setting-section.mb-5(aria-labelledby="observation-setup-heading")
-		h3#observation-setup-heading Check setup
+	details#observation-setup.settings-list.setting-section(aria-labelledby="observation-setup-heading")
+		summary#observation-setup-heading.settings-card-title Check setup
 		p.settings-description Enable observation above, then type a few words in the app you want to use. Return here and check setup to confirm Typerelay receives your typing.
 		#observation-checks(aria-live="polite")
 		.observation-setup-actions.mb-3

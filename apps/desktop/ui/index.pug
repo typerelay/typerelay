@@ -75,11 +75,9 @@ html(lang="en")
 								p#shortcut-help Ctrl, Shift, Alt or Super + key
 						.setting-row
 							.setting-copy
-								h3 Start at login
+								label.setting-label(for="autostart") Start at login
 								p Keep TypeRelay ready in the menu bar.
-							label.switch
-								input#autostart(type="checkbox")
-								span.switch-track(aria-hidden="true")
+							input#autostart.switch(type="checkbox" role="switch")
 						.settings-actions
 							button.primary(type="submit") Save changes
 					.settings-list.mac-only
@@ -137,7 +135,7 @@ html(lang="en")
 							h2.settings-card-title AI options
 							label.check(for="native-ai-enabled")
 								span Enable AI
-								input#native-ai-enabled(type="checkbox")
+								input#native-ai-enabled.switch(type="checkbox" role="switch")
 					section#native-ai-card.settings-list(hidden)
 						.setting-section
 							h2#native-model-heading.settings-card-title Choose local AI model
@@ -225,9 +223,9 @@ html(lang="en")
 		template#library-template
 			div.library-row
 				label.check
-					input(type="checkbox")
 					span.library-name
 					span.library-sync-state.status-pill
+					input.switch(type="checkbox" role="switch")
 				button.library-merge.secondary.btn-sm(type="button") Merge…
 				div.library-merge-form(hidden)
 					label Destination
