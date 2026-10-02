@@ -123,6 +123,22 @@ test('authoring yields a validated proposal without changing snippets', async ()
 	await Fixture.provider(() => assert.rejects(Ai.author(ctx, Fixture.author()), /Enter action/), () => ({ status: 'completed', output_text: '{"title":"Bad","text":"Run {{key:enter}}"}' }));
 });
 
+test('template conversion adds sender and booking fields and rejects proposals without new fields', async () => {
+	const ctx = await Fixture.context(); await Fixture.configure(ctx); const count = await Snippet.countDocuments();
+	const text = "If you or your team need any help or want a demo of the system, please feel free to schedule a time with me. To schedule, please go to https://meet.thenitai.com and select the day and time that works best for you and your team. If you don't find a time slot that works for you, please get in touch with me, and I'm sure we can arrange something.\n\nWe would love to welcome you to our ever-growing customer base as a new customer.\n\nBe sure to let me know if there’s anything else I can do for you. Just hit reply, and I'll be happy to help.\n\nCheers,\nNitai\nCEO & Founder";
+	const proposed = text.replace('https://meet.thenitai.com', '{{booking_url}}').replace('Nitai', '{{sender_name}}').replace('CEO & Founder', '{{sender_title}}');
+	for (const content of [{ version: 1, type: 'plain_text', text }, { version: 2, type: 'rich_text', markdown: text, variables: {}, assets: [] }]) {
+		await Fixture.provider(async calls => {
+			const result = await Ai.author(ctx, Fixture.author({ action: 'template', prompt: 'Add reusable fields', entry: { title: 'Demo invitation', content } }));
+			assert.match(calls[0].body.instructions, /personal names, job titles/); assert.match(calls[0].body.instructions, /exception to preserving links/);
+			for (const name of ['booking_url', 'sender_name', 'sender_title']) { assert.ok((result.proposal.content.markdown ?? result.proposal.content.text).includes('{{' + name + '}}')); assert.equal(result.proposal.content.variables[name].required, true); }
+			assert.equal(result.proposal.content.type, content.type === 'rich_text' ? 'rich_text' : 'template'); assert.equal(await Snippet.countDocuments(), count);
+		}, () => ({ status: 'completed', output_text: JSON.stringify({ title: 'Demo invitation', text: proposed }) }));
+		await Fixture.provider(() => assert.rejects(Ai.author(ctx, Fixture.author({ action: 'template', entry: { content } })), /did not add any reusable fields/), () => ({ status: 'completed', output_text: JSON.stringify({ title: 'Demo invitation', text }) }));
+	}
+	await Fixture.provider(() => assert.rejects(Ai.author(ctx, Fixture.author({ action: 'template', entry: { content: { version: 1, type: 'template', text: 'Hello {{name}}', variables: { name: { label: 'Name', required: true } } } } })), /did not add any reusable fields/), () => ({ status: 'completed', output_text: JSON.stringify({ title: 'Greeting', text: 'Hi {{name}}' }) }));
+});
+
 test('authoring generates from an empty editor while retaining input and proposal validation', async () => {
 	const ctx = await Fixture.context(); await Fixture.configure(ctx); const count = await Snippet.countDocuments();
 	const library = await Library.create({ account: ctx.account, creator: ctx.user, name: 'New snippets', shared: false, state: 'active', revision: 1 });
