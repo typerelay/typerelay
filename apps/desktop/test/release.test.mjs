@@ -119,3 +119,47 @@ test('legacy updater panel does not inherit the last packaged format', () => {
 		assert.equal(bytes.toString(), `before__TAURI_BUNDLE_TYPE_VAR_${format}after`);
 	}
 });
+
+test('AppImage-only flag is Linux-only and full releases remain the default', () => {
+	assert.equal(PanelRelease.options(['linux'], 'linux').appimageOnly, false);
+	assert.equal(PanelRelease.options(['linux', '--appimage-only'], 'linux').appimageOnly, true);
+	for (const mode of ['windows', 'macos']) assert.throws(() => PanelRelease.options([mode, '--appimage-only', '--dry-run']), /only supported for Linux/);
+});
+
+for (const appimageOnly of [true, false]) test(`Linux release artifacts and verification with appimageOnly=${appimageOnly}`, { skip: process.platform !== 'linux' }, async t => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), 'typerelay-linux-release-test-')); const originalRoot = PanelRelease.root; const originalKey = process.env.TAURI_SIGNING_PRIVATE_KEY; const commands = []; const version = '9.8.7'; const triple = 'x86_64-unknown-linux-gnu';
+	PanelRelease.root = root; process.env.TAURI_SIGNING_PRIVATE_KEY = 'fixture';
+	t.mock.method(PanelRelease, 'repository', async () => '12345678901234567890');
+	t.mock.method(DesktopVersion, 'config', async () => ({ version }));
+	t.mock.method(NativeTools, 'stage', async () => []);
+	t.mock.method(console, 'log', () => {});
+	t.mock.method(PanelRelease, 'run', async (command, args, options = {}) => {
+		commands.push([command, ...args]);
+		if (command === 'rustup') return triple;
+		if (command === 'file') return 'ELF 64-bit LSB executable, x86-64';
+		if (command === 'rpm') return `${version} x86_64`;
+		if (args[0] === '--version') return `${path.basename(command)} ${version}`;
+		if (command === 'pnpm' && args[0] === 'tauri' && args[1] === 'build') {
+			assert.equal(args[args.indexOf('--bundles') + 1], appimageOnly ? 'appimage' : 'appimage,deb,rpm');
+			const release = path.join(options.environment.CARGO_TARGET_DIR, triple, 'release'); await fs.mkdir(release, { recursive: true });
+			for (const name of ['typerelay', 'typerelay-tui', 'typerelay-panel', 'typerelay-ai']) await fs.writeFile(path.join(release, name), 'fixture');
+			for (const [format, extension] of appimageOnly ? [['appimage', 'AppImage']] : [['appimage', 'AppImage'], ['deb', 'deb'], ['rpm', 'rpm']]) { const directory = path.join(release, 'bundle', format); await fs.mkdir(directory, { recursive: true }); await fs.writeFile(path.join(directory, `TypeRelay.${extension}`), 'fixture package'); }
+		}
+		if (command === 'tar') await fs.writeFile(args[1], 'fixture archive');
+		if (command === 'pnpm' && args[1] === 'signer') await fs.writeFile(`${args[3]}.sig`, 'fixture signature');
+		return '';
+	});
+	try {
+		const reportPath = path.join(root, 'report.json');
+		await PanelRelease.main(['linux', '--report', reportPath, ...(appimageOnly ? ['--appimage-only'] : [])]);
+		const report = JSON.parse(await fs.readFile(reportPath, 'utf8'));
+		assert.equal(report.verified, true); assert.equal(report.artifacts.length, appimageOnly ? 2 : 8);
+		assert.equal(report.updater.target, appimageOnly ? 'linux-x86_64-appimage' : 'linux-x86_64');
+		assert.deepEqual(report.packageUpdaters.map(item => item.target), (appimageOnly ? ['appimage'] : ['appimage', 'deb', 'rpm']).map(format => `linux-x86_64-${format}`));
+		assert.equal(commands.some(([command, ...args]) => command === 'which' && args.includes('rpm')), !appimageOnly);
+		assert.equal(commands.some(([command]) => command === 'rpm'), !appimageOnly);
+		assert.equal(commands.some(([command]) => command === 'tar'), !appimageOnly);
+		assert.equal(commands.some(([command, ...args]) => command === 'cargo' && args.includes('legacy-install')), !appimageOnly);
+		if (appimageOnly) assert.ok(report.artifacts.every(item => /\.AppImage(\.sig)?$/.test(item.file)));
+	} finally { PanelRelease.root = originalRoot; if (originalKey === undefined) delete process.env.TAURI_SIGNING_PRIVATE_KEY; else process.env.TAURI_SIGNING_PRIVATE_KEY = originalKey; await fs.rm(root, { recursive: true, force: true }); }
+});

@@ -40,6 +40,16 @@ Existing credential names are supported: `APPLE_APP_SPECIFIC_PASSWORD` maps to T
 
 Tauri performs signing/notarization with hardened runtime enabled. The app bundles the matching native **TypeRelay TUI** sidecar, including a combined binary for universal builds. The command checks both panel and TUI architectures plus the resulting app with codesign, Gatekeeper and stapler. As with the existing release tooling, verification concerns the stapled application inside the DMG; no separate outer-DMG notarization claim is made. See [Tauri macOS signing](https://v2.tauri.app/distribute/sign/macos/).
 
+## Linux AppImage only
+
+For local testing, build only the AppImage and its updater signature:
+
+```fish
+node scripts/release-panel.mjs linux --appimage-only
+```
+
+Add `--dry-run` to preview the build command. This skips DEB, RPM, and the legacy archive (including its engine rebuild), and does not require `rpm`. Without the flag, Linux still builds all formats. Signing credentials, clean `develop`, and version/architecture checks still apply. Builds still use a fresh Cargo output directory, so native compilation remains part of each run. The partial verification report covers only the AppImage; use the default full build for publication.
+
 ## Outputs and boundaries
 
 The Linux build creates x86_64 AppImage, deb and rpm packages, each containing matching engine, TUI and panel binaries. Each package has its own signed updater target. A signed legacy archive remains internal to the updater feed for existing standalone installations; it is not advertised as a download. Native packages compile the engine without the legacy-install feature, excluding the embedded Python installer. deb/rpm install their service and device rules through package-managed files; AppImage starts its bundled engine directly. Missing keyboard access uses pkexec and the native input-access command. Only the compatibility archive rebuilds the engine with legacy-install enabled.
