@@ -102,22 +102,22 @@ impl App {
         Ok(Self { ai_dialog:None, writing:None, writing_undo:Vec::new(), writing_buttons:Vec::new(), search_query:String::new(), search_scope:None,  search_hits:Vec::new(), search_selection:None,  search_done:true, store, settings, screen: Screen::Files, files, file_state, global_search: TextArea::default(), global_search_focused: false, global_hits: Vec::new(), global_state: ListState::default(), global_edit: false, snippets_state: ListState::default(), file: None, search: TextArea::default(), search_focused: false, trigger: TextArea::default(), title: TextArea::default(), language: "plain_text".into(), code: false, template:false, rich:false, rich_preview:false,rich_image:None,image_source:TextArea::default(),image_alt:TextArea::default(),image_title:TextArea::default(),image_width:Self::text("640"),image_focus:0, variables:Default::default(), template_dialog:None, fill_base:None, copy_identity:None, rich_fill:None, preview_x: 0, expansion: TextArea::default(), name: TextArea::default(), url: TextArea::default(), editor_focus: 0, editing: None, original_entry: None, original_url: String::new(), prefix: TextArea::default(), original_prefix: String::new(), pending: None, pending_delete: None, selected_ids: std::collections::BTreeSet::new(), selection_anchor: None, move_destination: None, move_choices: Vec::new(), move_state: ListState::default(), move_from: Screen::Browse, move_items: Vec::new(), pending_batch: None,pending_merge:None, bulk_buttons: Vec::new(), pending_trash: None, trash_rows: Vec::new(), trash_state: ListState::default(), trash_buttons: Vec::new(), confirm_from: Screen::Files, status: "Choose a file, or create a new one".into(), error: false, quit: false, toolbar: Vec::new(), list_area: Rect::default(), field_areas: Vec::new(), save_area: Rect::default(), cancel_area: Rect::default(), confirm_buttons: Vec::new(),merge_button:Rect::default() })
     }
     fn cancel_writing(&mut self) {
-        if let Some((id,_,_,_))=self.writing.take(){let root=self.settings.config_dir().to_path_buf();std::thread::spawn(move||{let _=typerelay_client::native_ai::NativeAi::request(&root,serde_json::json!({"op":"cancel","id":id}));});self.message("Writing cancelled",false);}
+        if let Some((id,_,_,_))=self.writing.take(){let root=self.settings.config_dir().to_path_buf();std::thread::spawn(move||{let _=typerelay_client::native_ai::NativeAi::request(&root,serde_json::json!({"op":"cancel","id":id}));});self.message("Refinement cancelled",false);}
     }
     fn writing_available(&self) -> bool { let root=self.settings.config_dir();typerelay_client::native_ai::NativeAi::settings(root).ok().and_then(|settings|settings.model).and_then(|id|typerelay_client::native_ai::NativeAi::model(&id).ok()).and_then(|model|typerelay_client::native_ai::NativeAi::path(root,&model).ok()).is_some_and(|path|path.is_file()) }
     fn write_action(&mut self, action: usize) -> Result<()> {
-        if action==2 { self.cancel_writing();if self.writing_undo.last().is_some_and(|(_,text)|*text==Self::value(&self.expansion)){self.expansion=self.writing_undo.pop().unwrap().0;}else{self.expansion.undo();}self.rich_preview=false;return Ok(()); }
+        if action==1 { self.cancel_writing();if self.writing_undo.last().is_some_and(|(_,text)|*text==Self::value(&self.expansion)){self.expansion=self.writing_undo.pop().unwrap().0;}else{self.expansion.undo();}self.rich_preview=false;return Ok(()); }
         if self.writing.is_some(){return Ok(());}
-        let draft=self.draft();anyhow::ensure!(!draft.replace.trim().is_empty(),"Write a request or some text first");
+        let draft=self.draft();anyhow::ensure!(!draft.replace.trim().is_empty(),"Enter text to refine.");
         anyhow::ensure!(self.writing_available(),"Enable AI and choose a downloaded model in Settings");
-        let root=self.settings.config_dir().to_path_buf();let id=uuid::Uuid::new_v4().to_string();let job_id=id.clone();let original=draft.clone();let action=if action==0{"create"}else{"rewrite"};let(sender,receiver)=std::sync::mpsc::channel();
+        let root=self.settings.config_dir().to_path_buf();let id=uuid::Uuid::new_v4().to_string();let job_id=id.clone();let original=draft.clone();let action="rewrite";let(sender,receiver)=std::sync::mpsc::channel();
         std::thread::spawn(move||{let _=sender.send(typerelay_client::native_ai::NativeAi::author(&root,&original,action,&job_id));});self.writing=Some((id,draft,action.into(),receiver));Ok(())
     }
     pub fn ai_tick(&mut self)->bool {
         let mut changed=false;
         if self.writing.as_ref().is_some_and(|(_,base,_,_)|self.screen!=Screen::Edit||*base!=self.draft()){self.cancel_writing();changed=true;}
         let written=self.writing.as_ref().and_then(|(_,_,_,receiver)|receiver.try_recv().ok());
-        if let Some(result)=written {let(_,base,_,_)=self.writing.take().unwrap();match result.and_then(|proposal|{typerelay_client::native_ai::NativeAi::validate_proposal(&base,&proposal)?;Ok(proposal)}){Ok(proposal) if proposal.replace==base.replace=>self.message("No changes suggested.",false),Ok(proposal)=>{self.writing_undo.push((self.expansion.clone(),proposal.replace.clone()));self.expansion=Self::text(&proposal.replace);self.rich_preview=false;self.message("Text updated · Undo reverts · Ctrl+S saves",false);},Err(error)=>self.message(format!("Writing failed: {error}"),true)}changed=true;}
+        if let Some(result)=written {let(_,base,_,_)=self.writing.take().unwrap();match result.and_then(|proposal|{typerelay_client::native_ai::NativeAi::validate_proposal(&base,&proposal)?;Ok(proposal)}){Ok(proposal) if proposal.replace==base.replace=>self.message("No changes suggested.",false),Ok(proposal)=>{self.writing_undo.push((self.expansion.clone(),proposal.replace.clone()));self.expansion=Self::text(&proposal.replace);self.rich_preview=false;self.message("Text refined · Undo reverts · Ctrl+S saves",false);},Err(error)=>self.message(format!("Refinement failed: {error}"),true)}changed=true;}
         if let Some(dialog)=&mut self.ai_dialog{return dialog.tick()||changed;}
         if !matches!(self.screen,Screen::Files|Screen::Browse){self.search_done=true;self.search_query.clear();return changed;}
         let query=if self.screen==Screen::Browse{Self::value(&self.search)}else{Self::value(&self.global_search)};
@@ -159,7 +159,7 @@ impl App {
     }
     fn draft(&self) -> Match { let replacement=Self::value(&self.expansion);let dynamic=self.template||(!self.code&&!self.rich&&(!self.variables.is_empty()||replacement.contains("{{")));Match { variables: self.variables.clone(), trigger: Self::value(&self.trigger), replace: replacement, title: Self::value(&self.title), kind: if self.rich { "rich_text" } else if self.code { "code" } else if dynamic { "template" } else { "plain_text" }.into(), language: self.language.clone() } }
     fn next_editor_field(&mut self, backwards: bool) {
-        let order = [2, 0, 1, 3, 4, 5];
+        let order = [2, 0, 1, 3, 4];
         let index = order.iter().position(|field| *field == self.editor_focus).unwrap_or(0);
         self.editor_focus = order[(index + if backwards { order.len() - 1 } else { 1 }) % order.len()];
     }
@@ -252,7 +252,7 @@ impl App {
         self.editor_focus = 0;
         self.screen = Screen::Edit;
         self.writing_undo.clear();
-        self.message("Tab / Shift+Tab switch fields · Code: F2 leaves editor · F9 Type · Ctrl+G Create · Ctrl+S saves", false);
+        self.message("Tab / Shift+Tab switch fields · Code: F2 leaves editor · F9 Type · Ctrl+G Refine with AI · Ctrl+S saves", false);
         Ok(())
     }
     fn save(&mut self) -> Result<()> {
@@ -531,7 +531,7 @@ impl App {
             if self.screen==Screen::Edit{return self.write_action(0);}
             if self.screen==Screen::Settings{self.ai_dialog=Some(crate::ai_dialog::Dialog::new(self.settings.config_dir().to_path_buf()));return Ok(());}
         }
-        if self.screen==Screen::Edit&&matches!(&event,Event::Key(key) if key.kind!=KeyEventKind::Release&&key.modifiers.contains(KeyModifiers::CONTROL)&&key.code==KeyCode::Char('z')){return self.write_action(2);}
+        if self.screen==Screen::Edit&&matches!(&event,Event::Key(key) if key.kind!=KeyEventKind::Release&&key.modifiers.contains(KeyModifiers::CONTROL)&&key.code==KeyCode::Char('z')){return self.write_action(1);}
         if let Some(dialog)=&mut self.template_dialog {
             if let Some(outcome)=dialog.event(event) { match outcome {
                 crate::template_dialog::Outcome::Cancel=>(),
@@ -847,7 +847,7 @@ impl App {
                 self.field_areas.extend([trigger_row[2], parts[2], title_area]);
                 frame.render_widget(Paragraph::new(self.status.as_str()).wrap(Wrap{trim:false}).style(Style::default().fg(if self.error{Color::Red}else{Color::Gray})),parts[3]);
                 let destination = self.move_destination.as_ref().and_then(|id| self.move_choices.iter().find(|library|library["_id"] == *id)).and_then(|library|library["name"].as_str()).unwrap_or("Current library");
-                frame.render_widget(Paragraph::new(format!("Library: {destination} · F8 destination · F9 Type · F11 Variables · F12 Preview\n{}",if !self.writing_available(){"Enable AI and choose a downloaded model in Settings"}else if Self::value(&self.expansion).trim().is_empty(){"Write a request or some text first"}else{"Create from your request · Rewrite your text · Undo · Ctrl+S saves"})), parts[4]);
+                frame.render_widget(Paragraph::new(format!("Library: {destination} · F8 destination · F9 Type · F11 Variables · F12 Preview\n{}",if !self.writing_available(){"Enable AI and choose a downloaded model in Settings"}else if Self::value(&self.expansion).trim().is_empty(){"Enter text to refine."}else{"Refine with AI improves your text · Undo · Ctrl+S saves"})), parts[4]);
                 self.form_buttons(frame, parts[5]);
             }
             Screen::NewFile => {
@@ -888,10 +888,10 @@ impl App {
     }
     fn form_buttons(&mut self, frame: &mut Frame, area: Rect) {
         if self.screen==Screen::Edit {
-            let parts=Layout::horizontal([Constraint::Length(12),Constraint::Length(14),Constraint::Length(14),Constraint::Length(10),Constraint::Min(0),Constraint::Length(16)]).split(area);self.cancel_area=parts[0];self.save_area=parts[5];self.writing_buttons=vec![parts[1],parts[2],parts[3]];
+            let parts=Layout::horizontal([Constraint::Length(12),Constraint::Length(20),Constraint::Length(10),Constraint::Min(0),Constraint::Length(16)]).split(area);self.cancel_area=parts[0];self.save_area=parts[4];self.writing_buttons=vec![parts[1],parts[2]];
             let enabled=!Self::value(&self.expansion).trim().is_empty()&&self.writing_available();
-            Self::button(frame,parts[0],"Esc Cancel",true);Self::button(frame,parts[5],"Ctrl+S Save",true);
-            for(index,label)in ["Create","Rewrite","Undo"].iter().enumerate(){let pending=self.writing.as_ref().is_some_and(|(_,_,action,_)|action==if index==0{"create"}else if index==1{"rewrite"}else{""});let label=if pending{if index==0{"Creating…"}else{"Rewriting…"}}else{label};Self::button(frame,parts[index+1],label,index==2||enabled&&self.writing.is_none());if self.editor_focus==index+3{frame.render_widget(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Cyan)),parts[index+1]);}}
+            Self::button(frame,parts[0],"Esc Cancel",true);Self::button(frame,parts[4],"Ctrl+S Save",true);
+            for(index,label)in ["Refine with AI","Undo"].iter().enumerate(){let label=if index==0&&self.writing.is_some(){"Refining…"}else{label};Self::button(frame,parts[index+1],label,index==1||enabled&&self.writing.is_none());if self.editor_focus==index+3{frame.render_widget(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Cyan)),parts[index+1]);}}
             return;
         }
         let parts = Layout::horizontal([Constraint::Length(16), Constraint::Min(0), Constraint::Length(18)]).split(area);
@@ -905,8 +905,12 @@ mod tests {
     use super::*;
     use ratatui::crossterm::event::KeyEvent;
     #[test]
+    fn editor_exposes_one_refinement_action_and_undo() {
+        let temp=tempfile::tempdir().unwrap();let mut app=Fixture::app(temp.path());app.screen=Screen::Edit;let mut terminal=ratatui::Terminal::new(ratatui::backend::TestBackend::new(100,30)).unwrap();terminal.draw(|frame|app.draw(frame)).unwrap();let text=terminal.backend().buffer().content().iter().map(|cell|cell.symbol()).collect::<String>();assert!(text.contains("Refine with AI"));assert!(!text.contains("Rewrite"));assert!(!text.contains("Create"));assert_eq!(app.writing_buttons.len(),2);app.editor_focus=3;app.next_editor_field(false);assert_eq!(app.editor_focus,4);app.next_editor_field(false);assert_eq!(app.editor_focus,2);assert!(app.write_action(0).unwrap_err().to_string().contains("Enter text to refine"));
+    }
+    #[test]
     fn writing_replaces_in_place_and_undo_restores_editor_history() {
-        let temp=tempfile::tempdir().unwrap();let mut app=Fixture::app(temp.path());app.screen=Screen::Edit;app.expansion=App::text("Write a greeting");app.title=App::text("Title");app.trigger=App::text("greeting");let original=app.draft();let mut proposal=original.clone();proposal.replace="Hello there!".into();let(sender,receiver)=std::sync::mpsc::channel();app.writing=Some(("test".into(),original.clone(),"create".into(),receiver));sender.send(Ok(proposal)).unwrap();app.ai_tick();assert_eq!(App::value(&app.expansion),"Hello there!");assert_eq!(app.draft().title,original.title);assert_eq!(app.draft().trigger,original.trigger);assert_eq!(app.screen,Screen::Edit);app.write_action(2).unwrap();assert_eq!(app.draft(),original);
+        let temp=tempfile::tempdir().unwrap();let mut app=Fixture::app(temp.path());app.screen=Screen::Edit;app.expansion=App::text("Write a greeting");app.title=App::text("Title");app.trigger=App::text("greeting");let original=app.draft();let mut proposal=original.clone();proposal.replace="Hello there!".into();let(sender,receiver)=std::sync::mpsc::channel();app.writing=Some(("test".into(),original.clone(),"create".into(),receiver));sender.send(Ok(proposal)).unwrap();app.ai_tick();assert_eq!(App::value(&app.expansion),"Hello there!");assert_eq!(app.draft().title,original.title);assert_eq!(app.draft().trigger,original.trigger);assert_eq!(app.screen,Screen::Edit);app.write_action(1).unwrap();assert_eq!(app.draft(),original);
     }
     #[test]
     fn unchanged_writing_preserves_cursor_and_history() {
@@ -956,7 +960,7 @@ mod tests {
             assert_eq!(before, app.field_areas); assert_eq!(focus, app.editor_focus);
             assert!(app.status.starts_with("Type:")); assert!(!app.error);
             Fixture::key(&mut app, KeyCode::F(9), KeyModifiers::NONE);
-            let order = [2, 0, 1, 3, 4, 5];
+            let order = [2, 0, 1, 3, 4];
             app.editor_focus = order[0];
             for expected in order.into_iter().cycle().skip(1).take(order.len()) {
                 let key = if code && app.editor_focus == 1 { KeyCode::F(2) } else { KeyCode::Tab };

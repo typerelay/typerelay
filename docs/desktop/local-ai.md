@@ -11,7 +11,7 @@ Search uses a local SQLite full-text index, independently of AI. It matches word
 ## TUI
 
 - In Settings, **Ctrl+G** opens model management. Arrow keys select a model; **d** downloads/resumes after confirmation, **e** enables an installed model, **x** disables AI, **r** removes it, and **c** cancels a download.
-- In the editor, type a request in the body and click **Create** (or press **Ctrl+G**). Click **Rewrite** to improve existing text. Both replace the text directly in the same editor; Tab and Enter also reach these buttons.
+- In the editor, write your text and click **Refine with AI** (or press **Ctrl+G**) to improve its clarity, grammar and tone. The result replaces the text directly in the same editor. Tab and Enter also reach the button. Enter some text first; no separate prompt or screen is needed.
 - Identical output shows **No changes suggested.** without changing the editor or undo history. Model and validation failures appear inside the editor.
 - **Undo** or **Ctrl+Z** restores the previous text. **Esc** cancels generation without leaving the editor. Editing, saving or leaving cancels pending work; failures preserve your text. **Ctrl+S** saves normally. Existing template tokens, Enter actions, image references, metadata and content type remain unchanged.
 - Global and per-library searches use the same combined search flow. Per-library search stays within the selected library. Search is unaffected by the AI setting.
