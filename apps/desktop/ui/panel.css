@@ -34,3 +34,5 @@ body:not([data-os=macos]) #settings-form>.setting-row{padding:.9rem}
 #observation-form input[type=checkbox]{height:1.25rem;width:1.875rem}
 
 .observation-setup-actions{display:flex;align-items:center;flex-wrap:wrap;gap:1rem}#observation-app-help summary{cursor:pointer}.observation-check h6{margin:0 0 .5rem}#observation-setup.mb-5{margin-bottom:3rem}
+
+.suggestion-abbreviation-group{display:flex;align-items:center;border:.0625rem solid var(--border);border-radius:.45rem;background:var(--surface-strong);overflow:hidden}.suggestion-abbreviation-group:focus-within{outline:.15rem solid color-mix(in srgb,var(--accent) 45%,transparent)}#suggestion-prefix{flex-shrink:0;padding:.4rem .65rem;border-right:.0625rem solid var(--border);color:var(--secondary)}#suggestions-view #suggestion-abbreviation{flex:1;min-width:0;width:0;margin:0;border:0;border-radius:0;outline:none;background:transparent;box-shadow:none}

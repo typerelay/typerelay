@@ -8,7 +8,10 @@ section#suggestions-view(hidden)
 		.suggestion-fields.mb-3
 			div
 				label(for="suggestion-abbreviation") Abbreviation
-				input#suggestion-abbreviation.form-control-sm(required maxlength="63" pattern="[a-z0-9-]*" spellcheck="false")
+				.suggestion-abbreviation-group
+					span#suggestion-prefix(aria-hidden="true")
+					input#suggestion-abbreviation.form-control-sm(required maxlength="63" pattern="[a-z0-9-]*" spellcheck="false" aria-describedby="suggestion-prefix-help")
+				span#suggestion-prefix-help.visually-hidden The prefix is shown separately. Enter only the abbreviation.
 			div
 				label(for="suggestion-title") Title (optional)
 				input#suggestion-title.form-control-sm(maxlength="1000")

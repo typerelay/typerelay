@@ -15,7 +15,7 @@ Typerelay observes newly entered text in supported, focused editable fields. Aft
 
 Click a suggestion notification, the tray’s **Suggestions** action, or **Review suggestions** in Settings to open the dedicated suggestions panel. It uses the settings styling with an extra 1rem of horizontal padding. Press **Escape** to close it. Each row shows the captured text and **Store as snippet**, with smaller underlined **Never suggest again** and **Delete** actions below. Choose:
 
-- **Store as snippet:** replace the list with an editable form. Abbreviation and optional title share the first row, followed by text and the destination library. **Cancel** returns to the list; **Save** creates the snippet and returns to the list. A synced or shared destination uploads the reviewed snippet through normal synchronization.
+- **Store as snippet:** replace the list with an editable form. Abbreviation and optional title share the first row, followed by text and the destination library. The device’s configured prefix appears before the abbreviation input; enter only the abbreviation itself. **Cancel** returns to the list; **Save** creates the snippet and returns to the list. A synced or shared destination uploads the reviewed snippet through normal synchronization.
 - **Delete:** remove the captured candidate and its counts. Repeated text can be learned again later.
 - **Never suggest again:** discard the candidate and remember only a keyed fingerprint for suppression.
 
