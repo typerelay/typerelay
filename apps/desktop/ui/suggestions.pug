@@ -40,39 +40,6 @@ section#settings-suggestions.settings-page(hidden)
 			p#observation-platform-help.settings-description
 			p.settings-description Password fields, terminals, excluded apps, and Typerelay settings are skipped. A successful check applies to the app and field you just typed in.
 	button#suggestions-review.secondary.btn-sm(type="button") Review suggestions
-	section#suggestion-review.setting-section
-		h3#suggestion-heading(tabindex="-1") Suggestions
-		p#suggestions-empty No repeated text to review yet.
-		#suggestions-list
-	form#suggestion-editor.settings-list.setting-section(hidden)
-		h3 Create snippet
-		.mb-3
-			label(for="suggestion-title") Title
-			input#suggestion-title.form-control-sm(maxlength="1000")
-		.mb-3
-			label(for="suggestion-abbreviation") Abbreviation
-			input#suggestion-abbreviation.form-control-sm(maxlength="63" pattern="[a-z0-9-]*" spellcheck="false")
-		.mb-3
-			label(for="suggestion-text") Text
-			textarea#suggestion-text.form-control-sm(rows="6" required maxlength="65536")
-		.mb-3
-			label(for="suggestion-library") Library
-			select#suggestion-library.form-select-sm(required)
-				option(value="") Choose a library
-			p#suggestion-library-notice.settings-description Choose a destination. Synced and shared libraries upload the snippet when you save.
-		.form-actions
-			button#suggestion-cancel.secondary.btn-sm(type="button") Cancel
-			button#suggestion-save.primary.btn-sm(type="submit") Save
-	template#suggestion-template
-		article.suggestion-card
-			h6.suggestion-count
-			pre.suggestion-text
-			.suggestion-actions
-				button.suggestion-dismiss.secondary.btn-sm(type="button") Dismiss
-				button.suggestion-ignore.secondary.btn-sm(type="button") Never suggest this again
-				button.suggestion-create.primary.btn-sm(type="button") Create snippet
-	template#suggestion-library-option
-		option
 	template#observation-check-template
 		article.observation-check.mb-3
 			h6.observation-check-label

@@ -147,7 +147,7 @@ impl Store {
         ensure!(current==revision,"Suggestion changed; review the latest suggestion");
         match action {
             "dismiss"=>{self.connection.execute("UPDATE candidates SET dismiss_total=total,dismiss_until=?2,revision=revision+1,notified=0 WHERE id=?1",params![id,now+7*86400])?;},
-            "ignore"|"saved"=>{if action=="ignore"{self.connection.execute("INSERT OR IGNORE INTO ignored VALUES(?1)",[fingerprint])?;}self.connection.execute("DELETE FROM candidates WHERE id=?1",[id])?;},
+            "ignore"|"delete"|"saved"=>{if action=="ignore"{self.connection.execute("INSERT OR IGNORE INTO ignored VALUES(?1)",[fingerprint])?;}self.connection.execute("DELETE FROM candidates WHERE id=?1",[id])?;},
             _=>anyhow::bail!("Unknown suggestion action"),
         }
         transaction.commit()?;Ok(Change{id:id.into(),revision:revision+1,candidate:None})
@@ -239,6 +239,14 @@ mod tests {
         store.action(&row.id,row.revision,"ignore",110).unwrap();assert!(store.list(110,&settings).unwrap().is_empty());assert!(store.observe(phrase,111,&settings,&HashSet::new()).unwrap().is_none());
         store.forget().unwrap();for i in 0..4{store.observe(phrase,200+i,&settings,&HashSet::new()).unwrap();}assert_eq!(store.list(204,&settings).unwrap().len(),1);
         store.prune(204+31*86400,&settings).unwrap();assert!(store.list(204+31*86400,&settings).unwrap().is_empty());
+    }
+    #[test]
+    fn deleting_a_suggestion_removes_counts_without_permanent_suppression() {
+        let root=tempfile::tempdir().unwrap();let store=Store::open(root.path()).unwrap();let settings=Settings{threshold:2,..settings()};let text="A captured reusable sentence.";
+        for at in 100..102{store.observe(text,at,&settings,&HashSet::new()).unwrap();}let row=store.list(102,&settings).unwrap().remove(0);
+        let change=store.action(&row.id,row.revision,"delete",103).unwrap();assert!(change.candidate.is_none());assert!(store.list(103,&settings).unwrap().is_empty());
+        assert_eq!(store.connection.query_row("SELECT COUNT(*) FROM ignored",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+        assert!(store.observe(text,104,&settings,&HashSet::new()).unwrap().is_none());let new=store.observe(text,105,&settings,&HashSet::new()).unwrap().unwrap().candidate.unwrap();assert_ne!(row.id,new.id);assert_eq!(new.count,2);
     }
     #[test]
     fn dismissal_requires_time_and_four_more_occurrences() {

@@ -15,7 +15,7 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 #[derive(Default)]
-struct Runtime { root:PathBuf, target:Mutex<Option<platform::Target>>, last:Mutex<Option<platform::Target>>, erase:Mutex<usize>, busy:AtomicBool, syncing:AtomicBool, authenticating:AtomicBool, cancel_auth:AtomicBool, auth_error:Mutex<String>, prompting:AtomicBool, prompt_hit:Mutex<Option<Hit>>, settings:AtomicBool, status:Mutex<String>, capture_status:Mutex<String>, #[cfg(any(target_os="windows",target_os="macos"))] expansion_started:AtomicBool, #[cfg(target_os="linux")] registration:Mutex<Option<typerelay_client::desktop::Registration>>, #[cfg(target_os="linux")] engine:Mutex<Option<std::process::Child>>, #[cfg(target_os="linux")] closing:AtomicBool, #[cfg(target_os="linux")] linux_setup:AtomicBool }
+struct Runtime { root:PathBuf, target:Mutex<Option<platform::Target>>, last:Mutex<Option<platform::Target>>, erase:Mutex<usize>, busy:AtomicBool, syncing:AtomicBool, authenticating:AtomicBool, cancel_auth:AtomicBool, auth_error:Mutex<String>, prompting:AtomicBool, prompt_hit:Mutex<Option<Hit>>, settings:AtomicBool, suggestions:AtomicBool, status:Mutex<String>, capture_status:Mutex<String>, #[cfg(any(target_os="windows",target_os="macos"))] expansion_started:AtomicBool, #[cfg(target_os="linux")] registration:Mutex<Option<typerelay_client::desktop::Registration>>, #[cfg(target_os="linux")] engine:Mutex<Option<std::process::Child>>, #[cfg(target_os="linux")] closing:AtomicBool, #[cfg(target_os="linux")] linux_setup:AtomicBool }
 impl Runtime {
 	#[cfg(target_os="linux")]
 	fn setup_linux(app: tauri::AppHandle) {
@@ -110,7 +110,8 @@ impl Runtime {
         app.state::<Runtime>().stop_engine();
         app.exit(0);
     }
-    fn open(app: &tauri::AppHandle, settings:bool) {
+    fn open(app:&tauri::AppHandle,settings:bool){Self::open_panel(app,settings,false);}
+    fn open_panel(app:&tauri::AppHandle,settings:bool,suggestions:bool) {
         let state=app.state::<Runtime>(); if state.busy.load(Ordering::SeqCst) {return;}
         if state.prompt_hit.lock().unwrap().is_none(){*state.erase.lock().unwrap()=0;}
         let Some(window)=app.get_webview_window("panel") else{return;};
@@ -119,7 +120,7 @@ impl Runtime {
             let captured=platform::Target::capture();
             state.update_capture(platform::Target::for_panel(captured,state.last.lock().unwrap().clone()));
         }
-        state.settings.store(settings,Ordering::SeqCst);
+        state.settings.store(settings,Ordering::SeqCst);state.suggestions.store(suggestions,Ordering::SeqCst);
         if let Some(target)=state.target.lock().unwrap().as_ref() {
             if let Some((x,y,w,h))=target.bounds {
                 let point=(x as f64+w as f64/2.,y as f64+h as f64/2.);
@@ -129,7 +130,7 @@ impl Runtime {
             else {let _=window.center();}
         } else {let _=window.center();}
         let _=window.show(); let _=window.set_focus();
-        let _=app.emit("panel-open",json!({"prompt":state.prompt_hit.lock().unwrap().clone(),"settings":settings,"status":state.status_message(),"theme":Self::theme()}));
+        let _=app.emit("panel-open",json!({"prompt":state.prompt_hit.lock().unwrap().clone(),"settings":settings,"suggestions":suggestions,"status":state.status_message(),"theme":Self::theme()}));
         #[cfg(target_os="linux")]
         {
             let app=app.clone(); std::thread::spawn(move || {
@@ -246,7 +247,7 @@ fn initialize(app:tauri::AppHandle)->std::result::Result<Value,String> {
 		#[cfg(not(target_os="linux"))]
 		let keyboards:Vec<String>=Vec::new();
 		let connected=state.root.join("sync/credentials.json").exists();let authenticating=state.authenticating.load(Ordering::SeqCst);
-		Ok(json!({"config":settings,"keyboards":keyboards,"prompt":state.prompt_hit.lock().unwrap().clone(),"server":typerelay_client::settings::SettingsStore::open(state.root.join("settings.yml")).ok().map(|s|s.settings.sync_url).unwrap_or_default(),"connected":connected,"connection_state":if authenticating{"authenticating"}else if connected{"connected"}else{"disconnected"},"auth_error":*state.auth_error.lock().unwrap(),"theme":Runtime::theme(),"settings":state.settings.load(Ordering::SeqCst),"status":state.status_message(),"update":app.state::<update::UpdateState>().value(),"accessibility":accessibility,"input_monitoring":input_monitoring,"notifications":notifications,"empty":empty,"version":app.package_info().version.to_string()}))
+		Ok(json!({"config":settings,"keyboards":keyboards,"prompt":state.prompt_hit.lock().unwrap().clone(),"server":typerelay_client::settings::SettingsStore::open(state.root.join("settings.yml")).ok().map(|s|s.settings.sync_url).unwrap_or_default(),"connected":connected,"connection_state":if authenticating{"authenticating"}else if connected{"connected"}else{"disconnected"},"auth_error":*state.auth_error.lock().unwrap(),"theme":Runtime::theme(),"settings":state.settings.load(Ordering::SeqCst),"suggestions":state.suggestions.load(Ordering::SeqCst),"status":state.status_message(),"update":app.state::<update::UpdateState>().value(),"accessibility":accessibility,"input_monitoring":input_monitoring,"notifications":notifications,"empty":empty,"version":app.package_info().version.to_string()}))
 }
 #[tauri::command]
 async fn search(app:tauri::AppHandle,query:String)->std::result::Result<Value,String> {
@@ -312,7 +313,7 @@ async fn prepare_template(app:tauri::AppHandle,hit:Hit,values:Option<std::collec
 #[tauri::command]
 fn set_prompt_view(app:tauri::AppHandle,enabled:bool){let state=app.state::<Runtime>();state.prompting.store(enabled,Ordering::SeqCst);if !enabled{state.prompt_hit.lock().unwrap().take();*state.erase.lock().unwrap()=0;}}
 #[tauri::command]
-fn set_settings_view(app:tauri::AppHandle,enabled:bool){app.state::<Runtime>().settings.store(enabled,Ordering::SeqCst);}
+fn set_settings_view(app:tauri::AppHandle,enabled:bool,suggestions:Option<bool>){let state=app.state::<Runtime>();state.settings.store(enabled,Ordering::SeqCst);state.suggestions.store(enabled&&suggestions.unwrap_or(false),Ordering::SeqCst);}
 #[tauri::command]
 fn dismiss(app:tauri::AppHandle){set_prompt_view(app.clone(),false);Runtime::hide(&app);}
 #[tauri::command]
@@ -414,7 +415,7 @@ async fn suggestions(app:tauri::AppHandle,action:String,value:Option<Value>)->st
             "configure"=>{let result=state.configure(serde_json::from_value(value)?)?;if let Some(changes)=result["changes"].as_array(){for change in changes{let _=app.emit("suggestion-change",json!({"epoch":result["epoch"],"change":change}));}}Ok(result)},
             "forget"=>{let epoch=state.forget()?;let _=app.emit("suggestions-forgotten",json!({"epoch":epoch}));Ok(json!({"epoch":epoch}))},
             "libraries"=>observation::Observation::libraries(root),
-            "dismiss"|"ignore"|"save"=>{let id=value["id"].as_str().context("Missing suggestion")?;let revision=value["revision"].as_i64().context("Missing revision")?;let change=if action=="save"{let draft:typerelay_client::config::Match=serde_json::from_value(value["draft"].clone())?;state.save(root,id,revision,value["library"].as_str().context("Choose a library")?,draft)?}else{state.action(id,revision,&action)?};let result=json!({"epoch":state.epoch.load(Ordering::SeqCst),"change":change});let _=app.emit("suggestion-change",&result);Ok(result)},
+            "dismiss"|"delete"|"ignore"|"save"=>{let id=value["id"].as_str().context("Missing suggestion")?;let revision=value["revision"].as_i64().context("Missing revision")?;let change=if action=="save"{let draft:typerelay_client::config::Match=serde_json::from_value(value["draft"].clone())?;state.save(root,id,revision,value["library"].as_str().context("Choose a library")?,draft)?}else{state.action(id,revision,&action)?};let result=json!({"epoch":state.epoch.load(Ordering::SeqCst),"change":change});let _=app.emit("suggestion-change",&result);Ok(result)},
             _=>anyhow::bail!("Unknown suggestion action"),
         }
     }).await.map_err(|_|"Suggestion operation failed".to_owned())?.map_err(|error|error.to_string())
@@ -451,7 +452,7 @@ fn main() {
         {use tauri_plugin_deep_link::DeepLinkExt;#[cfg(target_os="linux")]app.deep_link().register_all()?;let callback_root=root.clone();app.deep_link().on_open_url(move|event|for url in event.urls(){let _=Sync::receive_callback(&callback_root,url.as_str());});if let Some(urls)=app.deep_link().get_current()?{for url in urls{let _=Sync::receive_callback(&root,url.as_str());}}}
         Sync::worker(root.clone(),root.join("snippets"));
         let config=Panel::settings(&root)?;
-		app.manage(Runtime{root:root.clone(),target:Mutex::new(None),last:Mutex::new(None),erase:Mutex::new(0),busy:AtomicBool::new(false),syncing:AtomicBool::new(false),authenticating:AtomicBool::new(false),cancel_auth:AtomicBool::new(false),auth_error:Mutex::new(String::new()),prompting:AtomicBool::new(false),prompt_hit:Mutex::new(None),settings:AtomicBool::new(false),status:Mutex::new(String::new()),capture_status:Mutex::new(String::new()),#[cfg(any(target_os="windows",target_os="macos"))] expansion_started:AtomicBool::new(false),#[cfg(target_os="linux")] registration:Mutex::new(None),#[cfg(target_os="linux")] engine:Mutex::new(None),#[cfg(target_os="linux")] closing:AtomicBool::new(false),#[cfg(target_os="linux")] linux_setup:AtomicBool::new(false)});
+		app.manage(Runtime{root:root.clone(),target:Mutex::new(None),last:Mutex::new(None),erase:Mutex::new(0),busy:AtomicBool::new(false),syncing:AtomicBool::new(false),authenticating:AtomicBool::new(false),cancel_auth:AtomicBool::new(false),auth_error:Mutex::new(String::new()),prompting:AtomicBool::new(false),prompt_hit:Mutex::new(None),settings:AtomicBool::new(false),suggestions:AtomicBool::new(false),status:Mutex::new(String::new()),capture_status:Mutex::new(String::new()),#[cfg(any(target_os="windows",target_os="macos"))] expansion_started:AtomicBool::new(false),#[cfg(target_os="linux")] registration:Mutex::new(None),#[cfg(target_os="linux")] engine:Mutex::new(None),#[cfg(target_os="linux")] closing:AtomicBool::new(false),#[cfg(target_os="linux")] linux_setup:AtomicBool::new(false)});
 		app.manage(update::UpdateState::default());
 		if observation::Observation::start(app.handle()).is_err(){*app.state::<Runtime>().status.lock().unwrap()="Snippet suggestions are unavailable: local storage could not be opened".into();}
 		#[cfg(target_os="macos")]

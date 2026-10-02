@@ -1,10 +1,10 @@
 export class Suggestions {
 	constructor(panel) {
 		this.panel=panel;this.rows=new Map();this.revisions=new Map();this.epoch=0;this.sequence=0;this.loaded=false;this.draft=null;this.changeSequence=0;this.updated=new Map();
-		this.checkSequence=0;this.form=document.querySelector('#observation-form');this.list=document.querySelector('#suggestions-list');
+		this.editSequence=0;this.reviewScroll=0;this.checkSequence=0;this.form=document.querySelector('#observation-form');this.list=document.querySelector('#suggestions-list');
 		document.querySelector('#observation-check').onclick=event=>this.run(event.currentTarget,()=>this.check());
 		document.querySelector('#observation-test-notification').onclick=event=>this.run(event.currentTarget,async()=>{await this.invoke('test-notification');document.querySelector('#observation-notification-result').textContent='Test sent. If no notification appeared, allow Typerelay notifications in your system settings and check Do Not Disturb or Focus mode.';});
-		document.querySelector('#suggestions-review').onclick=()=>{document.querySelector('#suggestion-heading').focus();};
+		document.querySelector('#suggestions-review').onclick=event=>this.run(event.currentTarget,()=>this.open());
 		this.form.onsubmit=event=>{event.preventDefault();void this.run(document.querySelector('#observation-save'),()=>this.configure());};
 		document.querySelector('#observation-enabled').onchange=()=>{if(!document.querySelector('#observation-enabled').checked&&this.settings?.enabled)void this.run(document.querySelector('#observation-enabled'),()=>this.configure({...this.settings,enabled:false}));};
 		document.querySelector('#observation-forget').onclick=event=>this.run(event.currentTarget,()=>this.forget());
@@ -13,11 +13,10 @@ export class Suggestions {
 		window.__TAURI__.event.listen('observation-status',event=>document.querySelector('#observation-status').textContent=event.payload);
 		window.__TAURI__.event.listen('suggestion-change',event=>this.change(event.payload));
 		window.__TAURI__.event.listen('suggestions-forgotten',event=>this.forgotten(event.payload.epoch));
-		window.__TAURI__.event.listen('suggestions-open',()=>this.open());
 	}
 	invoke(action,value){return this.panel.invoke('suggestions',{action,value});}
 	async run(button,operation){if(button.disabled)return;button.disabled=true;try{await operation();}catch(error){await Swal.fire({icon:'error',title:'Snippet suggestions',text:String(error),confirmButtonText:'OK'});}finally{button.disabled=false;}}
-	async open(){this.panel.settingsTab='suggestions';await this.panel.settings(true);}
+	async open(sequence=this.panel.openSequence=(this.panel.openSequence||0)+1){this.panel.cancelAi();await this.panel.invoke('set_settings_view',{enabled:true,suggestions:true});if(sequence!==this.panel.openSequence)return;document.body.dataset.view='suggestions';document.querySelector('#window-title').textContent='Suggestions';for(const id of ['search-view','settings-view','fill-view'])document.querySelector('#'+id).hidden=true;document.querySelector('#suggestions-view').hidden=false;await this.load();if(!this.draft&&!document.querySelector('#suggestions-view').hidden)document.querySelector('#suggestion-heading').focus({preventScroll:true});}
 	async load(){
 		const sequence=++this.sequence;const checkSequence=this.checkSequence;const started=this.changeSequence;const startEpoch=this.epoch;const snapshot=await this.invoke('list');if(sequence!==this.sequence||snapshot.epoch<this.epoch||startEpoch!==this.epoch&&snapshot.epoch!==this.epoch)return;
 		this.epoch=snapshot.epoch;this.settings=snapshot.settings;this.loaded=true;if(snapshot.setup&&checkSequence===this.checkSequence)this.setup(snapshot.setup);
@@ -48,19 +47,19 @@ export class Suggestions {
 		let node=[...this.list.children].find(node=>node.dataset.id===id);
 		if(!candidate){this.rows.delete(id);node?.remove();this.empty();return;}
 		this.rows.set(id,candidate);if(!node){node=document.querySelector('#suggestion-template').content.firstElementChild.cloneNode(true);node.dataset.id=id;this.list.append(node);}
-		node.querySelector('.suggestion-count').textContent=`You typed this ${candidate.count} times. Create a snippet?`;node.querySelector('.suggestion-text').textContent=candidate.text;
+		node.querySelector('.suggestion-text').textContent=candidate.text;
 		node.querySelector('.suggestion-create').onclick=event=>this.run(event.currentTarget,()=>this.edit(id));
-		for(const action of ['dismiss','ignore'])node.querySelector('.suggestion-'+action).onclick=event=>this.run(event.currentTarget,async()=>{const row=this.rows.get(id);if(row)this.change(await this.invoke(action,{id,revision:row.revision}));});this.empty();
+		for(const action of ['delete','ignore'])node.querySelector('.suggestion-'+action).onclick=event=>this.run(event.currentTarget,async()=>{const row=this.rows.get(id);if(row)this.change(await this.invoke(action,{id,revision:row.revision}));});this.empty();
 	}
 	empty(){document.querySelector('#suggestions-empty').hidden=this.rows.size>0;}
 	async edit(id){
 		if(this.draft&&this.draft.id!==id){const answer=await Swal.fire({title:'Replace this draft?',text:'Your unsaved edits will be discarded.',showCancelButton:true,confirmButtonText:'Replace',reverseButtons:true});if(!answer.isConfirmed)return;}
-		const row=this.rows.get(id);if(!row)return;const epoch=this.epoch;const libraries=await this.invoke('libraries');if(epoch!==this.epoch||!this.rows.has(id))return;if(!libraries.length)throw Error('Create a writable library in Typerelay first. Your suggestion is kept.');
+		const row=this.rows.get(id);if(!row)return;const sequence=++this.editSequence;const epoch=this.epoch;const libraries=await this.invoke('libraries');if(sequence!==this.editSequence||epoch!==this.epoch||!this.rows.has(id))return;if(!libraries.length)throw Error('Create a writable library in Typerelay first. Your suggestion is kept.');
 		this.draft={...row};document.querySelector('#suggestion-title').value='';document.querySelector('#suggestion-abbreviation').value='';document.querySelector('#suggestion-text').value=row.text;
 		const select=document.querySelector('#suggestion-library');for(const option of [...select.options].slice(1))option.remove();for(const library of libraries){const option=document.querySelector('#suggestion-library-option').content.firstElementChild.cloneNode(true);option.value=library.id;option.textContent=library.name+' · '+(library.shared?'Shared':library.synced?'Synced':'Local only');select.append(option);}select.value='';
-		document.querySelector('#suggestion-editor').hidden=false;document.querySelector('#suggestion-title').focus();
+		this.reviewScroll=document.querySelector('#suggestions-view').scrollTop;document.querySelector('#suggestion-review').hidden=true;document.querySelector('#suggestion-editor').hidden=false;document.querySelector('#suggestions-view').scrollTop=0;document.querySelector('#suggestion-abbreviation').focus({preventScroll:true});
 	}
-	cancel(){const id=this.draft?.id;this.draft=null;document.querySelector('#suggestion-editor').hidden=true;document.querySelector('#suggestion-text').value='';const node=[...this.list.children].find(node=>node.dataset.id===id);(node?.querySelector('.suggestion-create')||document.querySelector('#suggestion-heading')).focus();}
+	cancel(){this.editSequence++;const id=this.draft?.id;this.draft=null;document.querySelector('#suggestion-editor').hidden=true;document.querySelector('#suggestion-review').hidden=false;document.querySelector('#suggestion-text').value='';const node=[...this.list.children].find(node=>node.dataset.id===id);(node?.querySelector('.suggestion-create')||document.querySelector('#suggestion-heading')).focus({preventScroll:true});document.querySelector('#suggestions-view').scrollTop=this.reviewScroll;}
 	async save(){
 		if(!this.draft)return;const draft={replace:document.querySelector('#suggestion-text').value,title:document.querySelector('#suggestion-title').value,trigger:document.querySelector('#suggestion-abbreviation').value,type:'plain_text',language:'plain_text',variables:{}};
 		const result=await this.invoke('save',{id:this.draft.id,revision:this.rows.get(this.draft.id)?.revision??this.draft.revision,library:document.querySelector('#suggestion-library').value,draft});this.change(result);this.cancel();await Swal.fire({toast:true,position:'bottom-end',icon:'success',title:'Snippet saved',showConfirmButton:false,timer:2000});

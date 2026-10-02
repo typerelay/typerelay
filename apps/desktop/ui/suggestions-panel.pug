@@ -1,0 +1,35 @@
+section#suggestions-view(hidden)
+	section#suggestion-review
+		h2#suggestion-heading.visually-hidden(tabindex="-1") Suggestions
+		p#suggestions-empty No repeated text to review yet.
+		#suggestions-list
+	form#suggestion-editor.settings-list.setting-section(hidden)
+		h2.settings-card-title Store as snippet
+		.suggestion-fields.mb-3
+			div
+				label(for="suggestion-abbreviation") Abbreviation
+				input#suggestion-abbreviation.form-control-sm(required maxlength="63" pattern="[a-z0-9-]*" spellcheck="false")
+			div
+				label(for="suggestion-title") Title (optional)
+				input#suggestion-title.form-control-sm(maxlength="1000")
+		.mb-3
+			label(for="suggestion-text") Text
+			textarea#suggestion-text.form-control-sm(rows="6" required maxlength="65536")
+		.mb-3
+			label(for="suggestion-library") Library
+			select#suggestion-library.form-select-sm(required)
+				option(value="") Choose a library
+			p#suggestion-library-notice.settings-description Choose a destination. Synced and shared libraries upload the snippet when you save.
+		.form-actions
+			button#suggestion-cancel.secondary.btn-sm(type="button") Cancel
+			button#suggestion-save.primary.btn-sm(type="submit") Save
+	template#suggestion-template
+		article.suggestion-card
+			.suggestion-header
+				div.suggestion-text
+				button.suggestion-create.primary.btn-sm(type="button") Store as snippet
+			.suggestion-links
+				button.suggestion-ignore.link-button(type="button") Never suggest again
+				button.suggestion-delete.link-button(type="button") Delete
+	template#suggestion-library-option
+		option

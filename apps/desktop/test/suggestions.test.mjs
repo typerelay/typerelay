@@ -9,7 +9,7 @@ class Fixture {
 		const dom=new JSDOM(pug.renderFile('ui/index.pug'),{runScripts:'outside-only',pretendToBeVisual:true});const calls=[];const events={};
 		dom.window.Swal={fire:async()=>({isConfirmed:true})};dom.window.__TAURI__={event:{listen:(name,callback)=>events[name]=callback}};
 		dom.window.eval((await readFile('ui/suggestions.js','utf8')).replace('export class Suggestions','window.Suggestions=class Suggestions'));
-		const panel={invoke:async(name,args)=>{calls.push({name,args});throw Error('Unexpected command');},settings:()=>{throw Error('No section reload allowed');},settingsPage:()=>{throw Error('No section reload allowed');}};
+		const panel={cancelAi:()=>{},invoke:async(name,args)=>{calls.push({name,args});throw Error('Unexpected command');},settings:()=>{throw Error('No section reload allowed');},settingsPage:()=>{throw Error('No section reload allowed');}};
 		return {dom,calls,events,panel,ui:new dom.window.Suggestions(panel)};
 	}
 	static row(id='one',revision=5){return{id,revision,text:'A useful repeated sentence.',count:4};}
@@ -31,7 +31,7 @@ test('save uses the selected library, updates one item, preserves failed drafts 
 		const document=f.dom.window.document;document.querySelector('#suggestion-library').value='shared';document.querySelector('#suggestion-text').value='Edited by the user.';
 		await assert.rejects(()=>f.ui.save());assert.equal(document.querySelector('#suggestion-text').value,'Edited by the user.');assert.equal(document.querySelector('#suggestion-editor').hidden,false);
 		let resolve;f.panel.invoke=async(name,args)=>{f.calls.push({name,args});return new Promise(done=>resolve=done);};const save=document.querySelector('#suggestion-save');const first=f.ui.run(save,()=>f.ui.save());await f.ui.run(save,()=>f.ui.save());resolve({epoch:1,change:{id:'one',revision:6,candidate:null}});await first;
-		assert.equal(f.ui.list.firstElementChild,sibling);assert.equal(f.ui.rows.has('one'),false);assert.equal(f.calls.filter(call=>call.args.action==='save').length,2);assert.equal(f.calls.at(-1).args.value.library,'shared');assert.equal(f.calls.at(-1).args.value.draft.replace,'Edited by the user.');
+		assert.equal(f.ui.list.firstElementChild,sibling);assert.equal(document.querySelector('#suggestion-review').hidden,false);assert.equal(document.querySelector('#suggestion-editor').hidden,true);assert.equal(f.ui.rows.has('one'),false);assert.equal(f.calls.filter(call=>call.args.action==='save').length,2);assert.equal(f.calls.at(-1).args.value.library,'shared');assert.equal(f.calls.at(-1).args.value.draft.replace,'Edited by the user.');
 	}finally{f.dom.window.close();}
 });
 
@@ -68,5 +68,26 @@ test('setup shows macOS permission actions and test notification uses only the n
 		f.panel.invoke=async(name,args)=>{f.calls.push({name,args});return {};};await document.querySelector('[data-id="accessibility"] button').onclick({currentTarget:document.querySelector('[data-id="accessibility"] button')});
 		assert.equal(f.calls[0].name,'open_accessibility_settings');await document.querySelector('#observation-test-notification').onclick({currentTarget:document.querySelector('#observation-test-notification')});
 		assert.equal(f.calls[1].args.action,'test-notification');assert.match(document.querySelector('#observation-notification-result').textContent,/Test sent/);assert.equal(f.ui.rows.size,0);
+	}finally{f.dom.window.close();}
+});
+
+
+test('dedicated suggestion list is replaced by the editor and cancel restores the same list',async()=>{
+	const f=await Fixture.create();try{
+		const document=f.dom.window.document;f.ui.change(Fixture.change(Fixture.row()));const card=f.ui.list.firstElementChild;
+		assert.equal(card.querySelector('.suggestion-count'),null);assert.equal(card.querySelector('.suggestion-create').textContent,'Store as snippet');assert.equal(card.querySelector('.suggestion-ignore').textContent,'Never suggest again');assert.equal(card.querySelector('.suggestion-delete').textContent,'Delete');
+		f.panel.invoke=async(name,args)=>{f.calls.push({name,args});if(args.action==='libraries')return[{id:'local',name:'Local'}];throw Error('No surrounding reload allowed');};
+		await f.ui.edit('one');assert.equal(document.querySelector('#suggestion-review').hidden,true);assert.equal(document.querySelector('#suggestion-editor').hidden,false);assert.equal(document.activeElement.id,'suggestion-abbreviation');assert.equal(document.querySelector('#suggestion-title').required,false);assert.equal(document.querySelector('#suggestion-library').options.length,2);
+		f.ui.cancel();assert.equal(document.querySelector('#suggestion-review').hidden,false);assert.equal(document.querySelector('#suggestion-editor').hidden,true);assert.equal(f.ui.list.firstElementChild,card);assert.equal(document.activeElement,card.querySelector('.suggestion-create'));
+		let resolve;f.panel.invoke=()=>new Promise(done=>resolve=done);const pending=f.ui.edit('one');f.ui.cancel();resolve([{id:'local',name:'Local'}]);await pending;assert.equal(document.querySelector('#suggestion-editor').hidden,true);
+	}finally{f.dom.window.close();}
+});
+
+test('delete and ignore remove only their own cards without reloading the list',async()=>{
+	const f=await Fixture.create();try{
+		f.ui.change(Fixture.change(Fixture.row()));f.ui.change(Fixture.change(Fixture.row('two')));const sibling=f.ui.list.children[1];
+		f.panel.invoke=async(name,args)=>{f.calls.push({name,args});assert.equal(args.action,'delete');return {epoch:1,change:{id:'one',revision:6,candidate:null}};};const button=f.ui.list.firstElementChild.querySelector('.suggestion-delete');await button.onclick({currentTarget:button});
+		assert.equal(f.ui.list.firstElementChild,sibling);assert.equal(f.calls.length,1);f.ui.change(Fixture.change(Fixture.row()));assert.equal(f.ui.list.children.length,1);
+		f.panel.invoke=async(name,args)=>{assert.equal(args.action,'ignore');return {epoch:1,change:{id:'two',revision:6,candidate:null}};};const ignore=sibling.querySelector('.suggestion-ignore');await ignore.onclick({currentTarget:ignore});assert.equal(f.ui.list.children.length,0);
 	}finally{f.dom.window.close();}
 });

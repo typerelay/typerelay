@@ -13,13 +13,13 @@ Use **Send test notification** to verify system delivery without waiting for rep
 
 Typerelay observes newly entered text in supported, focused editable fields. After four separate occurrences by default, it offers a snippet suggestion. Single words, email addresses, URLs, and phrases qualify when they contain at least 12 characters excluding spaces; there is no minimum word count. A burst completes after five seconds without typing. Short fragments, uncertain edits, bulk paste, recognized automated insertion, and existing snippets are excluded.
 
-The tray's **Suggestions** action opens the review list. Choose:
+Click a suggestion notification, the tray’s **Suggestions** action, or **Review suggestions** in Settings to open the dedicated suggestions panel. It uses the settings styling with an extra 1rem of horizontal padding. Press **Escape** to close it. Each row shows the captured text and **Store as snippet**, with smaller underlined **Never suggest again** and **Delete** actions below. Choose:
 
-- **Create snippet:** review and edit text, title, abbreviation, and destination library. Nothing is saved until you click **Save**. A synced or shared destination uploads the reviewed snippet through normal synchronization.
-- **Dismiss:** hide the candidate for at least seven days and four additional occurrences.
-- **Never suggest this again:** discard the candidate and remember only a keyed fingerprint for suppression.
+- **Store as snippet:** replace the list with an editable form. Abbreviation and optional title share the first row, followed by text and the destination library. **Cancel** returns to the list; **Save** creates the snippet and returns to the list. A synced or shared destination uploads the reviewed snippet through normal synchronization.
+- **Delete:** remove the captured candidate and its counts. Repeated text can be learned again later.
+- **Never suggest again:** discard the candidate and remember only a keyed fingerprint for suppression.
 
-Notifications contain no observed wording. They appear after a typing pause, including after you switch away from the editor, with no hourly limit, and open the local review list. Each newly eligible candidate is notified once; additional occurrences update its count without repeatedly notifying for the same pending candidate. Notification delivery also requires the operating system's permission.
+Notifications contain no observed wording. They appear after a typing pause, including after you switch away from the editor, with no hourly limit, and open the local review list. Each newly eligible candidate is notified once; additional occurrences update its count without repeatedly notifying for the same pending candidate. Linux notifications request a 10-second on-screen duration and support opening the panel by clicking the notification body. Notification delivery also requires the operating system’s permission; Windows and macOS control banner duration through their own notification policies.
 
 ## Settings and privacy
 
@@ -53,7 +53,7 @@ Build checks are not live application certification. Test a native text editor a
 2. Verify password fields, excluded apps, paste, and snippet expansion produce no candidates.
 3. Try accents/composed input, corrections, field switches, screen lock/unlock, and permission revocation.
 4. Create, edit, choose a local or synced library, save, and cancel. Confirm only reviewed saves create snippets.
-5. Dismiss, ignore, disable, forget, and restart. Confirm stale responses do not restore forgotten text.
+5. Delete, ignore, disable, forget, and restart. Confirm stale responses do not restore forgotten text.
 6. Confirm normal typing, expansion, selection, focus, and clipboard behavior remain intact.
 
 Frontend regression tests are in `apps/desktop/test/suggestions.test.mjs`; run them with the existing desktop test command.

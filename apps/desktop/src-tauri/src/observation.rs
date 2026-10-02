@@ -35,13 +35,15 @@ impl Observation {
     pub fn feed(&self,event:Event) {if !self.enabled.load(Ordering::SeqCst){return;}if self.sender.try_send(event).is_err(){self.epoch.fetch_add(1,Ordering::SeqCst);}}
     pub fn reset(&self) {self.feed(Event{epoch:self.epoch.load(Ordering::SeqCst),field:String::new(),app:String::new(),safe:false,direct:false,edit:Edit::Reset});}
     pub fn status(&self,status:&str) {let mut current=self.status.lock().unwrap();if current.as_str()!=status{*current=status.into();let _=self.app.emit("observation-status",if self.enabled.load(Ordering::SeqCst){status}else{"Disabled"});}}
-    pub fn open(app:&tauri::AppHandle) {crate::Runtime::open(app,true);let _=app.emit("suggestions-open",());}
+    pub fn open(app:&tauri::AppHandle) {crate::Runtime::open_panel(app,true,true);}
     pub fn notify(app:&tauri::AppHandle,test:bool)->Result<()> {
         let message=if test{"This is a test notification from Typerelay. Open it to return to Suggestions."}else{"Repeated text is ready to review in Typerelay."};
         #[cfg(target_os="macos")]
         {crate::platform::NativeNotifications::suggestion(app.clone(),message)}
         #[cfg(any(target_os="linux",target_os="windows"))]
         {let mut notification=notify_rust::Notification::new();notification.appname("Typerelay").summary(if test{"Typerelay notification test"}else{"Snippet suggestion"}).body(message).action("review","Review");
+        #[cfg(target_os="linux")]
+        notification.timeout(10000).action("default","Open suggestions");
         #[cfg(target_os="windows")]
         notification.app_id(&app.config().identifier);
         let notification=notification.show()?;let app=app.clone();std::thread::spawn(move||notification.wait_for_action(move|action|if action=="review"||action=="default"{let handle=app.clone();let _=app.run_on_main_thread(move||Self::open(&handle));}));Ok(())}

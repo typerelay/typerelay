@@ -506,3 +506,15 @@ test('search loupe is right aligned and title bar has no shortcut badge',async()
   assert.equal(f.dom.window.document.querySelector('.shortcut-key'),null);
  }finally{f.dom.window.close();}
 });
+
+
+test('notification navigation opens the dedicated suggestions panel and Escape dismisses it',async()=>{
+ const f=await Fixture.create();try{
+  const original=f.panel.invoke;f.panel.invoke=async(name,args)=>name==='suggestions'&&args.action==='list'?{epoch:1,settings:{enabled:true,notifications:true,threshold:2,retention_days:30,excluded_apps:[]},status:'Active',candidates:[],changes:[]}:original(name,args);
+  f.panel.settings=()=>{throw Error('Notification must not open settings');};
+  await f.panel.open({suggestions:true,settings:true,theme:{os:'linux',background:'#ffffff',foreground:'#000000',accent:'#123456'}});
+  const document=f.dom.window.document;assert.equal(document.body.dataset.view,'suggestions');assert.equal(document.querySelector('#settings-view').hidden,true);assert.equal(document.querySelector('#search-view').hidden,true);assert.equal(document.querySelector('#suggestions-view').hidden,false);assert.equal(document.querySelector('#window-title').textContent,'Suggestions');
+  const before=f.calls.length;document.querySelector('#suggestion-text').dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'Enter',bubbles:true}));assert.equal(f.calls.slice(before).some(call=>call.name==='insert'),false);
+  document.dispatchEvent(new f.dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));assert.equal(f.calls.at(-1).name,'dismiss');
+ }finally{f.dom.window.close();}
+});
