@@ -100,11 +100,9 @@ test('keyboard selection saves any device and preserves the settings form and se
  }finally{f.dom.window.close();}
 });
 
-test('search icon hides while typing and explicit padding reserves both controls',async()=>{
+test('search has no magnifier or reserved left icon space',async()=>{
  const f=await Fixture.create();try{
-  const document=f.dom.window.document;const icon=document.querySelector('.search-icon');f.panel.query.value='';f.panel.render();assert.equal(icon.hidden,false);
-  f.panel.query.value='meeting';f.panel.query.focus();f.panel.render();assert.equal(icon.hidden,true);assert.equal(document.querySelector('#clear-search').hidden,false);assert.equal(document.activeElement,f.panel.query);
-  const style=f.dom.window.getComputedStyle(f.panel.query);assert.equal(style.paddingLeft,'2.45rem');assert.equal(style.paddingRight,'2.75rem');document.querySelector('#clear-search').click();assert.equal(icon.hidden,false);assert.equal(document.activeElement,f.panel.query);
+  const document=f.dom.window.document;assert.equal(document.querySelector('.search-icon'),null);f.panel.query.value='meeting';f.panel.query.focus();f.panel.render();assert.equal(document.querySelector('#clear-search').hidden,false);assert.equal(f.dom.window.getComputedStyle(f.panel.query).paddingLeft,'0.85rem');document.querySelector('#clear-search').click();assert.equal(document.querySelector('.search-icon'),null);assert.equal(document.activeElement,f.panel.query);
  }finally{f.dom.window.close();}
 });
 
