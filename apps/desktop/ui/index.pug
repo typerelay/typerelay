@@ -67,17 +67,17 @@ html(lang="en")
 					form#settings-form.settings-list
 						.setting-row
 							.setting-copy
+								label.setting-label(for="autostart") Start at login
+								p Keep TypeRelay ready in the menu bar.
+							input#autostart.switch(type="checkbox" role="switch")
+						.setting-row
+							.setting-copy
 								h3 Search shortcut
 								p Open TypeRelay from any app.
 							.setting-control.shortcut-control
 								label.visually-hidden(for="shortcut") Search shortcut
 								input#shortcut.form-control.form-control-sm(required aria-describedby="shortcut-help")
 								p#shortcut-help Ctrl, Shift, Alt or Super + key
-						.setting-row
-							.setting-copy
-								label.setting-label(for="autostart") Start at login
-								p Keep TypeRelay ready in the menu bar.
-							input#autostart.switch(type="checkbox" role="switch")
 						.settings-actions
 							button.primary(type="submit") Save changes
 					.settings-list.mac-only
@@ -163,7 +163,7 @@ html(lang="en")
 								.setting-copy
 									label(for="keyboard") Keyboard
 									p Automatic listens to all connected physical keyboards.
-								.setting-control
+								.setting-control.settings-select
 									select#keyboard.form-select.form-select-sm(form="settings-form")
 										option(value="") Automatic — all keyboards
 										template#keyboard-option-template

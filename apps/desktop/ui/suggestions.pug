@@ -11,7 +11,6 @@ section#settings-suggestions.settings-page(hidden)
 			label.check.mb-3(for="observation-native")
 				span Capture typing across apps
 				input#observation-native.switch(type="checkbox" role="switch")
-		p.settings-description Uses your permitted keyboard input when apps do not expose editable fields. Password fields that apps do not identify as protected may be learned. Exclude apps where you enter sensitive text.
 		label.check.mb-3(for="observation-notifications")
 			span Show suggestion notifications
 			input#observation-notifications.switch(type="checkbox" role="switch")
@@ -20,10 +19,11 @@ section#settings-suggestions.settings-page(hidden)
 			input#observation-threshold.form-control-sm(type="number" min="2" max="100" value="4" required)
 		.observation-field.mb-3
 			label(for="observation-retention") Keep observed candidates
-			select#observation-retention.form-select-sm
-				option(value="7") 7 days
-				option(value="30" selected) 30 days
-				option(value="90") 90 days
+			.settings-select
+				select#observation-retention.form-select-sm
+					option(value="7") 7 days
+					option(value="30" selected) 30 days
+					option(value="90") 90 days
 		.mb-3
 			label(for="observation-exclusions") Excluded apps
 			textarea#observation-exclusions.form-control-sm(rows="3" spellcheck="false" aria-describedby="observation-exclusions-help")
