@@ -1,3 +1,7 @@
+---
+description: Tested native capture combinations, verified results, and pending platform and input-method checks for Typerelay.
+---
+
 # Native capture: tested compatibility
 
 This is an opt-in development build, not a declaration of cross-platform or IME coverage. On 2026-10-02 the user prioritized installing and testing Linux on the current Hyprland/Omarchy machine; the remaining platform and IME work stays pending.
