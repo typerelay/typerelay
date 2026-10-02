@@ -170,7 +170,9 @@ export class AiClient {
 					if (JSON.stringify(await binding.read()) !== binding.snapshot) throw Error('The snippet changed. Generate a new proposal to preserve your edits.');
 					const proposal = structuredClone(binding.proposal); const text = root.querySelector('[data-ai-draft]').value;
 					if (proposal.content.type === 'rich_text') proposal.content.markdown = text; else proposal.content.text = text;
-					await binding.apply(proposal); binding.proposal = null; root.querySelector('[data-ai-proposal]').hidden = true; root.querySelector('[data-ai-author-status]').textContent = 'Draft applied. Review it, then Save.'; return;
+					await binding.apply(proposal); binding.proposal = null; root.querySelector('[data-ai-proposal]').hidden = true; root.querySelector('[data-ai-author-status]').textContent = 'Draft applied. Review it, then Save.';
+					if (root.classList.contains('ai-author-compact')) root.hidden = true;
+					return;
 				}
 				binding.job?.abort(); await this.ready('authoring'); const entry = await binding.read(); if (!this.localEnabled() || !this.status.enabled) return; const snapshot = JSON.stringify(entry); const job = new AbortController(); binding.job = job; this.jobs.add(job); binding.snapshot = snapshot;
 				try {

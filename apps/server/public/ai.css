@@ -9,7 +9,7 @@
 .ai-result { width: 100%; display: block; text-align: left; margin-bottom: .75rem; padding: .75rem; border: .0625rem solid color-mix(in srgb,currentColor 20%,transparent); border-radius: .5rem; }
 .ai-result strong,.ai-result span { display: block; }
 .ai-result-preview { white-space: pre-wrap; max-height: 6rem; overflow: hidden; }
-.ai-author [hidden],.ai-search [hidden],.ai-controls [hidden],.ai-configuration [hidden] { display: none !important; }
+.ai-author[hidden],.ai-author [hidden],.ai-search [hidden],.ai-controls [hidden],.ai-configuration [hidden] { display: none !important; }
 .ai-local-choice { display: flex; align-items: center; gap: .5rem; margin-bottom: .5rem; }
 [data-ai-launch][aria-disabled="true"] { pointer-events: none; opacity: .5; }
 .ai-configuration { max-width: 70rem; }

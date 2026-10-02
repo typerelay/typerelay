@@ -37,7 +37,7 @@ test('new web snippets show only the compact AI prompt and Submit above regular 
 	const fixture = BrowserFixture.create(async () => ({ status: BrowserFixture.status }));
 	try {
 		const { form, root } = await BrowserFixture.editor(fixture);
-		assert.equal(form.firstElementChild, root); assert.equal(form.querySelectorAll('[data-ai-author]').length, 1); assert.equal(root.classList.contains('ai-author-compact'), true);
+		assert.equal(form.firstElementChild, root); assert.equal(form.querySelectorAll('[data-ai-author]').length, 1); assert.equal(root.classList.contains('ai-author-compact'), true); assert.equal(root.hidden, false);
 		assert.equal(root.classList.contains('card'), true); assert.equal(form.querySelector('#replace').closest('.card'), root.nextElementSibling); assert.equal(root.nextElementSibling.classList.contains('card-body'), true);
 		assert.equal(root.querySelector('[data-ai-action]'), null); assert.equal(root.querySelector('[data-ai-effective]'), null); assert.equal(root.querySelector('h3'), null);
 		const prompt = root.querySelector('[data-ai-prompt]'); assert.equal(prompt.closest('label').querySelector('span').textContent, 'What would you like to do?'); assert.equal(prompt.closest('.col-12') !== null, true);
@@ -71,6 +71,7 @@ test('compact Submit generates an editable proposal and Use draft updates fields
 		assert.equal(area.value, 'Original'); assert.equal(root.querySelector('[data-ai-proposal]').hidden, false); assert.equal(root.querySelector('[data-ai-draft]').value, 'AI draft'); assert.notEqual(fixture.window.getComputedStyle(root.querySelector('[data-ai-author-status]')).display, 'none');
 		root.querySelector('[data-ai-draft]').value = 'Reviewed reply'; await fixture.client.click({ target: root.querySelector('[data-ai-apply]') });
 		assert.equal(area.value, 'Reviewed reply'); assert.equal(title.value, 'Reply'); assert.equal(trigger.value, 'reply'); assert.equal(root.querySelector('[data-ai-proposal]').hidden, true);
+		assert.equal(root.hidden, true); assert.equal(fixture.window.getComputedStyle(root).display, 'none');
 		assert.equal(form.querySelector('#replace'), area); assert.equal(fixture.document.querySelector('#record-form'), form); assert.equal(fixture.document.activeElement, trigger); assert.equal(form.scrollTop, 175);
 		assert.deepEqual(requests.map(request => request.path), ['/settings', '/author', '/settings']); assert.deepEqual(fixture.errors, []);
 	} finally { fixture.dom.window.close(); }
@@ -81,7 +82,7 @@ test('compact generation errors preserve the editor and report an error', async 
 	try {
 		const { form, root } = await BrowserFixture.editor(fixture); const area = form.querySelector('#replace'); area.value = 'Keep my edits'; root.querySelector('[data-ai-prompt]').value = 'Write a reply';
 		const button = root.querySelector('[data-ai-generate]'); await fixture.client.click({ target: button });
-		assert.equal(form.querySelector('#replace'), area); assert.equal(area.value, 'Keep my edits'); assert.equal(root.querySelector('[data-ai-proposal]').hidden, true); assert.equal(button.disabled, false); assert.deepEqual(fixture.errors, ['Provider unavailable']);
+		assert.equal(form.querySelector('#replace'), area); assert.equal(area.value, 'Keep my edits'); assert.equal(root.querySelector('[data-ai-proposal]').hidden, true); assert.equal(root.hidden, false); assert.equal(button.disabled, false); assert.deepEqual(fixture.errors, ['Provider unavailable']);
 	} finally { fixture.dom.window.close(); }
 });
 
