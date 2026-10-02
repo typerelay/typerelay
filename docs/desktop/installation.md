@@ -47,6 +47,15 @@ Run the x64 NSIS installer. It installs the resident panel plus **TypeRelay TUI*
 
 The Windows uninstaller removes the startup entry and TUI shortcut but preserves the local database and settings.
 
+For an unsigned Windows x64 test installer built from a Linux source checkout (requires cargo-xwin, the Windows Rust target, Clang/LLVM, CMake, Ninja, NSIS and Wine):
+
+```fish
+pnpm --filter typerelay-desktop build:windows:test
+```
+
+This builds the panel and matching CLI, TUI and AI worker, then bundles NSIS without code signing or updater signatures. Nothing is published. The installer is written under `target/windows-test/x86_64-pc-windows-msvc/release/bundle/nsis/`. Use the signed release workflow for production distribution.
+
+
 ## Upgrade and uninstall behavior
 
 The app silently downloads and verifies signed updates, then asks once: **Install and restart** or **Later**. Choosing **Later** keeps the download ready and pauses automatic reminders for that version until the next launch. Use **Install update…** in the tray/menu-bar menu to reopen the prompt anytime. Cached downloads are verified again before reuse. Operating-system permission dialogs may still appear. Linux updates use the installed package format: AppImage, deb or rpm. deb/rpm installation may request administrator access. After restart, AppImage runs its new bundled engine; deb/rpm restart the updated packaged service. Legacy standalone installations retain their signed update path. Do not mix standalone binaries from different releases.

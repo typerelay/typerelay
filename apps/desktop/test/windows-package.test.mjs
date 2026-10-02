@@ -16,6 +16,8 @@ test('Windows CLI and TUI use one native staging plan', () => {
 	assert.deepEqual(native.files.map(file => path.basename(file.destination)), ['typerelay-x86_64-pc-windows-msvc.exe', 'typerelay-tui-x86_64-pc-windows-msvc.exe', 'typerelay-ai-x86_64-pc-windows-msvc.exe']);
 	assert.ok(cross.files.every(file => file.source.startsWith(path.resolve(root, '/tmp/typerelay-release') + path.sep)));
 	assert.equal(NativeTools.environment({})[NativeTools.rustflags], '-C target-feature=+crt-static');
+	assert.equal(NativeTools.environment({}).LLAMA_STATIC_CRT, '1');
+	assert.deepEqual(NativeTools.environment(NativeTools.environment({})), NativeTools.environment({}));
 	assert.equal(NativeTools.environment({ [NativeTools.rustflags]: '-C opt-level=2' })[NativeTools.rustflags], '-C opt-level=2 -C target-feature=+crt-static');
 	assert.throws(() => NativeTools.plan('aarch64-pc-windows-msvc'), /Unsupported/);
 });

@@ -8,7 +8,8 @@
     "build": "node build.mjs",
     "build:macos:local": "node scripts/build-macos-local.mjs",
     "tauri": "tauri",
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "build:windows:test": "node scripts/build-windows-test.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.12.1",

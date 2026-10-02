@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 export class NativeTools {
 	static root = fileURLToPath(new URL('../../../', import.meta.url));
 	static rustflags = 'CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS';
-	static environment(environment = process.env) { return { ...environment, [NativeTools.rustflags]: [environment[NativeTools.rustflags], '-C target-feature=+crt-static'].filter(Boolean).join(' ') }; }
+	static environment(environment = process.env) { const flags = environment[NativeTools.rustflags] || ''; return { ...environment, LLAMA_STATIC_CRT: '1', [NativeTools.rustflags]: flags.includes('-C target-feature=+crt-static') ? flags : [flags, '-C target-feature=+crt-static'].filter(Boolean).join(' ') }; }
 	static plan(target, { platform = process.platform, environment = process.env, root = NativeTools.root } = {}) {
 		const windows = target === 'x86_64-pc-windows-msvc'; const linux = target === 'x86_64-unknown-linux-gnu'; const macos = ['aarch64-apple-darwin', 'x86_64-apple-darwin'].includes(target);
 		if (!windows && !macos && !linux) throw new Error('Unsupported native-tools target');
