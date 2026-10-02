@@ -440,6 +440,8 @@ fn main() {
     if std::env::args().any(|a|a=="--input-monitoring-status"){println!("{}",if platform::input_monitoring(false){"allowed"}else{"required"});return;}
     #[cfg(target_os="macos")]
     if std::env::args().any(|a|a=="--repair-input"){if let Err(error)=platform::release_modifiers(){eprintln!("TypeRelay input repair failed: {error}");std::process::exit(1);}return;}
+    #[cfg(target_os="windows")]
+    if arguments.iter().any(|arg|arg=="--capture-status") {match observation::Observation::request_diagnostics(){Ok(value)=>println!("{value}"),Err(error)=>{eprintln!("Capture status unavailable: {error}");std::process::exit(1);}}return;}
     #[cfg(target_os="linux")]
     if std::env::args().any(|a|a=="--capture-status") {
         let result=(||->Result<String>{let root=typerelay_client::panel_ipc::PanelIpc::directory()?;let path=root.join(format!("capture-status-{}.sock",std::process::id()));let socket=std::os::unix::net::UnixDatagram::bind(&path)?;let result=(||->Result<String>{socket.set_read_timeout(Some(std::time::Duration::from_secs(3)))?;socket.send_to(b"capture-status",root.join("events.sock"))?;let mut bytes=[0;16384];let length=socket.recv(&mut bytes)?;Ok(String::from_utf8(bytes[..length].to_vec())?)})();let _=std::fs::remove_file(path);result})();match result{Ok(value)=>println!("{value}"),Err(error)=>{eprintln!("Capture status unavailable: {error}");std::process::exit(1);}}return;
@@ -449,10 +451,12 @@ fn main() {
 
     #[cfg(target_os="linux")]
     if std::env::args().any(|a|a=="clipboard-serve") {let _=typerelay_client::clipboard::PasteJob::serve_restored();return;}
-	let builder=tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app,args,_|{let callback=Runtime::receive_callback(&args);if args.iter().any(|arg|arg=="--uninstall"){let _=app.autolaunch().disable();Runtime::quit(app);}else if args.iter().any(|arg|arg=="--quit"){Runtime::quit(app);}else if args.iter().any(|arg|arg=="--tui"){if let Err(error)=platform::open_tui(){Runtime::notice(app,&error.to_string(),true);}}else if !callback&&!args.iter().any(|arg|arg=="--background"){Runtime::open(app,false);}})).plugin(tauri_plugin_deep_link::init()).plugin(tauri_plugin_autostart::Builder::new().args(["--background"]).build()).plugin(tauri_plugin_dialog::init()).plugin(tauri_plugin_updater::Builder::new().build());
+	let builder=tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app,args,_|{#[cfg(target_os="windows")]if observation::Observation::diagnostics_response(app,&args){return;}let callback=Runtime::receive_callback(&args);if args.iter().any(|arg|arg=="--uninstall"){let _=app.autolaunch().disable();Runtime::quit(app);}else if args.iter().any(|arg|arg=="--quit"){Runtime::quit(app);}else if args.iter().any(|arg|arg=="--tui"){if let Err(error)=platform::open_tui(){Runtime::notice(app,&error.to_string(),true);}}else if !callback&&!args.iter().any(|arg|arg=="--background"){Runtime::open(app,false);}})).plugin(tauri_plugin_deep_link::init()).plugin(tauri_plugin_autostart::Builder::new().args(["--background"]).build()).plugin(tauri_plugin_dialog::init()).plugin(tauri_plugin_updater::Builder::new().build());
     #[cfg(not(target_os="linux"))]
     let builder=builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());
     let result=builder.setup(|app| {
+        #[cfg(target_os="windows")]
+        if observation::Observation::diagnostics_request(&std::env::args().collect::<Vec<_>>()).is_some(){app.handle().exit(1);return Ok(());}
         browser_bridge::BrowserBridge::refresh_registration();
         #[cfg(target_os="macos")]
         app.set_activation_policy(tauri::ActivationPolicy::Accessory);

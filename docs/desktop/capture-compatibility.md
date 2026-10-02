@@ -1,4 +1,4 @@
-# Native capture: local Linux test build
+# Native capture: tested compatibility
 
 This is an opt-in development build, not a declaration of cross-platform or IME coverage. On 2026-10-02 the user prioritized installing and testing Linux on the current Hyprland/Omarchy machine; the remaining platform and IME work stays pending.
 
@@ -10,13 +10,13 @@ This is an opt-in development build, not a declaration of cross-platform or IME 
 | German AltGr and US international dead keys | libxkbcommon deterministic tests | Physical layouts pending |
 | Sway, X11, GNOME, KDE Plasma | Context adapters compile; GNOME/KWin helper sources included | Untested; no compatibility claim |
 | macOS | Native-context implementation started | Build and device acceptance pending |
-| Windows | Cross-compilation check passes | Device acceptance pending |
+| Windows 11 VM, RDP, Notepad, US keyboard | Live keyboard input, repeated closing, email/URL, Backspace after idle, notification and review/save/expansion checks; 14 native Windows tests | Verified on 2026-10-02; Windows Zed/Obsidian/VS Code and physical-device acceptance pending |
 | IBus/Fcitx5 and native macOS/Windows IMEs | Shared commit/cancel arbitration replay tests only | Commit adapters unfinished; release blocker |
 | Required app bridges | Official Zed extension API reviewed; no passive text-edit/commit hook found | Required IME coverage remains a release blocker where OS commit delivery is unavailable |
 
 Source for the Zed API limitation: <https://github.com/zed-industries/zed/blob/main/crates/extension_api/src/extension_api.rs>. Ordinary keyboard capture does not require a bridge.
 
-User confirmation covers the reported Zed/Obsidian result on this machine; specific email/URL, notification timing, review-flow and sustained-use checks were not individually reported. Windows and macOS testing is deferred by the user.
+User confirmation covers the reported Zed/Obsidian result on this machine; specific email/URL, notification timing, review-flow and sustained-use checks were not individually reported. Windows VM testing was subsequently authorized and is recorded below. macOS testing remains deferred.
 
 ## Live acceptance and prior capture regression
 
@@ -25,6 +25,18 @@ The user's two different paragraphs/signatures containing “I wish you all the 
 The selected-device owner's repaired releases and releases consumed while waiting for expansion now also reach the observation translator. Previously only the forwarding side received those releases. This mismatch is fixed and unit-tested; it is not yet proven to be the cause of the reported missed closing. End-to-end acceptance of that live example remains pending. Do not treat replay success as proof that the real failure is resolved.
 
 On 2026-10-02, after build `47eabdc`, the user confirmed successful live discovery of “Hope this helps for today.” inside two different paragraphs with different signatures. This verifies the intended repeated-passage behavior on this Linux machine. The earlier exact “I wish you all the best.” case and the causal role of the key-release repair were not separately verified; broader edit-provider and platform limitations below remain.
+
+## Windows VM acceptance (2026-10-02)
+
+The existing `ImmIsIME` check reported an IME for this VM's ordinary US layout (`0x04090409`). This blocked native text capture before discovery: the initial repeated closing produced no fingerprints. Windows now queries the active TSF keyboard profile, distinguishing keyboard layouts from text processors. Missing profiles and foreground-layout mismatches remain blocked with an explicit reason. This change does not implement IME commits. See Microsoft's [GetActiveProfile contract](https://learn.microsoft.com/en-us/windows/win32/api/msctf/nf-msctf-itfinputprocessorprofilemgr-getactiveprofile).
+
+Live Notepad tests used keyboard events through RDP, with no clipboard typing. A separate metadata-only hook confirmed those events did not have the injected flag; injected-input filtering was preserved. The corrected build discovered a repeated closing inside different messages, an embedded URL, and `contact@sample.invalid` after correcting an end-of-address typo with Backspace following a six-second pause. The email's stored count was exactly two. A first email trial did not qualify; the isolated retry with a new email passed, so sustained reliability is still a follow-up acceptance item.
+
+Multiple suggestion notifications appeared within minutes. Review displayed the corrected sentence and URL; prefix display, Cancel, Save to the existing local `winlib`, Delete, Never suggest again, and Escape were exercised. The saved `vmcorrectiontest` snippet expanded to “Today we test corrections.” in the disposable Notepad test document. The test snippet remains in the local library for inspection. No hangs or crashes occurred during these checks; this is not a long-duration stress certification.
+
+Fourteen panel tests ran successfully inside Windows, including ordinary-layout/IME distinction, unknown and mismatched profiles, and diagnostic nonce validation. Two Windows packaging tests passed on the build host. The unsigned NSIS package was rebuilt and installed successfully (installer exit 0), with one running panel process and a post-install keyboard capture check. Installer SHA-256: `a60b3a84052cbd40b1c5aca97c7aed2bb579ec5780d731f580c4f37dbf6ffe73`. Windows Defender had quarantined the unsigned `typerelay.exe` CLI (threat ID `2147731849`); the CLI was still absent after installation. Protection was not disabled or bypassed. Desktop capture acceptance does not establish that all unsigned package tools are accepted by Defender.
+
+Windows now supports `typerelay-panel.exe --capture-status`, returning metadata-only capture state and counters from the running instance. Replies use a validated random nonce under the private observations directory and are removed after reading. Input-hook/COM initialization failures now appear in native setup status. No captured text is included in diagnostic replies.
 
 ## Repeated-passage engine
 
@@ -40,7 +52,7 @@ Keep the existing occurrence threshold (this machine: two). Write two different 
 
 Pause mid-closing, continue across sentences or lines, and correct an end-of-buffer typo with Backspace before and after a pause. Verify the full corrected passage and counts. Verify a growing suggestion updates its existing card without another notification. Then check two independent qualifying passages notify without an hourly delay, review/save with prefix and library selection, Cancel, Delete/Never suggest again, Escape, ordinary snippet expansion and sustained responsiveness.
 
-Frontend regression execution and physical acceptance remain assigned to the user. `typerelay-panel --capture-status` exposes metadata-only diagnostics, including discovery capacity, without returning captured text.
+Windows VM interaction was explicitly authorized for agent testing; other physical acceptance remains assigned to the user. `typerelay-panel --capture-status` exposes metadata-only diagnostics, including discovery capacity, without returning captured text.
 
 ## Current implementation boundaries
 

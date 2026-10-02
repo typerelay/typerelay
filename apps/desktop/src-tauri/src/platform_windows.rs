@@ -146,10 +146,18 @@ impl ObservationAdapter {
         if code>=0&&[WM_LBUTTONDOWN,WM_RBUTTONDOWN,WM_MBUTTONDOWN,WM_XBUTTONDOWN].contains(&(wparam.0 as u32)){Self::sender().with(|cell|if let Some((state,sender))=cell.borrow().as_ref(){let epoch=state.epoch.fetch_add(1,std::sync::atomic::Ordering::SeqCst)+1;let mut pid=0;unsafe{GetWindowThreadProcessId(GetForegroundWindow(),Some(&mut pid));}let _=sender.try_send(ObservationKey{epoch,at:crate::observation::Observation::now(),edit:typerelay_client::observation::Edit::Reset,pid});state.reset();});}
         unsafe{CallNextHookEx(None,code,wparam,lparam)}
     }
-    fn field(automation:&windows::Win32::UI::Accessibility::IUIAutomation)->Result<(windows::Win32::UI::Accessibility::IUIAutomationElement,String,u32)> {
-        use windows::Win32::UI::{Accessibility::*,Input::Ime::{ImmIsIME,ImmGetContext,ImmGetCompositionStringW,ImmReleaseContext,GCS_COMPSTR}};use windows::Win32::System::Threading::{QueryFullProcessImageNameW,PROCESS_NAME_WIN32};
+    fn input_method(profiles:&windows::Win32::UI::TextServices::ITfInputProcessorProfileMgr,layout:windows::Win32::UI::Input::KeyboardAndMouse::HKL)->Result<bool>{
+        use windows::Win32::UI::TextServices::{TF_INPUTPROCESSORPROFILE,GUID_TFCAT_TIP_KEYBOARD};
+        let mut profile=TF_INPUTPROCESSORPROFILE::default();unsafe{profiles.GetActiveProfile(&GUID_TFCAT_TIP_KEYBOARD,&mut profile)}.context("Keyboard profile unavailable; reopen Typerelay after selecting an input language")?;Self::profile_is_ime(&profile,layout)
+    }
+    fn profile_is_ime(profile:&windows::Win32::UI::TextServices::TF_INPUTPROCESSORPROFILE,layout:windows::Win32::UI::Input::KeyboardAndMouse::HKL)->Result<bool>{
+        use windows::Win32::UI::TextServices::{TF_PROFILETYPE_INPUTPROCESSOR,TF_PROFILETYPE_KEYBOARDLAYOUT};
+        match profile.dwProfileType{TF_PROFILETYPE_INPUTPROCESSOR=>Ok(true),TF_PROFILETYPE_KEYBOARDLAYOUT=>{ensure!(profile.hkl==layout,"Foreground keyboard layout differs from the verified input profile");Ok(false)},_=>anyhow::bail!("No verified active keyboard profile; select an input language")}
+    }
+    fn field(automation:&windows::Win32::UI::Accessibility::IUIAutomation,profiles:&windows::Win32::UI::TextServices::ITfInputProcessorProfileMgr)->Result<(windows::Win32::UI::Accessibility::IUIAutomationElement,String,u32)> {
+        use windows::Win32::UI::{Accessibility::*,Input::Ime::{ImmGetContext,ImmGetCompositionStringW,ImmReleaseContext,GCS_COMPSTR}};use windows::Win32::System::Threading::{QueryFullProcessImageNameW,PROCESS_NAME_WIN32};
         unsafe {
-            let thread=GetWindowThreadProcessId(GetForegroundWindow(),None);ensure!(!ImmIsIME(GetKeyboardLayout(thread)).as_bool(),"Input method provenance unavailable");
+            let thread=GetWindowThreadProcessId(GetForegroundWindow(),None);ensure!(!Self::input_method(profiles,GetKeyboardLayout(thread))?,"Input method provenance unavailable");
             let mut gui=GUITHREADINFO{cbSize:std::mem::size_of::<GUITHREADINFO>() as u32,..Default::default()};GetGUIThreadInfo(thread,&mut gui)?;
             let context=ImmGetContext(gui.hwndFocus);if !context.0.is_null(){let composing=ImmGetCompositionStringW(context,GCS_COMPSTR,None,0)>0;let _=ImmReleaseContext(gui.hwndFocus,context);ensure!(!composing,"Uncommitted composition");}
             let field=automation.GetFocusedElement()?;ensure!(field.CurrentHasKeyboardFocus()?.as_bool()&&field.CurrentIsEnabled()?.as_bool()&&!field.CurrentIsPassword()?.as_bool(),"Protected field");
@@ -161,11 +169,11 @@ impl ObservationAdapter {
             let path=String::from_utf16(&buffer[..length as usize])?;let app=std::path::Path::new(&path).file_name().context("Unknown application")?.to_string_lossy().to_string();ensure!(typerelay_client::observation::Settings::supported_app(&app),"Terminal application");Ok((field,app,pid))
         }
     }
-    fn native_context(automation:&windows::Win32::UI::Accessibility::IUIAutomation)->Result<typerelay_client::observation::CaptureContext>{
+    fn native_context(automation:&windows::Win32::UI::Accessibility::IUIAutomation,profiles:&windows::Win32::UI::TextServices::ITfInputProcessorProfileMgr)->Result<typerelay_client::observation::CaptureContext>{
         use typerelay_client::observation::{CaptureContext,CaptureSource,Protection};use windows::Win32::System::Threading::{QueryFullProcessImageNameW,PROCESS_NAME_WIN32};
         unsafe{let window=GetForegroundWindow();let mut pid=0;let thread=GetWindowThreadProcessId(window,Some(&mut pid));ensure!(!window.0.is_null()&&pid!=0&&pid!=std::process::id(),"Learning paused in Typerelay or an unidentified window");let handle=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,false,pid)?;let owned=OwnedHandle::from_raw_handle(handle.0);let mut buffer=[0u16;2048];let mut length=buffer.len() as u32;let result=QueryFullProcessImageNameW(handle,PROCESS_NAME_WIN32,windows::core::PWSTR(buffer.as_mut_ptr()),&mut length);drop(owned);result?;let path=String::from_utf16(&buffer[..length as usize])?;let app=std::path::Path::new(&path).file_name().context("Unknown app")?.to_string_lossy().into_owned();ensure!(typerelay_client::observation::Settings::supported_app(&app),"Learning paused in this application");
             let mut protection=Protection::Unknown;if let Ok(field)=automation.GetFocusedElement()&&field.CurrentProcessId().ok()==Some(pid as i32){if field.CurrentIsPassword().is_ok_and(|v|v.as_bool()){protection=Protection::Protected;}else if field.CurrentHasKeyboardFocus().is_ok_and(|v|v.as_bool()){protection=Protection::Unprotected;}}
-            let layout=GetKeyboardLayout(thread);let ime=windows::Win32::UI::Input::Ime::ImmIsIME(layout).as_bool();Ok(CaptureContext{app,window:format!("{pid}:{}",window.0 as usize),protection,active:true,layout:format!("{}",layout.0 as usize),ime:ime.then_some("Windows IME".into()),authority:if ime{CaptureSource::Ime}else{CaptureSource::Keyboard},..Default::default()})
+            let layout=GetKeyboardLayout(thread);let ime=Self::input_method(profiles,layout)?;Ok(CaptureContext{app,window:format!("{pid}:{}",window.0 as usize),protection,active:true,layout:format!("{}",layout.0 as usize),ime:ime.then_some("Windows IME".into()),authority:if ime{CaptureSource::Ime}else{CaptureSource::Keyboard},..Default::default()})
         }
     }
     pub fn start(state:Arc<crate::observation::Observation>) {
@@ -173,26 +181,27 @@ impl ObservationAdapter {
         use std::sync::atomic::Ordering;use typerelay_client::observation::Event;
         let(sender,receiver)=sync_channel::<ObservationKey>(128);let capture=state.clone();let running=Arc::new(std::sync::atomic::AtomicBool::new(false));let monitored=running.clone();
         std::thread::spawn(move||unsafe{
-            let result=(||->Result<()>{CoInitializeEx(None,COINIT_MULTITHREADED).ok()?;let automation:IUIAutomation=CoCreateInstance(&CUIAutomation,None,CLSCTX_INPROC_SERVER)?;let mut previous=None;let mut generation=0u64;let mut epoch=0;let mut native_previous=None::<typerelay_client::observation::CaptureContext>;let mut native_sequence=0u64;
+            let result=(||->Result<()>{CoInitializeEx(None,COINIT_MULTITHREADED).ok()?;let automation:IUIAutomation=CoCreateInstance(&CUIAutomation,None,CLSCTX_INPROC_SERVER)?;let profiles:windows::Win32::UI::TextServices::ITfInputProcessorProfileMgr=CoCreateInstance(&windows::Win32::UI::TextServices::CLSID_TF_InputProcessorProfiles,None,CLSCTX_INPROC_SERVER)?;let mut previous=None;let mut generation=0u64;let mut epoch=0;let mut native_previous=None::<typerelay_client::observation::CaptureContext>;let mut native_sequence=0u64;let mut counters=typerelay_client::observation::CaptureCounters::default();
                 loop {let raw=receiver.recv_timeout(Duration::from_millis(30)).ok();if !state.enabled.load(Ordering::SeqCst){previous=None;continue;}
-                    if !monitored.load(Ordering::SeqCst){previous=None;state.safety(false);state.status("Unavailable: Windows input monitoring could not start");continue;}
+                    if !monitored.load(Ordering::SeqCst){previous=None;state.safety(false);state.native_health(typerelay_client::observation::CaptureHealth{device:"Windows keyboard hook".into(),desktop:"windows".into(),blocked:Some("Windows keyboard hook unavailable; restart Typerelay".into()),at_ms:crate::observation::Observation::now(),..Default::default()});state.status("Unavailable: Windows input monitoring could not start");continue;}
                     let next_epoch=state.epoch.load(Ordering::SeqCst);if next_epoch!=epoch{previous=None;epoch=next_epoch;}
                     if state.native(){
                         use typerelay_client::observation::{CaptureHealth,CaptureSource,Edit,Protection};
-                        match Self::native_context(&automation){Ok(mut context)=>{
-                            let changed=native_previous.as_ref().is_none_or(|old|old.app!=context.app||old.window!=context.window||old.layout!=context.layout);if changed{if let Some(old)=&native_previous{native_sequence+=1;state.native_event(old.clone(),CaptureSource::Keyboard,native_sequence,if old.layout==context.layout{Edit::Boundary}else{Edit::Reset},crate::observation::Observation::now());}generation+=1;}context.generation=generation;
-                            state.native_health(CaptureHealth{desktop:"windows".into(),layout:context.layout.clone(),app:Some(context.app.clone()),ime:context.ime.clone(),source:"keyboard".into(),blocked:if context.protection==Protection::Protected{Some("Learning paused in a protected field".into())}else if context.ime.is_some(){Some("IME active: verified composition integration required".into())}else{None},at_ms:crate::observation::Observation::now(),..Default::default()});
+                        let started=std::time::Instant::now();let context=Self::native_context(&automation,&profiles);counters.max_context_ms=counters.max_context_ms.max(started.elapsed().as_millis() as u64);if let Some(raw)=&raw{counters.keys+=1;if crate::observation::Observation::now()-raw.at>=250{counters.stale+=1;}if matches!(raw.edit,Edit::Reset){counters.translated_resets+=1;}}
+                        match context{Ok(mut context)=>{
+                            let changed=native_previous.as_ref().is_none_or(|old|old.app!=context.app||old.window!=context.window||old.layout!=context.layout);if changed{counters.generations+=1;if let Some(old)=&native_previous{native_sequence+=1;state.native_event(old.clone(),CaptureSource::Keyboard,native_sequence,if old.layout==context.layout{Edit::Boundary}else{Edit::Reset},crate::observation::Observation::now());}generation+=1;}context.generation=generation;
+                            state.native_health(CaptureHealth{device:"Windows keyboard hook".into(),desktop:"windows".into(),layout:context.layout.clone(),app:Some(context.app.clone()),ime:context.ime.clone(),source:"keyboard".into(),counters:counters.clone(),blocked:if context.protection==Protection::Protected{Some("Learning paused in a protected field".into())}else if context.ime.is_some(){Some("IME active: verified composition integration required".into())}else{None},at_ms:crate::observation::Observation::now(),..Default::default()});
                             if let Some(raw)=raw&&raw.epoch==epoch&&crate::observation::Observation::now()-raw.at<250{let mut pid=0;GetWindowThreadProcessId(GetForegroundWindow(),Some(&mut pid));if raw.pid==pid{native_sequence+=1;state.native_event(context.clone(),CaptureSource::Keyboard,native_sequence,raw.edit,raw.at);}}
                             native_previous=Some(context);
-                        },Err(error)=>{if let Some(old)=native_previous.take(){native_sequence+=1;state.native_event(old,CaptureSource::Keyboard,native_sequence,Edit::Reset,crate::observation::Observation::now());}state.native_health(CaptureHealth{desktop:"windows".into(),blocked:Some(error.to_string()),at_ms:crate::observation::Observation::now(),..Default::default()});}}
+                        },Err(error)=>{counters.context_errors+=1;if let Some(old)=native_previous.take(){native_sequence+=1;state.native_event(old,CaptureSource::Keyboard,native_sequence,Edit::Reset,crate::observation::Observation::now());}state.native_health(CaptureHealth{device:"Windows keyboard hook".into(),desktop:"windows".into(),counters:counters.clone(),blocked:Some(error.to_string()),at_ms:crate::observation::Observation::now(),..Default::default()});}}
                         continue;
                     }
-                    let current=Self::field(&automation).ok();state.safety(current.is_some());let same=previous.as_ref().zip(current.as_ref()).is_some_and(|(old,new):(&(windows::Win32::UI::Accessibility::IUIAutomationElement,String,u32),&_)|automation.CompareElements(&old.0,&new.0).is_ok_and(|value|value.as_bool())&&old.2==new.2);
+                    let current=Self::field(&automation,&profiles).ok();state.safety(current.is_some());let same=previous.as_ref().zip(current.as_ref()).is_some_and(|(old,new):(&(windows::Win32::UI::Accessibility::IUIAutomationElement,String,u32),&_)|automation.CompareElements(&old.0,&new.0).is_ok_and(|value|value.as_bool())&&old.2==new.2);
                     if !same{generation+=1;state.reset();}
                     if let Some(raw)=raw&&same&&raw.epoch==epoch&&crate::observation::Observation::now()-raw.at<250 {let (_,app,pid)=current.as_ref().unwrap();if raw.pid==*pid{state.feed(Event{epoch,field:format!("{pid}:{generation}"),app:app.clone(),safe:true,direct:true,edit:raw.edit});}else{state.reset();}}
                     state.status(if current.is_some(){"Active"}else{"Waiting for a supported editable field"});previous=current;
                 }
-            })();if result.is_err(){state.status("Unavailable: Windows accessibility could not start");state.reset();}CoUninitialize();
+            })();if let Err(error)=result{state.native_health(typerelay_client::observation::CaptureHealth{device:"Windows keyboard hook".into(),desktop:"windows".into(),blocked:Some(format!("Windows capture initialization failed: {error}")),at_ms:crate::observation::Observation::now(),..Default::default()});state.status("Unavailable: Windows accessibility could not start");state.reset();}CoUninitialize();
         });
         std::thread::spawn(move||{
             Self::sender().with(|cell|cell.replace(Some((capture.clone(),sender))));
@@ -201,4 +210,16 @@ impl ObservationAdapter {
             if result.is_err(){capture.status("Unavailable: Windows input monitoring could not start");capture.reset();}
         });
     }
+}
+
+#[cfg(test)]
+mod observation_tests {
+    use super::ObservationAdapter;
+    use windows::Win32::UI::{Input::KeyboardAndMouse::HKL,TextServices::{TF_INPUTPROCESSORPROFILE,TF_PROFILETYPE_INPUTPROCESSOR,TF_PROFILETYPE_KEYBOARDLAYOUT}};
+    #[test]
+    fn ordinary_keyboard_profile_is_not_an_ime(){let layout=HKL(0x04090409usize as *mut _);let profile=TF_INPUTPROCESSORPROFILE{dwProfileType:TF_PROFILETYPE_KEYBOARDLAYOUT,hkl:layout,..Default::default()};assert!(!ObservationAdapter::profile_is_ime(&profile,layout).unwrap());}
+    #[test]
+    fn text_service_stays_blocked_even_with_a_keyboard_substitute(){let layout=HKL(0x04090409usize as *mut _);let profile=TF_INPUTPROCESSORPROFILE{dwProfileType:TF_PROFILETYPE_INPUTPROCESSOR,hklSubstitute:layout,..Default::default()};assert!(ObservationAdapter::profile_is_ime(&profile,layout).unwrap());}
+    #[test]
+    fn absent_or_mismatched_profile_cannot_authorize_capture(){let layout=HKL(0x04090409usize as *mut _);assert!(ObservationAdapter::profile_is_ime(&TF_INPUTPROCESSORPROFILE::default(),layout).is_err());let profile=TF_INPUTPROCESSORPROFILE{dwProfileType:TF_PROFILETYPE_KEYBOARDLAYOUT,hkl:HKL(0x04070407usize as *mut _),..Default::default()};assert!(ObservationAdapter::profile_is_ime(&profile,layout).is_err());}
 }
