@@ -98,7 +98,7 @@ test('native setup preserves rows and does not request per-editor accessibility'
 		const value={epoch:1,platform:'linux',enabled:true,native_capture:true,notifications_enabled:true,vscode:'off',status:'Native capture ready',capture:{device:'Selected keyboard',desktop:'hyprland',layout:'English (US)',source:'keyboard'}};
 		f.ui.setup(value);const row=document.querySelector('[data-id="capture-source"]');f.ui.setup({...value,capture:{...value.capture,blocked:'IME commit integration required'}});
 		assert.equal(document.querySelector('[data-id="capture-source"]'),row);assert.match(row.textContent,/IME commit integration required/);assert.equal(document.querySelector('[data-id="vscode"]'),null);assert.equal(f.ui.list.firstElementChild,card);assert.equal(f.calls.length,0);
-		const checkbox=document.querySelector('#observation-native');f.dom.window.Swal.fire=async()=>({isConfirmed:false});checkbox.checked=true;await checkbox.onchange({target:checkbox});assert.equal(checkbox.checked,false);
+		const checkbox=document.querySelector('#observation-native');let confirmations=0;f.dom.window.Swal.fire=async()=>{confirmations++;return {isConfirmed:false};};checkbox.checked=false;checkbox.click();assert.equal(checkbox.checked,true);assert.equal(confirmations,0);assert.equal(f.calls.length,0);
 	}finally{f.dom.window.close();}
 });
 

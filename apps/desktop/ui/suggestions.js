@@ -9,7 +9,6 @@ export class Suggestions {
 		document.querySelector('#suggestions-review').onclick=event=>this.run(event.currentTarget,()=>this.open());
 		this.form.onsubmit=event=>{event.preventDefault();void this.run(document.querySelector('#observation-save'),()=>this.configure());};
 		document.querySelector('#observation-enabled').onchange=()=>{if(!document.querySelector('#observation-enabled').checked&&this.settings?.enabled)void this.run(document.querySelector('#observation-enabled'),()=>this.configure({...this.settings,enabled:false}));};
-		document.querySelector('#observation-native').onchange=async event=>{if(event.target.checked&&!this.settings?.native_capture){const result=await Swal.fire({title:'Capture typing across apps?',text:'Known protected fields are skipped, but passwords in unidentified fields may be learned. Text stays on this device. You can exclude individual apps below.',showCancelButton:true,confirmButtonText:'Enable',reverseButtons:true});if(!result.isConfirmed)event.target.checked=false;}};
 		document.querySelector('#observation-forget').onclick=event=>this.run(event.currentTarget,()=>this.forget());
 		document.querySelector('#suggestion-editor').onsubmit=event=>{event.preventDefault();void this.run(document.querySelector('#suggestion-save'),()=>this.save());};
 		document.querySelector('#suggestion-cancel').onclick=()=>this.cancel();
