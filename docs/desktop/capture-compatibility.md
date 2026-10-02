@@ -6,7 +6,7 @@ This is an opt-in development build, not a declaration of cross-platform or IME 
 
 | Combination | Evidence | Acceptance |
 | --- | --- | --- |
-| Linux, Hyprland/Omarchy, selected physical keyboard, US layout | Native worker/panel release builds; live focus/session/layout metadata probe; replay, XKB and IPC tests | Physical typing in Zed, Obsidian and VS Code pending user test |
+| Linux, Hyprland/Omarchy, selected physical keyboard, US layout | Native worker/panel release builds; live focus/session/layout metadata probe; replay, XKB and IPC tests | User confirmed Zed and Obsidian work on 2026-10-02; VS Code acceptance for this build remains pending |
 | German AltGr and US international dead keys | libxkbcommon deterministic tests | Physical layouts pending |
 | Sway, X11, GNOME, KDE Plasma | Context adapters compile; GNOME/KWin helper sources included | Untested; no compatibility claim |
 | macOS | Native-context implementation started | Build and device acceptance pending |
@@ -15,6 +15,8 @@ This is an opt-in development build, not a declaration of cross-platform or IME 
 | Required app bridges | Official Zed extension API reviewed; no passive text-edit/commit hook found | Required IME coverage remains a release blocker where OS commit delivery is unavailable |
 
 Source for the Zed API limitation: <https://github.com/zed-industries/zed/blob/main/crates/extension_api/src/extension_api.rs>. Ordinary keyboard capture does not require a bridge.
+
+User confirmation covers the reported Zed/Obsidian result on this machine; specific email/URL, notification timing, review-flow and sustained-use checks were not individually reported. Windows and macOS testing is deferred by the user.
 
 ## Local test procedure
 
