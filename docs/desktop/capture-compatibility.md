@@ -18,6 +18,12 @@ Source for the Zed API limitation: <https://github.com/zed-industries/zed/blob/m
 
 User confirmation covers the reported Zed/Obsidian result on this machine; specific email/URL, notification timing, review-flow and sustained-use checks were not individually reported. Windows and macOS testing is deferred by the user.
 
+## Open live-capture regression
+
+The user's two different paragraphs/signatures containing “I wish you all the best.” pass deterministic passage and physical-US-key replay tests, but the initial live run retained only one closing. The first diagnostic retry reported shortcut resets with zero expired input, transport errors or context errors. Additional metadata-only counters now distinguish editing/navigation shortcuts, active modifier state and repaired key releases.
+
+The selected-device owner's repaired releases and releases consumed while waiting for expansion now also reach the observation translator. Previously only the forwarding side received those releases. This mismatch is fixed and unit-tested; it is not yet proven to be the cause of the reported missed closing. End-to-end acceptance of that live example remains pending. Do not treat replay success as proof that the real failure is resolved.
+
 ## Repeated-passage engine
 
 The detector now retains a 4,096-character editable window across pauses and Enter. It mines Unicode word-boundary passages of 12 non-whitespace characters to 1,000 characters, including multiple sentences. Email addresses and URLs are atomic. Matching normalizes Unicode NFC and whitespace; words, case and punctuation are not fuzzily matched.

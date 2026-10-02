@@ -204,3 +204,10 @@ mod dismissal_tests {
     #[test]
     fn migrated_dismissal_is_respected_by_incremental_changes(){let root=tempfile::tempdir().unwrap();let store=Store::open(root.path()).unwrap();let settings=Settings{enabled:true,threshold:2,..Default::default()};let write=|id:&str|{let mut work=store.begin_passage(PassageRevision{id:id.into(),revision:1,base:0,changed_from:0,text:"A complete recurring closing.".into(),at_ms:100000}).unwrap();loop{if let PassageProgress::Complete(changes)=store.advance_passage(&mut work,&settings,100).unwrap(){break changes;}}};write("first");write("second");let row=store.list(100,&settings).unwrap().remove(0);store.action(&row.id,row.revision,"dismiss",100).unwrap();assert!(write("third").iter().all(|change|change.candidate.is_none()));assert!(store.list(100,&settings).unwrap().is_empty());}
 }
+
+#[cfg(test)]
+mod reported_sample_tests {
+    use super::*;
+    #[test]
+    fn repeated_well_wishes_with_different_paragraphs_and_signatures(){let root=tempfile::tempdir().unwrap();let store=Store::open(root.path()).unwrap();let settings=Settings{enabled:true,native_capture:true,threshold:2,..Default::default()};let text="This is a long pragraph.\nI wish you all the best.\nNitai\n\nThis is an even longer paragraph.\nI wish you all the best.\nDenise\n\nThis is something else.\n";let mut detector=Detector::default();let mut time=100000;for c in text.chars(){time+=60;detector.event(Event{epoch:1,field:"editor".into(),app:"obsidian".into(),safe:true,direct:true,edit:if c=='\n'{Edit::Enter}else{Edit::Text(c.into())}},&settings,1,time);for revision in detector.take_passages(){let mut work=store.begin_passage(revision).unwrap();while matches!(store.advance_passage(&mut work,&settings,time/1000).unwrap(),PassageProgress::Pending){}}}detector.idle(time+6000);for revision in detector.take_passages(){let mut work=store.begin_passage(revision).unwrap();while matches!(store.advance_passage(&mut work,&settings,time/1000+6).unwrap(),PassageProgress::Pending){}}let rows=store.list(time/1000+6,&settings).unwrap();assert!(rows.iter().any(|row|row.text=="I wish you all the best."&&row.count==2));}
+}

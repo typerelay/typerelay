@@ -156,24 +156,24 @@ impl Session {
         }
     }
 
-    fn release_stale_keys(output: &mut VirtualDevice, pressed: &mut BTreeSet<u16>, keys_down: &BTreeSet<u16>) -> Result<()> {
+    fn release_stale_keys(pressed: &mut BTreeSet<u16>, keys_down: &BTreeSet<u16>,mut emit:impl FnMut(&[InputEvent])->Result<()>,mut observe:impl FnMut(u16)) -> Result<()> {
         let stale: Vec<_> = pressed.iter().filter(|key| !keys_down.contains(key)).copied().collect();
-        for code in stale { output.emit(&[InputEvent::new(EventType::KEY.0, code, 0)])?; pressed.remove(&code); }
+        for code in stale { observe(code);emit(&[InputEvent::new(EventType::KEY.0, code, 0)])?; pressed.remove(&code); }
         Ok(())
     }
 
-    fn wait_for_forwarded_keys(keyboard: &mut Device, output: &mut VirtualDevice, buffered: &mut VecDeque<InputEvent>, pressed: &mut BTreeSet<u16>, deadline: Instant) -> Result<bool> {
+    fn wait_for_forwarded_keys(keyboard: &mut Device, output: &mut VirtualDevice, buffered: &mut VecDeque<InputEvent>, pressed: &mut BTreeSet<u16>, deadline: Instant,capture:&typerelay_client::capture_linux::CapturePublisher) -> Result<bool> {
         loop {
             let mut pending = VecDeque::new();
             while let Some(event) = buffered.pop_front() {
                 if event.event_type() == EventType::KEY && pressed.contains(&event.code()) {
-                    if event.value() == 0 { pressed.remove(&event.code()); }
+                    if event.value() == 0 { pressed.remove(&event.code());capture.key(&event); }
                     output.emit(&[event])?;
                 } else if event.event_type() == EventType::KEY { pending.push_back(event); }
             }
             *buffered = pending;
             let keys_down: BTreeSet<_> = keyboard.get_key_state()?.iter().map(|key|key.0).collect();
-            Self::release_stale_keys(output, pressed, &keys_down)?;
+            Self::release_stale_keys(pressed,&keys_down,|events|output.emit(events).map_err(Into::into),|code|capture.repair_release(code))?;
             if pressed.is_empty() { return Ok(true); }
             if Instant::now() >= deadline { return Ok(false); }
             match keyboard.fetch_events() {
@@ -423,7 +423,7 @@ impl Session {
             if buffered.len() > 8192 { bail!("Input backlog exceeded safety limit; stopping"); }
             let keys_down: BTreeSet<_> = keyboard.get_key_state()?.iter().map(|key|key.0).collect();
             if buffered.is_empty() {
-                Self::release_stale_keys(&mut output, &mut pressed, &keys_down)?;
+                Self::release_stale_keys(&mut pressed,&keys_down,|events|output.emit(events).map_err(Into::into),|code|capture.repair_release(code))?;
                 if suppressed_space && !keys_down.contains(&KeyCode::KEY_SPACE.0) { suppressed_space = false; }
                 if suppressed_key.is_some_and(|key|!keys_down.contains(&key)) { suppressed_key = None; }
             }
@@ -525,7 +525,7 @@ impl Session {
                         && Self::target()? == target && !context.changed(target.as_deref())? {
                             capture.reset();let destination = target.clone().unwrap();
                             pressed.remove(&code.0);
-                            if !Self::wait_for_forwarded_keys(&mut keyboard, &mut output, &mut buffered, &mut pressed, Instant::now() + Duration::from_secs(3))? || Self::target()? != Some(destination.clone()) || context.changed(Some(&destination))? {
+                            if !Self::wait_for_forwarded_keys(&mut keyboard, &mut output, &mut buffered, &mut pressed, Instant::now() + Duration::from_secs(3),&capture)? || Self::target()? != Some(destination.clone()) || context.changed(Some(&destination))? {
                                 output.emit(&[event])?;
                                 pressed.insert(code.0);
                                 target = None;
@@ -570,6 +570,8 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn repaired_physical_releases_reach_both_forwarding_and_observation(){let mut pressed=BTreeSet::from([KeyCode::KEY_LEFTCTRL.0]);let mut output=vec![];let mut observed=vec![];Session::release_stale_keys(&mut pressed,&BTreeSet::new(),|events|{output.extend_from_slice(events);Ok(())},|code|observed.push(code)).unwrap();assert!(pressed.is_empty());assert_eq!(output,vec![InputEvent::new(EventType::KEY.0,KeyCode::KEY_LEFTCTRL.0,0)]);assert_eq!(observed,vec![KeyCode::KEY_LEFTCTRL.0]);Session::release_stale_keys(&mut pressed,&BTreeSet::new(),|_|panic!("duplicate release"),|_|panic!("duplicate observation repair")).unwrap();}
     #[test]
     fn input_reconnect_releases_resources_and_reselects_saved_keyboard() {
         let directory = tempfile::tempdir().unwrap();let path = directory.path().join("keyboard.lock");fs::write(&path, b"").unwrap();

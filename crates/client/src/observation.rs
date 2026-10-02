@@ -42,7 +42,10 @@ pub struct CaptureContext { pub generation:u64, pub app:String, pub window:Strin
 pub struct CaptureFrame { pub version:u32, pub session:String, pub source_id:String, pub sequence:u64, pub at_ms:i64, pub context:CaptureContext, pub source:CaptureSource, pub edit:Edit }
 #[derive(Clone,Default,Serialize,Deserialize)]
 #[serde(default,deny_unknown_fields)]
-pub struct CaptureHealth { pub device:String,pub desktop:String,pub layout:String,pub ime:Option<String>,pub app:Option<String>,pub source:String,pub blocked:Option<String>,pub at_ms:i64 }
+pub struct CaptureCounters {pub keys:u64,pub stale:u64,pub generations:u64,pub pointers:u64,pub translated_resets:u64,pub context_errors:u64,pub transport_errors:u64,pub max_context_ms:u64,pub last_reset:String,pub reset_reasons:std::collections::BTreeMap<String,u64>,pub active_shortcut_modifiers:u8,pub release_repairs:u64}
+#[derive(Clone,Default,Serialize,Deserialize)]
+#[serde(default,deny_unknown_fields)]
+pub struct CaptureHealth { pub device:String,pub desktop:String,pub layout:String,pub ime:Option<String>,pub app:Option<String>,pub source:String,pub blocked:Option<String>,pub at_ms:i64,pub counters:CaptureCounters }
 impl CaptureFrame {
     pub const VERSION:u32=1;
     pub fn valid(&self)->bool {self.version==Self::VERSION&&self.session.len()<=128&&!self.session.is_empty()&&!self.source_id.is_empty()&&self.source_id.len()<=128&&self.sequence>0&&self.context.app.len()<=512&&self.context.window.len()<=256&&self.context.field.as_ref().is_none_or(|field|field.len()<=256)&&self.context.layout.len()<=256&&self.context.ime.as_ref().is_none_or(|ime|ime.len()<=256)&&match &self.edit{Edit::Text(text)=>text.chars().count()<=16,Edit::Commit(text)=>text.chars().count()<=1000,Edit::Replace{start,end,text}=>*start>=0&&start<=end&&end-start<=4096&&text.chars().count()<=4096,_=>true}}
