@@ -117,7 +117,7 @@ impl App {
         let mut changed=false;
         if self.writing.as_ref().is_some_and(|(_,base,_,_)|self.screen!=Screen::Edit||*base!=self.draft()){self.cancel_writing();changed=true;}
         let written=self.writing.as_ref().and_then(|(_,_,_,receiver)|receiver.try_recv().ok());
-        if let Some(result)=written {let(_,base,_,_)=self.writing.take().unwrap();match result.and_then(|proposal|{typerelay_client::native_ai::NativeAi::validate_proposal(&base,&proposal)?;Ok(proposal)}){Ok(proposal)=>{self.writing_undo.push((self.expansion.clone(),proposal.replace.clone()));self.expansion=Self::text(&proposal.replace);self.rich_preview=false;self.message("Text updated · Undo reverts · Ctrl+S saves",false);},Err(error)=>self.message(error.to_string(),true)}changed=true;}
+        if let Some(result)=written {let(_,base,_,_)=self.writing.take().unwrap();match result.and_then(|proposal|{typerelay_client::native_ai::NativeAi::validate_proposal(&base,&proposal)?;Ok(proposal)}){Ok(proposal) if proposal.replace==base.replace=>self.message("No changes suggested.",false),Ok(proposal)=>{self.writing_undo.push((self.expansion.clone(),proposal.replace.clone()));self.expansion=Self::text(&proposal.replace);self.rich_preview=false;self.message("Text updated · Undo reverts · Ctrl+S saves",false);},Err(error)=>self.message(format!("Writing failed: {error}"),true)}changed=true;}
         if let Some(dialog)=&mut self.ai_dialog{return dialog.tick()||changed;}
         if !matches!(self.screen,Screen::Files|Screen::Browse){self.search_done=true;self.search_query.clear();return changed;}
         let query=if self.screen==Screen::Browse{Self::value(&self.search)}else{Self::value(&self.global_search)};
@@ -833,7 +833,7 @@ impl App {
             }
 			Screen::Image=>{let parts=Layout::vertical([Constraint::Length(3),Constraint::Length(3),Constraint::Length(3),Constraint::Length(3),Constraint::Min(2),Constraint::Length(3)]).split(body);self.image_source.set_block(Self::border("Local path or HTTP/HTTPS URL",self.image_focus==0));self.image_alt.set_block(Self::border("Alt text",self.image_focus==1));self.image_title.set_block(Self::border("Title",self.image_focus==2));self.image_width.set_block(Self::border("Display width (32–2048)",self.image_focus==3));frame.render_widget(&self.image_source,parts[0]);frame.render_widget(&self.image_alt,parts[1]);frame.render_widget(&self.image_title,parts[2]);frame.render_widget(&self.image_width,parts[3]);frame.render_widget(Paragraph::new("PNG, JPEG, WebP, and GIF · 5 MiB input · remote images are cached for offline insertion"),parts[4]);self.field_areas.extend([parts[0],parts[1],parts[2],parts[3]]);self.form_buttons(frame,parts[5]);}
             Screen::Edit => {
-                let parts = Layout::vertical([Constraint::Length(3), Constraint::Length(3), Constraint::Min(3), Constraint::Length(0), Constraint::Length(2), Constraint::Length(3)]).split(body);
+                let parts = Layout::vertical([Constraint::Length(3), Constraint::Length(3), Constraint::Min(3), Constraint::Length(2), Constraint::Length(2), Constraint::Length(3)]).split(body);
                 let metadata = Layout::horizontal([Constraint::Percentage(80), Constraint::Percentage(20)]).split(parts[0]);
                 let title_area = metadata[0];
                 frame.render_widget(Paragraph::new(if self.rich{"Rich · F9"}else if self.code { "Code · F9 toggles" } else { "Text · F9 toggles" }).style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)).block(Self::border("Type", false)), metadata[1]);
@@ -845,6 +845,7 @@ impl App {
                 frame.render_widget(&self.title, title_area);
 				frame.render_widget(&self.trigger, trigger_row[2]);if self.rich&&self.rich_preview{if let Some(image)=&self.rich_image{let preview=Layout::horizontal([Constraint::Percentage(65),Constraint::Percentage(35)]).split(parts[2]);frame.render_widget(Paragraph::new(tui_markdown::from_str(&Self::value(&self.expansion))).wrap(Wrap{trim:false}).block(Self::border("Rich preview · F12 source",false)),preview[0]);frame.render_widget(ratatui_image::Image::new(image),preview[1]);}else{frame.render_widget(Paragraph::new(tui_markdown::from_str(&Self::value(&self.expansion))).wrap(Wrap{trim:false}).block(Self::border("Rich preview · F12 source",false)),parts[2]);}}else{frame.render_widget(&self.expansion, parts[2]);}
                 self.field_areas.extend([trigger_row[2], parts[2], title_area]);
+                frame.render_widget(Paragraph::new(self.status.as_str()).wrap(Wrap{trim:false}).style(Style::default().fg(if self.error{Color::Red}else{Color::Gray})),parts[3]);
                 let destination = self.move_destination.as_ref().and_then(|id| self.move_choices.iter().find(|library|library["_id"] == *id)).and_then(|library|library["name"].as_str()).unwrap_or("Current library");
                 frame.render_widget(Paragraph::new(format!("Library: {destination} · F8 destination · F9 Type · F11 Variables · F12 Preview\n{}",if !self.writing_available(){"Enable AI and choose a downloaded model in Settings"}else if Self::value(&self.expansion).trim().is_empty(){"Write a request or some text first"}else{"Create from your request · Rewrite your text · Undo · Ctrl+S saves"})), parts[4]);
                 self.form_buttons(frame, parts[5]);
@@ -906,6 +907,14 @@ mod tests {
     #[test]
     fn writing_replaces_in_place_and_undo_restores_editor_history() {
         let temp=tempfile::tempdir().unwrap();let mut app=Fixture::app(temp.path());app.screen=Screen::Edit;app.expansion=App::text("Write a greeting");app.title=App::text("Title");app.trigger=App::text("greeting");let original=app.draft();let mut proposal=original.clone();proposal.replace="Hello there!".into();let(sender,receiver)=std::sync::mpsc::channel();app.writing=Some(("test".into(),original.clone(),"create".into(),receiver));sender.send(Ok(proposal)).unwrap();app.ai_tick();assert_eq!(App::value(&app.expansion),"Hello there!");assert_eq!(app.draft().title,original.title);assert_eq!(app.draft().trigger,original.trigger);assert_eq!(app.screen,Screen::Edit);app.write_action(2).unwrap();assert_eq!(app.draft(),original);
+    }
+    #[test]
+    fn unchanged_writing_preserves_cursor_and_history() {
+        let temp=tempfile::tempdir().unwrap();let mut app=Fixture::app(temp.path());app.screen=Screen::Edit;app.expansion=App::text("Hello");app.expansion.move_cursor(ratatui_textarea::CursorMove::End);app.expansion.insert_str("!");let cursor=app.expansion.cursor();let original=app.draft();let(sender,receiver)=std::sync::mpsc::channel();app.writing=Some(("unchanged".into(),original.clone(),"rewrite".into(),receiver));sender.send(Ok(original.clone())).unwrap();app.ai_tick();assert_eq!(app.status,"No changes suggested.");assert_eq!(app.draft(),original);assert_eq!(app.expansion.cursor(),cursor);assert!(app.writing_undo.is_empty());assert!(!app.error);app.expansion.undo();assert_eq!(App::value(&app.expansion),"Hello");
+    }
+    #[test]
+    fn invalid_writing_keeps_original_and_reports_failure() {
+        let temp=tempfile::tempdir().unwrap();let mut app=Fixture::app(temp.path());app.screen=Screen::Edit;app.expansion=App::text("Hello {{name}}");let original=app.draft();let(sender,receiver)=std::sync::mpsc::channel();app.writing=Some(("invalid".into(),original.clone(),"rewrite".into(),receiver));sender.send(Ok(Match{replace:"Hello {{other}}".into(),..original.clone()})).unwrap();app.ai_tick();assert!(app.error);assert!(app.status.contains("template variables"));assert_eq!(app.draft(),original);assert!(app.writing_undo.is_empty());
     }
     #[test]
     fn failed_and_stale_writing_preserves_current_text() {

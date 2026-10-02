@@ -12,6 +12,7 @@ Search uses a local SQLite full-text index, independently of AI. It matches word
 
 - In Settings, **Ctrl+G** opens model management. Arrow keys select a model; **d** downloads/resumes after confirmation, **e** enables an installed model, **x** disables AI, **r** removes it, and **c** cancels a download.
 - In the editor, type a request in the body and click **Create** (or press **Ctrl+G**). Click **Rewrite** to improve existing text. Both replace the text directly in the same editor; Tab and Enter also reach these buttons.
+- Identical output shows **No changes suggested.** without changing the editor or undo history. Model and validation failures appear inside the editor.
 - **Undo** or **Ctrl+Z** restores the previous text. **Esc** cancels generation without leaving the editor. Editing, saving or leaving cancels pending work; failures preserve your text. **Ctrl+S** saves normally. Existing template tokens, Enter actions, image references, metadata and content type remain unchanged.
 - Global and per-library searches use the same combined search flow. Per-library search stays within the selected library. Search is unaffected by the AI setting.
 
@@ -36,3 +37,5 @@ Before public release, benchmark retrieval and drafting on representative Window
 See [AI third-party notices](ai-notices.txt) for runtime and model licenses.
 
 Local search performance can be checked with `cargo run --release -p typerelay-client --example search_benchmark`. This builds an isolated 10,000-snippet fixture. Passing a SQLite path benchmarks a temporary backup, leaving the original database unchanged. The reported p95 includes search and result metadata.
+
+To verify writing against an already enabled local model, run `cargo run --release -p typerelay-client --example writing_smoke -- /path/to/config`. This checks the cancellation-message request, rough and polished drafts, and a protected template variable without saving snippets.

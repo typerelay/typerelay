@@ -14,7 +14,7 @@ pub struct Settings { pub model: Option<String>, pub enabled: Option<bool> }
 pub struct Endpoint { pub address: SocketAddr, pub token: String }
 pub struct NativeAi;
 impl NativeAi {
-    pub fn prompt(kind: &str, input: Value) -> String { let instructions: Value = serde_json::from_str(include_str!("ai-prompts.json")).expect("AI instructions"); format!("{}\nInput: {}", instructions[kind].as_str().unwrap_or(""), input) }
+    pub fn prompt(kind: &str, input: Value) -> String { let instructions: Value = serde_json::from_str(include_str!("ai-prompts.json")).expect("AI instructions"); let text=input["snippet"].as_str().unwrap_or("");let content_type=input["content_type"].as_str().unwrap_or("plain_text");let constraints=if content_type!="plain_text"||text.contains("{{"){format!("\n{}\nContent type: {}",instructions["preserve"].as_str().unwrap(),content_type)}else{String::new()};format!("{}{}\n{}: {}", instructions[kind].as_str().expect("Writing action"), constraints, if kind=="create"{"Request"}else{"Message"},text) }
     pub fn catalog() -> Vec<Model> { serde_json::from_str(include_str!("ai-models.json")).expect("pinned catalog") }
     pub fn model(id: &str) -> Result<Model> { Self::catalog().into_iter().find(|model| model.id == id).context("Unknown model") }
     pub fn directory(root: &Path) -> Result<PathBuf> {
@@ -77,7 +77,7 @@ impl NativeAi {
         ensure!(["create", "rewrite"].contains(&action), "Unknown writing action");
         ensure!(!draft.replace.trim().is_empty(), "Write a request or some text first");
         ensure!(draft.replace.len() <= if action == "create" {2000} else {16000}, "Draft or instruction too long");
-        let proposal = Self::request(root, json!({"op":"infer","kind":"author","id":id,"prompt":Self::prompt("author",json!({"action":action,"snippet":draft.replace,"content_type":draft.kind}))}))?;
+        let proposal = Self::request(root, json!({"op":"infer","kind":"author","id":id,"prompt":Self::prompt(action,json!({"snippet":draft.replace,"content_type":draft.kind}))}))?;
         let mut result = draft.clone(); result.replace = proposal["text"].as_str().context("Invalid AI draft")?.to_owned(); Self::validate_proposal(draft, &result)?; Ok(result)
     }
     pub fn validate_proposal(original: &Match, proposal: &Match) -> Result<()> {
@@ -105,12 +105,16 @@ mod tests {
     use super::*;
     #[test]
     fn writing_actions_use_existing_body_and_preserve_metadata() {
-        for action in ["create","rewrite"] {
+        for (action,response,valid) in [("create",json!({"text":"Welcome, {{name}}!"}),true),("rewrite",json!({"text":"Welcome, {{name}}!"}),true),("rewrite",json!({"text":42}),false),("rewrite",json!({}),false),("rewrite",json!({"text":""}),false)] {
             let root=tempfile::tempdir().unwrap();let listener=std::net::TcpListener::bind("127.0.0.1:0").unwrap();fs::write(NativeAi::directory(root.path()).unwrap().join("endpoint.json"),serde_json::to_vec(&Endpoint{address:listener.local_addr().unwrap(),token:"test".into()}).unwrap()).unwrap();
             let original=Match{replace:"Write a greeting to {{name}}".into(),kind:"template".into(),trigger:"hello".into(),title:"Welcome".into(),..Default::default()};let expected=original.replace.clone();
-            let worker=std::thread::spawn(move||{let(mut stream,_)=listener.accept().unwrap();let request=NativeAi::read(&mut stream).unwrap();let input:Value=serde_json::from_str(request["prompt"].as_str().unwrap().split("\nInput: ").nth(1).unwrap()).unwrap();assert_eq!(input["action"],action);assert_eq!(input["snippet"],expected);NativeAi::write(&mut stream,&json!({"value":{"text":"Welcome, {{name}}!"}})).unwrap();});
-            let result=NativeAi::author(root.path(),&original,action,"write").unwrap();worker.join().unwrap();assert_eq!(result.replace,"Welcome, {{name}}!");assert_eq!(result.title,original.title);assert_eq!(result.trigger,original.trigger);assert_eq!(result.kind,original.kind);assert_eq!(result.variables,original.variables);
+            let worker=std::thread::spawn(move||{let(mut stream,_)=listener.accept().unwrap();let request=NativeAi::read(&mut stream).unwrap();let prompt=request["prompt"].as_str().unwrap();assert!(prompt.ends_with(&format!("{}: {}",if action=="create"{"Request"}else{"Message"},expected)));assert!(prompt.contains(if action=="create"{"Do not repeat or rewrite the request itself"}else{"Keep its meaning and language"}));assert!(prompt.contains("Content type: template"));NativeAi::write(&mut stream,&json!({"value":response})).unwrap();});
+            let result=NativeAi::author(root.path(),&original,action,"write");worker.join().unwrap();assert_eq!(result.is_ok(),valid);if !valid{continue;}let result=result.unwrap();assert_eq!(result.replace,"Welcome, {{name}}!");assert_eq!(result.title,original.title);assert_eq!(result.trigger,original.trigger);assert_eq!(result.kind,original.kind);assert_eq!(result.variables,original.variables);
         }
+    }
+    #[test]
+    fn plain_text_creation_uses_a_focused_request_prompt() {
+        let text="I would like to write a message to cancel a meeting.";let input=json!({"snippet":text,"content_type":"plain_text"});let create=NativeAi::prompt("create",input.clone());assert!(create.starts_with("Write a short, polite, ready-to-send message"));assert!(create.ends_with(&format!("Request: {text}")));assert!(!create.contains("Input.action"));assert!(!create.contains("Content type:"));let rewrite=NativeAi::prompt("rewrite",input);assert!(rewrite.starts_with("Improve the following message"));assert!(rewrite.ends_with(&format!("Message: {text}")));assert_ne!(create,rewrite);
     }
     #[test]
     fn proposals_preserve_tokens_actions_images_and_type() {
