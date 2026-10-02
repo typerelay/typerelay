@@ -36,6 +36,7 @@ struct ContextWatch {
     stream: UnixStream,
     pending: String,
     pointers: Vec<Device>,
+    pointer_changed:bool,
 }
 
 impl ContextWatch {
@@ -53,7 +54,7 @@ impl ContextWatch {
             }
         }
         if pointers.is_empty() { bail!("No pointer device available for click cancellation"); }
-        Ok(Self { stream, pending: String::new(), pointers })
+        Ok(Self { stream, pending: String::new(), pointers,pointer_changed:false })
     }
 
     fn changed(&mut self, expected:Option<&str>) -> Result<bool> {
@@ -92,7 +93,7 @@ impl ContextWatch {
                 index += 1;
             }
         }
-        Ok(changed || window_changed)
+        self.pointer_changed=changed;Ok(changed || window_changed)
     }
 }
 
@@ -292,6 +293,7 @@ impl Session {
         let running = Arc::new(AtomicBool::new(true));
         let signal = running.clone();
         ctrlc::set_handler(move || signal.store(false, Ordering::SeqCst))?;
+        if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_none()||Hyprland::query("devices")?["keyboards"].as_array().is_some_and(|rows|rows.iter().any(|k|k["layout"].as_str()!=Some("us")||k["capsLock"]==true)){return typerelay_client::capture_linux::CapturePublisher::observe_only(device_name,running);}
         let panel = typerelay_client::panel_ipc::PanelIpc::engine(running.clone())?;
         let progress=Arc::new(AtomicU64::new(0));let guarded=Arc::new(AtomicBool::new(true));Self::guard_relay(guarded.clone(),progress.clone());
         let mut input_generation = 0u64;
@@ -323,7 +325,7 @@ impl Session {
         let device_name = if requested == "auto" { Installer::keyboard()? } else { requested.to_owned() };
         let devices = Hyprland::query("devices")?;
         let keyboards = devices["keyboards"].as_array().context("No Hyprland keyboard information")?;
-        if keyboards.iter().any(|k| k["layout"].as_str() != Some("us") || k["capsLock"].as_bool() == Some(true)) { bail!("POC requires US-only layouts and Caps Lock off"); }
+        if keyboards.iter().any(|k| k["layout"].as_str() != Some("us") || k["capsLock"].as_bool() == Some(true)) {bail!("Expansion requires a US layout; restart the worker for observation-only mode");}
         Self::check_interference(&devices)?;
         let inputs=Installer::devices()?;
         let selected: Vec<_> = Installer::keyboard_devices(&inputs).into_iter().filter(|(name, _, _)| name == &device_name).collect();
@@ -362,6 +364,7 @@ impl Session {
             // A key arrived between the idle check and grab. Let it finish normally.
             keyboard.ungrab()?;
         }
+        let capture=typerelay_client::capture_linux::CapturePublisher::start(device_name.clone())?;
         let mut settings = SettingsStore::open(Paths::config_dir()?.join("settings.yml"))?;
         let mut engine = Engine::new(store.snapshot.clone());
         engine.set_prefix(&settings.settings.trigger_prefix).map_err(anyhow::Error::msg)?;
@@ -391,7 +394,7 @@ impl Session {
                 if updated != caps_control { caps_control = updated; caps = false; engine.feed(Input::Cancel); target = None; }
                 last_conflict_check = Instant::now();
             }
-            let context_changed=context.changed(target.as_deref())?;
+            let context_changed=context.changed(target.as_deref())?;if context.pointer_changed{capture.pointer();}
             if context_changed {*input_generation=input_generation.wrapping_add(1);}
             if context_changed || last_input.elapsed() > Duration::from_secs(10) {
                 engine.feed(Input::Cancel); target = None; insertion.clear(); usage = None;
@@ -426,7 +429,7 @@ impl Session {
             }
             if paste.is_none() && insertion.is_empty() && pressed.is_empty() && (buffered.is_empty() || template_wait.is_some()) && !Self::modifiers_down(&keys_down, caps_control) && let Ok(request) = panel_requests.try_recv() {
                     if template_wait.as_ref().is_none_or(|wait|request.generation==Some(wait.generation)) && Instant::now() < request.deadline && request.generation.is_none_or(|expected| expected == *input_generation) && Self::target()? == Some(request.target.clone()) {
-                        engine.feed(Input::Cancel); last_input=Instant::now();
+                        capture.reset();engine.feed(Input::Cancel); last_input=Instant::now();
                         if let Some(wait)=&mut template_wait {wait.deadline=Instant::now()+Duration::from_secs(5);}
                         match request.step {
 							typerelay_client::clipboard_payload::ClipboardStep::Payload(payload) if !payload.plain.is_empty()||payload.html.is_some()=>{let text=payload.plain.clone();paste=Some(PasteState{job:PasteJob::start_payload(payload),expansion:Expansion{identity:None,template:None,erase:request.erase,text},target:Some(request.target),reply:Some(request.reply),generation:*input_generation,started:false,sent:false,cancelled:false});}
@@ -492,6 +495,7 @@ impl Session {
                 }
             }
             while let Some(event) = buffered.pop_front() {
+                capture.key(&event);
                 if event.event_type() != EventType::KEY { continue; }
                 let code = KeyCode(event.code());
                 if suppressed_key == Some(code.0) {
@@ -506,7 +510,7 @@ impl Session {
                 if event.value() == 1 { pressed.insert(code.0); *input_generation = input_generation.wrapping_add(1); }
                 let effective_pressed: BTreeSet<_> = pressed.iter().map(|key| Self::effective_key(*key, caps_control)).collect();
                 if event.value() == 1 && panel_shortcut.as_ref().is_some_and(|(key, groups)| *key == code.0 && groups.iter().all(|group|group.iter().any(|key|effective_pressed.contains(key))) && effective_pressed.iter().all(|key|*key == code.0 || groups.iter().any(|group|group.contains(key)))) && typerelay_client::panel_ipc::PanelIpc::notify() {
-                    suppressed_key = Some(code.0); engine.feed(Input::Cancel); target = None; continue;
+                    capture.reset();suppressed_key = Some(code.0); engine.feed(Input::Cancel); target = None; continue;
                 }
                 if event.value() != 0 {
                     last_input = Instant::now();
@@ -519,7 +523,7 @@ impl Session {
                     if expansion.is_some() && std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some() { eprintln!("Match found; held-key count {}", pressed.len()); }
                     if let Some(expansion) = expansion
                         && Self::target()? == target && !context.changed(target.as_deref())? {
-                            let destination = target.clone().unwrap();
+                            capture.reset();let destination = target.clone().unwrap();
                             pressed.remove(&code.0);
                             if !Self::wait_for_forwarded_keys(&mut keyboard, &mut output, &mut buffered, &mut pressed, Instant::now() + Duration::from_secs(3))? || Self::target()? != Some(destination.clone()) || context.changed(Some(&destination))? {
                                 output.emit(&[event])?;

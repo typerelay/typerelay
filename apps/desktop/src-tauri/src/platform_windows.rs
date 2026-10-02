@@ -136,14 +136,14 @@ impl ObservationAdapter {
                 if !state.enabled.load(Ordering::SeqCst){return;}
                 let mut pid=0;unsafe{GetWindowThreadProcessId(GetForegroundWindow(),Some(&mut pid));}
                 let modified=[0x11,0x12,0x5b,0x5c].iter().any(|key|unsafe{GetAsyncKeyState(*key)<0});
-                let edit=if modified||key.flags.0&0x12!=0||key.dwExtraInfo==TYPERELAY_EVENT_MARKER{Edit::Reset}else{match key.vkCode{0x0d=>Edit::Enter,0x08=>Edit::Backspace,0x10|0x14|0xa0|0xa1=>return,_=>match HookState::input(key.vkCode,key.scanCode){Input::Character(c)=>Edit::Text(c.to_string()),Input::Space=>Edit::Text(" ".into()),_=>Edit::Reset}}};
+                let edit=if modified||key.flags.0&0x12!=0||key.dwExtraInfo==TYPERELAY_EVENT_MARKER{Edit::Reset}else{match key.vkCode{0x0d|0x09=>Edit::Boundary,0x08=>Edit::Backspace,0x10|0x14|0xa0|0xa1=>return,_=>match HookState::input(key.vkCode,key.scanCode){Input::Character(c)=>Edit::Text(c.to_string()),Input::Space=>Edit::Text(" ".into()),_=>Edit::Reset}}};
                 if sender.try_send(ObservationKey{epoch:state.epoch.load(Ordering::SeqCst),at:crate::observation::Observation::now(),edit,pid}).is_err(){state.reset();}
             });
         }
         unsafe{CallNextHookEx(None,code,wparam,lparam)}
     }
     unsafe extern "system" fn mouse(code:i32,wparam:WPARAM,lparam:LPARAM)->LRESULT {
-        if code>=0&&[WM_LBUTTONDOWN,WM_RBUTTONDOWN,WM_MBUTTONDOWN,WM_XBUTTONDOWN].contains(&(wparam.0 as u32)){Self::sender().with(|cell|if let Some((state,_))=cell.borrow().as_ref(){state.epoch.fetch_add(1,std::sync::atomic::Ordering::SeqCst);state.reset();});}
+        if code>=0&&[WM_LBUTTONDOWN,WM_RBUTTONDOWN,WM_MBUTTONDOWN,WM_XBUTTONDOWN].contains(&(wparam.0 as u32)){Self::sender().with(|cell|if let Some((state,sender))=cell.borrow().as_ref(){let epoch=state.epoch.fetch_add(1,std::sync::atomic::Ordering::SeqCst)+1;let mut pid=0;unsafe{GetWindowThreadProcessId(GetForegroundWindow(),Some(&mut pid));}let _=sender.try_send(ObservationKey{epoch,at:crate::observation::Observation::now(),edit:typerelay_client::observation::Edit::Reset,pid});state.reset();});}
         unsafe{CallNextHookEx(None,code,wparam,lparam)}
     }
     fn field(automation:&windows::Win32::UI::Accessibility::IUIAutomation)->Result<(windows::Win32::UI::Accessibility::IUIAutomationElement,String,u32)> {
@@ -161,15 +161,32 @@ impl ObservationAdapter {
             let path=String::from_utf16(&buffer[..length as usize])?;let app=std::path::Path::new(&path).file_name().context("Unknown application")?.to_string_lossy().to_string();ensure!(typerelay_client::observation::Settings::supported_app(&app),"Terminal application");Ok((field,app,pid))
         }
     }
+    fn native_context(automation:&windows::Win32::UI::Accessibility::IUIAutomation)->Result<typerelay_client::observation::CaptureContext>{
+        use typerelay_client::observation::{CaptureContext,CaptureSource,Protection};use windows::Win32::System::Threading::{QueryFullProcessImageNameW,PROCESS_NAME_WIN32};
+        unsafe{let window=GetForegroundWindow();let mut pid=0;let thread=GetWindowThreadProcessId(window,Some(&mut pid));ensure!(!window.0.is_null()&&pid!=0&&pid!=std::process::id(),"Learning paused in Typerelay or an unidentified window");let handle=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,false,pid)?;let owned=OwnedHandle::from_raw_handle(handle.0);let mut buffer=[0u16;2048];let mut length=buffer.len() as u32;let result=QueryFullProcessImageNameW(handle,PROCESS_NAME_WIN32,windows::core::PWSTR(buffer.as_mut_ptr()),&mut length);drop(owned);result?;let path=String::from_utf16(&buffer[..length as usize])?;let app=std::path::Path::new(&path).file_name().context("Unknown app")?.to_string_lossy().into_owned();ensure!(typerelay_client::observation::Settings::supported_app(&app),"Learning paused in this application");
+            let mut protection=Protection::Unknown;if let Ok(field)=automation.GetFocusedElement()&&field.CurrentProcessId().ok()==Some(pid as i32){if field.CurrentIsPassword().is_ok_and(|v|v.as_bool()){protection=Protection::Protected;}else if field.CurrentHasKeyboardFocus().is_ok_and(|v|v.as_bool()){protection=Protection::Unprotected;}}
+            let layout=GetKeyboardLayout(thread);let ime=windows::Win32::UI::Input::Ime::ImmIsIME(layout).as_bool();Ok(CaptureContext{app,window:format!("{pid}:{}",window.0 as usize),protection,active:true,layout:format!("{}",layout.0 as usize),ime:ime.then_some("Windows IME".into()),authority:if ime{CaptureSource::Ime}else{CaptureSource::Keyboard},..Default::default()})
+        }
+    }
     pub fn start(state:Arc<crate::observation::Observation>) {
         use windows::Win32::{System::Com::{CoInitializeEx,CoCreateInstance,CoUninitialize,COINIT_MULTITHREADED,CLSCTX_INPROC_SERVER},UI::Accessibility::{CUIAutomation,IUIAutomation}};
         use std::sync::atomic::Ordering;use typerelay_client::observation::Event;
         let(sender,receiver)=sync_channel::<ObservationKey>(128);let capture=state.clone();let running=Arc::new(std::sync::atomic::AtomicBool::new(false));let monitored=running.clone();
         std::thread::spawn(move||unsafe{
-            let result=(||->Result<()>{CoInitializeEx(None,COINIT_MULTITHREADED).ok()?;let automation:IUIAutomation=CoCreateInstance(&CUIAutomation,None,CLSCTX_INPROC_SERVER)?;let mut previous=None;let mut generation=0u64;let mut epoch=0;
+            let result=(||->Result<()>{CoInitializeEx(None,COINIT_MULTITHREADED).ok()?;let automation:IUIAutomation=CoCreateInstance(&CUIAutomation,None,CLSCTX_INPROC_SERVER)?;let mut previous=None;let mut generation=0u64;let mut epoch=0;let mut native_previous=None::<typerelay_client::observation::CaptureContext>;let mut native_sequence=0u64;
                 loop {let raw=receiver.recv_timeout(Duration::from_millis(30)).ok();if !state.enabled.load(Ordering::SeqCst){previous=None;continue;}
                     if !monitored.load(Ordering::SeqCst){previous=None;state.safety(false);state.status("Unavailable: Windows input monitoring could not start");continue;}
                     let next_epoch=state.epoch.load(Ordering::SeqCst);if next_epoch!=epoch{previous=None;epoch=next_epoch;}
+                    if state.native(){
+                        use typerelay_client::observation::{CaptureHealth,CaptureSource,Edit,Protection};
+                        match Self::native_context(&automation){Ok(mut context)=>{
+                            let changed=native_previous.as_ref().is_none_or(|old|old.app!=context.app||old.window!=context.window||old.layout!=context.layout);if changed{if let Some(old)=&native_previous{native_sequence+=1;state.native_event(old.clone(),CaptureSource::Keyboard,native_sequence,if old.layout==context.layout{Edit::Boundary}else{Edit::Reset},crate::observation::Observation::now());}generation+=1;}context.generation=generation;
+                            state.native_health(CaptureHealth{desktop:"windows".into(),layout:context.layout.clone(),app:Some(context.app.clone()),ime:context.ime.clone(),source:"keyboard".into(),blocked:if context.protection==Protection::Protected{Some("Learning paused in a protected field".into())}else if context.ime.is_some(){Some("IME active: verified composition integration required".into())}else{None},at_ms:crate::observation::Observation::now(),..Default::default()});
+                            if let Some(raw)=raw&&raw.epoch==epoch&&crate::observation::Observation::now()-raw.at<250{let mut pid=0;GetWindowThreadProcessId(GetForegroundWindow(),Some(&mut pid));if raw.pid==pid{native_sequence+=1;state.native_event(context.clone(),CaptureSource::Keyboard,native_sequence,raw.edit,raw.at);}}
+                            native_previous=Some(context);
+                        },Err(error)=>{if let Some(old)=native_previous.take(){native_sequence+=1;state.native_event(old,CaptureSource::Keyboard,native_sequence,Edit::Reset,crate::observation::Observation::now());}state.native_health(CaptureHealth{desktop:"windows".into(),blocked:Some(error.to_string()),at_ms:crate::observation::Observation::now(),..Default::default()});}}
+                        continue;
+                    }
                     let current=Self::field(&automation).ok();state.safety(current.is_some());let same=previous.as_ref().zip(current.as_ref()).is_some_and(|(old,new):(&(windows::Win32::UI::Accessibility::IUIAutomationElement,String,u32),&_)|automation.CompareElements(&old.0,&new.0).is_ok_and(|value|value.as_bool())&&old.2==new.2);
                     if !same{generation+=1;state.reset();}
                     if let Some(raw)=raw&&same&&raw.epoch==epoch&&crate::observation::Observation::now()-raw.at<250 {let (_,app,pid)=current.as_ref().unwrap();if raw.pid==*pid{state.feed(Event{epoch,field:format!("{pid}:{generation}"),app:app.clone(),safe:true,direct:true,edit:raw.edit});}else{state.reset();}}

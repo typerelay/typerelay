@@ -20,7 +20,9 @@
           "libnotify-bin",
           "pkexec",
           "foot",
-          "systemd"
+          "systemd",
+          "libxkbcommon0",
+          "xkb-data"
         ],
         "files": {
           "/usr/lib/systemd/user/typerelay.service": "linux/typerelay.service",
@@ -41,7 +43,9 @@
           "libnotify",
           "polkit",
           "foot",
-          "systemd"
+          "systemd",
+          "libxkbcommon",
+          "xkeyboard-config"
         ],
         "files": {
           "/usr/lib/systemd/user/typerelay.service": "linux/typerelay.service",

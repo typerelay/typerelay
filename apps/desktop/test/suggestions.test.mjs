@@ -91,3 +91,13 @@ test('delete and ignore remove only their own cards without reloading the list',
 		f.panel.invoke=async(name,args)=>{assert.equal(args.action,'ignore');return {epoch:1,change:{id:'two',revision:6,candidate:null}};};const ignore=sibling.querySelector('.suggestion-ignore');await ignore.onclick({currentTarget:ignore});assert.equal(f.ui.list.children.length,0);
 	}finally{f.dom.window.close();}
 });
+
+test('native setup preserves rows and does not request per-editor accessibility',async()=>{
+	const f=await Fixture.create();try{
+		const document=f.dom.window.document;f.ui.change(Fixture.change(Fixture.row()));const card=f.ui.list.firstElementChild;
+		const value={epoch:1,platform:'linux',enabled:true,native_capture:true,notifications_enabled:true,vscode:'off',status:'Native capture ready',capture:{device:'Selected keyboard',desktop:'hyprland',layout:'English (US)',source:'keyboard'}};
+		f.ui.setup(value);const row=document.querySelector('[data-id="capture-source"]');f.ui.setup({...value,capture:{...value.capture,blocked:'IME commit integration required'}});
+		assert.equal(document.querySelector('[data-id="capture-source"]'),row);assert.match(row.textContent,/IME commit integration required/);assert.equal(document.querySelector('[data-id="vscode"]'),null);assert.equal(f.ui.list.firstElementChild,card);assert.equal(f.calls.length,0);
+		const checkbox=document.querySelector('#observation-native');f.dom.window.Swal.fire=async()=>({isConfirmed:false});checkbox.checked=true;await checkbox.onchange({target:checkbox});assert.equal(checkbox.checked,false);
+	}finally{f.dom.window.close();}
+});

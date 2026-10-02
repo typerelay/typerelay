@@ -1,0 +1,1 @@
+{"uuid":"capture@typerelay.com","name":"Typerelay input context","description":"Shares focused application and keyboard-layout metadata with the local Typerelay worker. Does not read document text.","shell-version":["45","46","47","48","49","50","51"],"version":1}

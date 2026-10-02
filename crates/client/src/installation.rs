@@ -83,6 +83,15 @@ impl Installer {
         Ok(Self::input_paths(&Self::devices()?, keyboard).iter().all(|(path, write)| std::ffi::CString::new(path.as_os_str().as_bytes()).is_ok_and(|path| unsafe { libc::access(path.as_ptr(), libc::R_OK | if *write { libc::W_OK } else { 0 }) == 0 })))
     }
 
+    pub fn install_capture_helper(desktop:&str)->Result<String>{
+        use std::{fs,path::PathBuf};
+        let home=PathBuf::from(std::env::var_os("HOME").context("HOME is missing")?);let data=std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(||home.join(".local/share"));
+        match desktop {
+            "gnome"=>{let path=data.join("gnome-shell/extensions/capture@typerelay.com");fs::create_dir_all(&path)?;fs::write(path.join("metadata.json"),include_str!("../../../apps/desktop/helpers/gnome/metadata.json"))?;fs::write(path.join("extension.js"),include_str!("../../../apps/desktop/helpers/gnome/extension.js"))?;let enabled=Command::new("gnome-extensions").args(["enable","capture@typerelay.com"]).status().is_ok_and(|status|status.success());Ok(if enabled{"Desktop helper enabled"}else{"Helper installed. Log out and back in, then enable Typerelay input context in GNOME Extensions."}.into())},
+            "kde"=>{let path=data.join("kwin/scripts/typerelay-capture");fs::create_dir_all(path.join("contents/code"))?;fs::write(path.join("metadata.json"),include_str!("../../../apps/desktop/helpers/kwin/metadata.json"))?;fs::write(path.join("contents/code/main.js"),include_str!("../../../apps/desktop/helpers/kwin/main.js"))?;ensure!(Command::new("kwriteconfig6").args(["--file","kwinrc","--group","Plugins","--key","typerelay-captureEnabled","true"]).status()?.success(),"Could not enable KWin helper");let bus=zbus::blocking::Connection::session()?;let _=bus.call_method(Some("org.kde.KWin"),"/KWin",Some("org.kde.KWin"),"reconfigure",&());Ok("Desktop helper installed. Enable Typerelay input context under Window Management → KWin Scripts if not already active.".into())},
+            _=>anyhow::bail!("This desktop does not require the GNOME/KWin helper"),
+        }
+    }
     pub fn grant_input_access(requested: &str) -> Result<()> {
         ensure!(unsafe { libc::geteuid() } == 0, "Input access requires native administrator authentication");
         let uid: u32 = std::env::var("PKEXEC_UID").context("Run input access through pkexec")?.parse()?;

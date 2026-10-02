@@ -19,7 +19,7 @@ struct Runtime { root:PathBuf, target:Mutex<Option<platform::Target>>, last:Mute
 impl Runtime {
 	#[cfg(target_os="linux")]
 	fn setup_linux(app: tauri::AppHandle) {
-		if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_none(){update::schedule(app);return;}
+		if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_none()&&!app.try_state::<std::sync::Arc<observation::Observation>>().is_some_and(|state|state.native()){update::schedule(app);return;}
 		let bundle=tauri::utils::platform::bundle_type();
 		if bundle.is_none() { update::schedule(app); return; }
 		if app.state::<Runtime>().linux_setup.swap(true,Ordering::SeqCst) { return; }
@@ -411,6 +411,10 @@ async fn suggestions(app:tauri::AppHandle,action:String,value:Option<Value>)->st
         match action.as_str(){
             "list"=>state.snapshot(),
             "check"=>state.diagnostics(),
+            #[cfg(target_os="linux")]
+            "install-context-helper"=>Ok(json!({"message":typerelay_client::installation::Installer::install_capture_helper(&typerelay_client::capture_linux::ContextProvider::desktop())?})),
+            #[cfg(target_os="linux")]
+            "restart-capture"=>{ensure!(std::process::Command::new("systemctl").args(["--user","restart","typerelay"]).status()?.success(),"Could not restart the keyboard worker; install the matching desktop package");Ok(json!({"message":"Keyboard worker restarted"}))},
             "test-notification"=>{observation::Observation::notify(&app,true)?;Ok(json!({"sent":true}))},
             "configure"=>{let result=state.configure(serde_json::from_value(value)?)?;if let Some(changes)=result["changes"].as_array(){for change in changes{let _=app.emit("suggestion-change",json!({"epoch":result["epoch"],"change":change}));}}Ok(result)},
             "forget"=>{let epoch=state.forget()?;let _=app.emit("suggestions-forgotten",json!({"epoch":epoch}));Ok(json!({"epoch":epoch}))},

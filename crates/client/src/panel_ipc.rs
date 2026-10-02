@@ -13,8 +13,39 @@ pub struct Prompt { pub hit: Hit, pub target: String, pub erase: usize, pub gene
 pub struct Insertion { pub deadline: std::time::Instant, pub step: ClipboardStep, pub erase: usize, pub generation: Option<u64>, pub target: String, pub reply: mpsc::Sender<std::result::Result<u64, String>> }
 pub struct PanelPresence(PathBuf);
 impl Drop for PanelPresence { fn drop(&mut self) { let _=fs::remove_file(&self.0); } }
+#[derive(Clone,Default,Serialize,Deserialize)]
+#[serde(default,deny_unknown_fields)]
+pub struct CaptureControl { pub version:u32,pub session:String,pub enabled:bool,pub expires_ms:i64,pub protected_app:Option<String>,pub excluded_apps:Vec<String> }
+pub use crate::observation::CaptureHealth;
+#[derive(Serialize,Deserialize)]
+pub enum CaptureBody { Frame(crate::observation::CaptureFrame),Health(CaptureHealth) }
+#[derive(Serialize,Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CapturePacket { version:u32,session:String,worker:u32,body:CaptureBody }
+pub struct CaptureReceiver {socket:UnixDatagram,path:PathBuf}
+impl CaptureReceiver {
+    pub fn bind()->Result<Self>{Self::bind_path(PanelIpc::directory()?.join("capture.sock"))}
+    fn bind_path(path:PathBuf)->Result<Self>{use std::os::fd::AsRawFd;let _=fs::remove_file(&path);let socket=UnixDatagram::bind(&path)?;socket.set_nonblocking(true)?;fs::set_permissions(&path,fs::Permissions::from_mode(0o600))?;let yes:libc::c_int=1;anyhow::ensure!(unsafe{libc::setsockopt(socket.as_raw_fd(),libc::SOL_SOCKET,libc::SO_PASSCRED,(&yes as *const libc::c_int).cast(),std::mem::size_of_val(&yes) as _)}==0,"Could not authenticate capture peer");Ok(Self{socket,path})}
+    pub fn receive(&self,session:&str)->Result<Option<CaptureBody>>{use std::os::fd::AsRawFd;
+        let mut bytes=[0u8;16384];let mut control=[0usize;16];let mut iov=libc::iovec{iov_base:bytes.as_mut_ptr().cast(),iov_len:bytes.len()};let mut message:libc::msghdr=unsafe{std::mem::zeroed()};message.msg_iov=&mut iov;message.msg_iovlen=1;message.msg_control=control.as_mut_ptr().cast();message.msg_controllen=std::mem::size_of_val(&control);
+        let length=unsafe{libc::recvmsg(self.socket.as_raw_fd(),&mut message,libc::MSG_DONTWAIT)};
+        if length<0{let error=std::io::Error::last_os_error();if error.kind()==std::io::ErrorKind::WouldBlock{return Ok(None);}return Err(error.into());}
+        if message.msg_flags&(libc::MSG_TRUNC|libc::MSG_CTRUNC)!=0{return Ok(None);}
+        let mut peer=None;unsafe{let mut header=libc::CMSG_FIRSTHDR(&message);while !header.is_null(){if (*header).cmsg_level==libc::SOL_SOCKET&&(*header).cmsg_type==libc::SCM_CREDENTIALS{peer=Some(std::ptr::read_unaligned(libc::CMSG_DATA(header).cast::<libc::ucred>()));}header=libc::CMSG_NXTHDR(&message,header);}}
+        let Some(peer)=peer.filter(|peer|peer.uid==unsafe{libc::geteuid()})else{return Ok(None);};let Ok(packet)=serde_json::from_slice::<CapturePacket>(&bytes[..length as usize])else{return Ok(None);};
+        if packet.version!=1||packet.session!=session||packet.worker!=peer.pid as u32{return Ok(None);}
+        let Some((pid,start))=PanelIpc::capture_worker(self.path.parent().context("Missing capture directory")?)?else{return Ok(None);};if pid!=packet.worker||PanelIpc::process_start(pid).ok().as_ref()!=Some(&start){return Ok(None);}
+        Ok(Some(packet.body))
+    }
+}
+impl Drop for CaptureReceiver {fn drop(&mut self){let _=fs::remove_file(&self.path);}}
 pub struct PanelIpc;
 impl PanelIpc {
+    pub fn capture_control()->Result<CaptureControl>{let path=Self::directory()?.join("capture-control.json");match fs::read(path){Ok(bytes)if bytes.len()<=131072=>Ok(serde_json::from_slice(&bytes)?),Ok(_)=>anyhow::bail!("Capture control exceeds limit"),Err(error)if error.kind()==std::io::ErrorKind::NotFound=>Ok(CaptureControl::default()),Err(error)=>Err(error.into())}}
+    pub fn configure_capture(control:&CaptureControl)->Result<()>{Paths::atomic_write(&Self::directory()?.join("capture-control.json"),&serde_json::to_vec(control)?,false)}
+    pub fn register_capture_worker()->Result<()> {Paths::atomic_write(&Self::directory()?.join("capture-worker.json"),&serde_json::to_vec(&(std::process::id(),Self::process_start(std::process::id())?))?,false)}
+    fn capture_worker(directory:&std::path::Path)->Result<Option<(u32,String)>> {let path=directory.join("capture-worker.json");match fs::read(path){Ok(bytes)if bytes.len()<=4096=>Ok(Some(serde_json::from_slice(&bytes)?)),_=>Ok(None)}}
+    pub fn send_capture(socket:&UnixDatagram,session:&str,body:CaptureBody)->Result<()> {let bytes=serde_json::to_vec(&CapturePacket{version:1,session:session.into(),worker:std::process::id(),body})?;anyhow::ensure!(bytes.len()<=16384,"Capture event exceeds limit");socket.send_to(&bytes,Self::directory()?.join("capture.sock"))?;Ok(())}
     pub fn directory() -> Result<PathBuf> {
         let root = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").context("Missing user runtime directory")?).join("typerelay-panel");
         fs::create_dir_all(&root)?; fs::set_permissions(&root, fs::Permissions::from_mode(0o700))?; Ok(root)
@@ -78,5 +109,23 @@ impl PanelIpc {
         stream.write_all(&(bytes.len() as u32).to_le_bytes())?; stream.write_all(&bytes)?;
         let mut bytes=Vec::new(); stream.take(4096).read_to_end(&mut bytes)?;
         serde_json::from_slice::<std::result::Result<(),String>>(&bytes)?.map_err(anyhow::Error::msg)
+    }
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::*;
+    #[test]
+    fn authenticates_worker_session_version_and_process_lifetime() {
+        let directory=tempfile::tempdir().unwrap();let receiver=CaptureReceiver::bind_path(directory.path().join("capture.sock")).unwrap();let sender=UnixDatagram::unbound().unwrap();sender.set_nonblocking(true).unwrap();
+        let pid=std::process::id();let registration=directory.path().join("capture-worker.json");fs::write(&registration,serde_json::to_vec(&(pid,PanelIpc::process_start(pid).unwrap())).unwrap()).unwrap();
+        let packet=|version,session:&str,worker|serde_json::to_vec(&CapturePacket{version,session:session.into(),worker,body:CaptureBody::Health(CaptureHealth::default())}).unwrap();
+        for invalid in [packet(2,"test",pid),packet(1,"old",pid),packet(1,"test",pid+1),b"invalid".to_vec(),vec![0;20000]]{sender.send_to(&invalid,&receiver.path).unwrap();assert!(receiver.receive("test").unwrap().is_none());}
+        sender.send_to(&packet(1,"test",pid),&receiver.path).unwrap();assert!(matches!(receiver.receive("test").unwrap(),Some(CaptureBody::Health(_))));
+        fs::write(&registration,serde_json::to_vec(&(pid,"different-start-time")).unwrap()).unwrap();sender.send_to(&packet(1,"test",pid),&receiver.path).unwrap();assert!(receiver.receive("test").unwrap().is_none());
+    }
+    #[test]
+    fn socket_backpressure_and_disconnect_do_not_block_sender() {
+        let directory=tempfile::tempdir().unwrap();let receiver=CaptureReceiver::bind_path(directory.path().join("capture.sock")).unwrap();let sender=UnixDatagram::unbound().unwrap();sender.set_nonblocking(true).unwrap();let start=std::time::Instant::now();let mut full=false;for _ in 0..1000{if sender.send_to(b"metadata",&receiver.path).is_err(){full=true;}}assert!(full);assert!(start.elapsed()<Duration::from_secs(1));let path=receiver.path.clone();drop(receiver);assert!(sender.send_to(b"metadata",path).is_err());
     }
 }

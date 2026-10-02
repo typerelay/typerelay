@@ -10,25 +10,47 @@ use crate::{config::Match, database::Database};
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
-pub struct Settings { pub enabled: bool, pub notifications: bool, pub threshold: u32, pub retention_days: u32, pub excluded_apps: Vec<String> }
-impl Default for Settings { fn default()->Self { Self { enabled:false, notifications:false, threshold:4, retention_days:30, excluded_apps:vec![] } } }
+pub struct Settings { pub enabled: bool, pub native_capture: bool, pub notifications: bool, pub threshold: u32, pub retention_days: u32, pub excluded_apps: Vec<String> }
+impl Default for Settings { fn default()->Self { Self { enabled:false, native_capture:false, notifications:false, threshold:4, retention_days:30, excluded_apps:vec![] } } }
 impl Settings {
     pub fn validate(&self)->Result<()> { ensure!((2..=100).contains(&self.threshold),"Choose a repetition threshold between 2 and 100"); ensure!([7,30,90].contains(&self.retention_days),"Choose 7, 30 or 90 days"); ensure!(self.excluded_apps.len()<=200&&self.excluded_apps.iter().all(|s|!s.trim().is_empty()&&s.len()<=512),"Invalid excluded application"); Ok(()) }
     pub fn allows(&self,app:&str)->bool { self.enabled&&Self::supported_app(app)&&!self.excluded_apps.iter().any(|value|value.eq_ignore_ascii_case(app)) }
     pub fn supported_app(app:&str)->bool {
         let app=app.to_ascii_lowercase();
-        !app.is_empty()&&!["com.apple.terminal","com.googlecode.iterm2","net.kovidgoyal.kitty","org.alacritty","com.mitchellh.ghostty","dev.warp.warp-stable","com.github.wez.wezterm","org.wezfurlong.wezterm","windowsterminal.exe","terminal.exe","wt.exe","conhost.exe","openconsole.exe","cmd.exe","powershell.exe","pwsh.exe","mintty.exe","putty.exe","wezterm-gui.exe","alacritty.exe","kitty.exe","foot","gnome-terminal-server","kgx","konsole","xterm","alacritty","kitty","ghostty","wezterm-gui","tilix","terminator"].contains(&app.as_str())
+        !app.is_empty()&&!["typerelay-panel","typerelay-tui","com.typerelay.panel","com.apple.terminal","com.googlecode.iterm2","net.kovidgoyal.kitty","org.alacritty","com.mitchellh.ghostty","dev.warp.warp-stable","com.github.wez.wezterm","org.wezfurlong.wezterm","windowsterminal.exe","terminal.exe","wt.exe","conhost.exe","openconsole.exe","cmd.exe","powershell.exe","pwsh.exe","mintty.exe","putty.exe","wezterm-gui.exe","alacritty.exe","kitty.exe","foot","gnome-terminal-server","kgx","konsole","xterm","alacritty","kitty","ghostty","wezterm-gui","tilix","terminator"].contains(&app.as_str())
     }
 }
 
 /// Adapters must attest focus, editable/non-protected field, and bounded new input.
 /// Input can come from native keys or a committed edit; never replay document values.
 /// No document values or surrounding text belong in this interface.
-#[derive(Clone)]
-pub enum Edit { Text(String), Backspace, Enter, Reset }
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub enum Edit { Text(String), Commit(String), Backspace, Enter, Boundary, CompositionStart, CompositionEnd, CompositionCancel, Reset }
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all="snake_case")]
+pub enum CaptureSource { #[default] Keyboard, Accessibility, Ime, Bridge }
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all="snake_case")]
+pub enum Protection { Protected, Unprotected, #[default] Unknown }
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureContext { pub generation:u64, pub app:String, pub window:String, pub field:Option<String>, pub protection:Protection, pub active:bool, pub layout:String, pub ime:Option<String>, pub authority:CaptureSource }
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureFrame { pub version:u32, pub session:String, pub source_id:String, pub sequence:u64, pub at_ms:i64, pub context:CaptureContext, pub source:CaptureSource, pub edit:Edit }
+#[derive(Clone,Default,Serialize,Deserialize)]
+#[serde(default,deny_unknown_fields)]
+pub struct CaptureHealth { pub device:String,pub desktop:String,pub layout:String,pub ime:Option<String>,pub app:Option<String>,pub source:String,pub blocked:Option<String>,pub at_ms:i64 }
+impl CaptureFrame {
+    pub const VERSION:u32=1;
+    pub fn valid(&self)->bool {self.version==Self::VERSION&&self.session.len()<=128&&!self.session.is_empty()&&!self.source_id.is_empty()&&self.source_id.len()<=128&&self.sequence>0&&self.context.app.len()<=512&&self.context.window.len()<=256&&self.context.field.as_ref().is_none_or(|field|field.len()<=256)&&self.context.layout.len()<=256&&self.context.ime.as_ref().is_none_or(|ime|ime.len()<=256)&&match &self.edit{Edit::Text(text)=>text.chars().count()<=16,Edit::Commit(text)=>text.chars().count()<=1000,_=>true}}
+}
+#[derive(Default)]
+struct CaptureState { session:String, sequences:std::collections::HashMap<String,u64>, context:Option<CaptureContext>, at_ms:i64, generation:u64, composing:bool, accepted:bool }
+
 pub struct Event { pub epoch:u64, pub field:String, pub app:String, pub safe:bool, pub direct:bool, pub edit:Edit }
 #[derive(Default)]
-pub struct Detector { field:String, pending:String, last_ms:i64, last_input_ms:i64, paused:bool }
+pub struct Detector { field:String, pending:String, last_ms:i64, last_input_ms:i64, paused:bool, capture:CaptureState }
 impl Detector {
     pub fn normalize(text:&str)->String { text.nfc().collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ") }
     pub fn reset(&mut self) { self.field.clear();self.pending.clear();self.paused=false;self.last_ms=0; }
@@ -47,12 +69,52 @@ impl Detector {
                 if text.chars().last().is_some_and(char::is_whitespace)&&self.pending.trim_end().ends_with(['.','!','?','。','！','？']) {return self.complete();}
             },
             Edit::Backspace=>{if self.paused {self.pending.clear();return None;}if let Some((index,_))=self.pending.grapheme_indices(true).next_back(){self.pending.truncate(index);}else{self.reset();}},
-            Edit::Enter=>{let value=self.complete();self.pending.clear();self.paused=false;return value;},
+            Edit::Enter|Edit::Boundary=>{let value=self.complete();self.pending.clear();self.paused=false;return value;},
+            Edit::Commit(_)|Edit::CompositionStart|Edit::CompositionEnd|Edit::CompositionCancel=>{self.reset();return None;},
             Edit::Reset=>unreachable!(),
         }
         None
     }
-    pub fn idle(&mut self,now_ms:i64)->Option<String> {if !self.paused&&self.last_ms>0&&now_ms-self.last_ms>=5000 {self.paused=true;return self.complete();}None}
+    pub fn capture(&mut self,frame:CaptureFrame,settings:&Settings,epoch:u64,session:&str,now:i64)->Vec<String> {
+        let mut completed=vec![];self.capture.accepted=false;
+        if frame.session!=session||!frame.valid()||!(0..=1000).contains(&(now-frame.at_ms)){return completed;}
+        if self.capture.session!=session {self.reset();self.capture=CaptureState{session:session.into(),..Default::default()};}
+        let previous=self.capture.sequences.get(&frame.source_id).copied();
+        if previous.is_some_and(|previous|frame.sequence<=previous){return completed;}
+        if !self.capture.sequences.contains_key(&frame.source_id)&&self.capture.sequences.len()>=16{self.reset();return completed;}
+        self.capture.sequences.insert(frame.source_id.clone(),frame.sequence);
+        if previous.is_some_and(|previous|frame.sequence!=previous+1){self.reset();self.capture.composing=false;return completed;}
+        if frame.context.generation<self.capture.generation||frame.at_ms<self.capture.at_ms{return completed;}
+        self.capture.at_ms=frame.at_ms;self.capture.generation=frame.context.generation;
+        if !settings.enabled||!frame.context.active||frame.context.window.is_empty()||!settings.allows(&frame.context.app)||frame.context.protection==Protection::Protected||frame.context.protection==Protection::Unknown&&!settings.native_capture {self.reset();self.capture.composing=false;self.capture.context=None;return completed;}
+        if !settings.native_capture&&frame.source!=CaptureSource::Accessibility {return completed;}
+        if matches!(frame.edit,Edit::Reset){self.reset();self.capture.composing=false;self.capture.context=Some(frame.context);return completed;}
+        self.last_input_ms=now;
+        if frame.source!=frame.context.authority{return completed;}
+        if let Some(previous)=&self.capture.context {
+            let changed=previous.generation!=frame.context.generation||previous.window!=frame.context.window||previous.field!=frame.context.field||previous.app!=frame.context.app;
+            let layout=previous.layout!=frame.context.layout;
+            if changed||layout {if changed&&!layout&&!self.capture.composing&&let Some(text)=self.complete(){completed.push(text);}self.reset();self.capture.composing=false;}
+        }
+        self.capture.context=Some(frame.context.clone());
+        self.capture.accepted=matches!(&frame.edit,Edit::Text(text) if !text.is_empty()&&!self.capture.composing)||matches!(&frame.edit,Edit::Commit(text) if !text.is_empty()&&frame.source!=CaptureSource::Keyboard);
+        match frame.edit {
+            Edit::CompositionStart=>{self.capture.composing=true;return completed;},
+            Edit::CompositionEnd|Edit::CompositionCancel=>{self.capture.composing=false;return completed;},
+            Edit::Commit(text)=>{
+                if !matches!(frame.source,CaptureSource::Ime|CaptureSource::Bridge|CaptureSource::Accessibility){self.reset();return completed;}
+                self.capture.composing=false;
+                for c in text.chars(){let edit=if c=='\n'{Edit::Enter}else if c=='\r'{continue;}else{Edit::Text(c.to_string())};let event=Event{epoch,field:frame.context.field.clone().unwrap_or_else(||frame.context.window.clone()),app:frame.context.app.clone(),safe:true,direct:true,edit};if let Some(text)=self.event(event,settings,epoch,now){completed.push(text);}}
+                return completed;
+            },
+            Edit::Text(_) if self.capture.composing=>return completed,
+            _=>{},
+        }
+        let event=Event{epoch,field:frame.context.field.unwrap_or(frame.context.window),app:frame.context.app,safe:true,direct:true,edit:frame.edit};
+        if let Some(text)=self.event(event,settings,epoch,now){completed.push(text);}completed
+    }
+    pub fn accepted_input(&self)->bool{self.capture.accepted}
+    pub fn idle(&mut self,now_ms:i64)->Option<String> {if self.capture.composing{return None;}if !self.paused&&self.last_ms>0&&now_ms-self.last_ms>=5000 {self.paused=true;return self.complete();}None}
     pub fn quiet(&self,now_ms:i64)->bool {self.last_input_ms>0&&now_ms-self.last_input_ms>=5000}
     fn complete(&mut self)->Option<String> {
         // Taking the buffer makes completion idempotent; subsequent newly typed
@@ -181,6 +243,45 @@ mod tests {
     fn settings()->Settings {Settings{enabled:true,..Settings::default()}}
     fn event(edit:Edit)->Event {Event{epoch:1,field:"field".into(),app:"editor".into(),safe:true,direct:true,edit}}
     fn type_text(detector:&mut Detector,text:&str)->Option<String> {let mut result=None;for c in text.chars(){result=detector.event(event(Edit::Text(c.to_string())),&settings(),1,1000).or(result);}result}
+    struct CaptureFixture { detector:Detector,settings:Settings,sequence:u64,context:CaptureContext,now:i64 }
+    impl CaptureFixture {
+        fn new()->Self {Self{detector:Detector::default(),settings:Settings{enabled:true,native_capture:true,..Default::default()},sequence:0,context:CaptureContext{generation:1,app:"zed-editor".into(),window:"one".into(),active:true,layout:"us".into(),..Default::default()},now:1000}}
+        fn frame(&mut self,edit:Edit)->CaptureFrame {self.sequence+=1;self.now+=10;CaptureFrame{version:1,session:"session".into(),source_id:"keyboard".into(),sequence:self.sequence,at_ms:self.now,context:self.context.clone(),source:self.context.authority,edit}}
+        fn send(&mut self,edit:Edit)->Vec<String> {let frame=self.frame(edit);self.detector.capture(frame,&self.settings,1,"session",self.now)}
+        fn text(&mut self,text:&str){for c in text.chars(){assert!(self.send(Edit::Text(c.to_string())).is_empty());}}
+    }
+    #[test]
+    fn native_stream_rejects_replay_gaps_and_retired_contexts() {
+        let mut f=CaptureFixture::new();f.text("me@email.com");let boundary=f.frame(Edit::Boundary);
+        assert_eq!(f.detector.capture(boundary.clone(),&f.settings,1,"session",f.now),vec!["me@email.com"]);assert!(f.detector.capture(boundary,&f.settings,1,"session",f.now).is_empty());
+        f.text("discard this text");f.sequence+=1;assert!(f.send(Edit::Boundary).is_empty());
+        f.context.generation=2;f.text("another@site.com");let mut stale=f.frame(Edit::Boundary);stale.context.generation=1;assert!(f.detector.capture(stale,&f.settings,1,"session",f.now).is_empty());assert_eq!(f.send(Edit::Boundary),vec!["another@site.com"]);
+        let frame=f.frame(Edit::Text("x".into()));assert!(f.detector.capture(frame,&f.settings,1,"new-session",f.now).is_empty());
+    }
+    #[test]
+    fn native_scope_protection_exclusion_lock_and_layout_reset() {
+        for mode in 0..5 {
+            let mut f=CaptureFixture::new();f.text("unfinished words");match mode{0=>f.context.protection=Protection::Protected,1=>f.context.active=false,2=>f.settings.native_capture=false,3=>f.settings.excluded_apps.push("zed-editor".into()),_=>f.context.layout="de".into()};assert!(f.send(Edit::Boundary).is_empty());
+        }
+        let mut f=CaptureFixture::new();f.text("me@email.com");f.context.generation+=1;f.context.window="two".into();assert_eq!(f.send(Edit::Text("a".into())),vec!["me@email.com"]);
+    }
+    #[test]
+    fn authoritative_ime_commits_replace_preedit_and_allow_long_unicode_text() {
+        let mut f=CaptureFixture::new();f.context.authority=CaptureSource::Ime;f.context.ime=Some("ibus".into());
+        f.send(Edit::CompositionStart);let mut raw=f.frame(Edit::Text("preedit".into()));raw.source=CaptureSource::Keyboard;raw.source_id="physical".into();f.sequence-=1;assert!(f.detector.capture(raw,&f.settings,1,"session",f.now).is_empty());assert!(f.detector.idle(f.now+6000).is_none());
+        let text="これは確定された入力の文章です。";assert!(f.send(Edit::Commit(text.into())).is_empty());assert_eq!(f.send(Edit::Boundary),vec![text]);
+        f.send(Edit::Commit("A committed prefix ".into()));f.send(Edit::CompositionStart);f.send(Edit::CompositionCancel);f.send(Edit::Commit("and its suffix".into()));assert_eq!(f.send(Edit::Boundary),vec!["A committed prefix and its suffix"]);
+    }
+    #[test]
+    fn native_edits_idle_autocomplete_and_expansion_reset() {
+        let mut f=CaptureFixture::new();f.text("repeatable sentencx");f.send(Edit::Backspace);f.send(Edit::Text("e".into()));
+        // A popup is not a field change: context identity stays stable.
+        f.context.generation+=1;f.context.generation-=1;
+        assert_eq!(f.detector.idle(f.now+5000),Some("repeatable sentence".into()));assert!(f.detector.idle(f.now+6000).is_none());
+        f.text("discard expansion trigger");f.send(Edit::Reset);assert!(f.send(Edit::Boundary).is_empty());
+        f.text("verified typed text");let old=f.frame(Edit::Text("stale".into()));assert!(f.detector.capture(old,&f.settings,1,"session",f.now+2000).is_empty());assert!(!f.detector.accepted_input());
+        f.send(Edit::Boundary);let old_generation=f.context.generation;f.context.generation+=1;f.context.protection=Protection::Protected;f.send(Edit::Reset);f.context.generation=old_generation;f.context.protection=Protection::Unknown;f.send(Edit::Text("late".into()));assert!(!f.detector.accepted_input());
+    }
     #[test]
     fn boundaries_edits_and_untrusted_input() {
         let mut detector=Detector::default();let phrase="This is a repeated sentence.";

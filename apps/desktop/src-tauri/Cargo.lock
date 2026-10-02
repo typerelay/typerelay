@@ -6334,9 +6334,13 @@ dependencies = [
  "unicode-segmentation",
  "url",
  "uuid",
+ "wayland-client",
  "windows 0.61.3",
  "wl-clipboard-rs",
+ "x11rb",
+ "xkbcommon",
  "yaml-edit",
+ "zbus",
  "zip 6.0.0",
 ]
 

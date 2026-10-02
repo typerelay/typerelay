@@ -127,6 +127,7 @@ impl Listener {
         let epoch=self.state.epoch.load(std::sync::atomic::Ordering::SeqCst);if epoch!=self.epoch{self.reset();self.epoch=epoch;}
         let kind=CStr::from_ptr(event.kind).to_string_lossy();
         if kind.starts_with("object:state-changed:focused") {
+            if event.detail1!=0{let role=self.api.symbol::<unsafe extern "C" fn(Object,*mut Object)->i32>(b"atspi_accessible_get_role")(event.source,std::ptr::null_mut());let app=std::fs::read_link(format!("/proc/{}/exe",self.api.process(event.source))).ok().and_then(|path|path.file_name().map(|name|name.to_string_lossy().into_owned()));self.state.protect(if role==40{app}else{None});}
             if event.detail1==0{if event.source==self.field{self.focus.lost(Observation::now());}return;}
             let same=event.source==self.field&&!self.field.is_null();
             let role=self.api.symbol::<unsafe extern "C" fn(Object,*mut Object)->i32>(b"atspi_accessible_get_role")(event.source,std::ptr::null_mut());
@@ -135,6 +136,7 @@ impl Listener {
             if self.field.is_null()&&self.api.safe(event.source,false).is_some(){self.field=self.api.symbol::<unsafe extern "C" fn(Object)->Object>(b"g_object_ref")(event.source);self.state.status("Ready to observe typing");}return;
         }
         if kind.starts_with("window:"){if !self.field.is_null()&&self.api.process(event.source)==self.api.process(self.field){self.reset();}return;}
+        if self.state.native(){return;}
         if event.source!=self.field||self.field.is_null(){
             // Some editors replace their accessible entry without a focus event.
             if !kind.starts_with("object:text-changed:")||self.api.safe(event.source,false).is_none(){return;}

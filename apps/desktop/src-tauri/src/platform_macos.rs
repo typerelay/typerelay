@@ -203,16 +203,44 @@ impl ObservationAdapter {
             })().ok();CFRelease(field);result
         }
     }
+    fn native_context()->Option<typerelay_client::observation::CaptureContext>{
+        use typerelay_client::observation::{CaptureContext,CaptureSource,Protection};use core_foundation::base::CFHash;
+        unsafe{
+            if !AXIsProcessTrusted()||!input_monitoring(false){return None;}
+            let application=NSWorkspace::sharedWorkspace().frontmostApplication()?;let pid=application.processIdentifier();if pid==std::process::id() as i32{return None;}
+            let app_name=application.bundleIdentifier()?.to_string();if !typerelay_client::observation::Settings::supported_app(&app_name)||app_name=="com.apple.loginwindow"{return None;}
+            let app=AXUIElementCreateApplication(pid);let window=Target::attribute(app,"AXFocusedWindow").ok();let field=Target::attribute(app,"AXFocusedUIElement").ok();CFRelease(app);
+            let window_id=window.map(|window|{let id=CFHash(window.cast());CFRelease(window);id.to_string()}).or_else(||Self::native_window(pid).map(|id|id.to_string()))?;
+            let mut protection=if IsSecureEventInputEnabled(){Protection::Protected}else{Protection::Unknown};
+            if let Some(field)=field{if let Ok(role)=Target::attribute(field,"AXSubrole"){if Self::string(role).contains("Secure"){protection=Protection::Protected;}CFRelease(role);}CFRelease(field);}
+            let source=TISCopyCurrentKeyboardInputSource();if source.is_null(){return None;}let id=TISGetInputSourceProperty(source,kTISPropertyInputSourceID);let kind=TISGetInputSourceProperty(source,kTISPropertyInputSourceType);let layout=if id.is_null(){String::new()}else{Self::string(id)};let ime=!kind.is_null()&&Self::string(kind).contains("InputMode");CFRelease(source);
+            Some(CaptureContext{app:app_name,window:format!("{pid}:{window_id}"),protection,active:!IsSecureEventInputEnabled(),layout,ime:ime.then_some("macOS input method".into()),authority:if ime{CaptureSource::Ime}else{CaptureSource::Keyboard},..Default::default()})
+        }
+    }
+    fn native_window(pid:i32)->Option<i32>{
+        use core_foundation::{base::TCFType,string::CFString};unsafe{let list=CGWindowListCopyWindowInfo(17,0);if list.is_null(){return None;}let owner=CFString::new("kCGWindowOwnerPID");let number=CFString::new("kCGWindowNumber");let layer=CFString::new("kCGWindowLayer");let mut found=None;
+            for index in 0..CFArrayGetCount(list).min(256){let dictionary=CFArrayGetValueAtIndex(list,index);let owner_value=CFDictionaryGetValue(dictionary,owner.as_concrete_TypeRef().cast());let layer_value=CFDictionaryGetValue(dictionary,layer.as_concrete_TypeRef().cast());let number_value=CFDictionaryGetValue(dictionary,number.as_concrete_TypeRef().cast());let(mut candidate,mut level,mut id)=(0i32,0i32,0i32);if !owner_value.is_null()&&!layer_value.is_null()&&!number_value.is_null()&&CFNumberGetValue(owner_value,3,(&mut candidate as *mut i32).cast())&&candidate==pid&&CFNumberGetValue(layer_value,3,(&mut level as *mut i32).cast())&&level==0&&CFNumberGetValue(number_value,3,(&mut id as *mut i32).cast()){found=Some(id);break;}}
+            CFRelease(list);found}
+    }
     pub fn start(state:Arc<crate::observation::Observation>) {
         use typerelay_client::observation::{Edit,Event};use std::sync::atomic::Ordering;
         let(sender,receiver)=sync_channel(128);let capture=state.clone();let running=Arc::new(std::sync::atomic::AtomicBool::new(false));let monitored=running.clone();
         std::thread::spawn(move||{
-            let mut previous=None;let mut epoch=0;
+            let mut previous=None;let mut epoch=0;let mut native_previous=None::<typerelay_client::observation::CaptureContext>;let mut native_generation=0;let mut native_sequence=0;
             loop {
                 let raw=receiver.recv_timeout(Duration::from_millis(25)).ok();
                 if !state.enabled.load(Ordering::SeqCst){previous=None;continue;}
                 if !monitored.load(Ordering::SeqCst){previous=None;state.safety(false);state.status("Permission needed: Input Monitoring; restart Typerelay after granting access");continue;}
                 let current_epoch=state.epoch.load(Ordering::SeqCst);if epoch!=current_epoch{previous=None;epoch=current_epoch;}
+                if state.native(){
+                    use typerelay_client::observation::{CaptureHealth,CaptureSource,Edit,Protection};
+                    if let Some(mut context)=Self::native_context(){
+                        if native_previous.as_ref().is_none_or(|old|old.app!=context.app||old.window!=context.window||old.layout!=context.layout){if let Some(old)=&native_previous{native_sequence+=1;state.native_event(old.clone(),CaptureSource::Keyboard,native_sequence,if old.layout==context.layout{Edit::Boundary}else{Edit::Reset},crate::observation::Observation::now());}native_generation+=1;}context.generation=native_generation;
+                        state.native_health(CaptureHealth{desktop:"macos".into(),layout:context.layout.clone(),ime:context.ime.clone(),app:Some(context.app.clone()),source:"keyboard".into(),blocked:if context.protection==Protection::Protected{Some("Learning paused in secure input".into())}else if context.ime.is_some(){Some("IME active: verified composition integration required".into())}else{None},at_ms:crate::observation::Observation::now(),..Default::default()});
+                        if let Some((event_epoch,at,edit))=raw&&event_epoch==epoch&&crate::observation::Observation::now()-at<250{native_sequence+=1;state.native_event(context.clone(),CaptureSource::Keyboard,native_sequence,edit,at);}native_previous=Some(context);
+                    }else{if let Some(old)=native_previous.take(){native_sequence+=1;state.native_event(old,CaptureSource::Keyboard,native_sequence,Edit::Reset,crate::observation::Observation::now());}state.native_health(CaptureHealth{desktop:"macos".into(),blocked:Some("Allow Accessibility and Input Monitoring, then focus an allowed app".into()),at_ms:crate::observation::Observation::now(),..Default::default()});}
+                    continue;
+                }
                 if raw.is_some(){std::thread::sleep(Duration::from_millis(12));}
                 let current=Self::field();state.safety(current.is_some());
                 if let Some((event_epoch,at,edit))=raw {
@@ -230,7 +258,7 @@ impl ObservationAdapter {
                 if !capture.enabled.load(Ordering::SeqCst){return CallbackResult::Keep;}
                 let epoch=capture.epoch.load(Ordering::SeqCst);let flags=event.get_flags();let key=event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE);
                 let direct=matches!(kind,CGEventType::KeyDown)&&event.get_integer_value_field(EventField::EVENT_SOURCE_UNIX_PROCESS_ID)==0&&event.get_integer_value_field(EventField::KEYBOARD_EVENT_AUTOREPEAT)==0&&!flags.intersects(CGEventFlags::CGEventFlagCommand|CGEventFlags::CGEventFlagControl);
-                let edit=if !direct{Edit::Reset}else{match key{36|76=>Edit::Enter,51=>Edit::Backspace,123..=126|117|48|53=>Edit::Reset,_=>{let mut buffer=[0u16;16];let mut length=0;unsafe{CGEventKeyboardGetUnicodeString(event.as_ptr(),buffer.len(),&mut length,buffer.as_mut_ptr());}match String::from_utf16(&buffer[..length.min(buffer.len())]){Ok(text)if !text.is_empty()=>Edit::Text(text),_=>Edit::Reset}}}};
+                let edit=if !direct{Edit::Reset}else{match key{36|76|48=>Edit::Boundary,51=>Edit::Backspace,123..=126|117|53=>Edit::Reset,_=>{let mut buffer=[0u16;16];let mut length=0;unsafe{CGEventKeyboardGetUnicodeString(event.as_ptr(),buffer.len(),&mut length,buffer.as_mut_ptr());}match String::from_utf16(&buffer[..length.min(buffer.len())]){Ok(text)if !text.is_empty()=>Edit::Text(text),_=>Edit::Reset}}}};
                 if sender.try_send((epoch,crate::observation::Observation::now(),edit)).is_err(){capture.reset();}CallbackResult::Keep
             },move||{active.store(true,Ordering::SeqCst);CFRunLoop::run_current()});
             running.store(false,Ordering::SeqCst);
@@ -240,3 +268,10 @@ impl ObservationAdapter {
 }
 #[link(name="Carbon",kind="framework")]
 unsafe extern "C" {fn IsSecureEventInputEnabled()->bool;}
+
+#[link(name="Carbon",kind="framework")]
+unsafe extern "C" {fn TISCopyCurrentKeyboardInputSource()->Ref;fn TISGetInputSourceProperty(source:Ref,key:Ref)->Ref;static kTISPropertyInputSourceID:Ref;static kTISPropertyInputSourceType:Ref;}
+#[link(name="CoreGraphics",kind="framework")]
+unsafe extern "C" {fn CGWindowListCopyWindowInfo(options:u32,relative:u32)->Ref;}
+#[link(name="CoreFoundation",kind="framework")]
+unsafe extern "C" {fn CFArrayGetCount(array:Ref)->isize;fn CFArrayGetValueAtIndex(array:Ref,index:isize)->Ref;fn CFDictionaryGetValue(dictionary:Ref,key:Ref)->Ref;fn CFNumberGetValue(number:Ref,kind:i32,value:*mut c_void)->bool;}

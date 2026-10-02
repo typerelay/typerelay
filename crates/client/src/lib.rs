@@ -10,6 +10,8 @@ pub mod bridge;
 pub mod browser_lease;
 #[cfg(all(feature = "desktop", target_os = "linux"))]
 pub mod desktop;
+#[cfg(all(feature = "desktop", target_os = "linux"))]
+pub mod capture_linux;
 pub mod sync;
 pub mod database;
 mod legacy_yaml;
