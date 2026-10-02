@@ -53,24 +53,32 @@ impl TextEdits {
     }
     fn moved(&self,offset:i32,now:i64)->bool {self.cursor.is_some_and(|cursor|cursor!=offset)&&now-self.changed>=400&&self.deleted.is_none()}
 }
+#[derive(Default)]
+struct Focus { blurred:Option<i64>,popup:bool }
+impl Focus {
+    fn missing(&mut self,now:i64){if !self.popup&&self.blurred.is_none(){self.blurred=Some(now);}}
+    fn lost(&mut self,now:i64){self.blurred=Some(now);self.popup=false;}
+    fn gained(&mut self,same_editor:bool,completion:bool)->bool {self.blurred=None;self.popup=completion;!same_editor&&!completion}
+    fn permits_unfocused(&self,now:i64)->bool {self.popup||self.blurred.is_some_and(|at|(0..200).contains(&(now-at)))}
+}
 struct Api { library:libloading::Library }
 impl Api {
     unsafe fn symbol<T:Copy>(&self,name:&[u8])->T {unsafe{*self.library.get::<T>(name).expect("validated AT-SPI symbol")}}
     fn load()->Result<Self> {unsafe{let api=Self{library:libloading::Library::new("libatspi.so.0")?};for name in ["atspi_init","atspi_event_listener_new","atspi_event_listener_register","atspi_event_listener_deregister","atspi_deregister_keystroke_listener","atspi_device_listener_new","atspi_register_keystroke_listener","atspi_accessible_get_role","atspi_accessible_get_state_set","atspi_state_set_contains","atspi_accessible_get_process_id","atspi_accessible_get_text_iface","atspi_text_get_n_selections","atspi_event_get_type","g_boxed_free","g_object_unref","g_object_ref","g_value_get_string","g_main_context_iteration","g_main_context_new","atspi_set_main_context"]{api.library.get::<unsafe extern "C" fn()>(name.as_bytes())?;}Ok(api)}}
     unsafe fn unref(&self,object:Object) {if !object.is_null(){unsafe{self.symbol::<unsafe extern "C" fn(Object)>(b"g_object_unref")(object);}}}
     unsafe fn process(&self,source:Object)->u32 {unsafe{self.symbol::<unsafe extern "C" fn(Object,*mut Object)->u32>(b"atspi_accessible_get_process_id")(source,std::ptr::null_mut())}}
-    unsafe fn safe(&self,source:Object)->Option<String> {unsafe{
+    unsafe fn safe(&self,source:Object,allow_completion:bool)->Option<String> {unsafe{
         if source.is_null(){return None;}
         let role=self.symbol::<unsafe extern "C" fn(Object,*mut Object)->i32>(b"atspi_accessible_get_role")(source,std::ptr::null_mut());if ![61,79].contains(&role){return None;}
         let states=self.symbol::<unsafe extern "C" fn(Object)->Object>(b"atspi_accessible_get_state_set")(source);if states.is_null(){return None;}
-        let contains=self.symbol::<unsafe extern "C" fn(Object,i32)->i32>(b"atspi_state_set_contains");let safe=[7,8,12,24].into_iter().all(|flag|contains(states,flag)!=0);self.unref(states);if !safe{return None;}
+        let contains=self.symbol::<unsafe extern "C" fn(Object,i32)->i32>(b"atspi_state_set_contains");let safe=[7,8,24].into_iter().all(|flag|contains(states,flag)!=0)&&(contains(states,12)!=0||allow_completion&&contains(states,37)!=0);self.unref(states);if !safe{return None;}
         let text=self.symbol::<unsafe extern "C" fn(Object)->Object>(b"atspi_accessible_get_text_iface")(source);if text.is_null(){return None;}
         let selections=self.symbol::<unsafe extern "C" fn(Object,*mut Object)->i32>(b"atspi_text_get_n_selections")(text,std::ptr::null_mut());self.unref(text);if selections!=0{return None;}
         let pid=self.process(source);if pid==0||pid==std::process::id(){return None;}
         let path=std::fs::read_link(format!("/proc/{pid}/exe")).ok()?;let app=path.file_name()?.to_string_lossy().into_owned();typerelay_client::observation::Settings::supported_app(&app).then_some(app)
     }}
 }
-struct Listener { event_listener:Object,key_listener:Object,registered:Vec<CString>,modifiers:Vec<u32>,unlocked:Arc<std::sync::atomic::AtomicBool>,api:Api,state:Arc<Observation>,field:Object,edits:TextEdits,epoch:u64 }
+struct Listener { event_listener:Object,key_listener:Object,registered:Vec<CString>,modifiers:Vec<u32>,unlocked:Arc<std::sync::atomic::AtomicBool>,api:Api,state:Arc<Observation>,field:Object,edits:TextEdits,focus:Focus,epoch:u64 }
 impl Drop for Listener {
     fn drop(&mut self) {unsafe {
         for kind in &self.registered {self.api.symbol::<unsafe extern "C" fn(Object,*const c_char,*mut Object)->i32>(b"atspi_event_listener_deregister")(self.event_listener,kind.as_ptr(),std::ptr::null_mut());}
@@ -79,8 +87,13 @@ impl Drop for Listener {
     }}
 }
 impl Listener {
+    fn safe_field(&mut self)->Option<String> {unsafe{
+        if let Some(app)=self.api.safe(self.field,false){self.focus.blurred=None;return Some(app);}
+        let app=self.api.safe(self.field,true)?;let now=Observation::now();self.focus.missing(now);
+        self.focus.permits_unfocused(now).then_some(app)
+    }}
     fn discard(&mut self){self.edits.reset();self.state.reset();}
-    fn reset(&mut self){self.discard();unsafe{self.api.unref(self.field);}self.field=std::ptr::null_mut();self.state.reset();}
+    fn reset(&mut self){self.discard();self.focus=Focus::default();unsafe{self.api.unref(self.field);}self.field=std::ptr::null_mut();self.state.reset();}
     fn feed(&self,app:&str,edits:Vec<Edit>){for edit in edits{self.state.feed(Event{epoch:self.epoch,field:format!("{:p}",self.field),app:app.into(),safe:true,direct:true,edit});}}
     unsafe extern "C" fn key(raw:*const KeyEvent,data:Object)->i32 {unsafe{
         let this=&mut *(data as *mut Self);let key=&*raw;
@@ -97,12 +110,20 @@ impl Listener {
         let epoch=self.state.epoch.load(std::sync::atomic::Ordering::SeqCst);if epoch!=self.epoch{self.reset();self.epoch=epoch;}
         let kind=CStr::from_ptr(event.kind).to_string_lossy();
         if kind.starts_with("object:state-changed:focused") {
-            if event.detail1==0{if event.source==self.field{self.reset();self.state.status("Waiting for a supported editable field");}return;}
-            self.reset();if self.api.safe(event.source).is_some(){self.field=self.api.symbol::<unsafe extern "C" fn(Object)->Object>(b"g_object_ref")(event.source);self.state.status("Ready to observe typing");}return;
+            if event.detail1==0{if event.source==self.field{self.focus.lost(Observation::now());}return;}
+            let same=event.source==self.field&&!self.field.is_null();
+            let role=self.api.symbol::<unsafe extern "C" fn(Object,*mut Object)->i32>(b"atspi_accessible_get_role")(event.source,std::ptr::null_mut());
+            let completion=!self.field.is_null()&&role==32&&self.api.process(event.source)==self.api.process(self.field)&&self.api.safe(self.field,true).is_some();
+            if self.focus.gained(same,completion){self.reset();}
+            if self.field.is_null()&&self.api.safe(event.source,false).is_some(){self.field=self.api.symbol::<unsafe extern "C" fn(Object)->Object>(b"g_object_ref")(event.source);self.state.status("Ready to observe typing");}return;
         }
         if kind.starts_with("window:"){if !self.field.is_null()&&self.api.process(event.source)==self.api.process(self.field){self.reset();}return;}
-        if event.source!=self.field||self.field.is_null(){return;}
-        let Some(app)=self.api.safe(event.source)else{self.discard();return;};let now=Observation::now();self.state.safety(true);
+        if event.source!=self.field||self.field.is_null(){
+            // Some editors replace their accessible entry without a focus event.
+            if !kind.starts_with("object:text-changed:")||self.api.safe(event.source,false).is_none(){return;}
+            self.reset();self.field=self.api.symbol::<unsafe extern "C" fn(Object)->Object>(b"g_object_ref")(event.source);
+        }
+        let Some(app)=self.safe_field()else{self.discard();return;};let now=Observation::now();self.state.safety(true);
         if kind.starts_with("object:text-selection-changed"){return;}
         if kind.starts_with("object:text-caret-moved") {if self.edits.moved(event.detail1,now){self.discard();}return;}
         if kind.starts_with("object:text-changed:") {
@@ -140,7 +161,7 @@ impl ObservationAdapter {
     fn run(state:Arc<Observation>)->Result<()> {unsafe{
         let api=Api::load()?;ensure!([0,1].contains(&api.symbol::<unsafe extern "C" fn()->i32>(b"atspi_init")()),"AT-SPI unavailable");let context=api.symbol::<unsafe extern "C" fn()->Object>(b"g_main_context_new")();api.symbol::<unsafe extern "C" fn(Object)>(b"atspi_set_main_context")(context);
         let unlocked=Arc::new(std::sync::atomic::AtomicBool::new(false));let session=unlocked.clone();std::thread::spawn(move||Self::watch_session(session));
-        let mut listener=Box::new(Listener{event_listener:std::ptr::null_mut(),key_listener:std::ptr::null_mut(),registered:vec![],modifiers:vec![],unlocked,api,state,field:std::ptr::null_mut(),edits:TextEdits::default(),epoch:0});let pointer=(&mut *listener as *mut Listener).cast();
+        let mut listener=Box::new(Listener{event_listener:std::ptr::null_mut(),key_listener:std::ptr::null_mut(),registered:vec![],modifiers:vec![],unlocked,api,state,field:std::ptr::null_mut(),edits:TextEdits::default(),focus:Focus::default(),epoch:0});let pointer=(&mut *listener as *mut Listener).cast();
         let events=listener.api.symbol::<unsafe extern "C" fn(unsafe extern "C" fn(*const AccessibleEvent,Object),Object,Object)->Object>(b"atspi_event_listener_new")(Listener::event,pointer,std::ptr::null_mut());listener.event_listener=events;ensure!(!events.is_null(),"AT-SPI listener unavailable");
         for kind in [c"object:state-changed:focused",c"object:text-changed",c"object:text-selection-changed",c"object:text-caret-moved",c"window:deactivate"] {ensure!(listener.api.symbol::<unsafe extern "C" fn(Object,*const c_char,*mut Object)->i32>(b"atspi_event_listener_register")(events,kind.as_ptr(),std::ptr::null_mut())!=0,"AT-SPI registration failed");listener.registered.push(kind.to_owned());}
         let keys=listener.api.symbol::<unsafe extern "C" fn(unsafe extern "C" fn(*const KeyEvent,Object)->i32,Object,Object)->Object>(b"atspi_device_listener_new")(Listener::key,pointer,std::ptr::null_mut());listener.key_listener=keys;
@@ -148,9 +169,9 @@ impl ObservationAdapter {
         listener.state.status("Waiting for a supported editable field");
         loop {
             while listener.api.symbol::<unsafe extern "C" fn(Object,i32)->i32>(b"g_main_context_iteration")(context,0)!=0{}
-            let unlocked=listener.unlocked.load(std::sync::atomic::Ordering::SeqCst);let safe=unlocked&&listener.api.safe(listener.field).is_some();listener.state.safety(safe);
+            let unlocked=listener.unlocked.load(std::sync::atomic::Ordering::SeqCst);let safe=unlocked&&listener.safe_field().is_some();listener.state.safety(safe);
             if !unlocked{listener.state.status("Session locked or session safety unavailable");}
-            if !listener.state.enabled.load(std::sync::atomic::Ordering::SeqCst)||listener.epoch!=listener.state.epoch.load(std::sync::atomic::Ordering::SeqCst)||!unlocked{listener.reset();}else if !safe{listener.discard();}else if let Some(app)=listener.api.safe(listener.field){let edits=listener.edits.flush(Observation::now());listener.feed(&app,edits);}
+            if !listener.state.enabled.load(std::sync::atomic::Ordering::SeqCst)||listener.epoch!=listener.state.epoch.load(std::sync::atomic::Ordering::SeqCst)||!unlocked{listener.reset();}else if !safe{listener.discard();}else if let Some(app)=listener.safe_field(){let edits=listener.edits.flush(Observation::now());listener.feed(&app,edits);}
             std::thread::sleep(Duration::from_millis(20));
         }
     }}
@@ -167,6 +188,25 @@ mod tests {
             self.now+=10;let settings=typerelay_client::observation::Settings{enabled:true,..Default::default()};
             for edit in self.edits.change(insert,offset,text,self.now){if let Some(text)=self.detector.event(Event{epoch:1,field:"editor".into(),app:"code".into(),safe:true,direct:true,edit},&settings,1,self.now){self.completed.push(text);}}
         }
+    }
+    #[test]
+    fn autocomplete_focus_roundtrips_preserve_complete_email_occurrences() {
+        let mut f=Fixture::new();let mut focus=Focus::default();let mut offset=423;
+        for _ in 0..2 {
+            for c in "me@".chars(){f.change(true,offset,&c.to_string());offset+=1;}
+            // Chromium updates the field state before emitting its blur/popup events.
+            focus.missing(f.now);assert!(focus.permits_unfocused(f.now));
+            f.change(true,offset,"e");offset+=1;
+            focus.lost(f.now);assert!(focus.permits_unfocused(f.now+100));
+            assert!(!focus.gained(false,true));assert!(focus.permits_unfocused(f.now+1000));
+            for c in "mail.com".chars(){f.change(true,offset,&c.to_string());offset+=1;}
+            assert!(!focus.gained(true,false));assert!(!focus.permits_unfocused(f.now));
+            f.change(true,offset,"\n");offset+=1;
+        }
+        assert_eq!(f.completed,vec!["me@email.com";2]);
+        focus.lost(f.now);assert!(focus.permits_unfocused(f.now+199));assert!(!focus.permits_unfocused(f.now+200));
+        assert!(focus.gained(false,false));assert!(!focus.permits_unfocused(f.now));
+        focus.missing(f.now);focus.missing(f.now+150);assert!(!focus.permits_unfocused(f.now+200));
     }
     #[test]
     fn committed_inserts_complete_sentences_without_keyboard_events() {
