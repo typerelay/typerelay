@@ -73,10 +73,10 @@ export class PanelRelease {
 	static root = fileURLToPath(new URL('../', import.meta.url));
 	static script = fileURLToPath(import.meta.url);
 	static options(args, platform = process.platform, architecture = process.arch) {
-		const mode = args.shift(); if (!['windows', 'macos', 'linux'].includes(mode)) throw new Error('Usage: node scripts/release-panel.mjs windows|macos|linux [--dry-run] [--target TARGET] [--report FILE] [--appimage-only]');
+		const mode = args.shift(); if (!['windows', 'macos', 'linux'].includes(mode)) throw new Error('Usage: node scripts/release-panel.mjs windows|macos|linux [--dry-run] [--target TARGET] [--report FILE] [--appimage]');
 		let target = mode === 'windows' ? 'x86_64-pc-windows-msvc' : mode === 'linux' ? 'x86_64-unknown-linux-gnu' : architecture === 'x64' && platform === 'darwin' ? 'x86_64-apple-darwin' : 'aarch64-apple-darwin'; let dry = false; let report; let appimageOnly = false;
-		while (args.length) { const arg = args.shift(); if (arg === '--dry-run') dry = true; else if (arg === '--appimage-only') appimageOnly = true; else if (arg === '--target') target = args.shift(); else if (arg === '--report') report = args.shift(); else throw new Error('Unsupported option ' + arg + '; publication is handled by the shared release tool'); }
-		if (appimageOnly && mode !== 'linux') throw new Error('--appimage-only is only supported for Linux');
+		while (args.length) { const arg = args.shift(); if (arg === '--dry-run') dry = true; else if (arg === '--appimage') appimageOnly = true; else if (arg === '--target') target = args.shift(); else if (arg === '--report') report = args.shift(); else throw new Error('Unsupported option ' + arg + '; publication is handled by the shared release tool'); }
+		if (appimageOnly && mode !== 'linux') throw new Error('--appimage is only supported for Linux');
 		const supported = mode === 'windows' ? ['x86_64-pc-windows-msvc'] : mode === 'linux' ? ['x86_64-unknown-linux-gnu'] : ['aarch64-apple-darwin', 'x86_64-apple-darwin', 'universal-apple-darwin'];
 		if (!supported.includes(target)) throw new Error('Unsupported target');
 		const expectedPlatform = mode === 'macos' ? 'darwin' : 'linux';

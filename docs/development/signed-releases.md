@@ -45,7 +45,7 @@ Tauri performs signing/notarization with hardened runtime enabled. The app bundl
 For local testing, build only the AppImage and its updater signature:
 
 ```fish
-node scripts/release-panel.mjs linux --appimage-only
+node scripts/release-panel.mjs linux --appimage
 ```
 
 Add `--dry-run` to preview the build command. This skips DEB, RPM, and the legacy archive (including its engine rebuild), and does not require `rpm`. Without the flag, Linux still builds all formats. Signing credentials, clean `develop`, and version/architecture checks still apply. Builds still use a fresh Cargo output directory, so native compilation remains part of each run. The partial verification report covers only the AppImage; use the default full build for publication.

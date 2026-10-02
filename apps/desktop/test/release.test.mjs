@@ -122,8 +122,8 @@ test('legacy updater panel does not inherit the last packaged format', () => {
 
 test('AppImage-only flag is Linux-only and full releases remain the default', () => {
 	assert.equal(PanelRelease.options(['linux'], 'linux').appimageOnly, false);
-	assert.equal(PanelRelease.options(['linux', '--appimage-only'], 'linux').appimageOnly, true);
-	for (const mode of ['windows', 'macos']) assert.throws(() => PanelRelease.options([mode, '--appimage-only', '--dry-run']), /only supported for Linux/);
+	assert.equal(PanelRelease.options(['linux', '--appimage'], 'linux').appimageOnly, true);
+	for (const mode of ['windows', 'macos']) assert.throws(() => PanelRelease.options([mode, '--appimage', '--dry-run']), /only supported for Linux/);
 });
 
 for (const appimageOnly of [true, false]) test(`Linux release artifacts and verification with appimageOnly=${appimageOnly}`, { skip: process.platform !== 'linux' }, async t => {
@@ -151,7 +151,7 @@ for (const appimageOnly of [true, false]) test(`Linux release artifacts and veri
 	});
 	try {
 		const reportPath = path.join(root, 'report.json');
-		await PanelRelease.main(['linux', '--report', reportPath, ...(appimageOnly ? ['--appimage-only'] : [])]);
+		await PanelRelease.main(['linux', '--report', reportPath, ...(appimageOnly ? ['--appimage'] : [])]);
 		const report = JSON.parse(await fs.readFile(reportPath, 'utf8'));
 		assert.equal(report.verified, true); assert.equal(report.artifacts.length, appimageOnly ? 2 : 8);
 		assert.equal(report.updater.target, appimageOnly ? 'linux-x86_64-appimage' : 'linux-x86_64');
