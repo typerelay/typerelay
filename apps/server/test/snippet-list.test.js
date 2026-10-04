@@ -16,7 +16,7 @@ test('personal abbreviation updates only its row and ignores duplicate and out-o
 		client.request = () => { throw new Error('No page, section, or library reload allowed'); };
 		const document = dom.window.document;
 		const container = document.querySelector('#snippets'); const sibling = document.querySelector('[data-snippet="two"]');
-		document.querySelector('[data-personal-snippet="one"]').focus();
+		document.querySelector('[data-edit-snippet="one"]').focus();
 		const updated = { ...snippets[0], effective_trigger: 'mine', personal: { revision: 1, trigger: 'mine', conflicts: [] } };
 		const result = { personal_sequence: 5, personal_fragments: [{ library: 'shared', snippet: updated, html: pug.renderFile('./views/ajax/snippet.pug', { library, snippet: updated }) }] };
 		await client.apply(result);
@@ -26,7 +26,7 @@ test('personal abbreviation updates only its row and ignores duplicate and out-o
 		assert.equal(document.querySelector('[data-snippet="one"]'), node);
 		assert.equal(document.querySelector('[data-snippet="two"]'), sibling);
 		assert.equal(document.querySelector('#snippets'), container);
-		assert.equal(document.activeElement.dataset.personalSnippet, 'one');
+		assert.equal(document.activeElement.dataset.editSnippet, 'one');
 		assert.equal(document.querySelector('[data-select-snippet="one"]').checked, true);
 		assert.equal(library.snippets[0].trigger, 'tw');
 		assert.equal(library.snippets[0].effective_trigger, 'mine');
