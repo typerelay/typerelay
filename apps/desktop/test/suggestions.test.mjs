@@ -16,6 +16,13 @@ class Fixture {
 	static change(row){return{epoch:1,change:{id:row.id,revision:row.revision,candidate:row}};}
 }
 
+test('excluded apps have a separate card within the same settings form without explanatory copy',async()=>{
+	const f=await Fixture.create();try{
+		const document=f.dom.window.document;const card=document.querySelector('#observation-exclusions-card');const general=document.querySelector('#observation-enabled').closest('.settings-list');
+		assert.notEqual(card,general);assert.equal(card.closest('form'),f.ui.form);assert.equal(general.closest('form'),f.ui.form);assert.equal(document.querySelector('#observation-save').form,f.ui.form);assert.equal(card.querySelector('h2').textContent,'Excluded apps');assert.equal(document.querySelector('#observation-exclusions-help'),null);assert.equal(document.querySelector('#observation-exclusions').hasAttribute('aria-describedby'),false);assert.equal(card.querySelector('#observation-choose-apps').type,'button');
+	}finally{f.dom.window.close();}
+});
+
 test('app picker keeps drafts and stable rows, deduplicates identities, and cancels without saving',async()=>{
 	const f=await Fixture.create();try{
 		const document=f.dom.window.document;f.ui.setExclusions(['legacy-app'],{'legacy-app':'Legacy App'});const row=document.querySelector('#observation-exclusions').firstElementChild;const button=document.querySelector('#observation-choose-apps');button.focus();document.querySelector('#settings-view').scrollTop=40;document.querySelector('#observation-threshold').value='8';

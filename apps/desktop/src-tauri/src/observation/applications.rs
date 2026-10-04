@@ -4,21 +4,28 @@ use std::path::Path;
 #[cfg(not(target_os="macos"))]
 use std::path::PathBuf;
 use tauri_plugin_dialog::DialogExt;
+use tauri::Manager;
 
 #[derive(serde::Serialize)]
 pub(super) struct Application { pub id:String, pub name:String }
 
 impl Observation {
     pub fn pick_applications(app:&tauri::AppHandle)->Result<serde_json::Value> {
-        let picker=app.dialog().file().set_title("Choose apps to exclude");
+        let window=app.get_webview_window("panel").context("Settings window is unavailable")?;
+        let picker=app.dialog().file().set_parent(&window).set_title("Choose apps to exclude");
         #[cfg(target_os="macos")]
         let picker=picker.set_directory("/Applications").add_filter("Applications",&["app"]);
         #[cfg(target_os="windows")]
         let picker=picker.add_filter("Applications and shortcuts",&["exe","lnk"]);
         #[cfg(target_os="linux")]
         let picker=picker.set_directory("/usr/share/applications");
+        let always_on_top=window.is_always_on_top()?;
+        window.set_always_on_top(false)?;
+        let files=picker.blocking_pick_files().unwrap_or_default();
+        window.set_always_on_top(always_on_top)?;
+        window.set_focus()?;
         let mut applications=Vec::<Application>::new();
-        for file in picker.blocking_pick_files().unwrap_or_default() {
+        for file in files {
             let path=file.into_path().context("Choose a local application")?;
             let application=Self::resolve_application(&path).map_err(|error|anyhow::anyhow!("Could not identify {}: {error:#}. Choose the installed application executable instead of a launcher or installer.",path.display()))?;
             if !applications.iter().any(|value|value.id.eq_ignore_ascii_case(&application.id)){applications.push(application);}

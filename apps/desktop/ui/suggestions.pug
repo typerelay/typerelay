@@ -1,35 +1,35 @@
 section#settings-suggestions.settings-page(hidden)
-	form#observation-form.settings-list.setting-section
-		h2.settings-card-title Snippet suggestions
-		p.settings-description Observed text stays on this device. Typerelay never uploads it or sends it to AI providers. Text becomes a normal snippet only when you review and save it to a library.
-		p.settings-description Suggestions accept single words, email addresses, URLs, and phrases with at least 12 characters excluding spaces. New suggestions notify after a typing pause, with no hourly limit.
-		p#observation-status(role="status" aria-live="polite") Disabled
-		.setting-copy
-			label.check.mb-3(for="observation-enabled")
-				span Observe repeated text
-				input#observation-enabled.switch(type="checkbox" role="switch")
-			label.check.mb-3(for="observation-native")
-				span Capture typing across apps
-				input#observation-native.switch(type="checkbox" role="switch")
-		label.check.mb-3(for="observation-notifications")
-			span Show suggestion notifications
-			input#observation-notifications.switch(type="checkbox" role="switch")
-		.observation-field.mb-3
-			label(for="observation-threshold") Suggest after this many occurrences
-			input#observation-threshold.form-control-sm(type="number" min="2" max="100" value="4" required)
-		.observation-field.mb-3
-			label(for="observation-retention") Keep observed candidates
-			.settings-select
-				select#observation-retention.form-select-sm
-					option(value="7") 7 days
-					option(value="30" selected) 30 days
-					option(value="90") 90 days
-		.mb-3
-			h3#observation-exclusions-heading Excluded apps
-			#observation-exclusions(role="list" aria-labelledby="observation-exclusions-heading" aria-describedby="observation-exclusions-help")
+	form#observation-form
+		.settings-list.setting-section
+			h2.settings-card-title Snippet suggestions
+			p.settings-description Observed text stays on this device. Typerelay never uploads it or sends it to AI providers. Text becomes a normal snippet only when you review and save it to a library.
+			p.settings-description Suggestions accept single words, email addresses, URLs, and phrases with at least 12 characters excluding spaces. New suggestions notify after a typing pause, with no hourly limit.
+			p#observation-status(role="status" aria-live="polite") Disabled
+			.setting-copy
+				label.check.mb-3(for="observation-enabled")
+					span Observe repeated text
+					input#observation-enabled.switch(type="checkbox" role="switch")
+				label.check.mb-3(for="observation-native")
+					span Capture typing across apps
+					input#observation-native.switch(type="checkbox" role="switch")
+			label.check.mb-3(for="observation-notifications")
+				span Show suggestion notifications
+				input#observation-notifications.switch(type="checkbox" role="switch")
+			.observation-field.mb-3
+				label(for="observation-threshold") Suggest after this many occurrences
+				input#observation-threshold.form-control-sm(type="number" min="2" max="100" value="4" required)
+			.observation-field.mb-3
+				label(for="observation-retention") Keep observed candidates
+				.settings-select
+					select#observation-retention.form-select-sm
+						option(value="7") 7 days
+						option(value="30" selected) 30 days
+						option(value="90") 90 days
+		#observation-exclusions-card.settings-list.setting-section
+			h2#observation-exclusions-heading.settings-card-title Excluded apps
+			#observation-exclusions(role="list" aria-labelledby="observation-exclusions-heading")
 			p#observation-exclusions-empty.settings-description No apps excluded.
 			button#observation-choose-apps.secondary.btn-sm(type="button") Choose apps…
-			p#observation-exclusions-help.settings-description Common password managers are excluded by default. Add or remove apps, then save settings. Browser extensions and websites cannot be excluded separately from their browser. Password fields, terminals, and unsupported fields are always skipped.
 		.form-actions
 			button#observation-save.primary.btn-sm(type="submit") Save settings
 	details#observation-setup.settings-list.setting-section(aria-labelledby="observation-setup-heading")
