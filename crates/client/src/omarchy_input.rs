@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 #[derive(Clone, Debug)]
 pub(super) struct KeyboardEvent { pub device: u64, pub event: InputEvent }
-struct Keyboard { name: String, identity: String, caps_control: bool, grabbed: bool, idle_since: Option<Instant>, device: Device }
+struct Keyboard { name: String, identity: String, caps_control: bool, grabbed: bool, idle_since: Option<Instant>, keys_held: bool, device: Device }
 #[derive(Default)]
 pub(super) struct Keyboards { devices: BTreeMap<u64, Keyboard>, held: BTreeMap<u64, BTreeSet<u16>>, next: u64, pub changed: bool, pub unavailable: Vec<serde_json::Value>, pub pending: VecDeque<KeyboardEvent> }
 impl Keyboards {
@@ -34,7 +34,7 @@ impl Keyboards {
                 device.set_nonblocking(true)?;
                 anyhow::ensure!([KeyCode::KEY_A, KeyCode::KEY_Z, KeyCode::KEY_SPACE, KeyCode::KEY_ENTER].iter().all(|key| device.supported_keys().is_some_and(|keys| keys.contains(*key))), "Not a text keyboard");
                 self.next += 1;
-                self.devices.insert(self.next, Keyboard { name: name.clone(), identity, caps_control, grabbed:false, idle_since:None, device });
+                self.devices.insert(self.next, Keyboard { name: name.clone(), identity, caps_control, grabbed:false, idle_since:None, keys_held:false, device });
                 Ok(())
             })();
             if let Err(error) = result {
@@ -60,11 +60,13 @@ impl Keyboards {
                 let attempt = (|| -> Result<()> {
                     let activity = match keyboard.device.fetch_events() { Ok(events) => events.count()>0, Err(error) if error.kind()==std::io::ErrorKind::WouldBlock => false, Err(error)=>return Err(error.into()) };
                     let held = keyboard.device.get_key_state()?.iter().next().is_some();
+                    keyboard.keys_held = held;
                     if !Self::idle(&mut keyboard.idle_since, activity || held, Instant::now()) { return Ok(()); }
                     keyboard.device.grab()?;
                     // Anything queued before this ownership boundary already reached the application.
                     let activity = match keyboard.device.fetch_events() { Ok(events)=>events.count()>0, Err(error) if error.kind()==std::io::ErrorKind::WouldBlock=>false, Err(error)=>return Err(error.into()) };
-                    if activity || keyboard.device.get_key_state()?.iter().next().is_some() { keyboard.device.ungrab()?;keyboard.idle_since=None;return Ok(()); }
+                    keyboard.keys_held = keyboard.device.get_key_state()?.iter().next().is_some();
+                    if activity || keyboard.keys_held { keyboard.device.ungrab()?;keyboard.idle_since=None;return Ok(()); }
                     keyboard.grabbed=true;self.changed=true;
                     Ok(())
                 })();
@@ -108,8 +110,9 @@ impl Keyboards {
     fn idle(since: &mut Option<Instant>, active: bool, now: Instant) -> bool {
         if active { *since=None;false } else { now.duration_since(*since.get_or_insert(now))>=Duration::from_millis(50) }
     }
+    fn activation_reason(keys_held: bool) -> &'static str { if keys_held { "Release held keys to activate this keyboard" } else { "Activating keyboard" } }
     pub fn issues(&self) -> Vec<serde_json::Value> {
-        let mut issues=self.unavailable.clone();issues.extend(self.devices.values().filter(|keyboard|!keyboard.grabbed).map(|keyboard|serde_json::json!({"name":keyboard.name,"reason":"Release held keys to activate this keyboard"})));issues
+        let mut issues=self.unavailable.clone();issues.extend(self.devices.values().filter(|keyboard|!keyboard.grabbed).map(|keyboard|serde_json::json!({"name":keyboard.name,"reason":Self::activation_reason(keyboard.keys_held)})));issues
     }
     pub fn active(&self) -> Vec<serde_json::Value> { self.devices.values().filter(|keyboard|keyboard.grabbed).map(|keyboard| serde_json::json!({"name":keyboard.name,"identity":keyboard.identity})).collect() }
 }
@@ -118,6 +121,11 @@ impl Keyboards {
 mod tests {
     use super::*;
     impl KeyboardEvent { fn key(device:u64,code:u16,value:i32)->Self { Self {device,event:InputEvent::new(EventType::KEY.0,code,value)} } }
+    #[test]
+    fn activation_message_requires_observed_held_keys() {
+        assert_eq!(Keyboards::activation_reason(false),"Activating keyboard");
+        assert_eq!(Keyboards::activation_reason(true),"Release held keys to activate this keyboard");
+    }
     #[test]
     fn unavailable_device_is_reported_without_failing_reconciliation() {
         let file=tempfile::NamedTempFile::new().unwrap();let devices=vec![("Missing access".into(),file.path().to_owned(),"ID_INPUT_KEYBOARD=1\nDEVPATH=/devices/platform/test/event0".into())];let compositor=serde_json::json!({"keyboards":[{"name":"missing-access","layout":"us"},{"name":"typerelay-virtual-keyboard","layout":"us"}]});let mut group=Keyboards::default();assert!(group.reconcile("Missing access",&compositor,&devices).is_ok());assert!(group.active().is_empty());assert_eq!(group.issues()[0]["name"],"Missing access");assert!(group.issues()[0]["reason"].as_str().unwrap().contains("access"));

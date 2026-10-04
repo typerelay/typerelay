@@ -44,14 +44,21 @@ impl PanelIpc {
     pub fn write_input_health(mut value: serde_json::Value) -> Result<()> {
         if value.get("reconciled_ms").is_none() { value["reconciled_ms"]=Self::input_health()["reconciled_ms"].clone(); }
         value["pid"] = std::process::id().into();
+        value["heartbeat_monotonic_ms"] = Self::monotonic_ms().into();
         Paths::atomic_write(&Self::directory()?.join("input-health.json"), &serde_json::to_vec(&value)?, false)
     }
     pub fn input_health() -> serde_json::Value {
         let value = (|| -> Result<serde_json::Value> { Ok(serde_json::from_slice(&fs::read(Self::directory()?.join("input-health.json"))?)?) })();
-        Self::checked_input_health(value.unwrap_or(serde_json::Value::Null), crate::capture_linux::CapturePublisher::now())
+        Self::checked_input_health(value.unwrap_or(serde_json::Value::Null), crate::capture_linux::CapturePublisher::now(), Self::monotonic_ms())
     }
-    pub fn checked_input_health(mut value: serde_json::Value, now: i64) -> serde_json::Value {
-        if value["heartbeat_ms"].as_i64().is_none_or(|at| now < at || now-at > 6000) {
+    fn monotonic_ms() -> Option<i64> {
+        // CLOCK_MONOTONIC is shared across processes and excludes time suspended.
+        let mut time = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+        (unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut time) } == 0).then_some(time.tv_sec * 1000 + time.tv_nsec / 1_000_000)
+    }
+    pub fn checked_input_health(mut value: serde_json::Value, now: i64, monotonic: Option<i64>) -> serde_json::Value {
+        let (heartbeat, clock) = match (value["heartbeat_monotonic_ms"].as_i64(), monotonic) { (Some(at), Some(clock)) => (Some(at), clock), _ => (value["heartbeat_ms"].as_i64(), now) };
+        if heartbeat.is_none_or(|at| at < 0 || clock < at || clock-at > 6000) {
             value = serde_json::json!({"state":"unavailable","active":[],"unavailable":[],"message":"Typerelay keyboard worker is unavailable. Open Check setup to repair keyboard input.","heartbeat_ms":now});
         }
         value
@@ -150,8 +157,26 @@ mod capture_tests {
 mod input_health_tests {
     use super::*;
     #[test]
+    fn suspend_and_wall_clock_changes_do_not_expire_a_live_worker() {
+        let health=serde_json::json!({"state":"ready","heartbeat_ms":1000,"heartbeat_monotonic_ms":1000});
+        for wall in [0,1000,86_401_000] { assert_eq!(PanelIpc::checked_input_health(health.clone(),wall,Some(2000))["state"],"ready"); }
+        assert_eq!(PanelIpc::checked_input_health(health.clone(),1000,Some(7000))["state"],"ready");
+        for clock in [999,7001] { assert_eq!(PanelIpc::checked_input_health(health.clone(),1000,Some(clock))["state"],"unavailable"); }
+        assert_eq!(PanelIpc::checked_input_health(serde_json::Value::Null,1000,Some(2000))["state"],"unavailable");
+    }
+    #[test]
+    fn legacy_workers_and_unavailable_monotonic_clock_use_wall_time() {
+        let old=serde_json::json!({"state":"ready","heartbeat_ms":1000});
+        assert_eq!(PanelIpc::checked_input_health(old.clone(),2000,Some(90_000))["state"],"ready");
+        assert_eq!(PanelIpc::checked_input_health(old,7001,Some(1000))["state"],"unavailable");
+        let current=serde_json::json!({"state":"ready","heartbeat_ms":1000,"heartbeat_monotonic_ms":1000});
+        assert_eq!(PanelIpc::checked_input_health(current.clone(),2000,None)["state"],"ready");
+        assert_eq!(PanelIpc::checked_input_health(current,7001,None)["state"],"unavailable");
+        assert!(PanelIpc::monotonic_ms().is_some_and(|clock|clock>=0));
+    }
+    #[test]
     fn stale_or_missing_heartbeat_never_reports_ready() {
-        for value in [serde_json::Value::Null,serde_json::json!({"state":"ready","heartbeat_ms":1000}),serde_json::json!({"state":"ready","heartbeat_ms":9000})] {assert_eq!(PanelIpc::checked_input_health(value,8000)["state"],"unavailable");}
-        assert_eq!(PanelIpc::checked_input_health(serde_json::json!({"state":"degraded","heartbeat_ms":7500}),8000)["state"],"degraded");
+        for value in [serde_json::Value::Null,serde_json::json!({"state":"ready","heartbeat_ms":1000}),serde_json::json!({"state":"ready","heartbeat_ms":9000})] {assert_eq!(PanelIpc::checked_input_health(value,8000,None)["state"],"unavailable");}
+        assert_eq!(PanelIpc::checked_input_health(serde_json::json!({"state":"degraded","heartbeat_ms":7500}),8000,None)["state"],"degraded");
     }
 }

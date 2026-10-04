@@ -78,6 +78,16 @@ impl Runtime {
 		*self.target.lock().unwrap()=target;
 		*self.capture_status.lock().unwrap()=message;
 	}
+    #[cfg(target_os="linux")]
+    fn input_notice(healthy: bool, transition: &mut Option<(bool, std::time::Instant)>, notified: &mut bool, now: std::time::Instant) -> bool {
+        let (previous, since) = transition.get_or_insert((healthy, now));
+        if *previous != healthy { *previous = healthy; *since = now; }
+        if now.duration_since(*since) < std::time::Duration::from_secs(6) { return false; }
+        if healthy { *notified = false; return false; }
+        if *notified { return false; }
+        *notified = true;
+        true
+    }
     fn input_health() -> Value {
         #[cfg(target_os="linux")]
         { typerelay_client::panel_ipc::PanelIpc::input_health() }
@@ -492,7 +502,7 @@ fn main() {
         {let _=std::fs::remove_file(typerelay_client::panel_ipc::PanelIpc::directory()?.join("ready"));}
         if std::env::args().any(|arg|arg=="--quit"||arg=="--uninstall") {if std::env::args().any(|arg|arg=="--uninstall"){app.autolaunch().disable()?;}app.handle().exit(0);return Ok(());}
         #[cfg(target_os="linux")]
-        { let handle=app.handle().clone();std::thread::spawn(move||{let mut previous=String::new();let mut previous_message=String::new();std::thread::sleep(std::time::Duration::from_secs(6));loop{let health=typerelay_client::panel_ipc::PanelIpc::input_health();let signature=serde_json::json!({"state":health["state"],"message":health["message"],"active":health["active"],"unavailable":health["unavailable"]}).to_string();if signature!=previous{let _=handle.emit("input-health",&health);previous=signature;}let message=health["message"].as_str().unwrap_or_default();if message!=previous_message{if !message.is_empty(){Runtime::notice(&handle,message,true);}previous_message=message.to_owned();}std::thread::sleep(std::time::Duration::from_secs(1));}}); }
+        { let handle=app.handle().clone();std::thread::spawn(move||{let mut previous=String::new();let mut transition=None;let mut notified=false;loop{let health=typerelay_client::panel_ipc::PanelIpc::input_health();let signature=serde_json::json!({"state":health["state"],"message":health["message"],"active":health["active"],"unavailable":health["unavailable"]}).to_string();if signature!=previous{let _=handle.emit("input-health",&health);previous=signature;}let message=health["message"].as_str().unwrap_or_default();if Runtime::input_notice(health["state"]=="ready",&mut transition,&mut notified,std::time::Instant::now())&&!message.is_empty(){Runtime::notice(&handle,message,true);}std::thread::sleep(std::time::Duration::from_secs(1));}}); }
         if let Err(error)=Runtime::shortcut(app.handle(),None,&config.shortcut){*app.state::<Runtime>().status.lock().unwrap()=error.to_string();}
         if config.launch_at_login && let Err(error)=app.autolaunch().enable(){*app.state::<Runtime>().status.lock().unwrap()=format!("Could not enable launch at login: {error}");}
 		if let Err(error)=tray::install(app.handle()){*app.state::<Runtime>().status.lock().unwrap()=format!("Tray unavailable: {error}. Use the shortcut or launcher.");}
@@ -532,6 +542,27 @@ fn main() {
 
 #[cfg(all(test,target_os="linux"))]
 mod tests {
+    #[cfg(target_os="linux")]
+    #[test]
+    fn input_notifications_require_persistence_and_sustained_recovery() {
+        let start=std::time::Instant::now();let mut transition=None;let mut notified=false;
+        let mut sample=|seconds,healthy|super::Runtime::input_notice(healthy,&mut transition,&mut notified,start+std::time::Duration::from_secs(seconds));
+        assert!(!sample(0,false));assert!(!sample(5,false));assert!(!sample(5,true));
+        // A new unhealthy interval must last six seconds, regardless of error text.
+        assert!(!sample(7,false));assert!(!sample(12,false));assert!(sample(13,false));assert!(!sample(20,false));
+        assert!(!sample(21,true));assert!(!sample(26,true));assert!(!sample(26,false));assert!(!sample(32,false));
+        assert!(!sample(33,true));assert!(!sample(39,true));assert!(!sample(40,false));assert!(sample(46,false));
+    }
+    #[cfg(target_os="linux")]
+    #[test]
+    fn changing_input_errors_do_not_reset_or_repeat_notifications() {
+        let start=std::time::Instant::now();let mut transition=None;let mut notified=false;let mut notices=vec![];
+        for (seconds,state,message) in [(0,"unavailable","Worker unavailable"),(2,"degraded","Activating keyboard"),(4,"degraded","Release held keys"),(6,"unavailable","Worker unavailable"),(8,"degraded","Activating keyboard")] {
+            if super::Runtime::input_notice(state=="ready",&mut transition,&mut notified,start+std::time::Duration::from_secs(seconds)) { notices.push(message); }
+        }
+        assert_eq!(notices,vec!["Worker unavailable"]);
+    }
+
     use super::*;
     #[test]
     fn search_panel_ignores_compositor_focus_loss() { assert!(!Runtime::hide_on_focus_loss()); }
