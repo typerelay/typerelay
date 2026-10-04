@@ -12,16 +12,25 @@ pub(super) struct Application { pub id:String, pub name:String }
 impl Observation {
     pub fn pick_applications(app:&tauri::AppHandle)->Result<serde_json::Value> {
         let window=app.get_webview_window("panel").context("Settings window is unavailable")?;
-        let picker=app.dialog().file().set_parent(&window).set_title("Choose apps to exclude");
+        let picker=app.dialog().file().set_title("Choose apps to exclude");
+        #[cfg(not(target_os="linux"))]
+        let picker=picker.set_parent(&window);
         #[cfg(target_os="macos")]
         let picker=picker.set_directory("/Applications").add_filter("Applications",&["app"]);
         #[cfg(target_os="windows")]
         let picker=picker.add_filter("Applications and shortcuts",&["exe","lnk"]);
         #[cfg(target_os="linux")]
         let picker=picker.set_directory("/usr/share/applications");
-        let always_on_top=window.is_always_on_top()?;
-        window.set_always_on_top(false)?;
+        // Linux compositors may keep a floating panel above the portal dialog despite
+        // lowering it. Hide only the native window; retain the webview and its drafts.
+        #[cfg(target_os="linux")]
+        window.hide()?;
+        #[cfg(not(target_os="linux"))]
+        let always_on_top={let previous=window.is_always_on_top()?;window.set_always_on_top(false)?;previous};
         let files=picker.blocking_pick_files().unwrap_or_default();
+        #[cfg(target_os="linux")]
+        window.show()?;
+        #[cfg(not(target_os="linux"))]
         window.set_always_on_top(always_on_top)?;
         window.set_focus()?;
         let mut applications=Vec::<Application>::new();

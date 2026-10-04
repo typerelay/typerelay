@@ -40,3 +40,4 @@ body:not([data-os=macos]) #settings-form>.setting-row{padding:.9rem}
 .observation-exclusion{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:.75rem}.observation-exclusion-copy{min-width:0;overflow-wrap:anywhere}.observation-exclusion-name,.observation-exclusion-id{display:block}.observation-exclusion-remove{flex-shrink:0;cursor:pointer}#observation-choose-apps{cursor:pointer}
 
 #observation-form>.form-actions{margin-bottom:.5rem}
+#observation-exclusions-card{padding:1.5rem}
