@@ -12,11 +12,22 @@ pub use passages::{PassageRevision,PassageWork,PassageProgress,DiscoveryStatus};
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
-pub struct Settings { pub enabled: bool, pub native_capture: bool, pub notifications: bool, pub threshold: u32, pub retention_days: u32, pub excluded_apps: Vec<String> }
-impl Default for Settings { fn default()->Self { Self { enabled:false, native_capture:false, notifications:false, threshold:4, retention_days:30, excluded_apps:vec![] } } }
+pub struct Settings { pub enabled: bool, pub native_capture: bool, pub notifications: bool, pub threshold: u32, pub retention_days: u32, pub excluded_apps: Vec<String>, pub excluded_app_names: std::collections::BTreeMap<String,String> }
+impl Default for Settings { fn default()->Self { Self { enabled:false, native_capture:false, notifications:false, threshold:4, retention_days:30, excluded_apps:Self::default_exclusions(std::env::consts::OS).iter().map(|(id,_)|(*id).into()).collect(), excluded_app_names:Default::default() } } }
 impl Settings {
-    pub fn validate(&self)->Result<()> { ensure!((2..=100).contains(&self.threshold),"Choose a repetition threshold between 2 and 100"); ensure!([7,30,90].contains(&self.retention_days),"Choose 7, 30 or 90 days"); ensure!(self.excluded_apps.len()<=200&&self.excluded_apps.iter().all(|s|!s.trim().is_empty()&&s.len()<=512),"Invalid excluded application"); Ok(()) }
-    pub fn allows(&self,app:&str)->bool { self.enabled&&Self::supported_app(app)&&!self.excluded_apps.iter().any(|value|value.eq_ignore_ascii_case(app)) }
+    // Desktop package identities; sources and platform limitations: docs/desktop/suggestions.md.
+    pub fn default_exclusions(platform:&str)->&'static [(&'static str,&'static str)] {
+        match platform {
+            "macos"=>&[("com.1password.1password","1Password"),("com.agilebits.onepassword7","1Password 7"),("com.bitwarden.desktop","Bitwarden"),("me.proton.pass.electron","Proton Pass"),("com.nordsec.nordpass","NordPass"),("com.keepersecurity.passwordmanager","Keeper"),("org.keepassxc.keepassxc","KeePassXC"),("org.keepassx.keepassxc","KeePassXC (legacy)"),("com.apple.Passwords","Apple Passwords")],
+            "windows"=>&[("1Password.exe","1Password"),("Bitwarden.exe","Bitwarden"),("ProtonPass.exe","Proton Pass"),("NordPass.exe","NordPass"),("keeperpasswordmanager.exe","Keeper"),("KeePass.exe","KeePass"),("KeePassXC.exe","KeePassXC")],
+            "linux"=>&[("1password","1Password"),("bitwarden","Bitwarden"),("Proton Pass","Proton Pass"),("nordpass","NordPass"),("keeperpasswordmanager","Keeper"),("keepassxc","KeePassXC")],
+            _=>&[],
+        }
+    }
+    pub fn app_name(&self,id:&str)->String {self.excluded_app_names.iter().find(|(key,_)|key.eq_ignore_ascii_case(id)).map(|(_,name)|name.clone()).or_else(||Self::default_exclusions(std::env::consts::OS).iter().find(|(key,_)|key.eq_ignore_ascii_case(id)).map(|(_,name)|(*name).into())).unwrap_or_else(||id.into())}
+    pub fn excluded(&self,app:&str)->bool {self.excluded_apps.iter().any(|value|value.eq_ignore_ascii_case(app))}
+    pub fn validate(&self)->Result<()> { ensure!((2..=100).contains(&self.threshold),"Choose a repetition threshold between 2 and 100"); ensure!([7,30,90].contains(&self.retention_days),"Choose 7, 30 or 90 days"); ensure!(self.excluded_apps.len()<=256&&self.excluded_apps.iter().all(|s|!s.trim().is_empty()&&s.len()<=512),"Invalid excluded application"); ensure!(self.excluded_app_names.len()<=256&&self.excluded_app_names.iter().all(|(id,name)|id.len()<=512&&!name.trim().is_empty()&&name.len()<=512&&self.excluded_apps.iter().any(|app|app.eq_ignore_ascii_case(id))),"Invalid application name"); Ok(()) }
+    pub fn allows(&self,app:&str)->bool { self.enabled&&Self::supported_app(app)&&!self.excluded(app) }
     pub fn supported_app(app:&str)->bool {
         let app=app.to_ascii_lowercase();
         !app.is_empty()&&!["typerelay-panel","typerelay-tui","com.typerelay.panel","com.apple.terminal","com.googlecode.iterm2","net.kovidgoyal.kitty","org.alacritty","com.mitchellh.ghostty","dev.warp.warp-stable","com.github.wez.wezterm","org.wezfurlong.wezterm","windowsterminal.exe","terminal.exe","wt.exe","conhost.exe","openconsole.exe","cmd.exe","powershell.exe","pwsh.exe","mintty.exe","putty.exe","wezterm-gui.exe","alacritty.exe","kitty.exe","foot","gnome-terminal-server","kgx","konsole","xterm","alacritty","kitty","ghostty","wezterm-gui","tilix","terminator"].contains(&app.as_str())
@@ -161,7 +172,7 @@ impl Store {
             CREATE INDEX IF NOT EXISTS occurrence_time ON occurrences(at);
             CREATE TABLE IF NOT EXISTS ignored(fingerprint TEXT PRIMARY KEY);")?;
         connection.execute("INSERT OR IGNORE INTO private VALUES('key',?1)",[uuid::Uuid::new_v4().to_string()+&uuid::Uuid::new_v4().to_string()])?;
-        let store=Self{connection};store.migrate_passages()?;Ok(store)
+        let store=Self{connection};store.migrate_passages()?;store.migrate_exclusions()?;Ok(store)
     }
     #[cfg(windows)]
     fn restrict_windows(path:&Path)->Result<()> {
@@ -172,6 +183,17 @@ impl Store {
             let result=(||->Result<()>{let mut present=BOOL::default();let mut defaulted=BOOL::default();let mut acl=std::ptr::null_mut();GetSecurityDescriptorDacl(descriptor,&mut present,&mut acl,&mut defaulted)?;ensure!(present.as_bool()&&!acl.is_null(),"Private file permissions unavailable");let name=path.as_os_str().encode_wide().chain(Some(0)).collect::<Vec<_>>();SetNamedSecurityInfoW(PCWSTR(name.as_ptr()),SE_FILE_OBJECT,DACL_SECURITY_INFORMATION|PROTECTED_DACL_SECURITY_INFORMATION,None,None,Some(acl),None).ok()?;Ok(())})();
             let _=LocalFree(Some(HLOCAL(descriptor.0)));result
         }
+    }
+    fn migrate_exclusions(&self)->Result<()> {
+        let transaction=rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?;
+        if !transaction.query_row("SELECT EXISTS(SELECT 1 FROM private WHERE key='excluded_apps_v1')",[],|row|row.get::<_,bool>(0))? {
+            let mut settings=self.settings()?;
+            for (id,_) in Settings::default_exclusions(std::env::consts::OS) {if !settings.excluded(id){settings.excluded_apps.push((*id).into());}}
+            settings.validate()?;
+            transaction.execute("INSERT INTO settings VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET value=excluded.value",[serde_json::to_string(&settings)?])?;
+            transaction.execute("INSERT INTO private VALUES('excluded_apps_v1','1')",[])?;
+        }
+        transaction.commit()?;Ok(())
     }
     pub fn settings(&self)->Result<Settings> {let value:Option<String>=self.connection.query_row("SELECT value FROM settings WHERE id=1",[],|r|r.get(0)).optional()?;value.map(|value|serde_json::from_str(&value).map_err(Into::into)).unwrap_or(Ok(Settings::default()))}
     pub fn configure(&self,settings:&Settings)->Result<()> {settings.validate()?;self.connection.execute("INSERT INTO settings VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET value=excluded.value",[serde_json::to_string(settings)?])?;self.connection.execute("UPDATE candidates SET revision=revision+1",[])?;Ok(())}
@@ -236,7 +258,7 @@ impl Store {
         for candidate in self.list(now,settings)? {self.connection.execute("UPDATE candidates SET notified=1 WHERE id=?1",[candidate.id])?;}
         Ok(true)
     }
-    pub fn forget(&self)->Result<()> {self.connection.execute_batch("BEGIN IMMEDIATE; DELETE FROM occurrences; DELETE FROM candidates; DELETE FROM ignored; DELETE FROM passage_receipts; DELETE FROM passage_patterns; DELETE FROM passage_contexts; DELETE FROM passage_rejections; DELETE FROM passage_cards; DELETE FROM private; COMMIT; VACUUM;")?;self.connection.execute("INSERT INTO private VALUES('key',?1)",[uuid::Uuid::new_v4().to_string()+&uuid::Uuid::new_v4().to_string()])?;Ok(())}
+    pub fn forget(&self)->Result<()> {self.connection.execute_batch("BEGIN IMMEDIATE; DELETE FROM occurrences; DELETE FROM candidates; DELETE FROM ignored; DELETE FROM passage_receipts; DELETE FROM passage_patterns; DELETE FROM passage_contexts; DELETE FROM passage_rejections; DELETE FROM passage_cards; DELETE FROM private WHERE key!='excluded_apps_v1'; COMMIT; VACUUM;")?;self.connection.execute("INSERT INTO private VALUES('key',?1)",[uuid::Uuid::new_v4().to_string()+&uuid::Uuid::new_v4().to_string()])?;Ok(())}
     /// Save receipt and normal snippet/outbox mutation share the snippet transaction.
     /// Receipts contain random IDs only, never observed text or fingerprints.
     pub fn save(&self,database:&Database,id:&str,revision:i64,library:&str,draft:Match,now:i64)->Result<Change> {
@@ -255,6 +277,35 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn exclusions_seed_once_preserve_legacy_settings_and_removed_defaults() {
+        let root=tempfile::tempdir().unwrap();let store=Store::open(root.path()).unwrap();let defaults=Settings::default_exclusions(std::env::consts::OS);
+        assert!(!defaults.is_empty());assert_eq!(store.settings().unwrap(),Settings::default());
+        let old=serde_json::json!({"enabled":true,"native_capture":true,"notifications":true,"threshold":8,"retention_days":90,"excluded_apps":["MyEditor",defaults[0].0.to_ascii_uppercase()]});
+        store.connection.execute("UPDATE settings SET value=?1 WHERE id=1",[old.to_string()]).unwrap();store.connection.execute("DELETE FROM private WHERE key='excluded_apps_v1'",[]).unwrap();drop(store);
+        let store=Store::open(root.path()).unwrap();let mut settings=store.settings().unwrap();
+        assert!(settings.enabled&&settings.native_capture&&settings.notifications);assert_eq!(settings.threshold,8);assert_eq!(settings.retention_days,90);assert!(settings.excluded("MyEditor"));assert_eq!(settings.excluded_apps.len(),defaults.len()+1);
+        let id=defaults[0].0;settings.excluded_apps.retain(|app|!app.eq_ignore_ascii_case(id));settings.excluded_app_names.insert("MyEditor".into(),"My friendly editor".into());store.configure(&settings).unwrap();drop(store);
+        let store=Store::open(root.path()).unwrap();assert_eq!(store.settings().unwrap(),settings);assert!(!store.settings().unwrap().excluded(id));assert_eq!(store.settings().unwrap().app_name("myeditor"),"My friendly editor");store.forget().unwrap();drop(store);
+        assert_eq!(Store::open(root.path()).unwrap().settings().unwrap(),settings);
+    }
+    #[test]
+    fn exclusion_migration_preserves_full_legacy_list_and_is_atomic() {
+        let root=tempfile::tempdir().unwrap();let store=Store::open(root.path()).unwrap();let mut settings=Settings{excluded_apps:(0..200).map(|i|format!("editor-{i}")).collect(),..Default::default()};
+        store.configure(&settings).unwrap();store.connection.execute("DELETE FROM private WHERE key='excluded_apps_v1'",[]).unwrap();store.migrate_exclusions().unwrap();assert_eq!(store.settings().unwrap().excluded_apps.len(),200+Settings::default_exclusions(std::env::consts::OS).len());
+        settings.threshold=0;store.connection.execute("UPDATE settings SET value=?1",[serde_json::to_string(&settings).unwrap()]).unwrap();store.connection.execute("DELETE FROM private WHERE key='excluded_apps_v1'",[]).unwrap();assert!(store.migrate_exclusions().is_err());assert_eq!(store.settings().unwrap(),settings);assert!(!store.connection.query_row("SELECT EXISTS(SELECT 1 FROM private WHERE key='excluded_apps_v1')",[],|row|row.get::<_,bool>(0)).unwrap());
+    }
+    #[test]
+    fn password_app_defaults_are_exact_removable_and_preserve_field_protection() {
+        for platform in ["linux","windows","macos"] {let catalog=Settings::default_exclusions(platform);assert!(!catalog.is_empty());let mut seen=HashSet::new();for (id,name) in catalog{assert!(seen.insert(id.to_ascii_lowercase()));assert!(!name.is_empty());}}
+        for (id,_) in Settings::default_exclusions(std::env::consts::OS) {
+            let mut f=CaptureFixture::new();f.context.app=id.to_ascii_uppercase();f.text("private password manager notes");assert!(f.send(Edit::Enter).is_empty());assert!(f.detector.take_passages().is_empty());
+            f.settings.excluded_apps.retain(|app|!app.eq_ignore_ascii_case(id));assert!(f.settings.allows(id));f.text("A sentence after removing the exclusion.");assert!(!f.send(Edit::Enter).is_empty());
+            f.context.protection=Protection::Protected;f.text("still protected password text");assert!(f.send(Edit::Enter).is_empty());
+            assert!(Settings{enabled:true,..Default::default()}.allows(&format!("{id}-other")));
+        }
+        assert_eq!(Settings::default().app_name("legacy.identifier"),"legacy.identifier");
+    }
     fn settings()->Settings {Settings{enabled:true,..Settings::default()}}
     fn event(edit:Edit)->Event {Event{epoch:1,field:"field".into(),app:"editor".into(),safe:true,direct:true,edit}}
     fn type_text(detector:&mut Detector,text:&str)->Option<String> {let mut result=None;for c in text.chars(){result=detector.event(event(Edit::Text(c.to_string())),&settings(),1,1000).or(result);}result}

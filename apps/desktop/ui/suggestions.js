@@ -1,12 +1,13 @@
 export class Suggestions {
 	constructor(panel) {
-		this.panel=panel;this.rows=new Map();this.revisions=new Map();this.epoch=0;this.sequence=0;this.loaded=false;this.draft=null;this.changeSequence=0;this.updated=new Map();
+		this.exclusions=new Map();this.exclusionSequence=0;this.panel=panel;this.rows=new Map();this.revisions=new Map();this.epoch=0;this.sequence=0;this.loaded=false;this.draft=null;this.changeSequence=0;this.updated=new Map();
 		this.editSequence=0;this.reviewScroll=0;this.checkSequence=0;this.form=document.querySelector('#observation-form');this.list=document.querySelector('#suggestions-list');
 		document.querySelector('#observation-check').onclick=event=>this.run(event.currentTarget,()=>this.check());
 		document.querySelector('#observation-test-notification').onclick=event=>this.run(event.currentTarget,async()=>{await this.invoke('test-notification');document.querySelector('#observation-notification-result').textContent='Test sent. If no notification appeared, allow Typerelay notifications in your system settings and check Do Not Disturb or Focus mode.';});
 		document.querySelector('#observation-context-helper').onclick=event=>this.run(event.currentTarget,async()=>{const result=await this.invoke('install-context-helper');await Swal.fire({icon:'info',title:'Desktop helper',text:result.message});await this.check();});
 		document.querySelector('#observation-restart-capture').onclick=event=>this.run(event.currentTarget,async()=>{await this.invoke('restart-capture');await this.check();});
 		document.querySelector('#suggestions-review').onclick=event=>this.run(event.currentTarget,()=>this.open());
+		document.querySelector('#observation-choose-apps').onclick=event=>this.run(event.currentTarget,()=>this.chooseApps());
 		this.form.onsubmit=event=>{event.preventDefault();void this.run(document.querySelector('#observation-save'),()=>this.configure());};
 		document.querySelector('#observation-enabled').onchange=()=>{if(!document.querySelector('#observation-enabled').checked&&this.settings?.enabled)void this.run(document.querySelector('#observation-enabled'),()=>this.configure({...this.settings,enabled:false}));};
 		document.querySelector('#observation-forget').onclick=event=>this.run(event.currentTarget,()=>this.forget());
@@ -20,12 +21,27 @@ export class Suggestions {
 	async run(button,operation){if(button.disabled)return;button.disabled=true;try{await operation();}catch(error){await Swal.fire({icon:'error',title:'Snippet suggestions',text:String(error),confirmButtonText:'OK'});}finally{button.disabled=false;}}
 	async open(sequence=this.panel.openSequence=(this.panel.openSequence||0)+1){this.panel.cancelAi();await this.panel.invoke('set_settings_view',{enabled:true,suggestions:true});if(sequence!==this.panel.openSequence)return;document.body.dataset.view='suggestions';document.querySelector('#window-title').textContent='Suggestions';for(const id of ['search-view','settings-view','fill-view'])document.querySelector('#'+id).hidden=true;document.querySelector('#suggestions-view').hidden=false;await this.load();if(!this.draft&&!document.querySelector('#suggestions-view').hidden)document.querySelector('#suggestion-heading').focus({preventScroll:true});}
 	async load(){
-		const sequence=++this.sequence;const checkSequence=this.checkSequence;const started=this.changeSequence;const startEpoch=this.epoch;const snapshot=await this.invoke('list');if(sequence!==this.sequence||snapshot.epoch<this.epoch||startEpoch!==this.epoch&&snapshot.epoch!==this.epoch)return;
+		const exclusionSequence=this.exclusionSequence;const sequence=++this.sequence;const checkSequence=this.checkSequence;const started=this.changeSequence;const startEpoch=this.epoch;const snapshot=await this.invoke('list');if(sequence!==this.sequence||snapshot.epoch<this.epoch||startEpoch!==this.epoch&&snapshot.epoch!==this.epoch)return;
 		document.querySelector('#suggestion-prefix').textContent=snapshot.prefix||'';this.epoch=snapshot.epoch;this.settings=snapshot.settings;this.loaded=true;if(snapshot.setup&&checkSequence===this.checkSequence)this.setup(snapshot.setup);
-		document.querySelector('#observation-native').checked=!!this.settings.native_capture;document.querySelector('#observation-enabled').checked=this.settings.enabled;document.querySelector('#observation-notifications').checked=this.settings.notifications;document.querySelector('#observation-threshold').value=this.settings.threshold;document.querySelector('#observation-retention').value=this.settings.retention_days;document.querySelector('#observation-exclusions').value=this.settings.excluded_apps.join('\n');document.querySelector('#observation-status').textContent=snapshot.status;
+		document.querySelector('#observation-native').checked=!!this.settings.native_capture;document.querySelector('#observation-enabled').checked=this.settings.enabled;document.querySelector('#observation-notifications').checked=this.settings.notifications;document.querySelector('#observation-threshold').value=this.settings.threshold;document.querySelector('#observation-retention').value=this.settings.retention_days;if(exclusionSequence===this.exclusionSequence)this.setExclusions(this.settings.excluded_apps,snapshot.excluded_app_names||this.settings.excluded_app_names||{});document.querySelector('#observation-status').textContent=snapshot.status;
 		const changes=snapshot.changes||snapshot.candidates.map(candidate=>({id:candidate.id,revision:candidate.revision,candidate}));const present=new Set(changes.map(row=>row.id));for(const [id,row]of this.rows)if(!present.has(id)&&(this.updated.get(id)||0)<=started)this.change({epoch:this.epoch,change:{id,revision:row.revision+1,candidate:null}});
 		for(const change of changes)this.change({epoch:this.epoch,change});this.empty();
 	}
+	setExclusions(ids,names={}) {
+		const keep=new Set(ids.map(id=>id.toLowerCase()));
+		for(const [key,app]of this.exclusions)if(!keep.has(key)){app.node.remove();this.exclusions.delete(key);}
+		for(const id of ids)this.exclusion({id,name:names[id]||id});this.exclusionsEmpty();
+	}
+	exclusion({id,name}) {
+		const key=id.toLowerCase();if(this.exclusions.has(key))return;
+		const node=document.querySelector('#observation-exclusion-template').content.firstElementChild.cloneNode(true);node.dataset.id=key;
+		node.querySelector('.observation-exclusion-name').textContent=name;const identifier=node.querySelector('.observation-exclusion-id');identifier.textContent=id;identifier.hidden=name===id;
+		const button=node.querySelector('.observation-exclusion-remove');button.setAttribute('aria-label','Remove '+name);
+		button.onclick=()=>{const next=node.nextElementSibling?.querySelector('button')||node.previousElementSibling?.querySelector('button')||document.querySelector('#observation-choose-apps');this.exclusions.delete(key);node.remove();this.exclusionSequence++;this.exclusionsEmpty();next.focus({preventScroll:true});};
+		this.exclusions.set(key,{id,name,node});document.querySelector('#observation-exclusions').append(node);this.exclusionsEmpty();
+	}
+	exclusionsEmpty(){document.querySelector('#observation-exclusions-empty').hidden=this.exclusions.size>0;}
+	async chooseApps(){const sequence=this.sequence;const apps=await this.invoke('pick-applications');if(sequence!==this.sequence)return;for(const app of apps)this.exclusion(app);if(apps.length)this.exclusionSequence++;}
 	async check(){const sequence=++this.checkSequence;const result=await this.invoke('check');if(sequence===this.checkSequence)this.setup(result);}
 	setup(value){
 		if(value.epoch!==undefined&&value.epoch<this.epoch)return;
@@ -36,7 +52,7 @@ export class Suggestions {
 		if(value.input){this.panel.inputHealth?.(value.input);checks.push({id:'input-readiness',label:'Keyboard input',detail:value.input.message||'Ready: '+(value.input.active||[]).map(device=>device.name).join(', ')});}
 		if(value.discovery)checks.push({id:'discovery',label:'Learning history',detail:value.discovery.capacity_reached?'Learning history reached its limit. Older one-off patterns are replaced as space is needed.':'Ready to recognize repeated passages across messages and days.'});
 		if(value.edit_support)checks.push({id:'edits',label:'Text corrections',detail:value.edit_support});
-		checks.push({id:'typing',label:'Typing check',detail:value.observed_app?'Typing received from '+(value.observed_app==='code'?'VS Code':value.observed_app)+' in the last minute.':value.enabled?'No typing verified in the last minute. Type in another app, then click Check setup.':'Enable observation before testing typing.'});
+		checks.push({id:'typing',label:'Typing check',detail:value.excluded_app?'Learning paused: '+value.excluded_app+' is excluded in Suggestions settings.':value.observed_app?'Typing received from '+(value.observed_app==='code'?'VS Code':value.observed_app)+' in the last minute.':value.enabled?'No typing verified in the last minute. Type in another app, then click Check setup.':'Enable observation before testing typing.'});
 		checks.push({id:'status',label:'Observer status',detail:value.status});
 		if(value.vscode&&!value.native_capture)checks.push({id:'vscode',label:'VS Code',detail:value.vscode==='off'?'Accessibility is switched off. In VS Code Settings, set Editor: Accessibility Support to On.':value.vscode==='on'?'Accessibility is enabled in user settings. Run the typing check to verify the current editor.':'In VS Code Settings, set Editor: Accessibility Support to On if the typing check does not pass.'});
 		checks.push({id:'notifications',label:'Suggestion notifications',detail:!value.notifications_enabled?'Enable Show suggestion notifications above and save settings.':value.notifications_allowed===false?'Allow Typerelay notifications in System Settings.':'Enabled in Typerelay. Send a test notification to check system delivery.',action:value.platform==='macos'&&value.notifications_allowed===false?'open_notification_settings':null,button:'Open notification settings'});
@@ -46,7 +62,7 @@ export class Suggestions {
 		document.querySelector('#observation-platform-help').textContent=value.native_capture&&value.platform==='linux'?'Linux: Check setup shows the selected keyboard and capture source. Ordinary typing needs no editor plugin or accessibility setting. IME capture is not yet available in this build.':value.platform==='macos'?'macOS: allow Accessibility and Input Monitoring for Typerelay, then restart it.':value.platform==='windows'?'Windows: run the editor as your normal user. Administrator windows and protected controls may block observation.':'Linux: enable accessibility in your desktop and editor. If the observer reports missing accessibility components, install AT-SPI 2 and restart Typerelay.';
 	}
 	async configure(value){
-		const settings=value||{enabled:document.querySelector('#observation-enabled').checked,native_capture:document.querySelector('#observation-native').checked,notifications:document.querySelector('#observation-notifications').checked,threshold:Number(document.querySelector('#observation-threshold').value),retention_days:Number(document.querySelector('#observation-retention').value),excluded_apps:[...new Set(document.querySelector('#observation-exclusions').value.split('\n').map(value=>value.trim()).filter(Boolean))]};
+		const settings=value||{enabled:document.querySelector('#observation-enabled').checked,native_capture:document.querySelector('#observation-native').checked,notifications:document.querySelector('#observation-notifications').checked,threshold:Number(document.querySelector('#observation-threshold').value),retention_days:Number(document.querySelector('#observation-retention').value),excluded_apps:[...this.exclusions.values()].map(app=>app.id),excluded_app_names:Object.fromEntries([...this.exclusions.values()].filter(app=>app.name!==app.id).map(app=>[app.id,app.name]))};
 		const result=await this.invoke('configure',settings);if(result.epoch<this.epoch)return;this.epoch=result.epoch;for(const change of result.changes||[])this.change({epoch:result.epoch,change});this.settings=settings;await this.check();document.querySelector('#observation-status').textContent=settings.enabled?(settings.native_capture?'Waiting for native typing':'Waiting for a supported editable field'):'Disabled';await Swal.fire({toast:true,position:'bottom-end',icon:'success',title:'Settings saved',showConfirmButton:false,timer:2000});
 	}
 	change(envelope){

@@ -25,9 +25,11 @@ section#settings-suggestions.settings-page(hidden)
 					option(value="30" selected) 30 days
 					option(value="90") 90 days
 		.mb-3
-			label(for="observation-exclusions") Excluded apps
-			textarea#observation-exclusions.form-control-sm(rows="3" spellcheck="false" aria-describedby="observation-exclusions-help")
-			p#observation-exclusions-help.settings-description One application identifier per line: macOS bundle ID, Windows executable name, or Linux executable name. Password fields, terminals, and unsupported fields are always skipped.
+			h3#observation-exclusions-heading Excluded apps
+			#observation-exclusions(role="list" aria-labelledby="observation-exclusions-heading" aria-describedby="observation-exclusions-help")
+			p#observation-exclusions-empty.settings-description No apps excluded.
+			button#observation-choose-apps.secondary.btn-sm(type="button") Choose apps…
+			p#observation-exclusions-help.settings-description Common password managers are excluded by default. Add or remove apps, then save settings. Browser extensions and websites cannot be excluded separately from their browser. Password fields, terminals, and unsupported fields are always skipped.
 		.form-actions
 			button#observation-save.primary.btn-sm(type="submit") Save settings
 	details#observation-setup.settings-list.setting-section(aria-labelledby="observation-setup-heading")
@@ -51,3 +53,10 @@ section#settings-suggestions.settings-page(hidden)
 			h6.observation-check-label
 			p.observation-check-detail.settings-description
 			button.observation-check-action.secondary.btn-sm(type="button" hidden)
+
+	template#observation-exclusion-template
+		.observation-exclusion(role="listitem")
+			.observation-exclusion-copy
+				span.observation-exclusion-name
+				small.observation-exclusion-id.settings-description
+			button.observation-exclusion-remove.secondary.btn-sm(type="button") Remove

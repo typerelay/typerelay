@@ -6393,6 +6393,7 @@ dependencies = [
  "tauri-plugin-global-shortcut",
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
+ "tempfile",
  "typerelay-client",
  "typerelay-core",
  "uuid",

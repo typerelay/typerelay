@@ -426,6 +426,7 @@ async fn suggestions(app:tauri::AppHandle,action:String,value:Option<Value>)->st
         let state=app.try_state::<std::sync::Arc<observation::Observation>>().context("Local observation storage is unavailable")?;let value=value.unwrap_or(Value::Null);let root=&app.state::<Runtime>().root;
         match action.as_str(){
             "list"=>state.snapshot(),
+            "pick-applications"=>observation::Observation::pick_applications(&app),
             "check"=>state.diagnostics(),
             #[cfg(target_os="linux")]
             "install-context-helper"=>Ok(json!({"message":typerelay_client::installation::Installer::install_capture_helper(&typerelay_client::capture_linux::ContextProvider::desktop())?})),

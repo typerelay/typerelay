@@ -23,7 +23,23 @@ Notifications contain no observed wording. They appear after a typing pause, inc
 
 ## Settings and privacy
 
-Change the repetition threshold (2–100), retention period (7, 30, or 90 days), and excluded applications. Enter one application identifier per line: a macOS bundle ID, Windows executable name, or Linux executable name. Exclusions affect future observation.
+Change the repetition threshold (2–100), retention period (7, 30, or 90 days), and excluded applications. **Choose apps…** opens the native file picker; choose one or more installed applications. Each row shows the app name and its capture identifier. **Remove** changes only that row. Additions and removals take effect after **Save settings**, and affect future observation. Existing learned candidates are not deleted. Canceling the picker changes nothing.
+
+Typerelay adds removable defaults once for new and existing installations, including apps not currently installed. Custom exclusions are preserved; removed defaults stay removed after restarting or forgetting learned text. The defaults are:
+
+| Platform | Password apps |
+| --- | --- |
+| macOS | 1Password (including 7), Bitwarden, Proton Pass, NordPass, Keeper, KeePassXC (current and legacy bundle IDs), Apple Passwords |
+| Windows | 1Password, Bitwarden, Proton Pass, NordPass, Keeper, KeePass, KeePassXC |
+| Linux | 1Password, Bitwarden, Proton Pass, NordPass, Keeper, KeePassXC |
+
+The picker resolves macOS `.app` bundles to bundle IDs, Windows `.exe` files and `.lnk` shortcuts to executable filenames, and Linux executables or resolvable `.desktop` files to the actual executable basename (following symlinks). Names and identifiers stay in the device-private settings database. Previous manually entered identifiers remain valid and display verbatim when their name is unknown. Matching is exact and case-insensitive, not a substring match.
+
+Linux scripts, AppImages, and generic Flatpak/Snap/interpreter launchers cannot reliably identify the process that eventually owns the window; the picker rejects these and asks for the installed app binary. KeePass running through the shared Mono interpreter is not a Linux default because excluding `mono` would affect unrelated apps. Windows shortcuts to launchers such as `Update.exe` are likewise rejected. Typerelay never runs selected files or evaluates launcher commands. If any selected file cannot be resolved, the selection is not added; choose valid applications again.
+
+Browser extensions and password-manager websites share their browser's process identity and cannot be excluded separately. Excluding the browser excludes the whole browser. Password fields, terminals, and unsupported fields remain protected even after a password-manager exclusion is removed. **Check setup** identifies a recently focused excluded app separately from input-worker failures.
+
+Catalog identity references: [1Password package](https://github.com/Homebrew/homebrew-cask/blob/master/Casks/1/1password.rb), [Bitwarden build configuration](https://github.com/bitwarden/clients/blob/main/apps/desktop/electron-builder.json), [Proton Pass packaging](https://github.com/ProtonMail/WebClients/blob/main/applications/pass-desktop/forge.config.ts), [NordPass package](https://github.com/Homebrew/homebrew-cask/blob/master/Casks/n/nordpass.rb), [Keeper package](https://github.com/Homebrew/homebrew-cask/blob/master/Casks/k/keeper-password-manager.rb), [Keeper deployment](https://docs.keeper.io/enterprise-guide/deploying-keeper-to-end-users/desktop-application), [KeePass downloads](https://keepass.info/download.html), [KeePassXC package](https://github.com/Homebrew/homebrew-cask/blob/master/Casks/k/keepassxc.rb), and [Apple Passwords](https://support.apple.com/guide/passwords/welcome/mac).
 
 Disabling observation immediately stops collection and clears unfinished input. Existing candidates remain until their retention period expires or you choose **Forget learned text**. Forgetting removes candidates, counts, ignored fingerprints, and pending input; it leaves saved snippets and settings intact. Observation continues afterward if still enabled.
 

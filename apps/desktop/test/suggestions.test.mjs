@@ -16,6 +16,35 @@ class Fixture {
 	static change(row){return{epoch:1,change:{id:row.id,revision:row.revision,candidate:row}};}
 }
 
+test('app picker keeps drafts and stable rows, deduplicates identities, and cancels without saving',async()=>{
+	const f=await Fixture.create();try{
+		const document=f.dom.window.document;f.ui.setExclusions(['legacy-app'],{'legacy-app':'Legacy App'});const row=document.querySelector('#observation-exclusions').firstElementChild;const button=document.querySelector('#observation-choose-apps');button.focus();document.querySelector('#settings-view').scrollTop=40;document.querySelector('#observation-threshold').value='8';
+		f.panel.invoke=async(name,args)=>{f.calls.push({name,args});assert.equal(args.action,'pick-applications');return [{id:'Editor.exe',name:'My Editor'},{id:'EDITOR.EXE',name:'Duplicate'}];};await f.ui.chooseApps();
+		assert.equal(f.ui.exclusions.size,2);assert.equal(document.querySelector('#observation-exclusions').firstElementChild,row);assert.equal(document.activeElement,button);assert.equal(document.querySelector('#observation-threshold').value,'8');assert.equal(document.querySelector('#settings-view').scrollTop,40);assert.equal(f.calls.length,1);
+		f.panel.invoke=async()=>[];await f.ui.chooseApps();assert.equal(f.ui.exclusions.size,2);
+		const picked=document.querySelector('[data-id="editor.exe"]');picked.querySelector('button').click();assert.equal(f.ui.exclusions.size,1);assert.equal(row.isConnected,true);assert.equal(document.activeElement,row.querySelector('button'));
+		let errors=0;f.dom.window.Swal.fire=async value=>{errors++;assert.equal(value.icon,'error');};f.panel.invoke=async()=>{throw Error('Cannot resolve this launcher');};await f.ui.run(button,()=>f.ui.chooseApps());assert.equal(errors,1);assert.equal(button.disabled,false);assert.equal(f.ui.exclusions.size,1);
+	}finally{f.dom.window.close();}
+});
+
+test('exclusions and labels save together, failed saves retain drafts, and setup explains exclusions',async()=>{
+	const f=await Fixture.create();try{
+		const document=f.dom.window.document;f.ui.settings={enabled:false,native_capture:false,notifications:false,threshold:4,retention_days:30,excluded_apps:[]};f.ui.setExclusions(['my-editor'],{'my-editor':'My Editor'});const row=document.querySelector('#observation-exclusions').firstElementChild;
+		f.panel.invoke=async(name,args)=>{f.calls.push({name,args});assert.equal(args.action,'configure');throw Error('Storage unavailable');};await assert.rejects(()=>f.ui.configure());assert.deepEqual(f.ui.settings.excluded_apps,[]);assert.equal(row.isConnected,true);assert.equal(f.ui.exclusions.size,1);
+		f.panel.invoke=async(name,args)=>{f.calls.push({name,args});if(args.action==='configure'){assert.deepEqual(Array.from(args.value.excluded_apps),['my-editor']);assert.equal(args.value.excluded_app_names['my-editor'],'My Editor');return {epoch:2,changes:[]};}assert.equal(args.action,'check');return {epoch:2,enabled:true,excluded_app:'My Editor',observed_app:'previous-editor'};};await f.ui.configure();
+		assert.equal(f.ui.settings.excluded_apps[0],'my-editor');assert.equal(row.isConnected,true);assert.match(document.querySelector('[data-id="typing"]').textContent,/My Editor is excluded/);assert.equal(f.calls.some(call=>call.args.action==='list'),false);
+		row.querySelector('button').click();f.panel.invoke=async(name,args)=>args.action==='configure'?{epoch:3,changes:[]}:{epoch:3};await f.ui.configure();assert.equal(f.ui.settings.excluded_apps.length,0);assert.equal(Object.keys(f.ui.settings.excluded_app_names).length,0);assert.equal(document.querySelector('#observation-exclusions-empty').hidden,false);
+	}finally{f.dom.window.close();}
+});
+
+test('late snapshots cannot overwrite exclusion edits and late picker results cannot change a newly loaded view',async()=>{
+	const f=await Fixture.create();try{
+		f.ui.setExclusions(['old-app']);let resolve;f.panel.invoke=()=>new Promise(done=>resolve=done);const loading=f.ui.load();f.dom.window.document.querySelector('.observation-exclusion-remove').click();
+		resolve({epoch:1,settings:{enabled:false,notifications:false,threshold:4,retention_days:30,excluded_apps:['old-app']},status:'Disabled',changes:[]});await loading;assert.equal(f.ui.exclusions.size,0);
+		f.panel.invoke=()=>new Promise(done=>resolve=done);const picking=f.ui.chooseApps();f.ui.sequence++;resolve([{id:'late-app',name:'Late App'}]);await picking;assert.equal(f.ui.exclusions.size,0);
+	}finally{f.dom.window.close();}
+});
+
 test('suggestion updates preserve node, draft, focus and scroll; stale events cannot resurrect deletions',async()=>{
 	const f=await Fixture.create();try{
 		f.ui.change(Fixture.change(Fixture.row()));const node=f.ui.list.firstElementChild;const button=node.querySelector('.suggestion-create');button.focus();f.ui.list.scrollTop=37;
