@@ -29,6 +29,7 @@ export class NativeTools {
 			child.on('error', reject); child.on('close', code => code === 0 ? resolve() : reject(new Error(plan.command + ' failed with exit code ' + code)));
 		});
 		await fs.mkdir(path.dirname(plans[0].files[0].destination), { recursive: true });
+		for (const file of plans.flatMap(plan => plan.files)) await fs.copyFile(file.source, file.destination);
 		if (target === 'universal-apple-darwin') {
 			const destinations = [];
 			for (const [index, file] of plans[0].files.entries()) {
@@ -38,7 +39,6 @@ export class NativeTools {
 			}
 			return destinations;
 		}
-		for (const file of plans.flatMap(plan => plan.files)) await fs.copyFile(file.source, file.destination);
 		return plans.flatMap(plan => plan.files.map(file => file.destination));
 	}
 	static hostTarget(platform = process.platform, architecture = process.arch) { if (platform === 'darwin') return architecture === 'x64' ? 'x86_64-apple-darwin' : 'aarch64-apple-darwin'; if (platform === 'win32') return 'x86_64-pc-windows-msvc'; if (platform === 'linux' && architecture === 'x64') return 'x86_64-unknown-linux-gnu'; throw new Error('Pass a supported native-tools target'); }

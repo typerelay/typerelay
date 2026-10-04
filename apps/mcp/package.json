@@ -11,11 +11,11 @@
   },
   "dependencies": {
     "@managani/cache": "0.1.5",
-    "@modelcontextprotocol/sdk": "^1.31.0",
+    "@modelcontextprotocol/sdk": "^1.32.0",
     "@typerelay/observability": "workspace:*",
     "express": "^5.2.1",
     "express-rate-limit": "^8.7.0",
-    "mongoose": "^9.10.3",
+    "mongoose": "^9.10.4",
     "zod": "^4.6.5"
   }
 }

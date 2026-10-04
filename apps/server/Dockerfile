@@ -1,9 +1,11 @@
 FROM rust:1.94-bookworm AS rust
+RUN apt-get update && apt-get install -y --no-install-recommends libxkbcommon-dev && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY scripts ./scripts
 COPY apps/desktop/package.json ./apps/desktop/package.json
+COPY apps/desktop/helpers ./apps/desktop/helpers
 RUN cargo build --release --locked --bins
 RUN rustup target add wasm32-unknown-unknown && cargo build --release --locked -p typerelay-template-wasm --target wasm32-unknown-unknown
 
@@ -31,6 +33,7 @@ FROM rust AS mobile-rust
 RUN cargo build --release --locked -p typerelay-mobile --features preview --bin typerelay-mobile-preview
 
 FROM workspace-dependencies AS mobile
+RUN apt-get update && apt-get install -y --no-install-recommends libxkbcommon0 && rm -rf /var/lib/apt/lists/*
 WORKDIR /opt/typerelay/apps/mobile
 COPY --from=workspace-dependencies /opt/deploy/mobile/node_modules ./node_modules
 COPY --from=workspace-dependencies /opt/deploy/server /opt/typerelay/apps/server
@@ -41,6 +44,7 @@ ENV NODE_ENV=development
 CMD ["pnpm", "exec", "vite", "--host", "0.0.0.0", "--port", "5174", "--strictPort"]
 
 FROM node:24-bookworm-slim AS production
+RUN apt-get update && apt-get install -y --no-install-recommends libxkbcommon0 && rm -rf /var/lib/apt/lists/*
 ARG APP_VERSION=development
 ENV APP_VERSION=${APP_VERSION}
 ENV NODE_OPTIONS=--disable-warning=ExperimentalWarning
