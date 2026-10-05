@@ -8,7 +8,8 @@ import session from 'express-session';
 import MongoStore from 'connect-mongo';
 import helmet from 'helmet';
 import { rateLimit } from 'express-rate-limit';
-import { mkdir, readdir, rm } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import formidable from 'formidable';
 import { mongoose, User, Account, Member, Device, Conflict, Ticket, Operation } from './model/index.js';
 import { Auth } from './services/auth.js';
@@ -47,7 +48,13 @@ export class Server {
 		await Promise.all(Object.values(mongoose.models).map(model => model.createIndexes()));
 		await StorageMigration.run();
 		const app = express();
-		const assetVersion = String(process.env.APP_VERSION || 'development').replace(/[^A-Za-z0-9._-]/g, '-');
+		// Release numbers can be reused; content must also identify cached module URLs.
+		const assetHash = createHash('sha256');
+		for (const root of [fileURLToPath(new URL('./public/', import.meta.url)), '/data/editor/']) {
+			if (!existsSync(root)) continue;
+			for (const name of (await readdir(root, { recursive: true })).filter(name => /\.(js|css|wasm)$/.test(name)).sort()) assetHash.update(name).update('\0').update(await readFile(root + name)).update('\0');
+		}
+		const assetVersion = String(process.env.APP_VERSION || 'development').replace(/[^A-Za-z0-9._-]/g, '-') + '-' + assetHash.digest('hex').slice(0, 16);
 		const authBackgrounds = (await readdir(fileURLToPath(new URL('./public/auth/backgrounds/', import.meta.url)))).filter(name => /^[a-z0-9][a-z0-9_-]*\.webp$/i.test(name)).sort();
 		if (process.env.IS_DOCKER === 'true') app.set('trust proxy', 1);
 		app.set('view engine', 'pug');

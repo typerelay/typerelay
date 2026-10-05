@@ -7,6 +7,8 @@ description: "Use TypeRelay Desktop to search, expand, edit, and synchronize sni
 
 The TypeRelay desktop app provides a resident search panel, continuous abbreviation expansion, local SQLite storage, background sync and the TypeRelay TUI.
 
+Optional [on-device AI](./local-ai) lets you download and manage local models from Desktop settings, then draft or refine snippets in the TUI. Processing stays on your device; no web account or hosted AI provider is needed.
+
 Optional [snippet suggestions](./suggestions) detect repeated wording locally on macOS, Windows, and Linux through supported accessibility interfaces. Review and edit each suggestion before saving it to a library. Observation is independent of abbreviation expansion and requires platform/application compatibility checks.
 
 | Platform | Package | Current scope |
