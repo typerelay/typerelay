@@ -6373,6 +6373,7 @@ dependencies = [
  "flate2",
  "foreign-types",
  "fs2",
+ "glib",
  "ksni",
  "libc",
  "libloading 0.8.9",

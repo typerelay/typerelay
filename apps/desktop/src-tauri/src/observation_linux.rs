@@ -76,7 +76,11 @@ impl Focus {
 struct Api { library:libloading::Library }
 impl Api {
     unsafe fn symbol<T:Copy>(&self,name:&[u8])->T {unsafe{*self.library.get::<T>(name).expect("validated AT-SPI symbol")}}
-    fn load()->Result<Self> {unsafe{let api=Self{library:libloading::Library::new("libatspi.so.0")?};for name in ["atspi_init","atspi_event_listener_new","atspi_event_listener_register","atspi_event_listener_deregister","atspi_deregister_keystroke_listener","atspi_device_listener_new","atspi_register_keystroke_listener","atspi_accessible_get_role","atspi_accessible_get_state_set","atspi_state_set_contains","atspi_accessible_get_process_id","atspi_accessible_get_text_iface","atspi_text_get_n_selections","atspi_event_get_type","g_boxed_free","g_object_unref","g_object_ref","g_value_get_string","g_main_context_iteration","g_main_context_new","atspi_set_main_context"]{api.library.get::<unsafe extern "C" fn()>(name.as_bytes())?;}Ok(api)}}
+    fn load()->Result<Self> {unsafe{let api=Self{library:libloading::Library::new("libatspi.so.0")?};for name in ["atspi_init","atspi_set_timeout","atspi_event_listener_new","atspi_event_listener_register","atspi_event_listener_deregister","atspi_deregister_keystroke_listener","atspi_device_listener_new","atspi_register_keystroke_listener","atspi_accessible_get_role","atspi_accessible_get_state_set","atspi_state_set_contains","atspi_accessible_get_process_id","atspi_accessible_get_text_iface","atspi_text_get_n_selections","atspi_event_get_type","g_boxed_free","g_object_unref","g_object_ref","g_value_get_string"]{api.library.get::<unsafe extern "C" fn()>(name.as_bytes())?;}Ok(api)}}
+    fn initialize()->Result<Self> {unsafe{
+        ensure!(glib::MainContext::default().is_owner(),"AT-SPI must run on the desktop event loop");
+        let api=Self::load()?;ensure!([0,1].contains(&api.symbol::<unsafe extern "C" fn()->i32>(b"atspi_init")()),"AT-SPI unavailable");api.symbol::<unsafe extern "C" fn(i32,i32)>(b"atspi_set_timeout")(25,25);Ok(api)
+    }}
     unsafe fn unref(&self,object:Object) {if !object.is_null(){unsafe{self.symbol::<unsafe extern "C" fn(Object)>(b"g_object_unref")(object);}}}
     unsafe fn process(&self,source:Object)->u32 {unsafe{self.symbol::<unsafe extern "C" fn(Object,*mut Object)->u32>(b"atspi_accessible_get_process_id")(source,std::ptr::null_mut())}}
     unsafe fn safe(&self,source:Object,allow_completion:bool)->Option<String> {unsafe{
@@ -116,7 +120,9 @@ impl Listener {
         let queue=&*(data as *const EventQueue);queue.push(Pending::Accessible(OwnedEvent{raw,kind:queue.kind,free:queue.free}));
     }}
     fn drain(&mut self){
+        let started=std::time::Instant::now();
         for _ in 0..256 {
+            if started.elapsed()>=Duration::from_millis(5){break;}
             if self.queue.overflow.swap(false,Ordering::SeqCst){self.queue.clear();self.reset();return;}
             let Some(event)=self.queue.pop()else{return;};
             match event {Pending::Accessible(event)=>unsafe{self.handle(&*event.raw);},Pending::Cancel=>self.discard()}
@@ -176,9 +182,15 @@ impl ObservationAdapter {
         }
     }
 
-    pub fn start(state:Arc<Observation>) {std::thread::spawn(move||{let result=Self::run(state.clone());if result.is_err(){state.reset();state.status("Unavailable: enable desktop accessibility and install AT-SPI 2, then restart Typerelay");}});}
+    pub fn start(state:Arc<Observation>) {
+        let observer=state.clone();let result=state.app.run_on_main_thread(move||{if Self::run(observer.clone()).is_err(){observer.reset();observer.status("Unavailable: enable desktop accessibility and install AT-SPI 2, then restart Typerelay");}});
+        if result.is_err(){state.reset();state.status("Unavailable: desktop event loop stopped");}
+    }
     fn run(state:Arc<Observation>)->Result<()> {unsafe{
-        let api=Api::load()?;ensure!([0,1].contains(&api.symbol::<unsafe extern "C" fn()->i32>(b"atspi_init")()),"AT-SPI unavailable");let context=api.symbol::<unsafe extern "C" fn()->Object>(b"g_main_context_new")();api.symbol::<unsafe extern "C" fn(Object)>(b"atspi_set_main_context")(context);
+        // AT-SPI attaches newly discovered application buses to the default context,
+        // even after atspi_set_main_context. Its global deferred-message queue is
+        // not thread-safe: initialize, query and dispatch only on GTK's thread.
+        let api=Api::initialize()?;
         let unlocked=Arc::new(std::sync::atomic::AtomicBool::new(false));let session=unlocked.clone();std::thread::spawn(move||Self::watch_session(session));
         let kind=api.symbol::<unsafe extern "C" fn()->usize>(b"atspi_event_get_type")();let free=api.symbol::<unsafe extern "C" fn(usize,Object)>(b"g_boxed_free");
         let mut queue=Box::new(EventQueue::new(kind,free));let pointer=(&mut *queue as *mut EventQueue).cast();
@@ -188,14 +200,14 @@ impl ObservationAdapter {
         let keys=listener.api.symbol::<unsafe extern "C" fn(unsafe extern "C" fn(*const KeyEvent,Object)->i32,Object,Object)->Object>(b"atspi_device_listener_new")(Listener::key,pointer,std::ptr::null_mut());listener.key_listener=keys;
         for modifiers in [0,1,2,3,4,8,64] {if !keys.is_null()&&listener.api.symbol::<unsafe extern "C" fn(Object,Object,u32,u32,u32,*mut Object)->i32>(b"atspi_register_keystroke_listener")(keys,std::ptr::null_mut(),modifiers,1,0,std::ptr::null_mut())!=0{listener.modifiers.push(modifiers);}}
         listener.state.status("Waiting for a supported editable field");
-        loop {
-            for _ in 0..256{if listener.api.symbol::<unsafe extern "C" fn(Object,i32)->i32>(b"g_main_context_iteration")(context,0)==0{break;}}
+        glib::timeout_add_local_full(Duration::from_millis(20),glib::Priority::DEFAULT_IDLE,move||{
             listener.drain();
-            let unlocked=listener.unlocked.load(std::sync::atomic::Ordering::SeqCst);let safe=unlocked&&listener.safe_field().is_some();listener.state.safety(safe);
+            let unlocked=listener.unlocked.load(std::sync::atomic::Ordering::SeqCst);
             if !unlocked{listener.state.status("Session locked or session safety unavailable");}
-            if !listener.state.enabled.load(std::sync::atomic::Ordering::SeqCst)||listener.epoch!=listener.state.epoch.load(std::sync::atomic::Ordering::SeqCst)||!unlocked{listener.reset();}else if !safe{listener.discard();}else if let Some(app)=listener.safe_field(){let edits=listener.edits.flush(Observation::now());listener.feed(&app,edits);}
-            std::thread::sleep(Duration::from_millis(20));
-        }
+            if !listener.state.enabled.load(std::sync::atomic::Ordering::SeqCst)||listener.epoch!=listener.state.epoch.load(std::sync::atomic::Ordering::SeqCst)||!unlocked{listener.reset();listener.state.safety(false);}else{let app=listener.safe_field();listener.state.safety(app.is_some());if let Some(app)=app{let edits=listener.edits.flush(Observation::now());listener.feed(&app,edits);}else{listener.discard();}}
+            glib::ControlFlow::Continue
+        });
+        Ok(())
     }}
 }
 
@@ -286,6 +298,12 @@ mod tests {
         let mut edits=TextEdits::default();edits.change(true,12,"text",1000);assert!(!edits.moved(0,1100));assert!(edits.moved(0,1400));
         edits.change(false,15,"t",1500);assert!(edits.flush(1574).is_empty());assert!(matches!(edits.flush(1575).as_slice(),[Edit::Backspace]));
         edits.reset();assert!(edits.flush(2000).is_empty());
+    }
+    #[test]
+    fn accessibility_worker_cannot_initialize_beside_desktop_dispatch() {
+        let context=glib::MainContext::default();let _owner=context.acquire().unwrap();
+        let error=std::thread::spawn(||Api::initialize().err().expect("Worker must not initialize AT-SPI").to_string()).join().unwrap();
+        assert_eq!(error,"AT-SPI must run on the desktop event loop");
     }
     #[test]
     fn atspi_abi_and_runtime_symbols_are_available() {
