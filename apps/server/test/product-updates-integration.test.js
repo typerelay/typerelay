@@ -1,7 +1,7 @@
 import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { writeFile } from 'node:fs/promises';
+import { writeFile, rm } from 'node:fs/promises';
 import { JSDOM } from 'jsdom';
 import { mongoose, User, Account, Member, Ticket, ProductUpdate } from '../model/index.js';
 import { Support } from '../services/support.js';
@@ -38,6 +38,29 @@ after(async () => {
 	if (mongoose.connection.readyState) { await mongoose.connection.dropDatabase(); await mongoose.disconnect(); }
 });
 
+test('asset URLs change with module contents even when the release number is reused', async () => {
+	const { Server } = await import('../app.js');
+	const initial = new JSDOM(await (await Fixture.request('/login')).text()).window.document.querySelector('script[src$="/auth.js"]').getAttribute('src');
+	await new Promise(resolve => Fixture.server.close(resolve));
+	Fixture.server = await Server.start();
+	assert.equal(new JSDOM(await (await Fixture.request('/login')).text()).window.document.querySelector('script[src$="/auth.js"]').getAttribute('src'), initial);
+	const fixture = '/data/editor/cache-version-regression.js';
+	try {
+		await writeFile(fixture, 'export const changed = true;');
+		await new Promise(resolve => Fixture.server.close(resolve));
+		Fixture.server = await Server.start();
+		const changed = new JSDOM(await (await Fixture.request('/login')).text()).window.document.querySelector('script[src$="/auth.js"]').getAttribute('src');
+		assert.notEqual(changed, initial);
+		assert.equal((await Fixture.request(initial)).status, 404);
+		assert.equal((await Fixture.request(changed)).status, 200);
+		assert.equal((await Fixture.request('/assets/news-drawer-test/app.js')).status, 404);
+	} finally {
+		await rm(fixture, { force: true });
+		await new Promise(resolve => Fixture.server.close(resolve));
+		Fixture.server = await Server.start();
+	}
+});
+
 test('real authenticated routes enforce CSRF, persist monotonic seen state and render the archive', async () => {
 	assert.ok(Fixture.user.product_updates_seen_at > new Date('2020-01-01'));
 	assert.equal((await User.findById(Fixture.user._id).lean()).product_updates_seen_at, undefined);
@@ -55,10 +78,11 @@ test('real authenticated routes enforce CSRF, persist monotonic seen state and r
 	const pageHtml = await page.text();
 	const dom = new JSDOM(pageHtml);
 	Fixture.csrf = dom.window.document.querySelector('meta[name=csrf-token]').content;
-	assert.equal(dom.window.document.querySelector('script[src$="/app.js"]').getAttribute('src'), '/assets/news-drawer-test/app.js');
-	assert.equal(dom.window.document.querySelector('script[src$="/auth.js"]').getAttribute('src'), '/assets/news-drawer-test/auth.js');
-	assert.equal(dom.window.document.querySelector('link[href$="/app.css"]').getAttribute('href'), '/assets/news-drawer-test/app.css');
-	const versionedModule = await Fixture.request('/assets/news-drawer-test/product-updates.js');
+	const assetPath = dom.window.document.querySelector('script[src$="/app.js"]').getAttribute('src').replace('/app.js', '');
+	assert.match(assetPath, /^\/assets\/news-drawer-test-[a-f0-9]{16}$/);
+	assert.equal(dom.window.document.querySelector('script[src$="/auth.js"]').getAttribute('src'), assetPath + '/auth.js');
+	assert.equal(dom.window.document.querySelector('link[href$="/app.css"]').getAttribute('href'), assetPath + '/app.css');
+	const versionedModule = await Fixture.request(assetPath + '/product-updates.js');
 	assert.equal(versionedModule.status, 200);
 	assert.match(await versionedModule.text(), /bootstrap\.Offcanvas/);
 	assert.equal((await Fixture.request('/assets/previous-release/product-updates.js')).status, 404);
@@ -73,8 +97,8 @@ test('real authenticated routes enforce CSRF, persist monotonic seen state and r
 		assert.equal(response.status, 200, editor.pathname);
 		assert.match(response.headers.get('content-type'), /javascript/);
 		const source = await response.text();
-		assert.equal(source, await (await Fixture.request(editor.pathname.replace('/news-drawer-test', ''))).text());
-		assert.equal((await Fixture.request(editor.pathname.replace('/news-drawer-test/', '/previous-release/'))).status, 404);
+		assert.equal(source, await (await Fixture.request(editor.pathname.replace(assetPath, '/assets'))).text());
+		assert.equal((await Fixture.request(editor.pathname.replace(assetPath, '/assets/previous-release'))).status, 404);
 		const chunks = [...source.matchAll(/(?:from|import\s*\()\s*["'](.\/[^"']+\.js)["']/g)].map(match => new URL(match[1], editor));
 		assert.ok(chunks.length, 'Built editors must exercise split module imports');
 		for (const chunk of chunks) { const response = await Fixture.request(chunk.pathname); assert.equal(response.status, 200, chunk.pathname); assert.match(response.headers.get('content-type'), /javascript/); }
