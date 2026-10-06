@@ -38,7 +38,19 @@ Uses the installed Developer ID Application identity and existing Apple notariza
 
 Existing credential names are supported: `APPLE_APP_SPECIFIC_PASSWORD` maps to Tauri's `APPLE_PASSWORD`; the Electron-style `APPLE_API_KEY` path plus `APPLE_API_KEY_ID` maps to Tauri's key path/ID variables. Already configured Tauri-style variables also work. Credentials and certificate contents are never written into generated configuration.
 
-Tauri performs signing/notarization with hardened runtime enabled. The app bundles the matching native **TypeRelay TUI** sidecar, including a combined binary for universal builds. The command checks both panel and TUI architectures plus the resulting app with codesign, Gatekeeper and stapler. As with the existing release tooling, verification concerns the stapled application inside the DMG; no separate outer-DMG notarization claim is made. See [Tauri macOS signing](https://v2.tauri.app/distribute/sign/macos/).
+Tauri signs the app with hardened runtime enabled. The release adapter submits it to Apple once, saves the submission ID immediately in the run directory, and polls with visible status for at most ten minutes. Individual Apple requests time out after one minute; submission and stapling time out after two minutes. A timeout preserves the signed app and recovery state instead of rebuilding or resubmitting. The app bundles the matching native **TypeRelay TUI** sidecar, including a combined binary for universal builds. The command checks both panel and TUI architectures plus the resulting app with codesign, Gatekeeper and stapler. As with the existing release tooling, verification concerns the stapled application inside the DMG; no separate outer-DMG notarization claim is made. See [Tauri macOS signing](https://v2.tauri.app/distribute/sign/macos/).
+
+If Apple remains busy or a network/packaging step fails, rerun the same shared release command. It automatically resumes an unfinished run with the same source commit, version and target. It skips dependency installation, compilation, signing and resubmission, then staples a disposable copy, verifies it and creates the DMG and signed updater archive. The submitted bundle stays immutable. No verified report is produced until all steps succeed.
+
+For an explicitly selected run, use the absolute directory printed by the failed command (existing Apple/updater credentials must be available):
+
+```fish
+node scripts/release-panel.mjs macos --resume /absolute/path/to/target/desktop-releases/macos/RUN_DIRECTORY
+```
+
+Explicit resume infers the target from the saved state and does not pull Git. It requires the original clean `develop` commit and version; changed source or signed bundle is refused. A normal shared invocation still pulls first; if that advances the source, the older run cannot be reused for the new commit. Earlier Tauri-managed builds without `notarization.json` cannot be adopted automatically.
+
+If submission times out before Apple returns an ID, the saved `Submitting` state blocks duplicate uploads. Inspect `xcrun notarytool history` with the same credentials and recover the matching submission ID into that run's `notarization.json` before resuming; do not guess an ID or delete the state to retry. Apple rejection preserves its ID for `notarytool log` inspection. Credentials are never stored in recovery state.
 
 ## Linux AppImage only
 
@@ -54,7 +66,7 @@ Add `--dry-run` to preview the build command. This skips DEB, RPM, and the legac
 
 The Linux build creates x86_64 AppImage, deb and rpm packages, each containing matching engine, TUI and panel binaries. Each package has its own signed updater target. A signed legacy archive remains internal to the updater feed for existing standalone installations; it is not advertised as a download. Native packages compile the engine without the legacy-install feature, excluding the embedded Python installer. deb/rpm install their service and device rules through package-managed files; AppImage starts its bundled engine directly. Missing keyboard access uses pkexec and the native input-access command. Only the compatibility archive rebuilds the engine with legacy-install enabled.
 
-Verified artifacts and a SHA-256/source-commit report go into a fresh commit-prefixed subdirectory of `target/desktop-releases/windows`, `linux`, or `macos`. Each invocation isolates its artifacts and report from previous builds. Failed builds must not be distributed. Bunny publication uploads immutable artifacts and platform metadata first; `latest.json` changes only after all three platforms match the same SemVer and commit.
+Verified artifacts and a SHA-256/source-commit report go into a fresh commit-prefixed subdirectory of `target/desktop-releases/windows`, `linux`, or `macos`. New builds isolate their artifacts and report; macOS recovery reuses only its validated unfinished run. Failed builds must not be distributed. Bunny publication uploads immutable artifacts and platform metadata first; `latest.json` changes only after all three platforms match the same SemVer and commit.
 
 The commands are covered by non-hardware tests and dry runs. Actual Windows signing still needs the local PIN/touch flow; macOS signing/notarization must be run and verified on the Mac. The Tauri updater public key is committed; the private updater key, Bunny credentials and YubiKey PIN remain outside Git. Existing clients require one manual installation of the first updater-enabled release.
 
