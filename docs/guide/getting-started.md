@@ -38,7 +38,7 @@ Give the snippet an optional title, an optional abbreviation and its expansion. 
 
 Open the search panel with **Ctrl+Shift+;** or the **T** tray/menu-bar icon. Select a result and press Enter to insert it into the application that was active before the panel opened.
 
-For continuous expansion, type the prefix, abbreviation and Space. If the default prefix is `;` and the abbreviation is `email`, type `;email `.
+For continuous expansion, type the prefix, abbreviation and Space or Enter. If the default prefix is `;` and the abbreviation is `email`, type `;email `.
 
 ## 6. Confirm synchronization
 

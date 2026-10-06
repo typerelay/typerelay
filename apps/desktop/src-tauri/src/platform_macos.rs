@@ -114,7 +114,7 @@ impl DeferredInput {
     }
 }
 pub struct ExpansionRequest { pub target:Target,pub expansion:Expansion,pub released:Receiver<()>,pub deferred:DeferredInput }
-struct ExpansionState { store:DatabaseSnapshot,settings:SettingsStore,engine:Engine,target:Option<Target>,sender:SyncSender<ExpansionRequest>,release:Option<SyncSender<()>>,deferred:Option<DeferredInput>,suppress_right_up:bool,reloaded:Instant }
+struct ExpansionState { store:DatabaseSnapshot,settings:SettingsStore,engine:Engine,target:Option<Target>,sender:SyncSender<ExpansionRequest>,release:Option<(u16,SyncSender<()>)>,deferred:Option<DeferredInput>,suppress_right_up:bool,reloaded:Instant }
 impl ExpansionState {
     fn new(directory:&std::path::Path,settings_path:std::path::PathBuf,sender:SyncSender<ExpansionRequest>)->Result<Self>{let store=DatabaseSnapshot::open(directory)?;let settings=SettingsStore::open(settings_path)?;let mut engine=Engine::new(store.snapshot.clone());engine.set_prefix(&settings.settings.trigger_prefix).map_err(anyhow::Error::msg)?;Ok(Self{store,settings,engine,target:None,sender,release:None,deferred:None,suppress_right_up:false,reloaded:Instant::now()})}
     fn reload(&mut self){
@@ -124,32 +124,35 @@ impl ExpansionState {
         if let Ok(true)=self.settings.reload(){let _=self.engine.set_prefix(&self.settings.settings.trigger_prefix);self.target=None;}
     }
     fn character(key:u16)->Option<char>{match key{0=>Some('a'),1=>Some('s'),2=>Some('d'),3=>Some('f'),4=>Some('h'),5=>Some('g'),6=>Some('z'),7=>Some('x'),8=>Some('c'),9=>Some('v'),11=>Some('b'),12=>Some('q'),13=>Some('w'),14=>Some('e'),15=>Some('r'),16=>Some('y'),17=>Some('t'),18=>Some('1'),19=>Some('2'),20=>Some('3'),21=>Some('4'),22=>Some('6'),23=>Some('5'),24=>Some('='),25=>Some('9'),26=>Some('7'),27=>Some('-'),28=>Some('8'),29=>Some('0'),30=>Some(']'),31=>Some('o'),32=>Some('u'),33=>Some('['),34=>Some('i'),35=>Some('p'),37=>Some('l'),38=>Some('j'),39=>Some('\''),40=>Some('k'),41=>Some(';'),42=>Some('\\'),43=>Some(','),44=>Some('/'),45=>Some('n'),46=>Some('m'),47=>Some('.'),50=>Some('`'),_=>None}}
-    fn input(event:&CGEvent,key:u16)->Input{match key{51=>Input::Backspace,117=>Input::Delete,123=>Input::Left,124=>Input::Right,49=>Input::Space,_=>{let mut buffer=[0u16;8];let mut length=0;unsafe{CGEventKeyboardGetUnicodeString(event.as_ptr(),buffer.len(),&mut length,buffer.as_mut_ptr());}let value=String::from_utf16_lossy(&buffer[..length.min(buffer.len())]);let mut characters=value.chars();let character=characters.next().or_else(||Self::character(key));let Some(character)=character else{return Input::Cancel;};if characters.next().is_some(){Input::Cancel}else{Input::Character(character)}}}}
+    fn input(event:&CGEvent,key:u16)->Input{match key{51=>Input::Backspace,117=>Input::Delete,123=>Input::Left,124=>Input::Right,49=>Input::Space,36|76=>Input::Enter,_=>{let mut buffer=[0u16;8];let mut length=0;unsafe{CGEventKeyboardGetUnicodeString(event.as_ptr(),buffer.len(),&mut length,buffer.as_mut_ptr());}let value=String::from_utf16_lossy(&buffer[..length.min(buffer.len())]);let mut characters=value.chars();let character=characters.next().or_else(||Self::character(key));let Some(character)=character else{return Input::Cancel;};if characters.next().is_some(){Input::Cancel}else{Input::Character(character)}}}}
     fn event(&mut self,event_type:CGEventType,event:&CGEvent)->bool {
         if (event.location().x+27469.).abs()<0.001{return false;}
         if self.deferred.as_ref().is_some_and(DeferredInput::finished){self.deferred=None;}
         let key=event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16;
         if matches!(event_type,CGEventType::KeyUp){
             if key==124&&self.suppress_right_up{self.suppress_right_up=false;return true;}
-            if key==KeyCode::SPACE&&let Some(release)=self.release.take(){let _=release.try_send(());return false;}
+            if self.release.as_ref().is_some_and(|(confirm,_)|*confirm==key)&&let Some((_,release))=self.release.take(){let _=release.try_send(());return key!=KeyCode::SPACE;}
             if let Some(deferred)=&self.deferred{return deferred.capture(event_type,event);}
             return false;
         }
+        if key!=KeyCode::SPACE&&self.release.as_ref().is_some_and(|(confirm,_)|*confirm==key){return true;}
         if key==124&&self.suppress_right_up{return true;}
         if let Some(deferred)=&self.deferred {if matches!(event_type,CGEventType::KeyDown){return deferred.capture(event_type,event);}deferred.cancel();}
         if !matches!(event_type,CGEventType::KeyDown){self.engine.feed(Input::Cancel);self.target=None;return false;}
 		if BrowserLease::active(){self.engine.feed(Input::Cancel);self.target=None;return false;}
         self.reload();
-        if key==124&&event.get_integer_value_field(EventField::KEYBOARD_EVENT_AUTOREPEAT)!=0{self.engine.feed(Input::Cancel);self.target=None;return false;}
+        if matches!(key,124|36|76|49)&&event.get_integer_value_field(EventField::KEYBOARD_EVENT_AUTOREPEAT)!=0{self.engine.feed(Input::Cancel);self.target=None;return false;}
         let modifiers=event.get_flags();
         if modifiers.intersects(CGEventFlags::CGEventFlagCommand|CGEventFlags::CGEventFlagControl|CGEventFlags::CGEventFlagAlternate|CGEventFlags::CGEventFlagShift|CGEventFlags::CGEventFlagAlphaShift){self.engine.feed(Input::Cancel);self.target=None;return false;}
         let input=Self::input(event,key);
         if matches!(input,Input::Character(character)if character==self.engine.prefix()){self.target=Target::capture().ok();}
         if self.target.is_none(){self.engine.feed(Input::Cancel);return false;}
         let result=self.engine.feed_event(input);
+        let matched_enter=matches!(input,Input::Enter)&&matches!(result,FeedResult::Expand(_));
         if matches!(result,FeedResult::Suppress){self.suppress_right_up=true;return true;}
-        if let FeedResult::Expand(mut expansion)=result&&let Some(target)=self.target.take()&&target.focused().ok()==Some(true){expansion.erase+=1;let (release,released)=sync_channel(1);let deferred=DeferredInput::new();if self.sender.try_send(ExpansionRequest{target,expansion,released,deferred:deferred.clone()}).is_ok(){self.release=Some(release);self.deferred=Some(deferred);}}
-        if matches!(input,Input::Cancel|Input::Space){self.target=None;}
+        if let FeedResult::Expand(mut expansion)=result&&let Some(target)=self.target.take()&&target.focused().ok()==Some(true){if matches!(input,Input::Space){expansion.erase+=1;}let (release,released)=sync_channel(1);let deferred=DeferredInput::new();if self.sender.try_send(ExpansionRequest{target,expansion,released,deferred:deferred.clone()}).is_ok(){self.release=Some((key,release));self.deferred=Some(deferred);return matches!(input,Input::Enter);}if matches!(input,Input::Enter){self.release=Some((key,release));return true;}}
+        if matched_enter {let (release,_)=sync_channel(1);self.release=Some((key,release));return true;}
+        if matches!(input,Input::Cancel|Input::Space|Input::Enter){self.target=None;}
         false
     }
 }
@@ -282,3 +285,10 @@ unsafe extern "C" {fn TISCopyCurrentKeyboardInputSource()->Ref;fn TISGetInputSou
 unsafe extern "C" {fn CGWindowListCopyWindowInfo(options:u32,relative:u32)->Ref;}
 #[link(name="CoreFoundation",kind="framework")]
 unsafe extern "C" {fn CFArrayGetCount(array:Ref)->isize;fn CFArrayGetValueAtIndex(array:Ref,index:isize)->Ref;fn CFDictionaryGetValue(dictionary:Ref,key:Ref)->Ref;fn CFNumberGetValue(number:Ref,kind:i32,value:*mut c_void)->bool;}
+
+#[cfg(test)]
+mod expansion_tests {
+    use super::*;
+    #[test]
+    fn return_release_does_not_accept_keypad_release_or_forward_repeats(){let directory=tempfile::tempdir().unwrap();let (sender,_)=sync_channel(1);let mut state=ExpansionState::new(&directory.path().join("snippets"),directory.path().join("settings.json"),sender).unwrap();let (release,released)=sync_channel(1);state.release=Some((36,release));let source=CGEventSource::new(CGEventSourceStateID::HIDSystemState).unwrap();let event=CGEvent::new_keyboard_event(source.clone(),36,true).unwrap();assert!(matches!(ExpansionState::input(&event,36),Input::Enter));assert!(matches!(ExpansionState::input(&event,76),Input::Enter));assert!(state.event(CGEventType::KeyDown,&event));let keypad=CGEvent::new_keyboard_event(source.clone(),76,false).unwrap();assert!(!state.event(CGEventType::KeyUp,&keypad));assert!(released.try_recv().is_err());let up=CGEvent::new_keyboard_event(source,36,false).unwrap();assert!(state.event(CGEventType::KeyUp,&up));assert!(released.try_recv().is_ok());}
+}

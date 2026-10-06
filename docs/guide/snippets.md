@@ -9,13 +9,15 @@ Every snippet has an expansion and may have a title and abbreviation. Titles mak
 
 ## Abbreviations
 
-Store the bare abbreviation without the local prefix. It may contain lowercase letters, numbers and hyphens and is limited to 63 characters. Type the machine’s prefix, the abbreviation and Space to expand. With the default prefix, `email` expands from `;email `.
+Store the bare abbreviation without the local prefix. It may contain lowercase letters, numbers and hyphens and is limited to 63 characters. Type the machine’s prefix, the abbreviation and Space or Enter to expand. With the default prefix, `email` expands from `;email `.
 
 The prefix is a local setting, so the same synchronized abbreviation can use a different prefix on another machine. Active abbreviations must be unique across the libraries available on that device. A collision can prevent a restore or staged download from activating until the conflict is corrected.
 
 The web editor shows the default semicolon beside the abbreviation because the server does not know each machine’s local prefix. It is illustrative, not stored. Leading semicolons or legacy commas pasted into the field are removed. A local prefix may be one unshifted US punctuation character from: comma, semicolon, period, slash, apostrophe, left/right bracket, backslash, backtick or equals.
 
-Backspace, Delete and unmodified Left/Right arrows can edit within a typed abbreviation before Space. Move the caret back to the end before pressing Space to expand. After an internal correction, TypeRelay ignores one extra Right press at the end so the caret stays there; a second Right moves past the abbreviation and cancels the match. Modifier shortcuts, pointer clicks, focus changes, other moves outside the abbreviation and unsupported navigation cancel the pending match instead of inserting into an uncertain target.
+Backspace, Delete and unmodified Left/Right arrows can edit within a typed abbreviation before Space or Enter. Move the caret back to the end before pressing Space or Enter to expand. After an internal correction, TypeRelay ignores one extra Right press at the end so the caret stays there; a second Right moves past the abbreviation and cancels the match. Modifier shortcuts, pointer clicks, focus changes, other moves outside the abbreviation and unsupported navigation cancel the pending match instead of inserting into an uncertain target.
+
+Enter/Return and keypad Enter consume the confirming key for matches; they add no newline or submission. Unmatched Enter behaves normally. Failed or cancelled Enter expansion does not submit the field. Explicit `{{key:enter}}` template actions retain their existing behavior; Chrome continues to reject these actions safely. Mobile keyboards retain immediate expansion.
 
 ## Text
 

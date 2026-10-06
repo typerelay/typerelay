@@ -15,7 +15,7 @@ Closing the panel hides it. On Omarchy, quitting the panel leaves the separate e
 
 The default shortcut can be changed to Ctrl, Shift, Alt or Super plus another key. If registration fails because the operating system or another application already owns it, choose a different shortcut. **Start at login** manages the platform’s user startup entry.
 
-The resident app also performs prefix + abbreviation + Space expansion on macOS and Windows. Omarchy uses the separate expansion service. See [Operating system notes](./platforms) for permissions, remote-session and clipboard behavior.
+The resident app also performs prefix + abbreviation + Space or Enter expansion on macOS and Windows. Omarchy uses the separate expansion service. See [Operating system notes](./platforms) for permissions, remote-session and clipboard behavior.
 
 ## Filling templates
 

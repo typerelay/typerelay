@@ -43,7 +43,7 @@ impl Snapshot {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum Input { Character(char), Backspace, Delete, Left, Right, Space, Cancel }
+pub enum Input { Character(char), Backspace, Delete, Left, Right, Space, Enter, Cancel }
 
 pub enum FeedResult { Forward, Suppress, Expand(Expansion) }
 
@@ -98,7 +98,7 @@ impl Engine {
         self.clear_pending();
     }
 
-    /// The adapter suppresses the confirming Space only when an expansion is returned.
+    /// The adapter suppresses the confirming Space or Enter only when an expansion is returned.
     pub fn feed(&mut self, input: Input) -> Option<Expansion> {
         match self.feed_event(input) { FeedResult::Expand(expansion) => Some(expansion), FeedResult::Forward | FeedResult::Suppress => None }
     }
@@ -126,7 +126,7 @@ impl Engine {
                 return FeedResult::Suppress;
             }
             Input::Left | Input::Right => self.clear_pending(),
-            Input::Space => {
+            Input::Space | Input::Enter => {
                 let abbreviation = if self.cursor == self.pending.len() { self.pending.strip_prefix(self.prefix) } else { None };
                 let expansion = abbreviation.and_then(|abbreviation| self.snapshot.snippets.get(abbreviation)).map(|s| Expansion { identity: self.snapshot.identities.get(&s.trigger).cloned(), template: self.snapshot.templates.get(&s.trigger).cloned(), erase: self.pending.len(), text: s.replacement.clone() });
                 self.clear_pending();
@@ -148,6 +148,23 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn both_confirming_keys_share_matching_editing_and_cancellation() {
+        for delimiter in [Input::Space, Input::Enter] {
+            let mut engine=Engine::new(Fixture::snapshot());
+            assert!(matches!(engine.feed_event(delimiter),FeedResult::Forward));
+            for c in ";unknown".chars(){engine.feed(Input::Character(c));}
+            assert!(matches!(engine.feed_event(delimiter),FeedResult::Forward));
+            for c in ";brx".chars(){engine.feed(Input::Character(c));}
+            engine.feed(Input::Backspace);engine.feed(Input::Character('b'));
+            assert_eq!(engine.feed(delimiter).unwrap().text,"Be right back.");
+            assert!(matches!(engine.feed_event(delimiter),FeedResult::Forward));
+            for c in ";brb".chars(){engine.feed(Input::Character(c));}
+            engine.feed(Input::Left);assert!(matches!(engine.feed_event(delimiter),FeedResult::Forward));
+            for c in ";brb".chars(){engine.feed(Input::Character(c));}
+            engine.feed(Input::Cancel);assert!(matches!(engine.feed_event(delimiter),FeedResult::Forward));
+        }
+    }
     struct Fixture;
     impl Fixture {
         fn snapshot() -> Snapshot {

@@ -13,7 +13,7 @@ TypeRelay stores text and code snippets in libraries. Use the web app, terminal 
 2. [Install the desktop app](../desktop/installation) and connect it to the same account.
 3. Create a local library in the TUI or a server library in the web app.
 4. [Enroll local libraries](./sync) that should synchronize. Server libraries you can access download automatically.
-5. Add an abbreviation, then type the local prefix, the abbreviation and Space in another application. The default prefix is `;`, so an abbreviation named `email` expands from `;email `.
+5. Add an abbreviation, then type the local prefix, the abbreviation and Space or Enter in another application. The default prefix is `;`, so an abbreviation named `email` expands from `;email `.
 
 Read [Getting started](./getting-started) for the complete first-use path.
 
@@ -22,7 +22,7 @@ Read [Getting started](./getting-started) for the complete first-use path.
 | Interface | Best for | Network required |
 | --- | --- | --- |
 | Desktop panel | Searching, filling and inserting snippets | No, after data is local |
-| Continuous expansion | Prefix + abbreviation + Space expansion | No |
+| Continuous expansion | Prefix + abbreviation + Space or Enter expansion | No |
 | TypeRelay TUI | Editing local libraries, snippets, templates and Trash | No |
 | Web app | Accounts, teams, sharing, imports, conflicts and security | Yes |
 | API and MCP | Approved integrations and agents | Yes |

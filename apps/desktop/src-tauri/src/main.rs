@@ -173,10 +173,10 @@ impl Runtime {
     #[cfg(any(target_os="windows",target_os="macos"))]
     fn expand(app:&tauri::AppHandle,request:platform::ExpansionRequest)->Result<()>{
         #[cfg(target_os="windows")]
-        let platform::ExpansionRequest{target,expansion,released}=request;
+        let platform::ExpansionRequest{target,expansion,released,restore_space}=request;
         #[cfg(target_os="macos")]
         let platform::ExpansionRequest{target,expansion,released,deferred}=request;
-        let release=released.recv_timeout(std::time::Duration::from_secs(2)).context("Release Space before expansion");
+        let release=released.recv_timeout(std::time::Duration::from_secs(2)).context("Release the confirming key before expansion");
         #[cfg(target_os="windows")]
         release?;
         #[cfg(target_os="macos")]
@@ -193,7 +193,7 @@ impl Runtime {
             let identity=template.identity.context("Template identity unavailable")?;
             let hit=Hit{id:identity.id,library:identity.library,revision:identity.revision,library_name:String::new(),title:template.abbreviation.clone(),abbreviation:template.abbreviation,preview:String::new()};
             if template.prompted {
-				let state=app.state::<Runtime>();if state.busy.load(Ordering::SeqCst)||state.prompting.load(Ordering::SeqCst){#[cfg(target_os="windows")]platform::paste(&target,0,Some(typerelay_client::clipboard_payload::ClipboardPayload::text(" ".into())))?;return Ok(());}
+				let state=app.state::<Runtime>();if state.busy.load(Ordering::SeqCst)||state.prompting.load(Ordering::SeqCst){#[cfg(target_os="windows")]if restore_space {platform::paste(&target,0,Some(typerelay_client::clipboard_payload::ClipboardPayload::text(" ".into())))?;}return Ok(());}
                 let prompt_app=app.clone();let main_app=prompt_app.clone();let prompt_target=target.clone();prompt_app.run_on_main_thread(move||{let state=main_app.state::<Runtime>();*state.target.lock().unwrap()=Some(prompt_target);*state.erase.lock().unwrap()=expansion.erase;*state.prompt_hit.lock().unwrap()=Some(hit);state.prompting.store(true,Ordering::SeqCst);Runtime::open(&main_app,false);})?;return Ok(());
             }
 			let directory=app.state::<Runtime>().root.join("snippets");let steps=Panel::steps_at(&directory,&hit,Default::default(),false,typerelay_client::templates::Templates::clock())?;let characters=Panel::usage_characters(&steps,expansion.erase);let mut erase=expansion.erase;

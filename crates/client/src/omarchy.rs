@@ -23,7 +23,7 @@ impl std::fmt::Display for Interference {
 
 impl std::error::Error for Interference {}
 
-struct TemplateWait { done: std::sync::mpsc::Receiver<std::result::Result<(),String>>, target:String, started:bool, generation:u64, deadline:Instant }
+struct TemplateWait { done: std::sync::mpsc::Receiver<std::result::Result<(),String>>, target:String, started:bool, generation:u64, deadline:Instant, restore_space:bool }
 
 struct PasteState {
     job: PasteJob,
@@ -34,6 +34,7 @@ struct PasteState {
     started: bool,
     sent: bool,
     cancelled: bool,
+    restore_space: bool,
 }
 
 struct ContextWatch {
@@ -142,7 +143,7 @@ impl Session {
     fn feed_input(engine: &mut Engine, event: &InputEvent, pressed: &BTreeSet<u16>, caps_control: bool, caps: &mut bool, allowed: bool) -> FeedResult {
         let code = KeyCode(event.code());
         if code == KeyCode::KEY_CAPSLOCK && event.value() == 1 && !caps_control { *caps = !*caps; }
-        if *caps || Self::modifiers_down(pressed, caps_control) || !allowed || (code == KeyCode::KEY_RIGHT && event.value() == 2) { engine.feed(Input::Cancel); FeedResult::Forward } else { engine.feed_event(Self::input(code)) }
+        if *caps || Self::modifiers_down(pressed, caps_control) || !allowed || (matches!(Self::input(code),Input::Right|Input::Space|Input::Enter) && event.value() == 2) { engine.feed(Input::Cancel); FeedResult::Forward } else { engine.feed_event(Self::input(code)) }
     }
 
     fn interference_present(devices: &serde_json::Value) -> bool {
@@ -219,6 +220,7 @@ impl Session {
     fn input(code: KeyCode) -> Input {
         match code {
             KeyCode::KEY_SPACE => Input::Space,
+            KeyCode::KEY_ENTER | KeyCode::KEY_KPENTER => Input::Enter,
             KeyCode::KEY_BACKSPACE => Input::Backspace,
             KeyCode::KEY_DELETE => Input::Delete,
             KeyCode::KEY_LEFT => Input::Left,
@@ -355,7 +357,7 @@ impl Session {
         let mut paste: Option<PasteState> = None;
         let mut last_conflict_check = Instant::now()-Duration::from_secs(2);
         let mut last_health = String::new();
-        eprintln!("TypeRelay running: {} snippets; automatic keyboard input; configured prefix + abbreviation + Space. Ctrl+C stops. No keystrokes are logged.", store.snapshot.len());
+        eprintln!("TypeRelay running: {} snippets; automatic keyboard input; configured prefix + abbreviation + Space or Enter. Ctrl+C stops. No keystrokes are logged.", store.snapshot.len());
         while running.load(Ordering::SeqCst) {
             progress.fetch_add(1,Ordering::SeqCst);
             if last_conflict_check.elapsed() >= Duration::from_secs(2) {
@@ -407,7 +409,7 @@ impl Session {
                         capture.reset();engine.feed(Input::Cancel); last_input=Instant::now();
                         if let Some(wait)=&mut template_wait {wait.deadline=Instant::now()+Duration::from_secs(5);}
                         match request.step {
-							typerelay_client::clipboard_payload::ClipboardStep::Payload(payload) if !payload.plain.is_empty()||payload.html.is_some()=>{let text=payload.plain.clone();paste=Some(PasteState{job:PasteJob::start_payload(payload),expansion:Expansion{identity:None,template:None,erase:request.erase,text},target:Some(request.target),reply:Some(request.reply),generation:*input_generation,started:false,sent:false,cancelled:false});}
+							typerelay_client::clipboard_payload::ClipboardStep::Payload(payload) if !payload.plain.is_empty()||payload.html.is_some()=>{let text=payload.plain.clone();paste=Some(PasteState{job:PasteJob::start_payload(payload),expansion:Expansion{identity:None,template:None,erase:request.erase,text},target:Some(request.target),reply:Some(request.reply),generation:*input_generation,started:false,sent:false,cancelled:false,restore_space:false});}
                             step => {
                                 if let Some(wait)=&mut template_wait {wait.started=true;}
                                 for _ in 0..request.erase { output.emit(&Self::stroke(KeyCode::KEY_BACKSPACE,false))?; }
@@ -431,7 +433,7 @@ impl Session {
                     Ok(Ok(Progress::Finished)) => { if state.sent && !state.cancelled && state.reply.is_none() { Self::record_usage(&state.expansion); } if let Some(reply) = state.reply.take() { let _ = reply.send(if state.sent && !state.cancelled { Ok(state.generation) } else { Err("Insertion cancelled; nothing retried".into()) }); } paste = None; continue; }
                     Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                         eprintln!("Clipboard paste failed; no automatic retry");
-                        if state.reply.is_none() && !state.started && !state.cancelled && Self::target()? == state.target { for event in Self::stroke(KeyCode::KEY_SPACE, false) { output.emit(&[event])?; } }
+                        if state.restore_space && state.reply.is_none() && !state.started && !state.cancelled && Self::target()? == state.target { for event in Self::stroke(KeyCode::KEY_SPACE, false) { output.emit(&[event])?; } }
                         paste = None;
                         continue;
                     }
@@ -463,9 +465,9 @@ impl Session {
             }
             if let Some(wait)=&template_wait {
                 match wait.done.try_recv() {
-                    Ok(result)=>{if result.is_err()&&!wait.started&&Self::target()?==Some(wait.target.clone()){output.emit(&Self::stroke(KeyCode::KEY_SPACE,false))?;}template_wait=None;},
+                    Ok(result)=>{if result.is_err()&&wait.restore_space&&!wait.started&&Self::target()?==Some(wait.target.clone()){output.emit(&Self::stroke(KeyCode::KEY_SPACE,false))?;}template_wait=None;},
                     Err(std::sync::mpsc::TryRecvError::Empty) if Instant::now()<wait.deadline=>{thread::sleep(Duration::from_millis(1));continue;},
-                    Err(std::sync::mpsc::TryRecvError::Empty)=>{if !wait.started&&Self::target()?==Some(wait.target.clone()){output.emit(&Self::stroke(KeyCode::KEY_SPACE,false))?;}*input_generation=input_generation.wrapping_add(1);template_wait=None;insertion.clear();paste=None;eprintln!("Template insertion timed out; releasing buffered typing");},
+                    Err(std::sync::mpsc::TryRecvError::Empty)=>{if wait.restore_space&&!wait.started&&Self::target()?==Some(wait.target.clone()){output.emit(&Self::stroke(KeyCode::KEY_SPACE,false))?;}*input_generation=input_generation.wrapping_add(1);template_wait=None;insertion.clear();paste=None;eprintln!("Template insertion timed out; releasing buffered typing");},
                     Err(std::sync::mpsc::TryRecvError::Disconnected)=>{template_wait=None;}
                 }
             }
@@ -496,6 +498,7 @@ impl Session {
                     if matches!(Self::input(code), Input::Character(c) if c == engine.prefix()) { target = Self::target()?; if std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some() { eprintln!("Candidate target available: {}", target.is_some()); } }
                     let result = Self::feed_input(&mut engine, &event, &pressed, caps_control, &mut caps, target.is_some());
                     if matches!(result, FeedResult::Suppress) { suppressed.insert((input.device,code.0)); pressed.remove(&code.0); continue; }
+                    let matched_enter=matches!(Self::input(code),Input::Enter)&&matches!(result,FeedResult::Expand(_));
                     let expansion = if let FeedResult::Expand(expansion) = result { Some(expansion) } else { None };
                     if expansion.is_some() && std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some() { eprintln!("Match found; held-key count {}", pressed.len()); }
                     if let Some(expansion) = expansion
@@ -503,34 +506,34 @@ impl Session {
                             capture.reset();let destination = target.clone().unwrap();
                             pressed.remove(&code.0);
                             if !Self::wait_for_forwarded_keys(&mut keyboard, &mut output, &mut buffered, &mut pressed, Instant::now() + Duration::from_secs(3),&capture)? || Self::target()? != Some(destination.clone()) || context.changed(Some(&destination))? {
-                                output.emit(&[event])?;
-                                pressed.insert(code.0);
+                                if code==KeyCode::KEY_SPACE {output.emit(&[event])?;pressed.insert(code.0);} else {suppressed.insert((input.device,code.0));}
                                 target = None;
                                 continue;
                             }
-                            suppressed.insert((input.device,KeyCode::KEY_SPACE.0));
+                            suppressed.insert((input.device,code.0));
                             if let Some(template) = &expansion.template {
                                 if let Some(identity) = &template.identity {
                                     let hit = typerelay_client::panel::Hit { id: identity.id.clone(), library: identity.library.clone(), revision: identity.revision, library_name: String::new(), title: template.abbreviation.clone(), abbreviation: template.abbreviation.clone(), preview: String::new() };
                                     let accepted = if template.prompted { typerelay_client::panel_ipc::PanelIpc::prompt(typerelay_client::panel_ipc::Prompt { hit, target: destination, erase: expansion.erase, generation:*input_generation, created_ms:std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis() }) } else {
                                         let tx=template_tx.clone(); let erase=expansion.erase; let generation=*input_generation; let started=Instant::now();
-											let (done,completion)=std::sync::mpsc::channel();template_wait=Some(TemplateWait{done:completion,target:destination.clone(),started:false,generation,deadline:Instant::now()+Duration::from_secs(5)});
+											let (done,completion)=std::sync::mpsc::channel();template_wait=Some(TemplateWait{done:completion,target:destination.clone(),started:false,generation,deadline:Instant::now()+Duration::from_secs(5),restore_space:code==KeyCode::KEY_SPACE});
 											std::thread::spawn(move || { let result=(||->Result<()>{ let steps=typerelay_client::panel::Panel::steps_at(&Paths::config_dir()?.join("snippets"),&hit,Default::default(),false,typerelay_client::templates::Templates::clock())?; anyhow::ensure!(started.elapsed()<Duration::from_secs(2),"Template preparation expired");typerelay_client::panel_ipc::PanelIpc::execute(&tx,&hit,&destination,steps,erase,Some(generation)) })().map_err(|error|error.to_string()); if let Err(error)=&result { eprintln!("Template insertion cancelled: {error}"); }let _=done.send(result); }); true
                                     };
                                     if accepted { target=None; break; }
                                 }
                                 eprintln!("Prompted expansion requires the TypeRelay panel; abbreviation left unchanged");
                                 std::thread::spawn(||{let _=std::process::Command::new("notify-send").args(["TypeRelay","Prompted expansion requires the TypeRelay panel. Your abbreviation was left unchanged."]).output();});
-                                output.emit(&Self::stroke(KeyCode::KEY_SPACE,false))?; target=None; continue;
+                                if code==KeyCode::KEY_SPACE {output.emit(&Self::stroke(KeyCode::KEY_SPACE,false))?;} target=None; continue;
                             }
                             if expansion.requires_paste() {
-                                paste = Some(PasteState { job: PasteJob::start(expansion.text.clone()), expansion, target: target.clone(), reply: None, generation:*input_generation, started: false, sent: false, cancelled: false });
+                                paste = Some(PasteState { job: PasteJob::start(expansion.text.clone()), expansion, target: target.clone(), reply: None, generation:*input_generation, started: false, sent: false, cancelled: false, restore_space:code==KeyCode::KEY_SPACE });
                             } else {
                                 insertion = Self::inject(&expansion, None)?; usage=Some(expansion);
                             }
                             target = None;
                             break;
                     }
+                    if matched_enter {suppressed.insert((input.device,code.0));pressed.remove(&code.0);target=None;continue;}
                 }
                 output.emit(&[event])?;
             }
@@ -547,6 +550,18 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn all_delimiters_match_and_repeated_or_modified_delimiters_cancel() {
+        for key in [KeyCode::KEY_SPACE,KeyCode::KEY_ENTER,KeyCode::KEY_KPENTER] {
+            for (value,pressed,allowed,expands) in [(1,BTreeSet::new(),true,true),(2,BTreeSet::new(),true,false),(1,BTreeSet::from([KeyCode::KEY_LEFTSHIFT.0]),true,false),(1,BTreeSet::new(),false,false)] {
+                let mut engine=Engine::new(typerelay_core::Snapshot::new(vec![typerelay_core::Snippet{trigger:"brb".into(),replacement:"Hello".into()}]).unwrap());
+                for c in ";brb".chars(){engine.feed(Input::Character(c));}
+                let result=Session::feed_input(&mut engine,&InputEvent::new(EventType::KEY.0,key.0,value),&pressed,false,&mut false,allowed);
+                assert_eq!(matches!(result,FeedResult::Expand(_)),expands);
+                assert!(matches!(engine.feed_event(Input::Enter),FeedResult::Forward));
+            }
+        }
+    }
     #[test]
     fn keyboard_switch_cancels_partial_trigger_and_both_keyboards_can_expand() {
         let mut engine=Engine::new(typerelay_core::Snapshot::new(vec![typerelay_core::Snippet{trigger:"brb".into(),replacement:"Be right back.".into()}]).unwrap());let mut source=None;let mut target=Some("window".into());

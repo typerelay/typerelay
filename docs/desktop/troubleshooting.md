@@ -13,7 +13,7 @@ description: "Troubleshoot TypeRelay Desktop panel, expansion, insertion, synchr
 
 ## Expansion does not run
 
-- Confirm the snippet has an abbreviation and that you type the local prefix, abbreviation and Space.
+- Confirm the snippet has an abbreviation and that you type the local prefix, abbreviation and Space or Enter.
 - Confirm the library is active and readable, and no other active snippet uses the same abbreviation.
 - Modifier shortcuts, clicks, focus changes and unsupported characters cancel a pending match.
 - On Omarchy, run `systemctl --user status typerelay` and check that Espanso is not running.

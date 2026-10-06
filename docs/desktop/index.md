@@ -24,7 +24,7 @@ Read [Operating system notes](./platforms) before deployment. The resident app c
 
 Use the search panel when you remember part of a title or phrase but not its abbreviation. Select the matching snippet, fill any prompted variables, and insert it into the application where you are writing. The [search panel guide](./panel) covers the interaction and how to work with different snippet types.
 
-Continuous expansion is useful for wording you type frequently. Store the bare abbreviation, such as `email`, then type the local prefix, abbreviation and Space. With the default prefix, that is `;email `. Keep shortcuts distinctive so they do not overlap with ordinary writing. For practical examples, read [typing shortcuts for replies, signatures and phrases](https://typerelay.com/blog/typing-shortcuts-for-reusable-replies-signatures-and-phrases/).
+Continuous expansion is useful for wording you type frequently. Store the bare abbreviation, such as `email`, then type the local prefix, abbreviation and Space or Enter. With the default prefix, that is `;email `. Keep shortcuts distinctive so they do not overlap with ordinary writing. For practical examples, read [typing shortcuts for replies, signatures and phrases](https://typerelay.com/blog/typing-shortcuts-for-reusable-replies-signatures-and-phrases/).
 
 ## Prepare content for offline use
 

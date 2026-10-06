@@ -8,6 +8,8 @@ let ownedUntil = 0;
 let lastEditor;
 let lastSelection;
 let promptOpen = false;
+const confirmingKeys = new Set();
+const expansionEditors = new Set();
 const googleDocs = [location.origin, ...Array.from(location.ancestorOrigins || [])].includes('https://docs.google.com');
 
 const send = async message => { const response = await chrome.runtime.sendMessage(message); if (!response?.ok) throw new Error(response?.error || 'TypeRelay is unavailable'); return response.value; };
@@ -106,11 +108,13 @@ function insert(editor, saved, expected, erase, rendered, rich) {
 async function expand(editor, saved, id, expected = '', erase = 0) {
 	const preview = await send({ type: 'prepare', id, preview: true });
 	if (preview.rendered.enter_actions) { notice('This snippet uses an Enter key action, which Chrome cannot perform safely. The field was left unchanged.'); return; }
+	if (expected && (document.activeElement !== editor || !document.hasFocus())) throw new Error('The original field lost focus; abbreviation left unchanged');
 	const fields = preview.rendered.fields || [];
 	const values = fields.length ? await promptFields(fields, preview.rendered.variables) : {};
 	if (values === null) return;
 	const result = await send({ type: 'prepare', id, values, preview: false });
 	if (result.rendered.enter_actions) { notice('This snippet uses an Enter key action, which Chrome cannot perform safely. The field was left unchanged.'); return; }
+	if (expected && !fields.length && (document.activeElement !== editor || !document.hasFocus())) throw new Error('The original field lost focus; abbreviation left unchanged');
 	insert(editor, saved, expected, erase, result.rendered, result.item.content.type === 'rich_text');
 	await send({ type: 'usage', event: { event_id: crypto.randomUUID(), identity: result.statisticsIdentity, library: result.item.library_id, snippet: result.item.id, shared: result.item.shared, action: 'insert', client: 'extension', occurred_at: new Date().toISOString(), characters: Math.max(0, (result.rendered.characters ?? [...result.rendered.text].length) - erase) } }).catch(() => undefined);
 }
@@ -131,11 +135,12 @@ void send({ type: 'snapshot' }).then(snapshot => { items = snapshot.items; prefi
 setInterval(() => { if (items.length) void claim(); }, 400);
 
 document.addEventListener('focusin', event => { const editor = editorFor(event.target); if (editor) { lastEditor = editor; lastSelection = selectionFor(editor); void send({ type: 'focus' }).catch(() => undefined); void claim(); } }, true);
-document.addEventListener('keyup', event => { const editor = editorFor(event.target); if (editor) { lastEditor = editor; lastSelection = selectionFor(editor); } }, true);
+document.addEventListener('keyup', event => { if (event.isTrusted && confirmingKeys.has(event.code || event.key)) { confirmingKeys.delete(event.code || event.key); event.preventDefault(); event.stopImmediatePropagation(); return; } const editor = editorFor(event.target); if (editor) { lastEditor = editor; lastSelection = selectionFor(editor); } }, true);
 document.addEventListener('mouseup', event => { const editor = editorFor(event.target); if (editor) { lastEditor = editor; lastSelection = selectionFor(editor); } }, true);
 
 document.addEventListener('keydown', event => {
-	if (!event.isTrusted || event.key !== ' ' || event.repeat || event.isComposing || event.ctrlKey || event.metaKey || event.altKey || promptOpen || Date.now() > ownedUntil) return;
+	if (event.isTrusted && (confirmingKeys.has(event.code || event.key) || (expansionEditors.has(editorFor(event.target)) && !promptOpen && [' ', 'Enter'].includes(event.key)))) { confirmingKeys.add(event.code || event.key); event.preventDefault(); event.stopImmediatePropagation(); return; }
+	if (!event.isTrusted || ![' ', 'Enter'].includes(event.key) || event.repeat || event.isComposing || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || promptOpen || Date.now() > ownedUntil) return;
 	const editor = editorFor(event.target);
 	if (!editor) return;
 	const before = beforeCaret(editor);
@@ -145,12 +150,15 @@ document.addEventListener('keydown', event => {
 	const item = items.find(row => !row.abbreviation_collision && row.trigger === match[0].slice(1));
 	if (!item) return;
 	const saved = selectionFor(editor);
+	confirmingKeys.add(event.code || event.key);
+	expansionEditors.add(editor);
 	event.preventDefault();
 	event.stopImmediatePropagation();
 	void send({ type: 'match', before, prefix, triggers: [...new Set(items.filter(row => !row.abbreviation_collision).map(row => row.trigger).filter(Boolean))] }).then(result => {
+		if (document.activeElement !== editor || !document.hasFocus()) throw new Error('The original field lost focus; abbreviation left unchanged');
 		if (!result || result.trigger !== item.trigger || result.erase !== match[0].length) throw new Error('Abbreviation changed');
 		return expand(editor, saved, item.id, match[0], result.erase);
-	}).catch(error => notice(error.message));
+	}).catch(error => notice(error.message)).finally(() => { expansionEditors.delete(editor); });
 }, true);
 
 chrome.runtime.onMessage.addListener((message, _sender, reply) => {
