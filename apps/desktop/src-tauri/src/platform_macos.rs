@@ -81,7 +81,7 @@ impl Target {
     pub fn restore(&self)->Result<()> { unsafe { let application=NSRunningApplication::runningApplicationWithProcessIdentifier(self.pid).context("Original application closed")?; let name=CString::new("AXRaise")?; let action=CFStringCreateWithCString(std::ptr::null(),name.as_ptr(),0x08000100); let result=AXUIElementPerformAction(self.window.0 as Ref,action); CFRelease(action); ensure!(result==0,"Original window is unavailable"); #[allow(deprecated)] let _=application.activateWithOptions(NSApplicationActivationOptions::ActivateIgnoringOtherApps); } for _ in 0..40 { if self.focused()? { return Ok(()); } std::thread::sleep(std::time::Duration::from_millis(15)); } anyhow::bail!("Could not restore original window; use Copy") }
     pub fn focused(&self)->Result<bool> { unsafe { if NSWorkspace::sharedWorkspace().frontmostApplication().map(|app|app.processIdentifier()) != Some(self.pid) {return Ok(false);} let app=AXUIElementCreateApplication(self.pid); let current=Self::attribute(app,"AXFocusedWindow"); CFRelease(app); let current=current?; let equal=CFEqual(current,self.window.0 as Ref); CFRelease(current); Ok(equal) } }
 }
-pub fn keys_down()->bool { [56,60,59,62,58,61,55,54,36,43].iter().any(|key|unsafe{CGEventSourceKeyState(1,*key)}) }
+pub fn keys_down()->bool { [56,60,59,62,58,61,55,54,36,76,43].iter().any(|key|unsafe{CGEventSourceKeyState(1,*key)}) }
 pub fn fallback_allowed()->bool { NSWorkspace::sharedWorkspace().frontmostApplication().is_some_and(|app|app.processIdentifier()==std::process::id() as i32) }
 pub fn accessibility(prompt:bool)->bool { let trusted=unsafe{AXIsProcessTrusted()};if !trusted&&prompt{let _=enigo::Enigo::new(&enigo::Settings::default());}trusted }
 pub fn input_monitoring(prompt:bool)->bool { let _=prompt;unsafe{IOHIDCheckAccess(1)==0} }
@@ -93,19 +93,23 @@ pub fn insert(target:&Target,erase:usize,has_text:bool)->Result<()> { let source
 pub fn release_modifiers()->Result<()> { let source=CGEventSource::new(CGEventSourceStateID::HIDSystemState).map_err(|_|anyhow::anyhow!("Cannot create keyboard event source"))?;for key in [KeyCode::COMMAND,KeyCode::RIGHT_COMMAND,KeyCode::SHIFT,KeyCode::RIGHT_SHIFT,KeyCode::CONTROL,KeyCode::RIGHT_CONTROL,KeyCode::OPTION,KeyCode::RIGHT_OPTION]{let event=CGEvent::new_keyboard_event(source.clone(),key,false).map_err(|_|anyhow::anyhow!("Cannot create keyboard event"))?;event.set_flags(CGEventFlags::empty());event.post(CGEventTapLocation::HID);}Ok(()) }
 
 struct DeferredEvent { key:u16,down:bool,flags:CGEventFlags,text:Vec<u16>,repeat:i64,keyboard:i64 }
-enum DeferredPhase { Capturing,Replaying,Finished }
-struct DeferredState { events:Vec<DeferredEvent>,cancelled:bool,phase:DeferredPhase }
+enum DeferredPhase { Capturing,Observing,Replaying,Finished }
+struct DeferredState { events:Vec<DeferredEvent>,cancelled:bool,phase:DeferredPhase,confirmers:Vec<u16> }
 #[derive(Clone)]
 pub struct DeferredInput(Arc<Mutex<DeferredState>>);
 impl DeferredInput {
-    fn new()->Self {Self(Arc::new(Mutex::new(DeferredState{events:Vec::new(),cancelled:false,phase:DeferredPhase::Capturing})))}
-    fn finished(&self)->bool {matches!(self.0.lock().unwrap().phase,DeferredPhase::Finished)}
+    fn new()->Self {Self(Arc::new(Mutex::new(DeferredState{events:Vec::new(),cancelled:false,phase:DeferredPhase::Capturing,confirmers:Vec::new()})))}
+    fn finished(&self)->bool {Arc::strong_count(&self.0)==1&&matches!(self.0.lock().unwrap().phase,DeferredPhase::Finished)}
     fn cancel(&self){self.0.lock().unwrap().cancelled=true;}
+    pub fn observe(&self){let mut state=self.0.lock().unwrap();state.phase=DeferredPhase::Observing;state.cancelled=false;}
+    pub fn begin(&self){let mut state=self.0.lock().unwrap();state.confirmers=[36,76].into_iter().filter(|key|unsafe{CGEventSourceKeyState(1,*key)}).collect();state.phase=DeferredPhase::Capturing;state.cancelled=false;}
+    pub fn discard(&self){let mut state=self.0.lock().unwrap();state.phase=DeferredPhase::Finished;state.events.clear();}
     pub fn cancelled(&self)->bool {self.0.lock().unwrap().cancelled}
     fn capture(&self,event_type:CGEventType,event:&CGEvent)->bool {
         let mut state=self.0.lock().unwrap();if matches!(state.phase,DeferredPhase::Finished){return false;}
+        if matches!(state.phase,DeferredPhase::Observing){if !matches!(event_type,CGEventType::KeyUp){state.cancelled=true;}return false;}
         let down=matches!(event_type,CGEventType::KeyDown);if !down&&!matches!(event_type,CGEventType::KeyUp){state.cancelled=true;return false;}
-        let key=event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16;let mut text=[0u16;8];let mut length=0;unsafe{CGEventKeyboardGetUnicodeString(event.as_ptr(),text.len(),&mut length,text.as_mut_ptr());}
+        let key=event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16;if state.confirmers.contains(&key){if !down{state.confirmers.retain(|confirm|*confirm!=key);}return true;}let mut text=[0u16;8];let mut length=0;unsafe{CGEventKeyboardGetUnicodeString(event.as_ptr(),text.len(),&mut length,text.as_mut_ptr());}
         state.events.push(DeferredEvent{key,down,flags:event.get_flags(),text:text[..length.min(text.len())].to_vec(),repeat:event.get_integer_value_field(EventField::KEYBOARD_EVENT_AUTOREPEAT),keyboard:event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYBOARD_TYPE)});true
     }
     pub fn finish(&self,target:&Target)->Result<usize>{
@@ -113,7 +117,7 @@ impl DeferredInput {
         if result.is_err(){self.0.lock().unwrap().phase=DeferredPhase::Finished;}result
     }
 }
-pub struct ExpansionRequest { pub target:Target,pub expansion:Expansion,pub released:Receiver<()>,pub deferred:DeferredInput }
+pub struct ExpansionRequest { pub target:Target,pub expansion:Expansion,pub released:Receiver<()>,pub confirm_enter:bool,pub deferred:DeferredInput }
 struct ExpansionState { store:DatabaseSnapshot,settings:SettingsStore,engine:Engine,target:Option<Target>,sender:SyncSender<ExpansionRequest>,release:Option<(u16,SyncSender<()>)>,deferred:Option<DeferredInput>,suppress_right_up:bool,reloaded:Instant }
 impl ExpansionState {
     fn new(directory:&std::path::Path,settings_path:std::path::PathBuf,sender:SyncSender<ExpansionRequest>)->Result<Self>{let store=DatabaseSnapshot::open(directory)?;let settings=SettingsStore::open(settings_path)?;let mut engine=Engine::new(store.snapshot.clone());engine.set_prefix(&settings.settings.trigger_prefix).map_err(anyhow::Error::msg)?;Ok(Self{store,settings,engine,target:None,sender,release:None,deferred:None,suppress_right_up:false,reloaded:Instant::now()})}
@@ -150,7 +154,7 @@ impl ExpansionState {
         let result=self.engine.feed_event(input);
         let matched_enter=matches!(input,Input::Enter)&&matches!(result,FeedResult::Expand(_));
         if matches!(result,FeedResult::Suppress){self.suppress_right_up=true;return true;}
-        if let FeedResult::Expand(mut expansion)=result&&let Some(target)=self.target.take()&&target.focused().ok()==Some(true){if matches!(input,Input::Space){expansion.erase+=1;}let (release,released)=sync_channel(1);let deferred=DeferredInput::new();if self.sender.try_send(ExpansionRequest{target,expansion,released,deferred:deferred.clone()}).is_ok(){self.release=Some((key,release));self.deferred=Some(deferred);return matches!(input,Input::Enter);}if matches!(input,Input::Enter){self.release=Some((key,release));return true;}}
+        if let FeedResult::Expand(mut expansion)=result&&let Some(target)=self.target.take()&&target.focused().ok()==Some(true){if matches!(input,Input::Space){expansion.erase+=1;}let (release,released)=sync_channel(1);let deferred=DeferredInput::new();if self.sender.try_send(ExpansionRequest{target,expansion,released,confirm_enter:matches!(input,Input::Enter),deferred:deferred.clone()}).is_ok(){self.release=Some((key,release));self.deferred=Some(deferred);return matches!(input,Input::Enter);}if matches!(input,Input::Enter){self.release=Some((key,release));return true;}}
         if matched_enter {let (release,_)=sync_channel(1);self.release=Some((key,release));return true;}
         if matches!(input,Input::Cancel|Input::Space|Input::Enter){self.target=None;}
         false
@@ -289,6 +293,8 @@ unsafe extern "C" {fn CFArrayGetCount(array:Ref)->isize;fn CFArrayGetValueAtInde
 #[cfg(test)]
 mod expansion_tests {
     use super::*;
+    #[test]
+    fn prompt_guard_passes_editing_then_buffers_and_cancels_without_replaying_held_enter(){let deferred=DeferredInput::new();let retained=deferred.clone();deferred.discard();assert!(!deferred.finished());drop(retained);assert!(deferred.finished());let source=CGEventSource::new(CGEventSourceStateID::HIDSystemState).unwrap();let down=CGEvent::new_keyboard_event(source.clone(),36,true).unwrap();let up=CGEvent::new_keyboard_event(source,36,false).unwrap();deferred.observe();assert!(!deferred.capture(CGEventType::KeyDown,&down));assert!(deferred.cancelled());deferred.begin();assert!(!deferred.cancelled());deferred.0.lock().unwrap().confirmers.push(36);assert!(deferred.capture(CGEventType::KeyDown,&down));assert!(deferred.capture(CGEventType::KeyUp,&up));assert!(deferred.0.lock().unwrap().events.is_empty());deferred.cancel();assert!(deferred.cancelled());deferred.discard();assert!(!deferred.capture(CGEventType::KeyDown,&down));}
     #[test]
     fn return_release_does_not_accept_keypad_release_or_forward_repeats(){let directory=tempfile::tempdir().unwrap();let (sender,_)=sync_channel(1);let mut state=ExpansionState::new(&directory.path().join("snippets"),directory.path().join("settings.json"),sender).unwrap();let (release,released)=sync_channel(1);state.release=Some((36,release));let source=CGEventSource::new(CGEventSourceStateID::HIDSystemState).unwrap();let event=CGEvent::new_keyboard_event(source.clone(),36,true).unwrap();assert!(matches!(ExpansionState::input(&event,36),Input::Enter));assert!(matches!(ExpansionState::input(&event,76),Input::Enter));assert!(state.event(CGEventType::KeyDown,&event));let keypad=CGEvent::new_keyboard_event(source.clone(),76,false).unwrap();assert!(!state.event(CGEventType::KeyUp,&keypad));assert!(released.try_recv().is_err());let up=CGEvent::new_keyboard_event(source,36,false).unwrap();assert!(state.event(CGEventType::KeyUp,&up));assert!(released.try_recv().is_ok());}
 }

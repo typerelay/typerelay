@@ -7,9 +7,9 @@ use crate::clipboard_payload::ClipboardStep;
 use std::{fs, os::unix::{fs::PermissionsExt, net::{UnixDatagram,UnixListener,UnixStream}}, path::PathBuf, sync::{Arc, atomic::{AtomicBool, Ordering}, mpsc}, time::Duration};
 
 #[derive(Serialize, Deserialize)]
-pub struct Request { pub hit: Hit, pub target: String, pub created_ms: u128, #[serde(default)] pub values: BTreeMap<String,String>, #[serde(default)] pub clock:Option<(i64,i32)>, #[serde(default)] pub generation:Option<u64>, #[serde(default)] pub erase: usize, #[serde(default)] pub prepare: bool }
+pub struct Request { pub hit: Hit, pub target: String, pub created_ms: u128, #[serde(default)] pub values: BTreeMap<String,String>, #[serde(default)] pub clock:Option<(i64,i32)>, #[serde(default)] pub generation:Option<u64>, #[serde(default)] pub erase: usize, #[serde(default)] pub prepare: bool, #[serde(default)] pub confirm_enter:bool }
 #[derive(Serialize,Deserialize)]
-pub struct Prompt { pub hit: Hit, pub target: String, pub erase: usize, pub generation:u64, pub created_ms:u128 }
+pub struct Prompt { pub hit: Hit, pub target: String, pub erase: usize, pub generation:u64, pub created_ms:u128, #[serde(default)] pub confirm_enter:bool }
 pub struct Insertion { pub deadline: std::time::Instant, pub step: ClipboardStep, pub erase: usize, pub generation: Option<u64>, pub target: String, pub reply: mpsc::Sender<std::result::Result<u64, String>> }
 pub struct PanelPresence(PathBuf);
 impl Drop for PanelPresence { fn drop(&mut self) { let _=fs::remove_file(&self.0); } }
@@ -117,7 +117,7 @@ impl PanelIpc {
                     anyhow::ensure!(now>=request.created_ms && now-request.created_ms<2000 && request.erase<=64,"Insertion request expired or invalid");
 					let steps=if request.prepare { Panel::content(&Paths::config_dir()?.join("snippets"),&request.hit)?; vec![] } else { Panel::steps_at(&Paths::config_dir()?.join("snippets"),&request.hit,request.values,false,request.clock.unwrap_or_else(crate::templates::Templates::clock))? };
                     anyhow::ensure!(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis().saturating_sub(request.created_ms)<2000,"Insertion preparation expired; nothing inserted");
-                    Self::execute(&background,&request.hit,&request.target,steps,request.erase,request.generation)
+                    Self::execute(&background,&request.hit,&request.target,ClipboardStep::with_confirmation(steps,request.confirm_enter&&!request.prepare),request.erase,request.generation)
                 })().map_err(|error|error.to_string());
                 if let Ok(bytes)=serde_json::to_vec(&result) { let _=stream.write_all(&bytes); }
             }

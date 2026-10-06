@@ -8,12 +8,14 @@ use anyhow::ensure;
 #[cfg(target_os = "windows")]
 #[path = "platform_windows.rs"] mod native;
 pub use native::Target;
+#[cfg(target_os="windows")]
+pub use native::keys_down;
 #[cfg(not(target_os="linux"))]
 impl Target {
 	pub fn for_panel(captured:Result<Self>,last:Option<Self>)->Result<Option<Self>> {match captured {Ok(target)=>Ok(Some(target)),Err(_) if native::fallback_allowed()=>Ok(last),Err(error)=>Err(error)}}
 }
 #[cfg(target_os="macos")]
-pub use native::NativeNotifications;
+pub use native::{NativeNotifications,DeferredInput};
 #[cfg(any(target_os = "windows",target_os = "macos"))]
 pub use native::{ExpansionRequest, ExpansionSession};
 
@@ -37,13 +39,14 @@ pub fn copy_payload(payload:typerelay_client::clipboard_payload::ClipboardPayloa
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn paste(target: &Target, erase: usize, payload: Option<typerelay_client::clipboard_payload::ClipboardPayload>) -> Result<()> {
+pub fn paste(target: &Target, erase: usize, payload: Option<typerelay_client::clipboard_payload::ClipboardPayload>, current:impl Fn()->bool) -> Result<()> {
     use std::time::{Duration, Instant};
     let deadline = Instant::now() + Duration::from_secs(2);
     while native::keys_down() { ensure!(Instant::now() < deadline, "Release shortcut keys before inserting"); std::thread::sleep(Duration::from_millis(10)); }
+    ensure!(current(), "Expansion cancelled; nothing inserted");
     ensure!(target.focused()?, "Original window lost focus; nothing inserted");
     #[cfg(target_os="windows")]
-	if payload.as_ref().is_none_or(|value|value.html.is_none()&&value.rtf.is_none())&&target.replace_text(erase,payload.as_ref().map(|value|value.plain.as_str()).unwrap_or("\n"))?{return Ok(());}
+	if let Some(payload)=payload.as_ref()&&payload.html.is_none()&&payload.rtf.is_none()&&target.replace_text(erase,&payload.plain)?{return Ok(());}
 	let mut clipboard=None;let has_text=payload.is_some();
 	if let Some(payload)=payload {
         #[cfg(target_os="windows")]
@@ -58,6 +61,7 @@ pub fn paste(target: &Target, erase: usize, payload: Option<typerelay_client::cl
     }}}
     }
     let insertion: Result<()> = (|| {
+        ensure!(current(), "Expansion cancelled; nothing inserted");
         ensure!(target.focused()?, "Original window lost focus; nothing inserted");
         #[cfg(target_os="windows")]
         {native::insert(target,erase,has_text)?;std::thread::sleep(Duration::from_millis(if has_text{350}else{100}));Ok(())}

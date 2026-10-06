@@ -36,18 +36,20 @@ pub fn fallback_allowed()->bool { unsafe { let window=GetForegroundWindow();let 
 pub fn open_url(url:&str)->Result<()> { std::process::Command::new("rundll32.exe").args(["url.dll,FileProtocolHandler",url]).spawn().context("Could not open link")?;Ok(()) }
 pub fn open_tui()->Result<()> { let executable=std::env::current_exe()?.with_file_name("typerelay-tui.exe");ensure!(executable.is_file(),"TypeRelay TUI is missing from this installation");std::process::Command::new(executable).spawn().context("Could not open TypeRelay TUI")?;Ok(()) }
 
-pub struct ExpansionRequest { pub target:Target, pub expansion:Expansion, pub released:Receiver<()>, pub restore_space:bool }
-struct HookState { store:DatabaseSnapshot, settings:SettingsStore, engine:Engine, target:Option<Target>, sender:SyncSender<ExpansionRequest>, suppress_delimiter:Option<((u32,u32,bool),SyncSender<()>)>, suppress_right:bool, right_forwarded:bool }
+pub struct ExpansionRequest { pub target:Target, pub expansion:Expansion, pub released:Receiver<()>,pub confirm_enter:bool,pub cancelled:Arc<std::sync::atomic::AtomicBool>, pub restore_space:bool }
+struct HookState { store:DatabaseSnapshot, settings:SettingsStore, engine:Engine, target:Option<Target>, sender:SyncSender<ExpansionRequest>, suppress_delimiter:Option<((u32,u32,bool),SyncSender<()>)>, pending:Option<Arc<std::sync::atomic::AtomicBool>>, suppress_right:bool, right_forwarded:bool, enter_forwarded:std::collections::BTreeSet<(u32,bool)> }
 thread_local! { static HOOK_STATE:RefCell<Option<HookState>>=const{RefCell::new(None)}; }
 impl HookState {
-    fn new(directory:PathBuf,settings_path:PathBuf,sender:SyncSender<ExpansionRequest>)->Result<Self>{let store=DatabaseSnapshot::open(&directory)?;let settings=SettingsStore::open(settings_path)?;let mut engine=Engine::new(store.snapshot.clone());engine.set_prefix(&settings.settings.trigger_prefix).map_err(anyhow::Error::msg)?;Ok(Self{store,settings,engine,target:None,sender,suppress_delimiter:None,suppress_right:false,right_forwarded:false})}
+    fn new(directory:PathBuf,settings_path:PathBuf,sender:SyncSender<ExpansionRequest>)->Result<Self>{let store=DatabaseSnapshot::open(&directory)?;let settings=SettingsStore::open(settings_path)?;let mut engine=Engine::new(store.snapshot.clone());engine.set_prefix(&settings.settings.trigger_prefix).map_err(anyhow::Error::msg)?;Ok(Self{store,settings,engine,target:None,sender,suppress_delimiter:None,pending:None,suppress_right:false,right_forwarded:false,enter_forwarded:Default::default()})}
     fn input(vk:u32,scan:u32)->Input {match vk{0x08=>Input::Backspace,0x2e=>Input::Delete,0x25=>Input::Left,0x27=>Input::Right,0x20=>Input::Space,0x0d=>Input::Enter,_=>unsafe{let window=GetForegroundWindow();let thread=GetWindowThreadProcessId(window,None);let layout=GetKeyboardLayout(thread);let mut state=[0u8;256];if GetKeyboardState(&mut state).is_err(){return Input::Cancel;}
         for modifier in [0x10usize,0x11,0x12]{state[modifier]=(state[modifier]&1)|if GetAsyncKeyState(modifier as i32)<0{0x80}else{0};}if let Some(key)=state.get_mut(vk as usize){*key|=0x80;}let mut buffer=[0u16;8];let length=ToUnicodeEx(vk,scan,&state,&mut buffer,5,Some(layout));if length<=0{return Input::Cancel;}let Ok(value)=String::from_utf16(&buffer[..usize::try_from(length).unwrap_or_default().min(buffer.len())])else{return Input::Cancel;};let mut characters=value.chars();let Some(character)=characters.next()else{return Input::Cancel;};if characters.next().is_some(){Input::Cancel}else{Input::Character(character)}}}}
     fn modified()->bool {unsafe{let control=GetAsyncKeyState(VK_CONTROL.0 as i32)<0;let alt=GetAsyncKeyState(VK_MENU.0 as i32)<0;[VK_LWIN,VK_RWIN,VK_SHIFT].iter().any(|key|GetAsyncKeyState(key.0 as i32)<0)||control!=alt}}
     fn key(&mut self,vk:u32,scan:u32,extended:bool,down:bool)->bool {
         let physical=(vk,scan,extended);
-        if !down {if vk==0x27{if self.suppress_right{self.suppress_right=false;return true;}self.right_forwarded=false;}if self.suppress_delimiter.as_ref().is_some_and(|(key,_)|*key==physical)&&let Some((_,released))=self.suppress_delimiter.take(){let _=released.try_send(());return true;}return false;}
+        if !down {if vk==0x0d{self.enter_forwarded.remove(&(scan,extended));}if vk==0x27{if self.suppress_right{self.suppress_right=false;return true;}self.right_forwarded=false;}if self.suppress_delimiter.as_ref().is_some_and(|(key,_)|*key==physical)&&let Some((_,released))=self.suppress_delimiter.take(){let _=released.try_send(());return true;}return false;}
         if self.suppress_delimiter.as_ref().is_some_and(|(key,_)|*key==physical){return true;}
+        if vk==0x0d&&!self.enter_forwarded.insert((scan,extended)){return false;}
+        if let Some(pending)=&self.pending{pending.store(true,std::sync::atomic::Ordering::SeqCst);}
 		if BrowserLease::active(){self.engine.feed(Input::Cancel);self.target=None;return false;}
         if vk==0x27{if self.suppress_right{return true;}if self.right_forwarded{self.engine.feed(Input::Cancel);self.target=None;return false;}self.right_forwarded=true;}
         if Self::modified(){self.engine.feed(Input::Cancel);self.target=None;return false;}
@@ -58,7 +60,7 @@ impl HookState {
         let result=self.engine.feed_event(input);
         let matched_enter=matches!(input,Input::Enter)&&matches!(result,FeedResult::Expand(_));
         if matches!(result,FeedResult::Suppress){self.right_forwarded=false;self.suppress_right=true;return true;}
-        if let FeedResult::Expand(expansion)=result&&let Some(target)=self.target.take()&&target.focused().ok()==Some(true){let (release,released)=sync_channel(1);if self.sender.try_send(ExpansionRequest{target,expansion,released,restore_space:matches!(input,Input::Space)}).is_ok()||matches!(input,Input::Enter){self.suppress_delimiter=Some((physical,release));return true;}}
+        if let FeedResult::Expand(expansion)=result&&let Some(target)=self.target.take()&&target.focused().ok()==Some(true){let (release,released)=sync_channel(1);let cancelled=Arc::new(std::sync::atomic::AtomicBool::new(false));self.pending=Some(cancelled.clone());if self.sender.try_send(ExpansionRequest{target,expansion,released,confirm_enter:matches!(input,Input::Enter),cancelled,restore_space:matches!(input,Input::Space)}).is_ok()||matches!(input,Input::Enter){self.suppress_delimiter=Some((physical,release));return true;}}
         if matched_enter {let (release,_)=sync_channel(1);self.suppress_delimiter=Some((physical,release));return true;}
         if matches!(input,Input::Cancel|Input::Space|Input::Enter){self.target=None;}
         false
@@ -93,7 +95,7 @@ impl ExpansionSession {
         unsafe{CallNextHookEx(None,code,wparam,lparam)}
     }
     unsafe extern "system" fn mouse_callback(code:i32,wparam:WPARAM,lparam:LPARAM)->LRESULT {
-        if code>=0&&[WM_LBUTTONDOWN,WM_RBUTTONDOWN,WM_MBUTTONDOWN,WM_XBUTTONDOWN].contains(&(wparam.0 as u32)){HOOK_STATE.with(|state|{if let Ok(mut state)=state.try_borrow_mut()&&let Some(state)=state.as_mut(){state.engine.feed(Input::Cancel);state.target=None;}});}
+        if code>=0&&[WM_LBUTTONDOWN,WM_RBUTTONDOWN,WM_MBUTTONDOWN,WM_XBUTTONDOWN].contains(&(wparam.0 as u32)){HOOK_STATE.with(|state|{if let Ok(mut state)=state.try_borrow_mut()&&let Some(state)=state.as_mut(){state.engine.feed(Input::Cancel);state.target=None;if let Some(pending)=&state.pending{pending.store(true,std::sync::atomic::Ordering::SeqCst);}}});}
         unsafe{CallNextHookEx(None,code,wparam,lparam)}
     }
 }
@@ -219,6 +221,8 @@ impl ObservationAdapter {
 #[cfg(test)]
 mod observation_tests {
     use super::{ObservationAdapter,HookState};
+    #[test]
+    fn prompt_guard_rearms_but_new_typing_cancels_confirmation(){let directory=tempfile::tempdir().unwrap();let (sender,_)=std::sync::mpsc::sync_channel(1);let mut state=HookState::new(directory.path().join("snippets"),directory.path().join("settings.json"),sender).unwrap();let pending=std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));state.pending=Some(pending.clone());state.enter_forwarded.insert((0x1c,false));assert!(!state.key(0x0d,0x1c,false,true));assert!(!pending.load(std::sync::atomic::Ordering::SeqCst));assert!(!state.key(0x41,0x1e,false,true));assert!(pending.load(std::sync::atomic::Ordering::SeqCst));pending.store(false,std::sync::atomic::Ordering::SeqCst);assert!(!state.key(0x42,0x30,false,true));assert!(pending.load(std::sync::atomic::Ordering::SeqCst));}
     #[test]
     fn matching_delimiter_release_uses_physical_identity(){let directory=tempfile::tempdir().unwrap();let (sender,_)=std::sync::mpsc::sync_channel(1);let mut state=HookState::new(directory.path().join("snippets"),directory.path().join("settings.json"),sender).unwrap();let (release,released)=std::sync::mpsc::sync_channel(1);state.suppress_delimiter=Some(((0x0d,0x1c,false),release));assert!(state.key(0x0d,0x1c,false,true));assert!(!state.key(0x0d,0x1c,true,false));assert!(released.try_recv().is_err());assert!(state.key(0x0d,0x1c,false,false));assert!(released.try_recv().is_ok());assert!(matches!(HookState::input(0x0d,0x1c),typerelay_core::Input::Enter));}
 

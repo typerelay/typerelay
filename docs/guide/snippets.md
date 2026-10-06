@@ -17,7 +17,9 @@ The web editor shows the default semicolon beside the abbreviation because the s
 
 Backspace, Delete and unmodified Left/Right arrows can edit within a typed abbreviation before Space or Enter. Move the caret back to the end before pressing Space or Enter to expand. After an internal correction, TypeRelay ignores one extra Right press at the end so the caret stays there; a second Right moves past the abbreviation and cancels the match. Modifier shortcuts, pointer clicks, focus changes, other moves outside the abbreviation and unsupported navigation cancel the pending match instead of inserting into an uncertain target.
 
-Enter/Return and keypad Enter consume the confirming key for matches; they add no newline or submission. Unmatched Enter behaves normally. Failed or cancelled Enter expansion does not submit the field. Explicit `{{key:enter}}` template actions retain their existing behavior; Chrome continues to reject these actions safely. Mobile keyboards retain immediate expansion.
+On desktop, Enter/Return and keypad Enter expand a matching abbreviation, then send one Enter after successful insertion. In an SSH terminal this executes the expanded command. Space expands without an added Enter. A template ending with explicit `{{key:enter}}` uses that action without an extra Enter; an earlier Enter action does not suppress the final confirmation. Failure, cancellation, changed focus, and held-key repeats never append another Enter. Unmatched Enter behaves normally.
+
+Chrome Enter expansion continues to consume the key without submitting or adding a newline; Chrome still rejects explicit `{{key:enter}}` actions. Mobile keyboards retain immediate expansion.
 
 ## Text
 
