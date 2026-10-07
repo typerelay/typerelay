@@ -541,3 +541,27 @@ test('device rows expose metadata and browser-local times; legacy devices stay u
 		assert.equal((await browser.call('/api/v2/fragments/device/' + known._id)).status, 404);
 	} finally { dom.window.close(); }
 });
+
+test('security changes accept older browser sessions without an authentication timestamp', async () => {
+	const browser = new Browser(); const email = randomUUID() + '@example.test';
+	await browser.page(); await Auth.login(email);
+	const link = Fixture.mailUrl(Fixture.mails.findLast(mail => mail.to === email));
+	await browser.call(link.pathname + link.search); await browser.page();
+	const user = await User.findOne({ email }).lean();
+	for (const authAt of [Date.now() - 86400000, undefined]) {
+		const sessions = await mongoose.connection.collection('web_sessions').find({}).toArray();
+		const stored = sessions.find(row => JSON.parse(row.session).user === String(user._id));
+		const session = JSON.parse(stored.session); session.auth_at = authAt;
+		await mongoose.connection.collection('web_sessions').updateOne({ _id: stored._id }, { $set: { session: JSON.stringify(session) } });
+		const setup = await browser.json('/api/v2/security/totp/setup');
+		assert.ok(setup.secret); assert.match(setup.qr, /^data:image/);
+		await browser.json('/api/v2/security/totp/confirm', 'POST', { code: generateSync({ secret: setup.secret }) });
+		assert.equal((await User.findById(user._id).lean()).totp_enabled, true);
+		await browser.json('/api/v2/security/totp/disable', 'POST', { code: generateSync({ secret: setup.secret }) });
+		assert.equal((await User.findById(user._id).lean()).totp_enabled, false);
+		const password = await browser.json('/api/v2/security/password'); assert.ok(password.password);
+	}
+});
+test('security changes still require the matching browser identity', () => {
+	for (const req of [{ session: {} }, { session: { user: 'user' }, ctx: { user: 'other' } }, { session: { user: 'user' }, ctx: { user: 'user', device: 'device' } }]) assert.throws(() => Security.browserSession(req), /Sign in/);
+});

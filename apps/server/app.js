@@ -87,7 +87,7 @@ export class Server {
 		app.use('/vendor/tom-select', express.static('node_modules/tom-select/dist'));
 		app.use('/white-label-assets', express.static(WhiteLabel.assetsRoot(), { index: false, maxAge: '7d' }));
 		app.get('/health', (req, res) => res.json({ ok: true }));
-		// Seconds; retain non-rolling cookies and the separate admin/reauthentication deadlines.
+		// Seconds; retain non-rolling cookies and the separate admin deadline.
 		const sessionStore = MongoStore.create({ mongoUrl: process.env.MONGO_URI, collectionName: 'web_sessions', touchAfter: 60 });
 		app.use(session({ name: 'typerelay.sid', secret: process.env.SESSION_SECRET || 'change-me', store: sessionStore, resave: false, saveUninitialized: false, cookie: { httpOnly: true, sameSite: 'lax', secure: Auth.origin.startsWith('https:'), maxAge: 7 * 86400000 } }));
 		app.use(WhiteLabel.resolveRequest);
