@@ -23,11 +23,11 @@ mixin aiProviderFields(connection)
 			label.form-label(for=prefix + '-url') API base URL
 			input.form-control.form-control-sm(id=prefix + '-url' type="url" name="base_url" value=connection ? connection.base_url : '' required=connection && connection.provider === 'compatible')
 	if connection
-		.form-check.mb-3
+		.form-check.form-switch.mb-3
 			label.d-flex.align-items-center
-				input.form-check-input.h-20px.w-30px.mt-0(type="checkbox" name="clear_key")
+				input.form-check-input.h-20px.w-30px.mt-0(type="checkbox" role="switch" name="clear_key")
 				span.ms-3 Clear stored key
-	.form-check.mb-3(data-ai-compatible hidden=!connection || connection.provider !== 'compatible')
+	.form-check.form-switch.mb-3(data-ai-compatible hidden=!connection || connection.provider !== 'compatible')
 		label.d-flex.align-items-center
-			input.form-check-input.h-20px.w-30px.mt-0(type="checkbox" name="no_auth" checked=connection && connection.no_auth)
+			input.form-check-input.h-20px.w-30px.mt-0(type="checkbox" role="switch" name="no_auth" checked=connection && connection.no_auth)
 			span.ms-3 Endpoint requires no API key

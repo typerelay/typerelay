@@ -13,12 +13,14 @@
 .ai-local-choice { display: flex; align-items: center; gap: .5rem; margin-bottom: .5rem; }
 [data-ai-launch][aria-disabled="true"] { pointer-events: none; opacity: .5; }
 .ai-configuration { max-width: 70rem; }
-.ai-configuration .nav-link { padding: .75rem 1.25rem; }
+.ai-settings-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2rem; }
+.ai-settings-columns > section { min-width: 0; }
+@media (max-width: 55rem) { .ai-settings-columns { grid-template-columns: minmax(0, 1fr); } }
 .ai-default-policy,.ai-workflow { padding: 1.25rem; border: .0625rem solid var(--bs-border-color); border-radius: .5rem; background: var(--bs-body-bg); }
 .ai-quota .form-control { flex: 0 0 6rem; width: 6rem; }
 .ai-private-endpoints { max-width: 48rem; }
 .ai-provider-add summary { list-style-position: inside; }
-.ai-route-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) minmax(0, .65fr) auto; gap: 1rem; align-items: end; }
+.ai-route-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; align-items: end; }
 .ai-route-fields > div { min-width: 0; }
 .ai-configuration .ts-wrapper { width: 100%; }
 .ai-configuration .ts-control { min-height: 1.9375rem; font-size: .875rem; padding: .25rem .5rem; }
@@ -32,3 +34,8 @@
 .ai-author-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
 .ai-author-actions [aria-pressed="true"] { color: var(--bs-btn-active-color); background-color: var(--bs-btn-active-bg); border-color: var(--bs-btn-active-border-color); }
 @media (max-width: 40rem) { .ai-author-actions { grid-template-columns: minmax(0, 1fr); } }
+
+.ai-controls input[role="switch"],.ai-configuration input[role="switch"] { appearance: none; flex-shrink: 0; width: 1.875rem; height: 1.25rem; border: .0625rem solid #767676; border-radius: 1rem; background: #767676; background-image: radial-gradient(circle, #fff 45%, transparent 50%); background-size: 1.125rem 1.125rem; background-position: left center; background-repeat: no-repeat; cursor: pointer; }
+.ai-controls input[role="switch"]:checked,.ai-configuration input[role="switch"]:checked { background-color: var(--bs-primary, #0d6efd); background-position: right center; }
+.ai-controls input[role="switch"]:focus-visible,.ai-configuration input[role="switch"]:focus-visible { outline: .125rem solid var(--bs-primary, #0d6efd); outline-offset: .125rem; }
+.ai-controls input[role="switch"]:disabled,.ai-configuration input[role="switch"]:disabled { opacity: .5; cursor: not-allowed; }

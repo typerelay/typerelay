@@ -282,3 +282,9 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 	flex-shrink: 0;
 }
 .product-updates-nav-link, [data-product-updates-dismiss], [data-product-updates-read-more], [data-product-updates-load-more] { cursor: pointer; }
+
+@media (max-width: 40rem) {
+	#settings .settings-body { flex-direction: column; }
+	#settings .settings-nav { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); flex: 0 0 auto; border-right: 0; border-bottom: .0625rem solid #e7dfd2; padding: 0; }
+	#settings .settings-content { min-height: 0; }
+}

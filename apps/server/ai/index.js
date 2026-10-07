@@ -129,7 +129,10 @@ export class Ai {
 		return { ctx: fresh, installation, personal, team: { enabled: true, connections: [], routes: {}, revision: 0, ...team } };
 	}
 	static route(state, workflow) {
-		for (const scope of ['personal', 'team', 'installation']) {
+		const scopes = ['personal', 'team', 'installation'];
+		for (let index = 0; index < scopes.length; index++) {
+			let scope = scopes[index];
+			if (scope !== 'installation' && state[scope].use_managed) { Support.assert(Billing.hosted(), 'Private Typerelay AI is available on the hosted edition', 403); scope = 'installation'; index = scopes.length; }
 			const settings = state[scope]; const route = settings.routes[workflow] || (workflow === 'search' ? settings.routes.authoring : null);
 			if (!route?.connection) continue;
 			const connection = settings.connections.find(item => item.id === route.connection);
@@ -146,7 +149,9 @@ export class Ai {
 	static async status(ctx) {
 		const state = await Ai.state(ctx); const day = new Date().toISOString().slice(0, 10); const used = (await AiUsage.findOne({ account: ctx.account, user: ctx.user, day }).lean())?.count || 0; const effective = {};
 		for (const workflow of Ai.workflows) { try { const value = Ai.route(state, workflow); effective[workflow] = { scope: value.scope, provider: value.connection.provider, model: value.route.model, name: value.connection.name, managed: value.managed }; } catch (error) { effective[workflow] = { error: error.message }; } }
-		return { identity: { account: ctx.account, user: ctx.user }, revisions: { personal: state.personal.revision, team: state.team.revision, installation: state.installation.revision }, enabled: state.installation.enabled && state.team.enabled && state.personal.enabled, personal_enabled: state.personal.enabled, team_enabled: state.team.enabled, installation_enabled: state.installation.enabled, can_manage_team: Support.admin(state.ctx), effective, allowance: { used, limit: state.installation.daily_limit, resets_at: new Date(Date.parse(day) + 86400000).toISOString() } };
+		const managed = { available: false, reason: 'Private Typerelay AI is available on the hosted edition.' };
+		if (Billing.hosted()) { try { Support.assert(state.installation.enabled, 'Private Typerelay AI is currently unavailable'); for (const workflow of Ai.workflows) Ai.route({ ...state, personal: { ...state.personal, use_managed: true } }, workflow); managed.available = true; managed.reason = ''; } catch (error) { managed.reason = error.message; } }
+		return { managed, identity: { account: ctx.account, user: ctx.user }, revisions: { personal: state.personal.revision, team: state.team.revision, installation: state.installation.revision }, enabled: state.installation.enabled && state.team.enabled && state.personal.enabled, personal_enabled: state.personal.enabled, team_enabled: state.team.enabled, installation_enabled: state.installation.enabled, can_manage_team: Support.admin(state.ctx), effective, allowance: { used, limit: state.installation.daily_limit, resets_at: new Date(Date.parse(day) + 86400000).toISOString() } };
 	}
 	static fragment(settings, scope) { return pug.renderFile('./views/ajax/ai-configuration.pug', { settings: Ai.summary(settings), scope, providers: AiProvider.catalog, protocols: AiProvider.protocols }); }
 	static async settings(ctx, scope) { const settings = await Ai.setting(ctx, scope); return { scope, settings: Ai.summary(settings), html: Ai.fragment(settings, scope), status: await Ai.status(ctx) }; }
@@ -168,7 +173,9 @@ export class Ai {
 		Support.assert(body.revision == null || body.revision === current.revision, 'AI settings changed; reopen settings', 409);
 		Support.assert(body.enabled === undefined || typeof body.enabled === 'boolean', 'Choose whether AI is enabled');
 		const routes = Ai.routes(body.routes ?? current.routes, current.connections);
-		const value = { ...current, enabled: body.enabled ?? current.enabled, routes };
+		Support.assert(body.use_managed === undefined || (typeof body.use_managed === 'boolean' && (!installation || !body.use_managed)), 'Choose whether to use private Typerelay AI');
+		if (body.use_managed === true && !current.use_managed) { const status = await Ai.status(ctx); Support.assert(status.managed.available, status.managed.reason, 403); }
+		const value = { ...current, enabled: body.enabled ?? current.enabled, use_managed: body.use_managed ?? current.use_managed ?? false, routes };
 		if (installation) {
 			if (body.daily_limit !== undefined) { Support.assert(Number.isSafeInteger(body.daily_limit) && body.daily_limit >= 1 && body.daily_limit <= 10000, 'Daily allowance must be between 1 and 10,000'); value.daily_limit = body.daily_limit; }
 			if (body.private_endpoints !== undefined) {
@@ -182,7 +189,7 @@ export class Ai {
 		return installation ? { settings: Ai.summary(value) } : { settings: Ai.summary(value), status: await Ai.status(ctx) };
 	}
 	static async persist(ctx, scope, value, revision, installation) {
-		const data = { enabled: value.enabled, routes: value.routes, connections: value.connections, ...(installation ? { daily_limit: value.daily_limit, private_endpoints: value.private_endpoints } : {}), revision: revision + 1 };
+		const data = { enabled: value.enabled, use_managed: value.use_managed === true, routes: value.routes, connections: value.connections, ...(installation ? { daily_limit: value.daily_limit, private_endpoints: value.private_endpoints } : {}), revision: revision + 1 };
 		value.revision = revision + 1;
 		if (installation) {
 			const { SystemSetting } = await import('../model/index.js');

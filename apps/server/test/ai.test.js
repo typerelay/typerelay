@@ -334,3 +334,16 @@ test('HTTP settings, fragments, verification, proposal and OpenAPI contracts', a
 		await Fixture.provider(async calls => { const blocked = await request('/author', 'POST', Fixture.author()); assert.equal(blocked.status, 403); assert.equal(calls.length, 0); });
 	} finally { await new Promise(resolve => server.close(resolve)); }
 });
+
+
+test('explicit managed AI bypasses team providers and preserves BYO routes through toggles', async () => {
+	process.env.TYPERELAY_HOSTED_EDITION = 'true';
+	try {
+		const ctx = await Fixture.context(); await Fixture.configure(null, 'installation', 'managed-key', true); await Fixture.configure(ctx, 'team', 'team-key'); await Fixture.configure(ctx);
+		const before = await Ai.setting(ctx, 'personal'); await Ai.save(ctx, 'personal', { use_managed: true });
+		assert.equal(Ai.route(await Ai.state(ctx), 'authoring').scope, 'installation'); assert.equal(Ai.route(await Ai.state(ctx), 'search').scope, 'installation'); assert.deepEqual((await Ai.setting(ctx, 'personal')).routes, before.routes);
+		await Ai.save(ctx, 'personal', { use_managed: false }); assert.equal(Ai.route(await Ai.state(ctx), 'authoring').scope, 'personal');
+		await Ai.save(ctx, 'personal', { routes: {} }); await Ai.save(ctx, 'team', { use_managed: true }); assert.equal(Ai.route(await Ai.state(ctx), 'authoring').scope, 'installation');
+		await Account.updateOne({ _id: ctx.account }, { $set: { admin_override: { plan: 'free' } } }); const state = await Ai.state(ctx); assert.throws(() => Ai.route(state, 'authoring'), /Pro\/Team/); await assert.rejects(Ai.save(ctx, 'personal', { use_managed: true }), /Pro\/Team/);
+	} finally { process.env.TYPERELAY_HOSTED_EDITION = 'false'; }
+});

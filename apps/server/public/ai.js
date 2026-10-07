@@ -4,7 +4,6 @@ export class AiClient {
 		document.addEventListener('change', event => this.change(event).catch(error => this.notify(error.message, 'error')));
 		document.addEventListener('click', event => this.click(event).catch(error => this.notify(error.message, 'error')));
 		document.addEventListener('submit', event => { const form = event.target; if (form.matches('[data-ai-routes-form],[data-ai-connection-form],[data-ai-endpoints-form]')) { event.preventDefault(); event.stopImmediatePropagation(); void this.busy(event.submitter, () => this.submit(form)); } });
-		document.addEventListener('keydown', event => this.tabKey(event));
 		window.addEventListener('storage', event => { if (event.key === this.localKey()) this.update(); });
 		window.addEventListener('focus', () => { if (!this.admin) void this.refresh().catch(() => {}); });
 	}
@@ -15,6 +14,7 @@ export class AiClient {
 	update() {
 		const enabled = this.localEnabled() && this.status?.enabled;
 		if (!enabled) this.cancel();
+		for (const root of document.querySelectorAll('[data-ai-configuration]')) { const control = root.querySelector('[data-ai-managed]'); if (!control) continue; control.disabled = control.dataset.aiBusy === 'true' || (!this.status?.managed?.available && !control.checked); root.querySelector('[data-ai-managed-status]').textContent = this.status?.managed?.available ? (control.checked ? 'Using private Typerelay AI. Your own provider settings are saved for later.' : 'Use AI included with your paid plan, or choose your own provider below.') : this.status?.managed?.reason || 'Checking availability…'; }
 		for (const control of document.querySelectorAll('[data-ai-local]')) control.checked = this.localEnabled();
 		for (const control of document.querySelectorAll('[data-ai-personal]')) control.checked = this.status?.personal_enabled !== false;
 		for (const node of document.querySelectorAll('[data-ai-status]')) {
@@ -28,7 +28,7 @@ export class AiClient {
 		}
 		for (const control of document.querySelectorAll('[data-ai-launch]')) { control.disabled = !enabled; control.setAttribute('aria-disabled', String(!enabled)); }
 	}
-	acceptStatus(status) { if (!status || this.pendingPolicy) return; const same = JSON.stringify(this.status?.identity) === JSON.stringify(status.identity) && this.context === this.identity(); if (same && Object.entries(this.status?.revisions || {}).some(([scope, revision]) => revision > (status.revisions?.[scope] || 0))) return; if (!same) this.cancel(); this.status = status; this.context = this.identity(); this.update(); }
+	acceptStatus(status) { if (!status) return; if (this.pendingPolicy) { if (!this.pendingStatus || Object.entries(this.pendingStatus.revisions || {}).every(([scope, revision]) => revision <= (status.revisions?.[scope] || 0))) this.pendingStatus = status; return; } const same = JSON.stringify(this.status?.identity) === JSON.stringify(status.identity) && this.context === this.identity(); if (same && Object.entries(this.status?.revisions || {}).some(([scope, revision]) => revision > (status.revisions?.[scope] || 0))) return; if (!same) this.cancel(); this.status = status; this.context = this.identity(); this.update(); }
 	async refresh() { const result = await this.request('/settings'); this.acceptStatus(result.status); return result; }
 	async ready(workflow) { if (!this.localEnabled()) throw Error('AI is disabled in this app'); await this.refresh(); if (!this.localEnabled()) throw Error('AI is disabled in this app'); if (!this.status.enabled) throw Error('AI is disabled for this account or user'); if (this.status.effective[workflow].error) throw Error(this.status.effective[workflow].error); }
 	fragment(html) { return new DOMParser().parseFromString(html, 'text/html').body.firstElementChild; }
@@ -41,26 +41,17 @@ export class AiClient {
 	}
 	async change(event) {
 		const control = event.target;
+		if (control.matches('[data-ai-managed]')) { const root = this.config(control); const previous = this.configValue(root).use_managed === true; await this.busy(control, async () => { try { const result = await this.request('/settings', 'PATCH', { scope: root.dataset.aiConfiguration, use_managed: control.checked, revision: this.configValue(root).revision }); this.updateConfig(root, result); control.checked = result.settings.use_managed; } catch (error) { control.checked = previous; throw error; } }); return; }
 		if (control.matches('[data-ai-local]')) { localStorage.setItem(this.localKey(), String(control.checked)); this.update(); }
 		if (control.matches('[data-ai-personal]')) {
-			this.cancel(); control.disabled = true; const previous = this.status; this.pendingPolicy = true;
+			this.cancel(); control.disabled = true; const previous = this.status; this.pendingPolicy = true; this.pendingStatus = null;
 			if (this.status) { this.status = { ...this.status, personal_enabled: control.checked, enabled: control.checked && this.status.team_enabled && this.status.installation_enabled }; this.update(); }
-			try { const current = await this.request('/settings?scope=personal'); const result = await this.request('/settings', 'PATCH', { scope: 'personal', enabled: control.checked, routes: current.settings.routes, revision: current.settings.revision }); this.pendingPolicy = false; this.acceptStatus(result.status); for (const root of document.querySelectorAll('[data-ai-configuration="personal"]')) { this.updateConfig(root, result); root.querySelector('[name="enabled"]').checked = result.settings.enabled; } }
-			catch (error) { this.status = previous; this.update(); throw error; } finally { this.pendingPolicy = false; control.disabled = false; }
+			try { const current = await this.request('/settings?scope=personal'); const result = await this.request('/settings', 'PATCH', { scope: 'personal', enabled: control.checked, routes: current.settings.routes, revision: current.settings.revision }); this.pendingPolicy = false; this.acceptStatus(result.status); for (const root of document.querySelectorAll('[data-ai-configuration="personal"]')) { this.updateConfig(root, result); const enabled = root.querySelector('[name="enabled"]'); if (enabled) enabled.checked = result.settings.enabled; } }
+			catch (error) { this.status = previous; this.update(); throw error; } finally { this.pendingPolicy = false; control.disabled = false; const status = this.pendingStatus; this.pendingStatus = null; this.acceptStatus(status); }
 		}
 		if (control.matches('[data-ai-configuration] select[name$="_connection"]')) this.routeControls(this.config(control));
 		if (control.matches('[data-ai-model],select[name$="_protocol"]')) { const row = control.closest('[data-ai-route]'); if (row) { if (row.querySelector('[name$="_connection"]').value) row.querySelector('[data-ai-model-status]').textContent = 'Verify this model before saving.'; this.routeControls(this.config(control)); } }
 		if (control.matches('[data-ai-connection-form] select[name="provider"]')) this.providerControls(control.closest('form'));
-	}
-	selectTab(root, tab) {
-		root.dataset.aiTab = tab;
-		for (const button of root.querySelectorAll('[data-ai-config-tab]')) { const active = button.dataset.aiConfigTab === tab; button.classList.toggle('active', active); button.setAttribute('aria-selected', String(active)); button.tabIndex = active ? 0 : -1; }
-		for (const panel of root.querySelectorAll('[data-ai-config-panel]')) panel.hidden = panel.dataset.aiConfigPanel !== tab;
-	}
-	tabKey(event) {
-		if (!event.target.matches('[data-ai-config-tab]') || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-		event.preventDefault(); const root = this.config(event.target); const tabs = [...root.querySelectorAll('[data-ai-config-tab]')]; const index = tabs.indexOf(event.target); const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
-		this.selectTab(root, tabs[next].dataset.aiConfigTab); tabs[next].focus();
 	}
 	providerControls(form) { const compatible = form.elements.provider.value === 'compatible'; for (const node of form.querySelectorAll('[data-ai-compatible]')) node.hidden = !compatible; const url = form.querySelector('[name="base_url"]'); url.required = compatible; url.disabled = !compatible; form.elements.no_auth.disabled = !compatible; }
 	routeControls(root) {
@@ -137,7 +128,7 @@ export class AiClient {
 		} else {
 			const routes = {};
 			for (const workflow of ['authoring', 'search']) if (data.get(workflow + '_connection')) routes[workflow] = { connection: data.get(workflow + '_connection'), model: data.get(workflow + '_model'), protocol: data.get(workflow + '_protocol') };
-			const result = await this.request('/settings', 'PATCH', { scope, enabled: data.has('enabled'), routes, revision: this.configValue(root).revision, ...(this.admin ? { daily_limit: Number(data.get('daily_limit')) } : {}) });
+			const result = await this.request('/settings', 'PATCH', { scope, ...(form.elements.enabled ? { enabled: data.has('enabled') } : {}), routes, revision: this.configValue(root).revision, ...(this.admin ? { daily_limit: Number(data.get('daily_limit')) } : {}) });
 			this.updateConfig(root, result);
 		}
 		this.notify('AI settings saved');
@@ -151,8 +142,7 @@ export class AiClient {
 			root.querySelector('[data-ai-language-field]').hidden = button.dataset.aiEditAction !== 'translate'; root.querySelector('[data-ai-author-hint]').textContent = button.dataset.aiHint;
 			return;
 		}
-		if (button.matches('[data-ai-config-tab]')) { this.selectTab(this.config(button), button.dataset.aiConfigTab); return; }
-		if (button.matches('[data-ai-refresh-scope]')) return this.busy(button, async () => { if (!await this.confirm('Refresh saved AI settings? Unsaved changes in this section will be discarded.', 'Refresh')) return; const root = this.config(button); const result = await this.request(this.admin ? '/settings' : '/settings?scope=' + root.dataset.aiConfiguration); const node = this.fragment(result.html); const tab = root.dataset.aiTab; this.destroyConfig(root); root.replaceWith(node); this.selectTab(node, tab); this.routeControls(node); this.acceptStatus(result.status); this.update(); });
+		if (button.matches('[data-ai-refresh-scope]')) return this.busy(button, async () => { if (!await this.confirm('Refresh saved AI settings? Unsaved changes in this section will be discarded.', 'Refresh')) return; const root = this.config(button); const result = await this.request(this.admin ? '/settings' : '/settings?scope=' + root.dataset.aiConfiguration); const node = this.fragment(result.html); this.destroyConfig(root); root.replaceWith(node); this.routeControls(node); this.acceptStatus(result.status); this.update(); });
 		if (button.matches('[data-ai-manage]')) { event.preventDefault(); await this.manage(); return; }
 		if (button.matches('[data-ai-edit-connection]')) { button.closest('[data-ai-connection]').querySelector('form').hidden = false; return; }
 		if (button.matches('[data-ai-cancel-connection]')) { const form = button.closest('form'); form.reset(); this.providerControls(form); if (form.dataset.id) form.hidden = true; else form.closest('details').open = false; return; }

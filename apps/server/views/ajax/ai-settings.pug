@@ -1,5 +1,6 @@
 div(data-ai-settings)
 	h2.h4.mb-3 AI
+	- var embeddedAiSettings = true
 	include ai-controls
 	div(data-ai-configuration-slot="personal")
 	if canManageTeam
