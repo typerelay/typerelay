@@ -48,7 +48,7 @@ async function copy(item) {
 			await window.navigator.clipboard.write([new window.ClipboardItem({ 'text/plain': new Blob([result.rendered.text], { type: 'text/plain' }), 'text/html': new Blob([result.rendered.html], { type: 'text/html' }) })]);
 		} else await window.navigator.clipboard.writeText(result.rendered.text);
 		await send({ type: 'usage', event: { event_id: crypto.randomUUID(), identity: result.statisticsIdentity, library: result.item.library_id, snippet: result.item.id, shared: result.item.shared, action: 'copy', client: 'extension', occurred_at: new Date().toISOString(), characters: Math.max(0, (result.rendered.characters ?? [...result.rendered.text].length)) } }).catch(() => undefined);
-		window.close();
+		if (result.rendered.cursor) status('Copied text. Cursor positioning was omitted.'); else window.close();
 	} catch (error) { status(error.message); }
 	finally { copying = false; row?.removeAttribute('aria-busy'); }
 }
@@ -105,7 +105,7 @@ function results() {
 					shell.querySelector('#preview-content').replaceChildren(...content.content.childNodes);
 					rich.srcdoc = shell.documentElement.outerHTML;
 					rich.hidden = false;
-				} else { plain.textContent = result.rendered.text; plain.hidden = false; }
+				} else { plain.textContent = result.rendered.cursor ? result.rendered.text.slice(0, result.rendered.cursor.utf16) + '▏ [Cursor position]' + result.rendered.text.slice(result.rendered.cursor.utf16) : result.rendered.text; plain.hidden = false; }
 				message.hidden = true;
 			} catch (error) { if (row.isConnected && serial === previewSerial) message.textContent = error.message; }
 		});

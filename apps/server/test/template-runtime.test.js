@@ -13,6 +13,8 @@ test('browser WebAssembly uses literal answers, ordered actions, shared dates an
 		assert.deepEqual(rendered.fields, ['name']); assert.equal(rendered.enter_actions, 1); assert.equal(rendered.steps[1].kind, 'enter');
 		await assert.rejects(TemplateRuntime.render(template), /required/);
 		await assert.rejects(TemplateRuntime.render({ text: '{{shell:ls}}', variables: {} }), /variable name/);
+		const cursor = await TemplateRuntime.render({ text: '{{name}}{{cursor:here}}😀\n', variables: {} }, { name: 'e\u0301' }); assert.equal(cursor.cursor.utf16, 2); assert.equal(cursor.cursor.backward_utf16, 3); assert.equal(cursor.cursor.backward_graphemes, 2); assert.equal(cursor.text, 'e\u0301😀\n'); assert.match(TemplateRuntime.preview(cursor), /Cursor position/);
+		await assert.rejects(TemplateRuntime.render({ text: '{{cursor:here}}{{cursor:here}}' }), /only one/);
 		const literal = await TemplateRuntime.render({ text: '\\{{name}}', variables: {} }); assert.equal(literal.text, '{{name}}');
 		const multiline = await TemplateRuntime.render({ text: '{{body}}', variables: { body: { multiline: true } } }, { body: 'One\r\n\tTwo\n' }); assert.equal(multiline.text, 'One\n\tTwo\n');
 	} finally { globalThis.fetch = fetch; }

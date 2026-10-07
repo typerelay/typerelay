@@ -201,7 +201,7 @@ async function copyPopup(rendered, type = 'plain_text', write = async () => {}) 
 	dom.window.close = () => { closed++; };
 	Object.defineProperty(dom.window.navigator, 'clipboard', { value: { writeText: async text => { await write(); writes.push(text); }, write: async items => { await write(); writes.push(items); } } });
 	dom.window.ClipboardItem = class { constructor(data) { this.data = data; } };
-	globalThis.chrome = { runtime: { sendMessage: async message => {
+	globalThis.chrome = { storage: { onChanged: { addListener() {} } }, runtime: { sendMessage: async message => {
 		messages.push(message);
 		if (message.type === 'status') return { ok: true, value: { connected: true, bridgeVerified: false } };
 		if (message.type === 'snapshot') return { ok: true, value: { items: [{ id: 'copy', title: 'Copy', library: 'Mine' }] } };
@@ -304,4 +304,12 @@ test('rendering failure leaves the clipboard unchanged and popup open', async ()
 	assert.deepEqual(fixture.writes, []);
 	assert.equal(fixture.closed(), 0);
 	assert.equal(document.querySelector('#status').textContent, 'Image unavailable offline');
+});
+
+test('copying a cursor snippet strips marker output and explains omitted positioning', async () => {
+ globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
+ const fixture = await copyPopup({ text: 'Hello world', fields: [], cursor: { utf16: 6, backward_graphemes: 5, backward_utf16: 5 } }, 'template');
+ fixture.click(); await tick();
+ assert.deepEqual(fixture.writes, ['Hello world']); assert.match(fixture.dom.window.document.querySelector('#status').textContent, /Cursor positioning was omitted/);
+ fixture.dom.window.close();
 });

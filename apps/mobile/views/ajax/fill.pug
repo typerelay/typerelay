@@ -13,7 +13,9 @@ form#fill-form
 				span= definition.label || name
 				textarea(id='answer-'+name name=name rows=definition.multiline ? 3 : 1 required=definition.required)= definition.default || ''
 		span.eyebrow Preview
-		pre#insert-preview= rendered.text
+		pre#insert-preview= rendered.cursor ? rendered.text.slice(0, rendered.cursor.utf16) + '▏ [Cursor position]' + rendered.text.slice(rendered.cursor.utf16) : rendered.text
+		if rendered.cursor
+			p Copy includes text only. Cursor positioning is omitted.
 		if rendered.enter_actions
 			p.settings-note This snippet contains desktop Enter actions. Mobile cannot execute these actions. Edit the snippet before using it.
 		p.settings-note Formatting depends on the destination app. iOS keyboard insertion uses plain text.

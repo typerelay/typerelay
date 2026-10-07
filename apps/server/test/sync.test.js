@@ -525,7 +525,7 @@ test('Keyboard Maestro commits rich assets atomically, enforces review and prese
 
 test('template metadata survives imports, edits, conflicts, moves and Trash', async () => {
 	const ctx = await Fixture.user('owner', (await Account.create({ name: 'Template tests' }))._id);
-	const content = { version: 1, type: 'template', text: 'Hi {{name}} {{date}}{{key:enter}}', variables: { name: { label: 'Customer', default: 'Nitai', required: true, multiline: false }, date: { timezone: 'utc', format: 'DD/MM/YYYY' } } };
+	const content = { version: 1, type: 'template', text: 'Hi {{name}} {{date}}{{cursor:here}}', variables: { name: { label: 'Customer', default: 'Nitai', required: true, multiline: false }, date: { timezone: 'utc', format: 'DD/MM/YYYY' } } };
 	const body = { name: 'Template', snippets: [{ id: randomUUID(), trigger: 'template', content }] };
 	let result = await Libraries.mutate(ctx, randomUUID(), body, (fresh, session) => Libraries.create(fresh, body, session).then(library => ({ library })));
 	let library = result.library; const first = library.snippets[0];

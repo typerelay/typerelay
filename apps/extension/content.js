@@ -86,6 +86,7 @@ async function promptFields(fields, variables) {
 
 function insert(editor, saved, expected, erase, rendered, rich) {
 	if (!editor.isConnected || !saved) throw new Error('The original field is no longer available');
+	if (rendered.cursor && editor instanceof HTMLInputElement && /[\r\n]/.test(rendered.text)) throw new Error('This single-line field cannot preserve the cursor position in multiline text. Use a textarea or Copy.');
 	restore(editor, saved);
 	const before = beforeCaret(editor);
 	if (expected && (!before || !before.endsWith(expected))) throw new Error('The field changed; abbreviation left unchanged');
@@ -93,8 +94,10 @@ function insert(editor, saved, expected, erase, rendered, rich) {
 		const start = editor.selectionStart;
 		const begin = erase ? start - erase : start;
 		const end = erase ? start : editor.selectionEnd;
+		if (rendered.cursor && editor.maxLength >= 0 && editor.value.length - (end - begin) + rendered.text.length > editor.maxLength) throw new Error('This field is too short for the complete snippet and cursor position. Field unchanged.');
 		editor.setSelectionRange(begin, end);
 		if (!document.execCommand('insertText', false, rendered.text)) { restore(editor, saved); throw new Error('This field rejected an undoable insertion'); }
+		if (rendered.cursor) editor.setSelectionRange(begin + rendered.cursor.utf16, begin + rendered.cursor.utf16);
 		return;
 	}
 	const selection = editor.ownerDocument.getSelection();
@@ -103,6 +106,7 @@ function insert(editor, saved, expected, erase, rendered, rich) {
 	if (rich && rendered.html) {
 		if (!document.execCommand('insertHTML', false, rendered.html)) { restore(editor, saved); throw new Error('This editor rejected formatted insertion'); }
 	} else if (!document.execCommand('insertText', false, rendered.text)) { restore(editor, saved); throw new Error('This editor rejected insertion'); }
+	if (rendered.cursor) { for (let index = 0; index < rendered.cursor.backward_graphemes; index++) selection.modify('move', 'backward', 'character'); }
 }
 
 async function expand(editor, saved, id, expected = '', erase = 0) {

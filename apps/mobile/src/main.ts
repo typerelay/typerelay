@@ -208,7 +208,7 @@ export class MobileApp {
   const selection = { library: library._id, id: snippet.id, generation: MobileApp.state.generation };
   const rendered = await Native.call('keyboard_render', { ...selection, preview: true });
   MobileApp.$('detail-content').replaceChildren(MobileApp.fragment(fill({ snippet, rendered, variables: rendered.variables || rendered.template?.variables || {}, canEdit: library.permissions.edit })));
-  MobileApp.$('fill-form').onsubmit = event => { event.preventDefault(); const button = (event.target as HTMLFormElement).querySelector<HTMLButtonElement>('[type=submit]')!; void MobileApp.busy(button, async () => { const values = Object.fromEntries(new FormData(event.target as HTMLFormElement)); const output = await Native.call('keyboard_render', { ...selection, values, clipboard: true }); if (output.enter_actions) throw new Error('Desktop Enter actions are unsupported on mobile'); await Native.plugin.copy({ text: output.text, html: output.html, rtf: output.rtf }); await Native.call('keyboard_usage', { ...selection, kind: 'copy', characters: output.characters ?? [...output.text].length }).catch(() => undefined); MobileApp.toast('Copied'); }); };
+  MobileApp.$('fill-form').onsubmit = event => { event.preventDefault(); const button = (event.target as HTMLFormElement).querySelector<HTMLButtonElement>('[type=submit]')!; void MobileApp.busy(button, async () => { const values = Object.fromEntries(new FormData(event.target as HTMLFormElement)); const output = await Native.call('keyboard_render', { ...selection, values, clipboard: true }); if (output.enter_actions) throw new Error('Desktop Enter actions are unsupported on mobile'); await Native.plugin.copy({ text: output.text, html: output.html, rtf: output.rtf }); await Native.call('keyboard_usage', { ...selection, kind: 'copy', characters: output.characters ?? [...output.text].length }).catch(() => undefined); MobileApp.toast(output.cursor ? 'Copied text. Cursor positioning was omitted.' : 'Copied'); }); };
   const edit = document.getElementById('edit-from-detail'); if (edit) edit.onclick = () => { const modal = MobileApp.$('detail-modal'); modal.addEventListener('hidden.bs.modal', () => { void MobileApp.openEditor(library, snippet).catch(MobileApp.error); }, { once: true }); Modal.getInstance(modal)?.hide(); };
   MobileApp.$('detail-modal').classList.add('is-drawer'); Modal.getOrCreateInstance(MobileApp.$('detail-modal')).show();
  }
@@ -264,7 +264,7 @@ export class MobileApp {
   if (output.enter_actions) throw new Error('This snippet contains desktop Enter actions and cannot be copied directly on mobile.');
   await Native.plugin.copy({ text: output.text, html: output.html, rtf: output.rtf });
   await Native.call('keyboard_usage', { library: library._id, id: snippet.id, generation: MobileApp.state.generation, kind: 'copy', characters: output.characters ?? [...output.text].length }).catch(() => undefined);
-  MobileApp.toast('Snippet copied');
+  MobileApp.toast(output.cursor ? 'Copied text. Cursor positioning was omitted.' : 'Snippet copied');
  }
  static async deleteSnippet(library: Library, snippet: Snippet, closeEditor = false) {
   if (!library.permissions.edit) throw new Error('This library is read-only.');
