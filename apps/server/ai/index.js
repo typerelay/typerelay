@@ -88,6 +88,17 @@ export class AiProvider {
 		});
 	}
 	static async models(connection, installation) {
+		const endpoint = new URL(AiProvider.endpoint(connection));
+		if (connection.provider === 'compatible' && endpoint.origin === 'https://api.cloudflare.com' && /^\/client\/v4\/accounts\/[^/]+\/ai\/v1$/.test(endpoint.pathname)) {
+			const discovery = { ...connection, base_url: endpoint.href.replace(/\/v1$/, '') }; const models = new Map();
+			for (let page = 1; page <= 10; page++) {
+				const data = await AiProvider.request(discovery, installation, '/models/search?' + new URLSearchParams({ task: 'Text Generation', per_page: '100', page: String(page) }));
+				Support.assert(data.success === true && Array.isArray(data.result), 'Cloudflare could not list models; enter a model ID manually or retry', 502);
+				for (const model of data.result) if (typeof model?.name === 'string' && model.name.trim()) models.set(model.name, { id: model.name, name: model.name });
+				if (data.result.length < 100 || page >= data.result_info?.total_pages) break;
+			}
+			return [...models.values()];
+		}
 		const data = await AiProvider.request(connection, installation, '/models');
 		const values = connection.provider === 'google' ? (data.models || []).filter(model => model.supportedGenerationMethods?.includes('generateContent')).map(model => ({ id: model.name.replace(/^models\//, ''), name: model.displayName || model.name })) : (data.data || []).map(model => ({ id: model.id, name: model.name || model.display_name || model.id }));
 		return values.filter(model => typeof model.id === 'string' && !/^(jev-|text-embedding-|whisper-|tts-|dall-e-|gpt-image-)/i.test(model.id)).slice(0, 1000);

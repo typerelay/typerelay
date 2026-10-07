@@ -63,7 +63,7 @@ export class AiClient {
 			if (!state || state.connection !== selected) {
 				if (state) { state.job?.abort(); model.tomselect.clear(true); model.tomselect.clearOptions(); model.tomselect.wrapper.classList.remove('loading'); model.tomselect.wrapper.removeAttribute('aria-busy'); row.querySelector('[name$="_protocol"]').value = 'auto'; }
 				state = { connection: selected, attempted: false }; this.models.set(row, state);
-				status.textContent = selected ? 'Choose a model or enter its ID.' : row.dataset.aiRoute === 'search' ? 'Uses the authoring provider and model.' : 'Uses the inherited provider and model.';
+				status.textContent = selected ? 'Choose a model, or type its ID and press Enter.' : row.dataset.aiRoute === 'search' ? 'Uses the authoring provider and model.' : 'Uses the inherited provider and model.';
 			}
 			if (selected) model.tomselect.enable(); else model.tomselect.disable();
 			for (const control of row.querySelectorAll('select[name$="_protocol"],button')) control.disabled = !selected || control.dataset.aiBusy === 'true' || (control.hasAttribute('data-ai-models') && !!state.job) || (control.hasAttribute('data-ai-verify') && !model.value);
@@ -80,8 +80,8 @@ export class AiClient {
 			const response = await this.request('/models', 'POST', { scope: root.dataset.aiConfiguration, connection: state.connection }, job.signal);
 			if (!current()) return;
 			model.tomselect.clearOptions(); model.tomselect.addOptions(response.models.map(value => ({ value: value.id, text: value.name === value.id ? value.id : value.name + ' · ' + value.id }))); model.tomselect.refreshOptions(false);
-			status.textContent = response.models.length ? 'Choose a model or enter its ID, then Verify.' : 'No models listed. Enter the model ID, then Verify.';
-		} catch (error) { if (current() && error.name !== 'AbortError') { status.textContent = 'Could not load models. Enter an ID or refresh to retry.'; this.notify(error.message, 'error'); } }
+			status.textContent = response.models.length ? 'Choose a model, or type its ID and press Enter, then Verify.' : 'No models listed. Type the model ID and press Enter, then Verify.';
+		} catch (error) { if (current() && error.name !== 'AbortError') { status.textContent = 'Could not load models. ' + error.message + ' Click the Model field, type an ID and press Enter, or refresh to retry.'; this.notify(error.message, 'error'); } }
 		finally { this.modelJobs.delete(job); if (state.job === job) { state.job = null; if (row.isConnected && this.models.get(row) === state) { model.tomselect.wrapper.classList.remove('loading'); model.tomselect.wrapper.removeAttribute('aria-busy'); refresh.disabled = !state.connection; } } }
 	}
 	destroyConfig(root) { for (const row of root.querySelectorAll('[data-ai-route]')) { this.models.get(row)?.job?.abort(); row.querySelector('[data-ai-model]').tomselect?.destroy(); } }
