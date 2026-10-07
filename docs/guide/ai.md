@@ -54,7 +54,7 @@ Manage credentials in web **Settings → AI**. Other apps open that page on the 
 3. Under **AI settings**, choose the Authoring provider. Models load automatically into a searchable selector. Choose a model or type a manual model ID, then **Verify**. Use **Refresh models** to retry discovery.
 4. Select **Save AI settings**. Search inherits Authoring initially; choose a Search provider to use a different model. Its models also load automatically.
 
-On eligible hosted accounts, **Use private Typerelay AI** selects the included AI for that scope without deleting your saved providers or models. A personal selection overrides team settings; a team selection applies when the user has no personal provider route. Turning the switch off restores normal provider inheritance. The switch shows an explanation when included AI is unavailable.
+On eligible hosted accounts, **Use private Typerelay AI** selects the included AI for that scope without deleting your saved providers or models. A personal selection overrides team settings; a team selection applies when the user has no personal provider route. Turning the switch off restores normal provider inheritance. The switch is shown only in the hosted edition and explains when included AI is unavailable.
 
 Private connections belong to your user in the selected account. Owners/admins configure shared team connections. Routing uses private, then team, then installation settings. A configured connection's failure produces an error and does not silently switch providers or credentials.
 
@@ -92,3 +92,5 @@ Authoring submits your instructions and snippet text. Search submits your query 
 Keys stay encrypted on the server and are not synchronized to clients. AI request records contain action IDs, workflow names, quota counters, and completion state; they do not contain prompts, local text, or AI outputs. Provider processing/retention depends on the service you choose.
 
 Errors preserve your editor and existing results. Stale proposals cannot replace newer edits. Use **Refresh settings** to reload saved configuration after a conflict; this explicit action discards unsaved changes in that section.
+
+In web **Settings → AI**, the **Enable AI** switch in the header controls AI for your account across connected apps. The web app uses that account preference; desktop, mobile, and extension apps retain their own local AI controls.

@@ -1,6 +1,6 @@
 export class AiClient {
-	constructor({ request, identity, notify, manage, admin = false }) {
-		this.request = request; this.identity = identity; this.notify = notify; this.manage = manage; this.admin = admin; this.jobs = new Set(); this.modelJobs = new Set(); this.models = new WeakMap(); this.bindings = new WeakMap(); this.results = new WeakMap(); this.status = null;
+	constructor({ request, identity, notify, manage, admin = false, local = true }) {
+		this.request = request; this.identity = identity; this.notify = notify; this.manage = manage; this.admin = admin; this.local = local; this.jobs = new Set(); this.modelJobs = new Set(); this.models = new WeakMap(); this.bindings = new WeakMap(); this.results = new WeakMap(); this.status = null;
 		document.addEventListener('change', event => this.change(event).catch(error => this.notify(error.message, 'error')));
 		document.addEventListener('click', event => this.click(event).catch(error => this.notify(error.message, 'error')));
 		document.addEventListener('submit', event => { const form = event.target; if (form.matches('[data-ai-routes-form],[data-ai-connection-form],[data-ai-endpoints-form]')) { event.preventDefault(); event.stopImmediatePropagation(); void this.busy(event.submitter, () => this.submit(form)); } });
@@ -8,7 +8,7 @@ export class AiClient {
 		window.addEventListener('focus', () => { if (!this.admin) void this.refresh().catch(() => {}); });
 	}
 	localKey() { return 'typerelay.ai.enabled'; }
-	localEnabled() { return localStorage.getItem(this.localKey()) !== 'false'; }
+	localEnabled() { return !this.local || localStorage.getItem(this.localKey()) !== 'false'; }
 	cancel() { for (const job of this.jobs) job.abort(); this.jobs.clear(); }
 	reset() { this.cancel(); for (const job of this.modelJobs) job.abort(); this.modelJobs.clear(); this.status = null; for (const node of document.querySelectorAll('[data-ai-results]')) node.replaceChildren(); for (const node of document.querySelectorAll('[data-ai-proposal]')) node.hidden = true; this.update(); }
 	update() {

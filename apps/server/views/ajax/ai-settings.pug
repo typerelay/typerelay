@@ -1,7 +1,11 @@
 div(data-ai-settings)
-	h2.h4.mb-3 AI
-	- var embeddedAiSettings = true
-	include ai-controls
+	.ai-settings-header.d-flex.align-items-center.justify-content-between.flex-wrap.gap-3.mb-3
+		h2.h4.mb-0 AI
+		.ai-controls.mb-0(data-ai-controls)
+			.form-check.form-switch.mb-0
+				label.form-check-label.d-flex.align-items-center
+					input.form-check-input.h-20px.w-30px.mt-0(type="checkbox" role="switch" data-ai-personal checked)
+					span Enable AI
 	div(data-ai-configuration-slot="personal")
 	if canManageTeam
 		div(data-ai-configuration-slot="team")

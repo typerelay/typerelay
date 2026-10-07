@@ -153,7 +153,7 @@ export class Ai {
 		if (Billing.hosted()) { try { Support.assert(state.installation.enabled, 'Private Typerelay AI is currently unavailable'); for (const workflow of Ai.workflows) Ai.route({ ...state, personal: { ...state.personal, use_managed: true } }, workflow); managed.available = true; managed.reason = ''; } catch (error) { managed.reason = error.message; } }
 		return { managed, identity: { account: ctx.account, user: ctx.user }, revisions: { personal: state.personal.revision, team: state.team.revision, installation: state.installation.revision }, enabled: state.installation.enabled && state.team.enabled && state.personal.enabled, personal_enabled: state.personal.enabled, team_enabled: state.team.enabled, installation_enabled: state.installation.enabled, can_manage_team: Support.admin(state.ctx), effective, allowance: { used, limit: state.installation.daily_limit, resets_at: new Date(Date.parse(day) + 86400000).toISOString() } };
 	}
-	static fragment(settings, scope) { return pug.renderFile('./views/ajax/ai-configuration.pug', { settings: Ai.summary(settings), scope, providers: AiProvider.catalog, protocols: AiProvider.protocols }); }
+	static fragment(settings, scope) { return pug.renderFile('./views/ajax/ai-configuration.pug', { settings: Ai.summary(settings), scope, hosted: Billing.hosted(), providers: AiProvider.catalog, protocols: AiProvider.protocols }); }
 	static async settings(ctx, scope) { const settings = await Ai.setting(ctx, scope); return { scope, settings: Ai.summary(settings), html: Ai.fragment(settings, scope), status: await Ai.status(ctx) }; }
 	static routes(value, connections) {
 		Support.assert(value && typeof value === 'object' && !Array.isArray(value), 'Invalid AI workflow routes');

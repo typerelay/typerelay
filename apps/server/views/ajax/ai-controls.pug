@@ -3,11 +3,11 @@ section.ai-controls.card.card-body.mb-5(data-ai-controls)
 		.form-check.form-switch.mb-0
 			label.form-check-label.d-flex.align-items-center
 				input.form-check-input.h-20px.w-30px.mt-0(type="checkbox" role="switch" data-ai-personal checked)
-				span.ms-3 AI for my account on all apps
+				span AI for my account on all apps
 		.form-check.form-switch.mb-0
 			label.form-check-label.d-flex.align-items-center
 				input.form-check-input.h-20px.w-30px.mt-0(type="checkbox" role="switch" data-ai-local checked)
-				span.ms-3 AI in this app
+				span AI in this app
 	if typeof embeddedAiSettings === 'undefined' || !embeddedAiSettings
 		h2.h5 AI
 		p.ai-status.text-muted.small(data-ai-status role="status") Checking AI settings…

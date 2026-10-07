@@ -39,3 +39,8 @@
 .ai-controls input[role="switch"]:checked,.ai-configuration input[role="switch"]:checked { background-color: var(--bs-primary, #0d6efd); background-position: right center; }
 .ai-controls input[role="switch"]:focus-visible,.ai-configuration input[role="switch"]:focus-visible { outline: .125rem solid var(--bs-primary, #0d6efd); outline-offset: .125rem; }
 .ai-controls input[role="switch"]:disabled,.ai-configuration input[role="switch"]:disabled { opacity: .5; cursor: not-allowed; }
+
+.ai-controls .form-switch label,.ai-configuration .form-switch label { gap: .5rem; }
+.ai-controls .form-switch input,.ai-configuration .form-switch input { margin-right: 0; }
+.ai-policy-switch { padding: .75rem 1rem; }
+.ai-configuration .text-muted.small,.ai-configuration .form-text { font-size: .75rem; line-height: 1.4; }

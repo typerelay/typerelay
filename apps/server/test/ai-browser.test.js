@@ -19,7 +19,7 @@ class BrowserFixture {
 		const errors = []; const client = new window.AiClient({ request, identity: () => 'fixture', notify: (message, icon) => { if (icon === 'error') errors.push(message); }, manage: () => {}, admin }); client.acceptStatus(structuredClone(BrowserFixture.status));
 		return { dom, window, document: window.document, client, errors };
 	}
-	static html(settings, scope = 'personal') { return pug.renderFile('views/ajax/ai-configuration.pug', { settings, scope, providers: AiProvider.catalog, protocols: AiProvider.protocols }); }
+	static html(settings, scope = 'personal') { return pug.renderFile('views/ajax/ai-configuration.pug', { settings, scope, hosted: true, providers: AiProvider.catalog, protocols: AiProvider.protocols }); }
 	static tick() { return new Promise(resolve => setTimeout(resolve, 0)); }
 	static async editor(fixture, snippet = null) {
 		const library = { _id: 'library', name: 'Library', shared: false, permissions: { edit: true } };
@@ -235,4 +235,22 @@ test('managed selection status survives a conflicting concurrent account policy 
 		const control = fixture.document.querySelector('[data-ai-managed]'); control.checked = true; await fixture.client.change({ target: control }); finishPolicy(); await assert.rejects(pending, /settings changed/);
 		assert.equal(control.checked, true); assert.equal(fixture.client.status.effective.authoring.managed, true); assert.equal(fixture.client.status.revisions.personal, 1); assert.equal(policy.checked, true);
 	} finally { fixture.dom.window.close(); }
+});
+
+
+test('web AI header has one account switch and ignores legacy browser opt-out while apps retain it', async () => {
+	const fixture = BrowserFixture.create(async () => ({ status: BrowserFixture.status }));
+	try {
+		const header = fixture.document.querySelector('.ai-settings-header'); assert.equal(header.querySelectorAll('[role="switch"]').length, 1); assert.equal(header.querySelector('label').textContent.trim(), 'Enable AI'); assert.equal(fixture.document.querySelector('[data-ai-local]'), null);
+		fixture.window.localStorage.setItem(fixture.client.localKey(), 'false'); assert.equal(fixture.client.localEnabled(), false); fixture.client.local = false; assert.equal(fixture.client.localEnabled(), true); fixture.client.request = async () => ({ status: { ...BrowserFixture.status, enabled: false, personal_enabled: false } }); fixture.client.acceptStatus({ ...BrowserFixture.status, enabled: false, personal_enabled: false }); assert.equal(header.querySelector('[data-ai-personal]').checked, false); await assert.rejects(fixture.client.ready('authoring'), /disabled/);
+		assert.match(readFileSync('public/app.js', 'utf8'), /new AiClient\(\{ local: false,/); assert.match(pug.renderFile('views/ajax/ai-controls.pug'), /data-ai-local/);
+	} finally { fixture.dom.window.close(); }
+});
+
+
+test('included Typerelay AI controls appear only on hosted settings', () => {
+	for (const scope of ['personal', 'team']) {
+		const render = hosted => pug.renderFile('views/ajax/ai-configuration.pug', { settings: BrowserFixture.settings, scope, hosted, providers: AiProvider.catalog, protocols: AiProvider.protocols });
+		assert.match(render(true), /data-ai-managed/); assert.doesNotMatch(render(false), /data-ai-managed|Use private Typerelay AI/); assert.match(render(false), /data-ai-connections/);
+	}
 });

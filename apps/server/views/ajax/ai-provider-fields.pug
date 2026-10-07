@@ -26,8 +26,8 @@ mixin aiProviderFields(connection)
 		.form-check.form-switch.mb-3
 			label.d-flex.align-items-center
 				input.form-check-input.h-20px.w-30px.mt-0(type="checkbox" role="switch" name="clear_key")
-				span.ms-3 Clear stored key
+				span Clear stored key
 	.form-check.form-switch.mb-3(data-ai-compatible hidden=!connection || connection.provider !== 'compatible')
 		label.d-flex.align-items-center
 			input.form-check-input.h-20px.w-30px.mt-0(type="checkbox" role="switch" name="no_auth" checked=connection && connection.no_auth)
-			span.ms-3 Endpoint requires no API key
+			span Endpoint requires no API key
