@@ -31,7 +31,7 @@ A password reset link expires after 15 minutes. Resetting the password invalidat
 
 Open **Settings → Profile** to change your name or email address. A name change is immediate. An email change is sent to the new address and does not take effect until you confirm it while signed in. The confirmation fails if the address is already in use or the account changed after the request.
 
-Changing security settings, registering or removing passkeys, and changing email require a browser sign-in from the last 15 minutes. If prompted, sign out and sign in again before retrying. Personal tokens and OAuth apps are managed separately under **Settings → Apps Access**.
+Changing security settings, registering or removing passkeys, and changing email require an active browser session. There is no additional sign-in time limit for these actions. Personal tokens and OAuth apps are managed separately under **Settings → Apps Access**.
 
 ## Two-factor authentication and passkeys
 

@@ -86,7 +86,7 @@ block content
 						.settings-content
 							section.settings-pane(id="settings-pane-profile" role="tabpanel" aria-labelledby="settings-tab-profile" hidden=false)
 								h3.h6.fw-bold Profile
-								form#profile-form.mb-5
+								form#profile-form.card.p-4.mb-5
 									label.form-label(for="profile-name") Name
 									input#profile-name.form-control.form-control-sm.mb-3(name="name" value=profile.name required)
 									label.form-label(for="profile-email") Email address
@@ -132,8 +132,8 @@ block content
 																span.ms-1 Rotate
 														p#team-member-password-help.small.text-muted.mt-2.mb-1 Generated for new Type Relay users. Existing users keep their password.
 														p#team-member-password-status.small.text-muted.mb-3(aria-live="polite")
-														.form-check.mb-3
-															input#team-member-send-welcome.form-check-input.h-20px.w-30px(type="checkbox" name="send_welcome_email" checked)
+														.form-check.form-switch.mb-3
+															input#team-member-send-welcome.form-check-input.h-20px.w-30px(type="checkbox" role="switch" name="send_welcome_email" checked)
 															label.form-check-label(for="team-member-send-welcome") Send email notification
 														.text-end
 															button.btn.btn-primary.btn-sm(type="submit") Add user

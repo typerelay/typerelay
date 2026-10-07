@@ -49,10 +49,12 @@ Mobile AI runs in the main app. Native keyboards use their existing snippet work
 
 Manage credentials in web **Settings → AI**. Other apps open that page on the connected server.
 
-1. Open **AI Providers** and add a named provider and API key.
+1. In **AI for me**, add a named provider and API key under **AI provider**. Owners and admins can configure shared providers in **AI for my team**.
 2. For compatible APIs, enter the full API base URL, including its path. Keyless endpoints can use **Endpoint requires no API key**.
-3. Open **AI Defaults** and choose the Authoring provider. Models load automatically into a searchable selector. Choose a model or type a manual model ID, then **Verify**. Use **Refresh models** to retry discovery.
-4. Save AI defaults. Search inherits Authoring initially; choose a Search provider to use a different model. Its models also load automatically.
+3. Under **AI settings**, choose the Authoring provider. Models load automatically into a searchable selector. Choose a model or type a manual model ID, then **Verify**. Use **Refresh models** to retry discovery.
+4. Select **Save AI settings**. Search inherits Authoring initially; choose a Search provider to use a different model. Its models also load automatically.
+
+On eligible hosted accounts, **Use private Typerelay AI** selects the included AI for that scope without deleting your saved providers or models. A personal selection overrides team settings; a team selection applies when the user has no personal provider route. Turning the switch off restores normal provider inheritance. The switch is shown only in the hosted edition and explains when included AI is unavailable.
 
 Private connections belong to your user in the selected account. Owners/admins configure shared team connections. Routing uses private, then team, then installation settings. A configured connection's failure produces an error and does not silently switch providers or credentials.
 
@@ -69,9 +71,11 @@ Blank replacement-key fields preserve a saved key. **Clear stored key** removes 
 
 The API format defaults to **auto**. Override it if your gateway/model requires another supported format. For Cloudflare Workers AI, use the account-specific base URL, API token, and model. See [Cloudflare compatibility](https://developers.cloudflare.com/workers-ai/configuration/open-ai-compatibility/) and [OpenCode Zen endpoints](https://opencode.ai/docs/en/zen/).
 
+For Cloudflare Gemma 4 26B A4B, enter `@cf/google/gemma-4-26b-a4b-it` as the model with the compatible Chat Completions API. Typerelay automatically disables this model's thinking mode so short authoring and search responses do not spend their output budget on reasoning. Cloudflare processes these requests; this is separate from on-device AI.
+
 ## Hosted and self-hosted defaults
 
-Installation administrators configure providers and defaults at **Admin → Settings → AI**. **AI Providers** manages credentials and private endpoint approvals. **AI Defaults** manages the installation switch, daily allowance, and Authoring/Search providers and models. Each tab saves its own fields and preserves changes in the other tab.
+Installation administrators configure providers and defaults at **Admin → Settings → AI**. **AI provider** manages credentials and private endpoint approvals. **AI settings** manages the installation switch, daily allowance, and Authoring/Search providers and models. Each form saves its own fields and preserves changes in the other forms.
 
 Hosted Pro/Team, including eligible trials, receive fifty managed actions per user/day by default. The administrator can adjust the limit. Each authoring/search action counts once, including two-call searches. The allowance resets at UTC midnight. Requests rejected before inference do not consume allowance; failures after generation starts can consume it.
 
@@ -79,7 +83,7 @@ Private/team keys work on every plan without consuming managed allowance. Self-h
 
 Saving keys requires the existing **GIT_ENCRYPTION_KEY** deployment setting. No new environment variables are needed.
 
-Hosted compatible endpoints require public HTTPS. Self-hosted admins can approve private HTTP(S) origins for local model servers in **AI Providers → Private endpoints**, one origin per line. Save endpoint approvals before fetching models or verifying a private provider. The endpoint must be reachable from the Typerelay server.
+Hosted compatible endpoints require public HTTPS. Self-hosted admins can approve private HTTP(S) origins for local model servers in **AI provider → Private endpoints**, one origin per line. Save endpoint approvals before fetching models or verifying a private provider. The endpoint must be reachable from the Typerelay server.
 
 ## Data and recovery
 
@@ -88,3 +92,5 @@ Authoring submits your instructions and snippet text. Search submits your query 
 Keys stay encrypted on the server and are not synchronized to clients. AI request records contain action IDs, workflow names, quota counters, and completion state; they do not contain prompts, local text, or AI outputs. Provider processing/retention depends on the service you choose.
 
 Errors preserve your editor and existing results. Stale proposals cannot replace newer edits. Use **Refresh settings** to reload saved configuration after a conflict; this explicit action discards unsaved changes in that section.
+
+In web **Settings → AI**, the **Enable AI** switch in the header controls AI for your account across connected apps. The web app uses that account preference; desktop, mobile, and extension apps retain their own local AI controls.

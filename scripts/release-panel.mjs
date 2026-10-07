@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { NativeTools } from '../apps/desktop/scripts/stage-native-tools.mjs';
+import { LocalMacBuild } from '../apps/desktop/scripts/build-macos-local.mjs';
 import { DesktopVersion } from './desktop-version.mjs';
 
 export class SigningBridge {
@@ -73,16 +74,17 @@ export class PanelRelease {
 	static root = fileURLToPath(new URL('../', import.meta.url));
 	static script = fileURLToPath(import.meta.url);
 	static options(args, platform = process.platform, architecture = process.arch) {
-		const mode = args.shift(); if (!['windows', 'macos', 'linux'].includes(mode)) throw new Error('Usage: node scripts/release-panel.mjs windows|macos|linux [--dry-run] [--target TARGET] [--report FILE] [--appimage]');
-		let target = mode === 'windows' ? 'x86_64-pc-windows-msvc' : mode === 'linux' ? 'x86_64-unknown-linux-gnu' : architecture === 'x64' && platform === 'darwin' ? 'x86_64-apple-darwin' : 'aarch64-apple-darwin'; let dry = false; let report; let appimageOnly = false;
-		while (args.length) { const arg = args.shift(); if (arg === '--dry-run') dry = true; else if (arg === '--appimage') appimageOnly = true; else if (arg === '--target') target = args.shift(); else if (arg === '--report') report = args.shift(); else throw new Error('Unsupported option ' + arg + '; publication is handled by the shared release tool'); }
+		const mode = args.shift(); if (!['windows', 'macos', 'linux'].includes(mode)) throw new Error('Usage: node scripts/release-panel.mjs windows|macos|linux [--dry-run] [--target TARGET] [--report FILE] [--appimage] [--resume ABSOLUTE_RUN_DIRECTORY]');
+		const targetExplicit = args.includes('--target'); let target = mode === 'windows' ? 'x86_64-pc-windows-msvc' : mode === 'linux' ? 'x86_64-unknown-linux-gnu' : architecture === 'x64' && platform === 'darwin' ? 'x86_64-apple-darwin' : 'aarch64-apple-darwin'; let dry = false; let report; let resume; let appimageOnly = false;
+		while (args.length) { const arg = args.shift(); if (arg === '--dry-run') dry = true; else if (arg === '--appimage') appimageOnly = true; else if (arg === '--target') target = args.shift(); else if (arg === '--report') report = args.shift(); else if (arg === '--resume') { resume = args.shift(); if (!resume) throw new Error('--resume requires an absolute run directory'); } else throw new Error('Unsupported option ' + arg + '; publication is handled by the shared release tool'); }
 		if (appimageOnly && mode !== 'linux') throw new Error('--appimage is only supported for Linux');
 		const supported = mode === 'windows' ? ['x86_64-pc-windows-msvc'] : mode === 'linux' ? ['x86_64-unknown-linux-gnu'] : ['aarch64-apple-darwin', 'x86_64-apple-darwin', 'universal-apple-darwin'];
 		if (!supported.includes(target)) throw new Error('Unsupported target');
 		const expectedPlatform = mode === 'macos' ? 'darwin' : 'linux';
 		if (!dry && platform !== expectedPlatform) throw new Error(mode === 'windows' ? 'Run Windows signing on Omarchy' : mode === 'linux' ? 'Run Linux packaging in the configured Linux release machine' : 'Run macOS signing on the Mac');
 		if (report && !path.isAbsolute(report)) throw new Error('--report must be an absolute path');
-		return { mode, target, dry, report, appimageOnly };
+		if (resume && (mode !== 'macos' || !path.isAbsolute(resume))) throw new Error('--resume requires macos and an absolute run directory');
+		return { mode, target, dry, report, appimageOnly, resume, targetExplicit };
 	}
 	static buildEnvironment(environment) {
 		const result = { ...environment };
@@ -99,13 +101,87 @@ export class PanelRelease {
 		if (!(result.APPLE_ID && result.APPLE_PASSWORD && result.APPLE_TEAM_ID) && !(result.APPLE_API_ISSUER && result.APPLE_API_KEY && result.APPLE_API_KEY_PATH)) throw new Error('Apple notarization credentials are missing');
 		return result;
 	}
-	static async run(command, args, { cwd = PanelRelease.root, environment = process.env, capture = false } = {}) {
+	static async run(command, args, { cwd = PanelRelease.root, environment = process.env, capture = false, timeoutMs = 0 } = {}) {
 		return new Promise((resolve, reject) => {
-			const child = spawn(command, args, { cwd, env: environment, stdio: capture ? ['ignore', 'pipe', 'pipe'] : 'inherit' }); let output = '';
+			const child = spawn(command, args, { cwd, env: environment, detached: timeoutMs > 0 && process.platform !== 'win32', stdio: capture ? ['ignore', 'pipe', 'pipe'] : 'inherit' }); let output = ''; let timedOut = false;
+			const timer = timeoutMs > 0 ? setTimeout(() => { timedOut = true; try { if (process.platform !== 'win32') process.kill(-child.pid, 'SIGKILL'); else child.kill('SIGKILL'); } catch {} }, timeoutMs) : undefined;
 			if (capture) { child.stdout.on('data', chunk => { output += chunk; }); child.stderr.on('data', () => {}); }
-			child.on('error', reject); child.on('close', code => code === 0 ? resolve(output.trim()) : reject(new Error(command + ' failed with exit code ' + code)));
+			child.on('error', error => { clearTimeout(timer); reject(error); }); child.on('close', code => { clearTimeout(timer); if (timedOut) reject(new Error(command + ' timed out after ' + timeoutMs / 1000 + ' seconds')); else if (code === 0) resolve(output.trim()); else reject(new Error(command + ' failed with exit code ' + code)); });
 		});
 	}
+	static notaryArguments(environment) {
+		const apple = PanelRelease.appleEnvironment(environment);
+		return apple.APPLE_ID && apple.APPLE_PASSWORD && apple.APPLE_TEAM_ID ? ['--apple-id', apple.APPLE_ID, '--password', apple.APPLE_PASSWORD, '--team-id', apple.APPLE_TEAM_ID] : ['--key', apple.APPLE_API_KEY_PATH, '--key-id', apple.APPLE_API_KEY, '--issuer', apple.APPLE_API_ISSUER];
+	}
+	static async lockRun(directory) {
+		const file = path.join(directory, 'release.lock');
+		try { const handle = await fs.open(file, 'wx', 0o600); await handle.writeFile(String(process.pid)); await handle.close(); return file; }
+		catch (error) { if (error.code !== 'EEXIST') throw error; }
+		// Serialize stale-lock recovery so simultaneous resumes cannot remove a newly acquired lock.
+		const recovery = file + '.recovery';
+		try { await fs.mkdir(recovery); } catch (error) { if (error.code === 'EEXIST') throw new Error('Another release is recovering this run lock: ' + file); throw error; }
+		try {
+			const owner = Number(await fs.readFile(file, 'utf8').catch(error => { if (error.code === 'ENOENT') return ''; throw error; }));
+			if (owner) { try { process.kill(owner, 0); throw new Error('Release run is active in process ' + owner); } catch (error) { if (error.code !== 'ESRCH') throw error; } }
+			else { try { await fs.access(file); throw new Error('Release lock has no valid owner; inspect ' + file); } catch (error) { if (error.code !== 'ENOENT') throw error; } }
+			await fs.rm(file, { force: true }); const handle = await fs.open(file, 'wx', 0o600); await handle.writeFile(String(process.pid)); await handle.close(); return file;
+		} finally { await fs.rmdir(recovery); }
+	}
+	static async saveNotarization(directory, state) {
+		const file = path.join(directory, 'notarization.json'); await fs.writeFile(file + '.tmp', JSON.stringify(state, null, 2) + '\n', { mode: 0o600 }); await fs.rename(file + '.tmp', file);
+	}
+	static async fingerprint(app) {
+		const hash = createHash('sha256');
+		const visit = async directory => { for (const name of (await fs.readdir(directory)).sort()) { const file = path.join(directory, name); const stat = await fs.lstat(file); hash.update(JSON.stringify([path.relative(app, file), stat.mode])); if (stat.isSymbolicLink()) hash.update(await fs.readlink(file)); else if (stat.isDirectory()) await visit(file); else if (stat.isFile()) hash.update(await fs.readFile(file)); else throw new Error('Unsupported app bundle entry'); } };
+		await visit(app); return hash.digest('hex');
+	}
+	static async pendingRun(directory, provenance) {
+		const candidates = [];
+		for (const name of await fs.readdir(directory)) {
+			const run = path.join(directory, name); const state = await fs.readFile(path.join(run, 'notarization.json'), 'utf8').then(JSON.parse).catch(error => { if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null; throw error; });
+			if (state && !state.completed && ['commit', 'version', 'target'].every(key => state[key] === provenance[key])) candidates.push(run);
+		}
+		if (candidates.length > 1) throw new Error('Multiple pending notarizations; select one with --resume ABSOLUTE_RUN_DIRECTORY');
+		return candidates[0];
+	}
+	static async waitForNotarization(state, directory, environment, { timeoutMs = 600000, pollMs = 15000 } = {}) {
+		const deadline = Date.now() + timeoutMs;
+		while (Date.now() < deadline) {
+			const result = JSON.parse(await PanelRelease.run('xcrun', ['notarytool', 'info', state.id, ...PanelRelease.notaryArguments(environment), '--output-format', 'json'], { environment: PanelRelease.buildEnvironment(environment), capture: true, timeoutMs: Math.min(60000, Math.max(1, deadline - Date.now())) }));
+			if (result.id !== state.id) throw new Error('Apple returned a different notarization submission');
+			state.status = result.status; await PanelRelease.saveNotarization(directory, state); console.log('Apple notarization ' + state.id + ': ' + state.status);
+			if (state.status === 'Accepted') return;
+			if (state.status !== 'In Progress') throw new Error('Apple notarization ' + state.id + ' ended with ' + state.status + '; inspect its notarytool log before rebuilding');
+			await new Promise(resolve => setTimeout(resolve, Math.min(pollMs, Math.max(0, deadline - Date.now()))));
+		}
+		throw new Error('Apple notarization remains pending after ' + timeoutMs / 60000 + ' minutes');
+	}
+	static async notarize(app, directory, provenance, environment) {
+		const fingerprint = await PanelRelease.fingerprint(app);
+		let state = await fs.readFile(path.join(directory, 'notarization.json'), 'utf8').then(JSON.parse).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+		if (state && (!['commit', 'version', 'target'].every(key => state[key] === provenance[key]) || state.fingerprint !== fingerprint || state.app !== path.relative(directory, app))) throw new Error('Saved notarization source or app changed; refusing resume');
+		try {
+			if (!state) {
+				await PanelRelease.run('codesign', ['--verify', '--deep', '--strict', app], { timeoutMs: 60000 });
+				const archive = path.join(directory, 'notarization-upload.zip');
+				await PanelRelease.run('ditto', ['-c', '-k', '--keepParent', app, archive], { timeoutMs: 120000 });
+				state = { ...provenance, app: path.relative(directory, app), fingerprint, status: 'Submitting', created: new Date().toISOString() }; await PanelRelease.saveNotarization(directory, state);
+				const submission = JSON.parse(await PanelRelease.run('xcrun', ['notarytool', 'submit', archive, '--no-wait', ...PanelRelease.notaryArguments(environment), '--output-format', 'json'], { environment: PanelRelease.buildEnvironment(environment), capture: true, timeoutMs: 120000 }));
+				if (!submission.id) throw new Error('Apple submission returned no ID');
+				state.id = submission.id; state.status = submission.status || 'In Progress'; await PanelRelease.saveNotarization(directory, state);
+				console.log('Apple notarization submission: ' + state.id);
+			}
+			if (!state.id) throw new Error('Submission outcome unknown; inspect Apple notarytool history and recover its ID in notarization.json before resuming. No duplicate submission was sent');
+			await PanelRelease.waitForNotarization(state, directory, environment);
+			if (await PanelRelease.fingerprint(app) !== state.fingerprint) throw new Error('Submitted app changed while waiting for Apple; refusing packaging');
+			// Staple a disposable copy: the submitted signed bundle remains immutable across interrupted packaging.
+			const packaged = path.join(directory, 'notarized', 'TypeRelay.app'); await fs.rm(path.dirname(packaged), { recursive: true, force: true }); await fs.mkdir(path.dirname(packaged), { recursive: true });
+			await PanelRelease.run('ditto', [app, packaged], { timeoutMs: 120000 });
+			await PanelRelease.run('xcrun', ['stapler', 'staple', packaged], { timeoutMs: 120000 });
+			return packaged;
+		} catch (error) { throw new Error(error.message + '\nRecovery preserved at ' + directory + '. Rerun the same release command, or node scripts/release-panel.mjs macos --target ' + provenance.target + ' --resume ' + JSON.stringify(directory)); }
+	}
+
 	static async requireCommands(names) { for (const name of names) await PanelRelease.run('which', [name], { capture: true }); }
 	static async repository() {
 		if (await PanelRelease.run('git', ['status', '--porcelain'], { capture: true })) throw new Error('Release requires a clean checkout');
@@ -130,59 +206,72 @@ export class PanelRelease {
 	static async main(args = process.argv.slice(2)) {
 		if (args[0] === 'sign-file') { if (args.length !== 4) throw new Error('Invalid signing hook request'); return SigningBridge.requestTauri(args[1],args[2],args[3]); }
 		const options = PanelRelease.options([...args]);
+		if (options.resume && !options.targetExplicit) { options.target = JSON.parse(await fs.readFile(path.join(options.resume, 'notarization.json'), 'utf8')).target; if (!['aarch64-apple-darwin', 'x86_64-apple-darwin', 'universal-apple-darwin'].includes(options.target)) throw new Error('Saved notarization has an unsupported target'); }
 		const working = path.join(PanelRelease.root, 'apps/desktop');
 		let target = path.join(PanelRelease.root, 'target/desktop-releases', options.mode);
-		const build = options.mode === 'windows' ? ['tauri', 'bundle', '--target', options.target, '--bundles', 'nsis', '--config', 'src-tauri/tauri.windows.conf.json'] : ['tauri', 'build', '--target', options.target, '--bundles', options.mode === 'linux' ? options.appimageOnly ? 'appimage' : 'appimage,deb,rpm' : 'app,dmg', '--', '--locked'];
+		const build = options.mode === 'windows' ? ['tauri', 'bundle', '--target', options.target, '--bundles', 'nsis', '--config', 'src-tauri/tauri.windows.conf.json'] : ['tauri', 'build', '--target', options.target, '--bundles', options.mode === 'linux' ? options.appimageOnly ? 'appimage' : 'appimage,deb,rpm' : 'app', '--', '--locked'];
 		const compile = options.mode === 'windows' ? ['xwin', 'build', '--manifest-path', 'src-tauri/Cargo.toml', '--release', '--target', options.target, '--locked'] : null;
 		if (options.dry) { console.log(JSON.stringify({ source: 'clean develop + git pull --ff-only', platform: options.mode, target: options.target, install: ['pnpm', 'install', '--frozen-lockfile'], nativeTools: NativeTools.plans(options.target).map(plan => [plan.command, ...plan.args]), compile: compile ? ['cargo', ...compile] : null, build: ['pnpm', ...build], signing: options.mode === 'windows' ? 'Shared Helpmonks YubiKey signer via private socket; hidden PIN and touch in local terminal' : options.mode === 'macos' ? 'Local Developer ID, Apple notarization and Tauri updater signature' : 'Tauri updater signature for the verified engine, TUI and panel bundle', output: target, publish: false }, null, 2)); return; }
 		if (Number(process.versions.node.split('.')[0]) < 24) throw new Error('Node.js 24 or newer is required');
-		await PanelRelease.requireCommands(['git', 'pnpm', 'cargo', 'rustup', 'tar', 'file', ...(options.mode === 'windows' ? ['cargo-xwin', 'clang', 'lld-link', 'llvm-rc', 'makensis', 'wine'] : options.mode === 'macos' ? ['security', 'codesign', 'spctl', 'xcrun', 'lipo'] : options.appimageOnly ? [] : ['rpm'])]);
+		await PanelRelease.requireCommands(['git', 'pnpm', 'cargo', 'rustup', 'tar', 'file', ...(options.mode === 'windows' ? ['cargo-xwin', 'clang', 'lld-link', 'llvm-rc', 'makensis', 'wine'] : options.mode === 'macos' ? ['security', 'codesign', 'spctl', 'xcrun', 'lipo', 'ditto', 'hdiutil'] : options.appimageOnly ? [] : ['rpm'])]);
 		if (!process.env.TAURI_SIGNING_PRIVATE_KEY) throw new Error('TAURI_SIGNING_PRIVATE_KEY is required');
-		const commit = await PanelRelease.repository();
+		if (options.resume && (await PanelRelease.run('git', ['status', '--porcelain'], { capture: true }) || await PanelRelease.run('git', ['branch', '--show-current'], { capture: true }) !== 'develop')) throw new Error('Resume requires a clean develop checkout');
+		const commit = options.resume ? await PanelRelease.run('git', ['rev-parse', 'HEAD'], { capture: true }) : await PanelRelease.repository();
 		const config = await DesktopVersion.config();
 		const targets = options.target === 'universal-apple-darwin' ? ['aarch64-apple-darwin', 'x86_64-apple-darwin'] : [options.target];
 		const installed = await PanelRelease.run('rustup', ['target', 'list', '--installed'], { capture: true });
 		if (targets.some(value => !installed.split('\n').includes(value))) throw new Error('Install Rust targets first: rustup target add ' + targets.join(' '));
 		await fs.mkdir(target, { recursive: true });
-		target = await fs.mkdtemp(path.join(target, commit.slice(0, 12) + '-')); // Fresh artifacts; a failed run cannot inherit a previous verification report.
+		const provenance = { commit, version: config.version, target: options.target };
+		const resume = options.mode === 'macos' ? options.resume || await PanelRelease.pendingRun(target, provenance) : undefined;
+		target = resume || await fs.mkdtemp(path.join(target, commit.slice(0, 12) + '-')); // Fresh artifacts; a failed run cannot inherit a previous verification report.
+		if (resume) {
+			const saved = JSON.parse(await fs.readFile(path.join(target, 'notarization.json'), 'utf8'));
+			if (!['commit', 'version', 'target'].every(key => saved[key] === provenance[key])) throw new Error('Saved notarization requires its original clean develop commit, version and target; refusing stale resume');
+			console.log('Resuming Apple notarization from ' + target);
+		}
 		const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'typerelay-release-')); await fs.chmod(temporary, 0o700);
 		const baseEnvironment = { ...PanelRelease.buildEnvironment(process.env), CARGO_TARGET_DIR: target, TMPDIR: temporary };
 		const environment = options.mode === 'windows' ? NativeTools.environment(baseEnvironment) : baseEnvironment;
-		let nativeTools=[]; let signer; let signingEnvironment; let bridge; let ownsSigningEnvironment = false;
+		let nativeTools=[]; let signer; let signingEnvironment; let bridge; let lock; let ownsSigningEnvironment = false;
 		try {
-			await PanelRelease.run('pnpm', ['install', '--frozen-lockfile'], { cwd: working, environment });
-			if (options.mode === 'windows') { await PanelRelease.run('pnpm', ['build'], { cwd: working, environment }); nativeTools=await NativeTools.stage(options.target, { environment }); }
-			if (options.mode === 'macos') nativeTools=await NativeTools.stage(options.target, { environment });
-			if (options.mode === 'linux') nativeTools=await NativeTools.stage(options.target, { environment });
-			let overlay;
-			if (options.mode === 'windows') {
-				const tools = path.resolve(process.env.TYPERELAY_RELEASE_TOOLS || path.join(os.homedir(), 'repos/helpmonks-install-script/scripts/desktop-release'));
-				signer = await import(pathToFileURL(path.join(tools, 'lib/windows-signing.mjs')).href);
-				const hook = createRequire(import.meta.url)(path.join(tools, 'sign-windows-pkcs11.cjs'));
-				if (process.env.WINDOWS_SIGNING_PREPARED === '1') signingEnvironment = process.env;
-				else { signingEnvironment = await signer.prepareWindowsSigningEnvironment(process.env); ownsSigningEnvironment = true; await signer.runWindowsSigningProbe(signingEnvironment, path.join(tools, 'sign-windows-pkcs11.cjs')); }
-				bridge = new SigningBridge(path.join(temporary, 'sign.sock'), [await fs.realpath(target), await fs.realpath(temporary), await fs.realpath(path.dirname(nativeTools[0]))], async file => {
-					await hook.signWithEnvironment({ hash: 'sha256', name: 'TypeRelay', site: 'https://typerelay.com', path: file }, signingEnvironment);
-					await PanelRelease.run('osslsigncode', ['verify', '-CAfile', signingEnvironment.WINDOWS_SIGNING_CA_FILE, '-ignore-cdp', '-ignore-crl', '-in', file], { environment, capture: true });
-					});
-					await bridge.start();
-				overlay = { bundle: { createUpdaterArtifacts: true, windows: { signCommand: { cmd: process.execPath, args: [PanelRelease.script, 'sign-file', bridge.path, path.join(working, 'src-tauri'), '%1'] } } } };
-			} else if (options.mode === 'macos') {
-				Object.assign(environment, PanelRelease.appleEnvironment(process.env), { CARGO_TARGET_DIR: target, TMPDIR: temporary });
-				environment.CI = 'true';
-				if (environment.APPLE_API_KEY_PATH) await fs.access(environment.APPLE_API_KEY_PATH);
-				const identities = await PanelRelease.run('security', ['find-identity', '-v', '-p', 'codesigning'], { capture: true });
-				const available = [...identities.matchAll(/"(Developer ID Application:[^"]+)"/g)].map(match => match[1]).filter(value => !environment.APPLE_TEAM_ID || value.endsWith('(' + environment.APPLE_TEAM_ID + ')'));
-				const identity = available.includes(environment.APPLE_SIGNING_IDENTITY) ? environment.APPLE_SIGNING_IDENTITY : available.length === 1 ? available[0] : null;
-				if (!identity || !available.includes(identity)) throw new Error('Set APPLE_SIGNING_IDENTITY to one matching Developer ID Application identity');
-				environment.APPLE_SIGNING_IDENTITY = identity;
-				overlay = { bundle: { createUpdaterArtifacts: true, macOS: { signingIdentity: identity, hardenedRuntime: true } } };
-			} else {
-				overlay = { bundle: { createUpdaterArtifacts: true } };
+			if (options.mode === 'macos') lock = await PanelRelease.lockRun(target);
+			await fs.rm(path.join(target, 'release-verification.json'), { force: true }); if (options.report) await fs.rm(options.report, { force: true });
+			if (resume) { const saved = JSON.parse(await fs.readFile(path.join(target, 'notarization.json'), 'utf8')); saved.completed = false; await PanelRelease.saveNotarization(target, saved); }
+			if (!resume) {
+				await PanelRelease.run('pnpm', ['install', '--frozen-lockfile'], { cwd: working, environment });
+				if (options.mode === 'windows') { await PanelRelease.run('pnpm', ['build'], { cwd: working, environment }); nativeTools=await NativeTools.stage(options.target, { environment }); }
+				if (options.mode === 'macos') nativeTools=await NativeTools.stage(options.target, { environment });
+				if (options.mode === 'linux') nativeTools=await NativeTools.stage(options.target, { environment });
+				let overlay;
+				if (options.mode === 'windows') {
+					const tools = path.resolve(process.env.TYPERELAY_RELEASE_TOOLS || path.join(os.homedir(), 'repos/helpmonks-install-script/scripts/desktop-release'));
+					signer = await import(pathToFileURL(path.join(tools, 'lib/windows-signing.mjs')).href);
+					const hook = createRequire(import.meta.url)(path.join(tools, 'sign-windows-pkcs11.cjs'));
+					if (process.env.WINDOWS_SIGNING_PREPARED === '1') signingEnvironment = process.env;
+					else { signingEnvironment = await signer.prepareWindowsSigningEnvironment(process.env); ownsSigningEnvironment = true; await signer.runWindowsSigningProbe(signingEnvironment, path.join(tools, 'sign-windows-pkcs11.cjs')); }
+					bridge = new SigningBridge(path.join(temporary, 'sign.sock'), [await fs.realpath(target), await fs.realpath(temporary), await fs.realpath(path.dirname(nativeTools[0]))], async file => {
+						await hook.signWithEnvironment({ hash: 'sha256', name: 'TypeRelay', site: 'https://typerelay.com', path: file }, signingEnvironment);
+						await PanelRelease.run('osslsigncode', ['verify', '-CAfile', signingEnvironment.WINDOWS_SIGNING_CA_FILE, '-ignore-cdp', '-ignore-crl', '-in', file], { environment, capture: true });
+						});
+						await bridge.start();
+					overlay = { bundle: { createUpdaterArtifacts: true, windows: { signCommand: { cmd: process.execPath, args: [PanelRelease.script, 'sign-file', bridge.path, path.join(working, 'src-tauri'), '%1'] } } } };
+				} else if (options.mode === 'macos') {
+					const apple = PanelRelease.appleEnvironment(process.env);
+					environment.CI = 'true';
+					if (apple.APPLE_API_KEY_PATH) await fs.access(apple.APPLE_API_KEY_PATH);
+					const identities = await PanelRelease.run('security', ['find-identity', '-v', '-p', 'codesigning'], { capture: true });
+					const available = [...identities.matchAll(/"(Developer ID Application:[^"]+)"/g)].map(match => match[1]).filter(value => !apple.APPLE_TEAM_ID || value.endsWith('(' + apple.APPLE_TEAM_ID + ')'));
+					const identity = available.includes(apple.APPLE_SIGNING_IDENTITY) ? apple.APPLE_SIGNING_IDENTITY : available.length === 1 ? available[0] : null;
+					if (!identity || !available.includes(identity)) throw new Error('Set APPLE_SIGNING_IDENTITY to one matching Developer ID Application identity');
+					overlay = { bundle: { createUpdaterArtifacts: false, macOS: { signingIdentity: identity, hardenedRuntime: true } } };
+				} else {
+					overlay = { bundle: { createUpdaterArtifacts: true } };
+				}
+				const overlayPath = path.join(temporary, 'tauri-signing.json'); await fs.writeFile(overlayPath, JSON.stringify(overlay), { mode: 0o600 });
+				if (options.mode === 'windows') { build.push('--config', overlayPath); await PanelRelease.run('cargo', compile, { cwd: working, environment }); } else build.splice(build.indexOf('--'), 0, '--config', overlayPath);
+				await PanelRelease.run('pnpm', build, { cwd: working, environment });
 			}
-			const overlayPath = path.join(temporary, 'tauri-signing.json'); await fs.writeFile(overlayPath, JSON.stringify(overlay), { mode: 0o600 });
-			if (options.mode === 'windows') { build.push('--config', overlayPath); await PanelRelease.run('cargo', compile, { cwd: working, environment }); } else build.splice(build.indexOf('--'), 0, '--config', overlayPath);
-			await PanelRelease.run('pnpm', build, { cwd: working, environment });
 			const release = path.join(target, options.target, 'release'); let artifacts; let updater; let packageUpdaters;
 			if (options.mode === 'windows') {
 				const panel=path.join(release,'typerelay-panel.exe');const installers=await PanelRelease.files(path.join(release,'bundle/nsis'),'.exe');const executables=[panel,...nativeTools,...installers];
@@ -195,16 +284,17 @@ export class PanelRelease {
 				artifacts = [...installers, ...signatures]; updater = { target: 'windows-x86_64', file: installers[0], signature: signatures[0] };
 			} else if (options.mode === 'macos') {
 				const apps = await PanelRelease.files(path.join(release, 'bundle/macos'), '.app'); if (apps.length !== 1) throw new Error('Expected one macOS app');
+				apps[0] = await PanelRelease.notarize(apps[0], target, provenance, process.env);
 				const ai = path.join(apps[0], 'Contents/MacOS/typerelay-ai'); if(await PanelRelease.run(ai, ['--version'], {capture:true}) !== 'typerelay-ai '+config.version) throw new Error('Bundled AI worker version does not match'); const tui = path.join(apps[0], 'Contents/MacOS/typerelay-tui'); const version = await PanelRelease.run(tui, ['--version'], { capture: true }); if (version !== `typerelay-tui ${config.version}`) throw new Error('Bundled macOS TUI version does not match');
 				await PanelRelease.run('codesign', ['--verify', '--deep', '--strict', '--verbose=2', apps[0]]);
-				await PanelRelease.run('spctl', ['--assess', '--type', 'execute', '--verbose=2', apps[0]]);
-				await PanelRelease.run('xcrun', ['stapler', 'validate', apps[0]]);
+				await PanelRelease.run('spctl', ['--assess', '--type', 'execute', '--verbose=2', apps[0]], { timeoutMs: 60000 });
+				await PanelRelease.run('xcrun', ['stapler', 'validate', apps[0]], { timeoutMs: 60000 });
 				for (const file of [path.join(apps[0], 'Contents/MacOS/typerelay-panel'), tui, ai]) for (const target of targets) await PanelRelease.run('lipo', [file, '-verify_arch', target.startsWith('aarch64') ? 'arm64' : 'x86_64']);
-				const dmgs = await PanelRelease.files(path.join(release, 'bundle/dmg'), '.dmg'); const archives = await PanelRelease.files(path.join(release, 'bundle/macos'), '.app.tar.gz'); const signatures = await PanelRelease.files(path.join(release, 'bundle/macos'), '.sig');
-				if (dmgs.length !== 1 || archives.length !== 1 || signatures.length !== 1) throw new Error('Expected one macOS DMG and signed updater archive');
-				const macArchitecture = options.target.startsWith('aarch64') ? 'aarch64' : options.target.startsWith('x86_64') ? 'x64' : 'universal'; const archive = path.join(path.dirname(archives[0]), `TypeRelay_${config.version}_${macArchitecture}.app.tar.gz`); const signature = `${archive}.sig`;
-				await fs.rename(archives[0], archive); await fs.rename(signatures[0], signature);
-				artifacts = [...dmgs, archive, signature]; updater = { target: options.target.startsWith('aarch64') ? 'darwin-aarch64' : 'darwin-x86_64', file: archive, signature };
+				const macArchitecture = options.target.startsWith('aarch64') ? 'aarch64' : options.target.startsWith('x86_64') ? 'x64' : 'universal'; const archive = path.join(release, 'bundle/macos', `TypeRelay_${config.version}_${macArchitecture}.app.tar.gz`); const signature = `${archive}.sig`; const dmg = path.join(release, 'bundle/dmg', `TypeRelay_${config.version}_${macArchitecture}.dmg`);
+				await LocalMacBuild.packageDmg(apps[0], dmg, (command, args) => PanelRelease.run(command, args, { environment, timeoutMs: 120000 }));
+				await PanelRelease.run('tar', ['-czf', archive, '-C', path.dirname(apps[0]), path.basename(apps[0])], { environment, timeoutMs: 120000 });
+				await PanelRelease.run('pnpm', ['tauri', 'signer', 'sign', archive, '--app-version', config.version], { cwd: working, environment, capture: true, timeoutMs: 60000 });
+				artifacts = [dmg, archive, signature]; updater = { target: options.target.startsWith('aarch64') ? 'darwin-aarch64' : 'darwin-x86_64', file: archive, signature };
 			} else {
 				const engine = path.join(release, 'typerelay'); const tui = path.join(release, 'typerelay-tui'); const panel = path.join(release, 'typerelay-panel'); const ai = path.join(release, 'typerelay-ai');
 				for (const [name, file] of [['typerelay', engine], ['typerelay-tui', tui], ['typerelay-panel', panel], ['typerelay-ai', ai]]) { const version = await PanelRelease.run(file, ['--version'], { capture: true }); if (version !== `${name} ${config.version}`) throw new Error(`${name} version does not match ${config.version}`); const type = await PanelRelease.run('file', ['--brief', file], { capture: true }); if (!/ELF 64-bit.*x86-64/i.test(type)) throw new Error(`${name} is not an x86-64 ELF binary`); }
@@ -228,12 +318,16 @@ export class PanelRelease {
 				packageUpdaters = await Promise.all(packages.map(async file => { await PanelRelease.run('pnpm', ['tauri', 'signer', 'sign', file], { cwd: working, environment }); return { target: 'linux-x86_64-' + ({ '.AppImage': 'appimage', '.deb': 'deb', '.rpm': 'rpm' }[path.extname(file)]), file: path.relative(target, file), signature: (await fs.readFile(`${file}.sig`, 'utf8')).trim() }; }));
 				artifacts = [...packages, ...packages.map(file => `${file}.sig`), ...(archive ? [archive, `${archive}.sig`] : [])]; updater = options.appimageOnly ? { target: 'linux-x86_64-appimage', file: appImages[0], signature: `${appImages[0]}.sig` } : { target: 'linux-x86_64', file: archive, signature: `${archive}.sig` };
 			}
-			if (await PanelRelease.run('git', ['status', '--porcelain'], { capture: true })) throw new Error('Build changed tracked source; do not distribute');
+			if (await PanelRelease.run('git', ['status', '--porcelain'], { capture: true }) || await PanelRelease.run('git', ['rev-parse', 'HEAD'], { capture: true }) !== commit) throw new Error('Build changed source or commit; do not distribute');
 			const report = { product: 'TypeRelay', version: config.version, commit, platform: options.mode, target: options.target, verified: true, directory: target, ...(packageUpdaters ? { packageUpdaters } : {}), updater: { target: updater.target, file: path.relative(target, updater.file), signature: (await fs.readFile(updater.signature, 'utf8')).trim() }, artifacts: await Promise.all(artifacts.map(async file => ({ file: path.relative(target, file), size: (await fs.stat(file)).size, sha256: createHash('sha256').update(await fs.readFile(file)).digest('hex') }))) };
 			await fs.writeFile(path.join(target, 'release-verification.json'), JSON.stringify(report, null, 2) + '\n');
 			if (options.report) { await fs.mkdir(path.dirname(options.report), { recursive: true }); await fs.writeFile(options.report, JSON.stringify(report, null, 2) + '\n', { mode: 0o600 }); }
+			if (options.mode === 'macos') { const state = JSON.parse(await fs.readFile(path.join(target, 'notarization.json'), 'utf8')); state.completed = true; await PanelRelease.saveNotarization(target, state); }
 			console.log('Signed and verified TypeRelay ' + config.version + '. Nothing published. Output: ' + target);
-		} finally { if (bridge) await bridge.close(); if (ownsSigningEnvironment) await signer.cleanupWindowsSigningEnvironment(signingEnvironment); await fs.rm(temporary, { recursive: true, force: true }); }
+		} catch (error) {
+			if (lock) { await fs.rm(path.join(target, 'release-verification.json'), { force: true }); if (options.report) await fs.rm(options.report, { force: true }); const saved = await fs.access(path.join(target, 'notarization.json')).then(() => true, () => false); if (saved) throw new Error(error.message + '\nResume: node scripts/release-panel.mjs macos --target ' + options.target + ' --resume ' + JSON.stringify(target)); }
+			throw error;
+		} finally { if (lock) await fs.rm(lock, { force: true }); if (bridge) await bridge.close(); if (ownsSigningEnvironment) await signer.cleanupWindowsSigningEnvironment(signingEnvironment); await fs.rm(temporary, { recursive: true, force: true }); }
 	}
 }
 if (process.argv[1]) { const entry = await fs.realpath(path.resolve(process.argv[1])).catch(() => path.resolve(process.argv[1])); if (import.meta.url === pathToFileURL(entry).href) PanelRelease.main().catch(error => { console.error(error.message); process.exitCode = 1; }); }

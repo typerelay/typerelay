@@ -19,7 +19,7 @@ export class Security {
 		Support.assert(password.length >= 8, 'Password must be at least 8 characters');
 		return { password, hash: await bcrypt.hash(password, 12) };
 	}
-	static fresh(req) { Support.assert((!req.ctx || (!req.ctx.device && req.ctx.user === req.session.user)) && req.session.user && req.session.auth_at > Date.now() - 15 * 60000, 'Please sign out and sign in again before changing security settings', 401); }
+	static browserSession(req) { Support.assert((!req.ctx || (!req.ctx.device && req.ctx.user === req.session.user)) && req.session.user, 'Sign in to change security settings', 401); }
 	static async establish(req, id, verifiedFactor = false) {
 		const user = await User.findById(id).lean();
 		Support.assert(user, 'Sign-in failed', 401);
@@ -81,7 +81,7 @@ export class Security {
 		const user = await User.findById(req.ctx.user).lean();
 		const email = req.body.email === undefined ? user.email : Security.email(req.body.email);
 		if (email !== user.email) {
-			Security.fresh(req);
+			Security.browserSession(req);
 			Support.assert(!await User.exists({ email }), 'Email address unavailable', 409);
 			await Security.issue(email, 'email-change', { user: String(user._id), old: user.email, version: user.auth_version || 0 }, '/auth/email', name);
 		}
@@ -130,7 +130,7 @@ export class Security {
 		const rpID = new URL(Auth.origin).hostname;
 		let options;
 		if (register) {
-			Security.fresh(req);
+			Security.browserSession(req);
 			const user = await User.findById(req.ctx.user).lean();
 			const keys = await Passkey.find({ user: user._id }).lean();
 			options = await generateRegistrationOptions({ rpName: 'TypeRelay', rpID, userID: new TextEncoder().encode(String(user._id)), userName: user.email, userDisplayName: user.name, attestationType: 'none', excludeCredentials: keys.map(key => ({ id: key.credential_id, transports: key.transports })), authenticatorSelection: { residentKey: 'required', userVerification: 'required' }, supportedAlgorithmIDs: [-7, -257] });
@@ -143,7 +143,7 @@ export class Security {
 	static passkeyFailure() { throw new Fault(400, 'Passkey response could not be verified. Try again.'); }
 	static async passkeyVerify(req, register) {
 		Support.assert(!req.boundAccount, 'Use app.typerelay.com for passkeys', 403);
-		if (register) Security.fresh(req);
+		if (register) Security.browserSession(req);
 		Support.assert(req.session.passkey, 'Passkey challenge expired; try again');
 		const ticket = await Ticket.findOneAndDelete({ hash: Support.hash(req.session.passkey), kind: register ? 'passkey-register' : 'passkey-login', expires: { $gt: new Date() } }).lean();
 		delete req.session.passkey;
@@ -187,7 +187,7 @@ export class Security {
 		app.post('/auth/passkey/verify', limit, async (req, res) => res.json(await Security.passkeyVerify(req, false)));
 	}
 	static mountPrivate(app, limit) {
-		app.use('/api/v2/security', limit, (req, res, next) => { if (req.method !== 'GET') Security.fresh(req); res.setHeader('Cache-Control', 'no-store'); next(); });
+		app.use('/api/v2/security', limit, (req, res, next) => { if (req.method !== 'GET') Security.browserSession(req); res.setHeader('Cache-Control', 'no-store'); next(); });
 		app.get('/api/v2/security', async (req, res) => {
 			const user = await User.findById(req.ctx.user).lean();
 			res.json({ totp_enabled: user.totp_enabled, keys: await Passkey.find({ user: user._id }).select('_id name').lean() });

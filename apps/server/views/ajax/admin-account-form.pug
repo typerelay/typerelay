@@ -46,8 +46,8 @@ form(data-admin-account=(account && account.id) || '')
 						each value in ['free','pro','team']
 							option(value=value selected=value === 'free')= value
 				.col-12.mb-3
-					.form-check
-						input#send-signup-email.form-check-input.h-20px.w-30px(type="checkbox" name="send_signup_email")
+					.form-check.form-switch
+						input#send-signup-email.form-check-input.h-20px.w-30px(type="checkbox" role="switch" name="send_signup_email")
 						label.form-check-label(for="send-signup-email") Send signup confirmation email
 		if account
 			h3.h5.mt-3 Admin overrides

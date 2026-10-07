@@ -9,7 +9,7 @@
 	if editingAuthor
 		.ai-author-actions.mt-3.mb-3(role="group" aria-label="AI action")
 			each action in [{ value: 'improve', label: 'Refine text', description: 'Improve wording, tone, grammar, or length', hint: 'Make it shorter and friendlier.' }, { value: 'translate', label: 'Translate text', description: 'Convert it into your requested language', hint: 'Use an informal tone.' }, { value: 'template', label: 'Add reusable fields', description: 'Turn “Hello Sarah” into “Hello {{name}}”', hint: 'Make the name and company fillable.' }]
-				button.btn.btn-outline-primary.btn-sm.text-start(type="button" data-ai-edit-action=action.value data-ai-hint=action.hint aria-pressed=action.value === 'improve')
+				button.btn.btn-outline-primary.btn-sm.text-start(type="button" data-ai-edit-action=action.value data-ai-hint=action.hint aria-pressed=action.value === 'improve' ? 'true' : 'false')
 					span.d-block.fw-semibold= action.label
 					span.d-block.small= action.description
 		.mb-3(data-ai-language-field hidden)

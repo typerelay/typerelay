@@ -28,7 +28,7 @@ class TypeRelay {
 	searchFocus = null;
 	submit = null;
 	constructor() {
-		this.ai = new AiClient({ request: (path, method, body) => this.request('ai' + path, method, body), identity: () => location.origin + ':' + this.account + ':' + document.querySelector('#workspace')?.dataset.user, notify: (message, icon) => this.toast(message, icon), manage: () => { bootstrap.Modal.getOrCreateInstance(document.querySelector('#settings')).show(); this.settingsTab('ai'); } });
+		this.ai = new AiClient({ local: false, request: (path, method, body) => this.request('ai' + path, method, body), identity: () => location.origin + ':' + this.account + ':' + document.querySelector('#workspace')?.dataset.user, notify: (message, icon) => this.toast(message, icon), manage: () => { bootstrap.Modal.getOrCreateInstance(document.querySelector('#settings')).show(); this.settingsTab('ai'); } });
 		this.ai.bindSearch(document.querySelector('[data-ai-search]'), async () => ({}), async result => { await this.open(result.library); const snippet = this.libraries.get(result.library)?.snippets.find(item => item.id === result.id); if (!snippet || snippet.revision !== result.revision) throw Error('This snippet changed. Search again.'); bootstrap.Modal.getOrCreateInstance(document.querySelector('#search-modal')).hide(); const node = document.querySelector('[data-snippet="' + CSS.escape(result.id) + '"]'); node?.focus(); node?.scrollIntoView({ block: 'center' }); });
 		this.statistics = new Statistics(this);
 		this.templateEditor = new TemplateEditor(this); this.templateFill = new TemplateFill(this);

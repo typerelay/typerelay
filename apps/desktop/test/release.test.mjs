@@ -135,6 +135,7 @@ for (const appimageOnly of [true, false]) test(`Linux release artifacts and veri
 	t.mock.method(console, 'log', () => {});
 	t.mock.method(PanelRelease, 'run', async (command, args, options = {}) => {
 		commands.push([command, ...args]);
+		if (command === 'git' && args[0] === 'rev-parse') return '12345678901234567890';
 		if (command === 'rustup') return triple;
 		if (command === 'file') return 'ELF 64-bit LSB executable, x86-64';
 		if (command === 'rpm') return `${version} x86_64`;

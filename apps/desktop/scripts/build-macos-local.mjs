@@ -13,6 +13,11 @@ export class LocalMacBuild {
 	static run(command, args, cwd = LocalMacBuild.root) { return new Promise((resolve, reject) => { const child = spawn(command, args, { cwd, stdio: 'inherit' }); child.on('error', reject); child.on('close', code => code === 0 ? resolve() : reject(new Error(command + ' failed with exit code ' + code))); }); }
 	static output(command, args) { return new Promise((resolve, reject) => { const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] }); let output = ''; child.stdout.on('data', data => { output += data; }); child.on('error', reject); child.on('close', code => code === 0 ? resolve(output) : reject(new Error(command + ' failed with exit code ' + code))); }); }
 	static async signingIdentity(environment = process.env) { const output = await LocalMacBuild.output('security', ['find-identity', '-v', '-p', 'codesigning']); const identities = [...output.matchAll(/"(Developer ID Application:[^"]+)"/g)].map(match => match[1]); const requested = environment.APPLE_SIGNING_IDENTITY; if (requested && identities.includes(requested)) return requested; if (identities.length === 1) return identities[0]; throw new Error('Set APPLE_SIGNING_IDENTITY to one installed Developer ID Application identity'); }
+	static async packageDmg(app, dmg, run = LocalMacBuild.run) {
+		const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'typerelay-local-dmg-'));
+		try { await fs.mkdir(path.dirname(dmg), { recursive: true }); await run('ditto', [app, path.join(temporary, 'TypeRelay.app')]); await fs.symlink('/Applications', path.join(temporary, 'Applications')); await run('hdiutil', ['create', '-volname', 'TypeRelay', '-srcfolder', temporary, '-ov', '-format', 'UDZO', dmg]); }
+		finally { await fs.rm(temporary, { recursive: true, force: true }); }
+	}
 	static async main(platform = process.platform) {
 		if (platform !== 'darwin') throw new Error('Run the local macOS build on a Mac');
 		const target = LocalMacBuild.target(); const config = await DesktopVersion.config(); const identity = await LocalMacBuild.signingIdentity();
@@ -22,9 +27,8 @@ export class LocalMacBuild {
 		await LocalMacBuild.run('codesign', ['--force', '--sign', identity, '--identifier', 'com.typerelay.ai', '--options', 'runtime', '--timestamp=none', path.join(app, 'Contents/MacOS/typerelay-ai')]);
 		await LocalMacBuild.run('codesign', ['--force', '--sign', identity, '--identifier', config.identifier, '--options', 'runtime', '--timestamp=none', app]);
 		await LocalMacBuild.run('codesign', ['--verify', '--deep', '--strict', '--verbose=2', app]);
-		const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'typerelay-local-dmg-')); const dmg = path.join(release, 'dmg', `TypeRelay_${config.version}_${target.artifact}.dmg`);
-		try { await fs.mkdir(path.dirname(dmg), { recursive: true }); await LocalMacBuild.run('ditto', [app, path.join(temporary, 'TypeRelay.app')]); await fs.symlink('/Applications', path.join(temporary, 'Applications')); await LocalMacBuild.run('hdiutil', ['create', '-volname', 'TypeRelay', '-srcfolder', temporary, '-ov', '-format', 'UDZO', dmg]); }
-		finally { await fs.rm(temporary, { recursive: true, force: true }); }
+		const dmg = path.join(release, 'dmg', `TypeRelay_${config.version}_${target.artifact}.dmg`);
+		await LocalMacBuild.packageDmg(app, dmg);
 		console.log('Built Developer ID-signed TypeRelay app and DMG for local testing: ' + dmg);
 	}
 }

@@ -19,7 +19,7 @@ class BrowserFixture {
 		const errors = []; const client = new window.AiClient({ request, identity: () => 'fixture', notify: (message, icon) => { if (icon === 'error') errors.push(message); }, manage: () => {}, admin }); client.acceptStatus(structuredClone(BrowserFixture.status));
 		return { dom, window, document: window.document, client, errors };
 	}
-	static html(settings, scope = 'personal') { return pug.renderFile('views/ajax/ai-configuration.pug', { settings, scope, providers: AiProvider.catalog, protocols: AiProvider.protocols }); }
+	static html(settings, scope = 'personal') { return pug.renderFile('views/ajax/ai-configuration.pug', { settings, scope, hosted: true, providers: AiProvider.catalog, protocols: AiProvider.protocols }); }
 	static tick() { return new Promise(resolve => setTimeout(resolve, 0)); }
 	static async editor(fixture, snippet = null) {
 		const library = { _id: 'library', name: 'Library', shared: false, permissions: { edit: true } };
@@ -69,6 +69,8 @@ test('saved snippet AI choices preserve inputs, validate translation, and previe
 	try {
 		const { form, root } = await BrowserFixture.editor(fixture, { id: 'saved', trigger: 'hello', title: 'Greeting', replace: 'Hello', content: { version: 1, type: 'plain_text', text: 'Hello' } });
 		root.open = true; const preview = root.querySelector('[data-ai-generate]'); const prompt = root.querySelector('[data-ai-prompt]'); const language = root.querySelector('[data-ai-language]'); const area = form.querySelector('#replace');
+		await fixture.client.click({ target: preview }); assert.equal(requests.at(-1).body.action, 'improve');
+		await fixture.client.click({ target: root.querySelector('[data-ai-discard]') });
 		for (const action of ['improve', 'template']) {
 			const before = requests.length; await fixture.client.click({ target: root.querySelector('[data-ai-edit-action="' + action + '"]') });
 			assert.equal(prompt.value, ''); assert.equal(requests.length, before);
@@ -149,12 +151,16 @@ test('connection updates affect one row and preserve other fields, focus and scr
 	} finally { fixture.dom.window.close(); }
 });
 
-test('AI tabs preserve forms, focus and configuration nodes without requesting a section reload', async () => {
-	let requests = 0; const fixture = BrowserFixture.create(async () => { requests++; return { settings: BrowserFixture.settings, html: BrowserFixture.html(BrowserFixture.settings), status: BrowserFixture.status }; });
+test('AI cards show providers and settings together without losing unsaved fields when selecting managed AI', async () => {
+	let saved; const settings = structuredClone(BrowserFixture.settings); const status = { ...BrowserFixture.status, managed: { available: true } };
+	const fixture = BrowserFixture.create(async (path, method, body) => { if (method === 'PATCH') { saved = body; return { settings: { ...settings, use_managed: body.use_managed, revision: 1 }, status: { ...status, revisions: { personal: 1 } } }; } return { settings, html: BrowserFixture.html(settings), status }; });
 	try {
-		await fixture.client.loadSettings(fixture.document.querySelector('[data-ai-settings]')); const root = fixture.document.querySelector('[data-ai-configuration]'); const providers = root.querySelector('[data-ai-config-panel="providers"]'); const defaults = root.querySelector('[data-ai-config-panel="defaults"]'); const key = providers.querySelector('[name="api_key"]'); key.value = 'unsaved-key'; root.scrollTop = 120;
-		const tab = root.querySelector('[data-ai-config-tab="defaults"]'); tab.click(); tab.focus(); assert.equal(providers.hidden, true); assert.equal(defaults.hidden, false); assert.equal(fixture.document.activeElement, tab);
-		tab.dispatchEvent(new fixture.window.KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true })); assert.equal(providers.hidden, false); assert.equal(defaults.hidden, true); assert.equal(key.value, 'unsaved-key'); assert.equal(root.scrollTop, 120); assert.equal(requests, 1); assert.equal(root.querySelector('[data-ai-config-panel="providers"]'), providers); assert.equal(root.querySelector('[data-ai-config-panel="defaults"]'), defaults);
+		await fixture.client.loadSettings(fixture.document.querySelector('[data-ai-settings]')); const root = fixture.document.querySelector('[data-ai-configuration]'); const key = root.querySelector('[name="api_key"]'); key.value = 'unsaved-key'; root.scrollTop = 120;
+		assert.equal(fixture.document.querySelector('[data-ai-controls] h2'), null); assert.equal(fixture.document.querySelector('[data-ai-manage]'), null); assert.match(pug.renderFile('views/ajax/ai-controls.pug'), /data-ai-manage/); assert.equal(root.classList.contains('card'), true); assert.equal(root.querySelector('h2').textContent, 'AI for me'); assert.equal(root.querySelector('[role="tab"]'), null); assert.equal(root.querySelector('[data-ai-config-panel="defaults"]').hidden, false);
+		const control = root.querySelector('[data-ai-managed]'); control.checked = true; await fixture.client.change({ target: control });
+		assert.deepEqual(JSON.parse(JSON.stringify(saved)), { scope: 'personal', use_managed: true, revision: 0 }); assert.equal(key.value, 'unsaved-key'); assert.equal(root.scrollTop, 120); assert.equal(fixture.document.querySelector('[data-ai-configuration]'), root); assert.equal(control.checked, true);
+		fixture.client.request = async () => { throw Error('Save failed'); }; control.checked = false; await fixture.client.change({ target: control }); assert.equal(control.checked, true); assert.match(fixture.errors.at(-1), /Save failed/); assert.equal(key.value, 'unsaved-key');
+		for (const input of fixture.document.querySelectorAll('input[type="checkbox"]')) assert.equal(input.getAttribute('role'), 'switch');
 	} finally { fixture.dom.window.close(); }
 });
 
@@ -183,7 +189,7 @@ test('saving endpoint approvals sends only approvals and preserves unsaved defau
 	const settings = { ...BrowserFixture.settings, daily_limit: 50 }; let saved; const fixture = BrowserFixture.create(async (path, method, body) => { if (method === 'PATCH') { saved = body; return { settings: { ...settings, revision: 1, private_endpoints: ['http://127.0.0.1:11434'] } }; } return { settings, html: BrowserFixture.html(settings, 'installation') }; }, true);
 	try {
 		await fixture.client.loadSettings(fixture.document.querySelector('[data-ai-settings]')); const root = fixture.document.querySelector('[data-ai-configuration]'); const quota = root.querySelector('[name="daily_limit"]'); quota.value = '90'; const key = root.querySelector('[name="api_key"]'); key.value = 'unsaved-key'; const form = root.querySelector('[data-ai-endpoints-form]'); form.elements.private_endpoints.value = 'http://127.0.0.1:11434'; await fixture.client.submit(form);
-		assert.deepEqual(JSON.parse(JSON.stringify(saved)), { scope: 'installation', revision: 0, private_endpoints: 'http://127.0.0.1:11434' }); assert.equal(quota.value, '90'); assert.equal(key.value, 'unsaved-key'); assert.equal(fixture.document.querySelector('[data-ai-configuration]'), root); assert.equal(root.dataset.aiTab, 'providers');
+		assert.deepEqual(JSON.parse(JSON.stringify(saved)), { scope: 'installation', revision: 0, private_endpoints: 'http://127.0.0.1:11434' }); assert.equal(quota.value, '90'); assert.equal(key.value, 'unsaved-key'); assert.equal(fixture.document.querySelector('[data-ai-configuration]'), root); assert.equal(root.querySelector('[data-ai-config-panel="defaults"]').hidden, false);
 	} finally { fixture.dom.window.close(); }
 });
 
@@ -218,4 +224,33 @@ for (const compact of [false, true]) test(`${compact ? 'compact' : 'full'} edito
 		resolveAuthor({ proposal: { title: 'Title', content: { version: 1, type: 'plain_text', text: 'Delayed proposal' } }, status: BrowserFixture.status }); await BrowserFixture.tick();
 		assert.equal(root.querySelector('[data-ai-proposal]').hidden, true); assert.equal(area.value, 'New user edit'); assert.equal(form.querySelector('#replace'), area); assert.equal(form.isConnected, true); assert.deepEqual(fixture.errors, []);
 	} finally { fixture.dom.window.close(); }
+});
+
+
+test('managed selection status survives a conflicting concurrent account policy save', async () => {
+	let finishPolicy; const settings = structuredClone(BrowserFixture.settings); const initial = { ...BrowserFixture.status, managed: { available: true } }; const managed = { ...initial, revisions: { personal: 1 }, effective: { authoring: { managed: true, name: 'Included', model: 'gemma' }, search: { managed: true, name: 'Included', model: 'gemma' } } };
+	const fixture = BrowserFixture.create(async (path, method, body) => { if (method !== 'PATCH') return { settings, html: BrowserFixture.html(settings), status: initial }; if (body.use_managed) return { settings: { ...settings, use_managed: true, revision: 1 }, status: managed }; return new Promise((resolve, reject) => { finishPolicy = () => reject(Error('AI settings changed')); }); });
+	try {
+		await fixture.client.loadSettings(fixture.document.querySelector('[data-ai-settings]')); const policy = fixture.document.querySelector('[data-ai-personal]'); policy.checked = false; const pending = fixture.client.change({ target: policy }); await BrowserFixture.tick();
+		const control = fixture.document.querySelector('[data-ai-managed]'); control.checked = true; await fixture.client.change({ target: control }); finishPolicy(); await assert.rejects(pending, /settings changed/);
+		assert.equal(control.checked, true); assert.equal(fixture.client.status.effective.authoring.managed, true); assert.equal(fixture.client.status.revisions.personal, 1); assert.equal(policy.checked, true);
+	} finally { fixture.dom.window.close(); }
+});
+
+
+test('web AI header has one account switch and ignores legacy browser opt-out while apps retain it', async () => {
+	const fixture = BrowserFixture.create(async () => ({ status: BrowserFixture.status }));
+	try {
+		const header = fixture.document.querySelector('.ai-settings-header'); assert.equal(header.querySelectorAll('[role="switch"]').length, 1); assert.equal(header.querySelector('label').textContent.trim(), 'Enable AI'); assert.equal(fixture.document.querySelector('[data-ai-local]'), null);
+		fixture.window.localStorage.setItem(fixture.client.localKey(), 'false'); assert.equal(fixture.client.localEnabled(), false); fixture.client.local = false; assert.equal(fixture.client.localEnabled(), true); fixture.client.request = async () => ({ status: { ...BrowserFixture.status, enabled: false, personal_enabled: false } }); fixture.client.acceptStatus({ ...BrowserFixture.status, enabled: false, personal_enabled: false }); assert.equal(header.querySelector('[data-ai-personal]').checked, false); await assert.rejects(fixture.client.ready('authoring'), /disabled/);
+		assert.match(readFileSync('public/app.js', 'utf8'), /new AiClient\(\{ local: false,/); assert.match(pug.renderFile('views/ajax/ai-controls.pug'), /data-ai-local/);
+	} finally { fixture.dom.window.close(); }
+});
+
+
+test('included Typerelay AI controls appear only on hosted settings', () => {
+	for (const scope of ['personal', 'team']) {
+		const render = hosted => pug.renderFile('views/ajax/ai-configuration.pug', { settings: BrowserFixture.settings, scope, hosted, providers: AiProvider.catalog, protocols: AiProvider.protocols });
+		assert.match(render(true), /data-ai-managed/); assert.doesNotMatch(render(false), /data-ai-managed|Use private Typerelay AI/); assert.match(render(false), /data-ai-connections/);
+	}
 });

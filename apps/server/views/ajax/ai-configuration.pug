@@ -1,71 +1,77 @@
 include ai-provider-fields
-section.ai-configuration.mb-5(data-ai-configuration=scope data-settings=JSON.stringify(settings) data-ai-tab="providers")
-	.d-flex.align-items-center.justify-content-between.gap-3.mb-3
-		h2.h5.mb-0= scope === 'installation' ? 'Installation AI' : scope === 'team' ? 'Team AI' : 'My private AI'
+section.ai-configuration.card.card-body.mb-5(data-ai-configuration=scope data-settings=JSON.stringify(settings))
+	.d-flex.align-items-center.justify-content-between.flex-wrap.gap-3.mb-3
+		h2.h5.mb-0= scope === 'installation' ? 'Installation AI' : scope === 'team' ? 'AI for my team' : 'AI for me'
 		button.btn.btn-outline-secondary.btn-sm(type="button" data-ai-refresh-scope) Refresh settings
 	p.text-muted.small.mb-4= scope === 'personal' ? 'Private to you in this account. Your providers override team and installation defaults.' : scope === 'team' ? 'Shared providers for this account. Disabling team AI also blocks private providers.' : 'Hosted defaults are available to Pro/Team. Self-hosted defaults use your own provider accounts.'
-	.nav.nav-tabs.mb-4(role="tablist" aria-label="AI configuration")
-		each tab in ['providers', 'defaults']
-			button.nav-link(type="button" id='ai-' + scope + '-' + tab + '-tab' class=tab === 'providers' ? 'active' : '' role="tab" data-ai-config-tab=tab aria-controls='ai-' + scope + '-' + tab aria-selected=tab === 'providers' ? 'true' : 'false' tabindex=tab === 'providers' ? '0' : '-1')= tab === 'providers' ? 'AI Providers' : 'AI Defaults'
-	section(id='ai-' + scope + '-providers' role="tabpanel" aria-labelledby='ai-' + scope + '-providers-tab' data-ai-config-panel="providers")
-		p.text-muted.small.mb-3 Add providers here, then choose their models in AI Defaults.
-		div.mb-4(data-ai-connections)
-			each connection in settings.connections
-				include ai-connection
-		details.ai-provider-add.card.p-3.mb-5
-			summary.cursor-pointer.fw-semibold Add AI provider
-			form.mt-4(data-ai-connection-form)
-				+aiProviderFields(null)
-				.d-flex.justify-content-between.align-items-center
-					button.btn.btn-outline-secondary.btn-sm(type="button" data-ai-cancel-connection) Cancel
-					button.btn.btn-primary.btn-sm.ms-3(type="submit") Add provider
-		if scope === 'installation'
-			form.ai-private-endpoints(data-ai-endpoints-form)
-				h3.h6 Private endpoints
-				p.text-muted.small.mb-3 Self-hosted only. Approve the origins of local model servers before using them as providers.
-				.mb-3
-					label.form-label(for='ai-' + scope + '-private-endpoints') Approved private endpoint origins
-					textarea.form-control.form-control-sm(id='ai-' + scope + '-private-endpoints' name="private_endpoints" rows="3" aria-describedby='ai-' + scope + '-private-help')= settings.private_endpoints.join('\n')
-					div.form-text(id='ai-' + scope + '-private-help') One origin per line, including the protocol and optional port.
-				.d-flex.justify-content-end
-					button.btn.btn-primary.btn-sm(type="submit") Save endpoint approvals
-	section(id='ai-' + scope + '-defaults' role="tabpanel" aria-labelledby='ai-' + scope + '-defaults-tab' data-ai-config-panel="defaults" hidden)
-		form(data-ai-routes-form)
-			.ai-default-policy.mb-5
-				.form-check.mb-3
+	.ai-settings-columns
+		section(id='ai-' + scope + '-providers' data-ai-config-panel="providers")
+			h3.h6.mb-3 AI provider
+			if scope !== 'installation' && locals.hosted
+				.form-check.form-switch.mb-3
 					label.d-flex.align-items-center
-						input.form-check-input.h-20px.w-30px.mt-0(type="checkbox" name="enabled" checked=settings.enabled)
-						span.ms-3= scope === 'personal' ? 'Enable AI for my account' : scope === 'team' ? 'Allow AI for this team' : 'Allow AI on this installation'
-				if scope === 'installation'
-					.ai-quota.d-flex.align-items-center.flex-wrap.gap-3
-						label.form-label.mb-0(for='ai-' + scope + '-daily-limit') Managed actions per user/day
-						input.form-control.form-control-sm(id='ai-' + scope + '-daily-limit' type="number" name="daily_limit" min="1" max="10000" required value=settings.daily_limit aria-describedby='ai-' + scope + '-quota-help')
-						span.text-muted.small(id='ai-' + scope + '-quota-help') Resets at midnight UTC
-			each workflow in ['authoring', 'search']
-				- var route = settings.routes[workflow] || {}
-				.ai-workflow.mb-4(data-ai-route=workflow)
-					h3.h6.mb-3= workflow === 'authoring' ? 'Authoring' : 'Search'
-					.ai-route-fields
-						div
-							label.form-label(for='ai-' + scope + '-' + workflow + '-connection') Provider
-							select.form-select.form-select-sm(id='ai-' + scope + '-' + workflow + '-connection' name=workflow + '_connection')
-								option(value="")= workflow === 'search' ? 'Same as authoring' : 'Inherit defaults'
-								each connection in settings.connections
-									option(value=connection.id selected=route.connection === connection.id)= connection.name
-						div
-							label.form-label(for='ai-' + scope + '-' + workflow + '-model') Model
-							select.form-select.form-select-sm(id='ai-' + scope + '-' + workflow + '-model' name=workflow + '_model' data-ai-model aria-describedby='ai-' + scope + '-' + workflow + '-model-status')
-								option(value="")
-								if route.model
-									option(value=route.model selected)= route.model
-						div
-							label.form-label(for='ai-' + scope + '-' + workflow + '-protocol') API format
-							select.form-select.form-select-sm(id='ai-' + scope + '-' + workflow + '-protocol' name=workflow + '_protocol')
-								each protocol in protocols
-									option(value=protocol selected=(route.protocol || 'auto') === protocol)= protocol === 'auto' ? 'Automatic' : protocol
-						button.btn.btn-outline-secondary.btn-sm(type="button" data-ai-verify=workflow) Verify
-					.d-flex.align-items-center.justify-content-between.gap-3.mt-2
-						span.text-muted.small(id='ai-' + scope + '-' + workflow + '-model-status' data-ai-model-status role="status")
-						button.btn.btn-link.btn-sm.p-0.text-nowrap(type="button" data-ai-models=workflow) Refresh models
-			.d-flex.justify-content-end.mt-4
-				button.btn.btn-primary.btn-sm(type="submit") Save AI defaults
+						input.form-check-input.h-20px.w-30px.mt-0(type="checkbox" role="switch" data-ai-managed checked=settings.use_managed)
+						span Use private Typerelay AI
+				p.text-muted.small.mb-3(data-ai-managed-status role="status") Checking availability…
+			div.mb-4(data-ai-connections)
+				each connection in settings.connections
+					include ai-connection
+			details.ai-provider-add.card.p-3.mb-5
+				summary.cursor-pointer.fw-semibold Add provider
+				form.mt-4(data-ai-connection-form)
+					+aiProviderFields(null)
+					.d-flex.justify-content-between.align-items-center
+						button.btn.btn-outline-secondary.btn-sm(type="button" data-ai-cancel-connection) Cancel
+						button.btn.btn-primary.btn-sm.ms-3(type="submit") Add provider
+			if scope === 'installation'
+				form.ai-private-endpoints(data-ai-endpoints-form)
+					h3.h6 Private endpoints
+					p.text-muted.small.mb-3 Self-hosted only. Approve the origins of local model servers before using them as providers.
+					.mb-3
+						label.form-label(for='ai-' + scope + '-private-endpoints') Approved private endpoint origins
+						textarea.form-control.form-control-sm(id='ai-' + scope + '-private-endpoints' name="private_endpoints" rows="3" aria-describedby='ai-' + scope + '-private-help')= settings.private_endpoints.join('\n')
+						div.form-text(id='ai-' + scope + '-private-help') One origin per line, including the protocol and optional port.
+					.d-flex.justify-content-end
+						button.btn.btn-primary.btn-sm(type="submit") Save endpoint approvals
+		section(id='ai-' + scope + '-defaults' data-ai-config-panel="defaults")
+			h3.h6.mb-3 AI settings
+			form(data-ai-routes-form)
+				if scope !== 'personal'
+					.ai-default-policy.mb-3(class=scope === 'team' ? 'ai-policy-switch' : '')
+						.form-check.form-switch.mb-0
+							label.d-flex.align-items-center
+								input.form-check-input.h-20px.w-30px.mt-0(type="checkbox" role="switch" name="enabled" checked=settings.enabled)
+								span= scope === 'personal' ? 'Enable AI for my account' : scope === 'team' ? 'Allow AI for this team' : 'Allow AI on this installation'
+						if scope === 'installation'
+							.ai-quota.d-flex.align-items-center.flex-wrap.gap-3
+								label.form-label.mb-0(for='ai-' + scope + '-daily-limit') Managed actions per user/day
+								input.form-control.form-control-sm(id='ai-' + scope + '-daily-limit' type="number" name="daily_limit" min="1" max="10000" required value=settings.daily_limit aria-describedby='ai-' + scope + '-quota-help')
+								span.text-muted.small(id='ai-' + scope + '-quota-help') Resets at midnight UTC
+				each workflow in ['authoring', 'search']
+					- var route = settings.routes[workflow] || {}
+					.ai-workflow.mb-4(data-ai-route=workflow)
+						h3.h6.mb-3= workflow === 'authoring' ? 'Authoring' : 'Search'
+						.ai-route-fields
+							div
+								label.form-label(for='ai-' + scope + '-' + workflow + '-connection') Provider
+								select.form-select.form-select-sm(id='ai-' + scope + '-' + workflow + '-connection' name=workflow + '_connection')
+									option(value="")= workflow === 'search' ? 'Same as authoring' : 'Inherit defaults'
+									each connection in settings.connections
+										option(value=connection.id selected=route.connection === connection.id)= connection.name
+							div
+								label.form-label(for='ai-' + scope + '-' + workflow + '-model') Model
+								select.form-select.form-select-sm(id='ai-' + scope + '-' + workflow + '-model' name=workflow + '_model' data-ai-model aria-describedby='ai-' + scope + '-' + workflow + '-model-status')
+									option(value="")
+									if route.model
+										option(value=route.model selected)= route.model
+							div
+								label.form-label(for='ai-' + scope + '-' + workflow + '-protocol') API format
+								select.form-select.form-select-sm(id='ai-' + scope + '-' + workflow + '-protocol' name=workflow + '_protocol')
+									each protocol in protocols
+										option(value=protocol selected=(route.protocol || 'auto') === protocol)= protocol === 'auto' ? 'Automatic' : protocol
+							button.btn.btn-outline-secondary.btn-sm(type="button" data-ai-verify=workflow) Verify
+						.d-flex.align-items-center.justify-content-between.gap-3.mt-2
+							span.text-muted.small(id='ai-' + scope + '-' + workflow + '-model-status' data-ai-model-status role="status")
+							button.btn.btn-link.btn-sm.p-0.text-nowrap(type="button" data-ai-models=workflow) Refresh models
+				.d-flex.justify-content-end.mt-4
+					button.btn.btn-primary.btn-sm(type="submit") Save AI settings
