@@ -181,6 +181,7 @@ test('model discovery failure preserves a saved model and allows refresh without
 	const fixture = BrowserFixture.create(async path => { if (path !== '/models') return { settings, html: BrowserFixture.html(settings), status: BrowserFixture.status }; if (++discoveries === 1) throw Error('Provider unavailable'); return { models: [{ id: 'new-model', name: 'New model' }] }; });
 	try {
 		await fixture.client.loadSettings(fixture.document.querySelector('[data-ai-settings]')); await BrowserFixture.tick(); const root = fixture.document.querySelector('[data-ai-configuration]'); const row = root.querySelector('[data-ai-route="authoring"]'); const model = row.querySelector('[data-ai-model]'); assert.equal(model.value, 'saved-model'); assert.deepEqual(fixture.errors, ['Provider unavailable']);
+		model.tomselect.clear(); model.tomselect.createItem('@cf/google/gemma-4-26b-a4b-it'); assert.equal(model.value, '@cf/google/gemma-4-26b-a4b-it'); assert.equal(row.querySelector('[data-ai-verify]').disabled, false); model.tomselect.setValue('saved-model');
 		row.querySelector('[data-ai-models]').click(); await BrowserFixture.tick(); assert.equal(model.value, 'saved-model'); assert.ok(model.tomselect.options['new-model']); assert.equal(fixture.document.querySelector('[data-ai-configuration]'), root);
 	} finally { fixture.dom.window.close(); }
 });

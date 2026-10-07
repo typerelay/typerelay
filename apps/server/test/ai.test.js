@@ -83,6 +83,20 @@ test('GPT-6.1 Sol and Astra use supported reasoning settings without changing Lu
 	}, call => call.path === '/responses' ? { status: 'completed', output_text: 'OK' } : { choices: [{ finish_reason: 'stop', message: { content: 'OK' } }] });
 });
 
+test('Cloudflare discovery uses native paginated model names and leaves compatible gateways unchanged', async () => {
+	const connection = { provider: 'compatible', base_url: 'https://api.cloudflare.com/client/v4/accounts/test/ai/v1/', key: 'discovery-key' };
+	await Fixture.provider(async calls => {
+		const models = await AiProvider.models(connection, {});
+		assert.equal(models.length, 101); assert.equal(models.at(-1).id, '@cf/google/gemma-4-26b-a4b-it'); assert.equal(calls.length, 2);
+		assert.equal(calls[0].connection.base_url, 'https://api.cloudflare.com/client/v4/accounts/test/ai'); assert.equal(calls[0].connection.key, connection.key); assert.match(calls[1].path, /page=2/); assert.match(calls[0].path, /task=Text\+Generation/); assert.equal(connection.base_url.endsWith('/v1/'), true);
+	}, (call, count) => ({ success: true, result: count === 1 ? Array.from({ length: 100 }, (_, i) => ({ id: 'internal-' + i, name: '@cf/test/model-' + i })) : [{ id: 'internal-gemma', name: '@cf/google/gemma-4-26b-a4b-it' }], result_info: { total_pages: 2 } }));
+	await Fixture.provider(() => assert.rejects(AiProvider.models(connection, {}), /could not list models/), () => ({ success: false, result: [] }));
+	await Fixture.provider(async calls => {
+		for (const base_url of ['https://gateway.example/v1', 'https://api.cloudflare.com.example/client/v4/accounts/test/ai/v1']) assert.deepEqual(await AiProvider.models({ ...connection, base_url }, {}), [{ id: 'chat-model', name: 'Chat model' }]);
+		assert.ok(calls.every(call => call.path === '/models'));
+	}, () => ({ data: [{ id: 'chat-model', name: 'Chat model' }] }));
+});
+
 test('Cloudflare Gemma disables thinking for short JSON responses without changing other models', async () => {
 	await Fixture.provider(async calls => {
 		const connection = { provider: 'compatible', base_url: 'https://api.cloudflare.com/client/v4/accounts/test/ai/v1' };
