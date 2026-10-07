@@ -94,18 +94,18 @@ class Panel {
 		this.cancelAi();
 		if(!hit)return;
 		const result=await this.invoke('prepare_template',{hit});
-		this.filling=hit;this.fillMode=mode;this.enterActions=result.enter_actions;
+		this.filling=hit;this.fillMode=mode;this.enterActions=result.enter_actions;this.cursor=result.cursor;
 		if(!result.fields.length){await this.commit();return;}
 		await this.invoke('set_prompt_view',{enabled:true});
 		document.querySelector('#search-view').hidden=true;document.querySelector('#settings-view').hidden=true;document.querySelector('#fill-view').hidden=false;
 		const container=document.querySelector('#fill-fields');container.replaceChildren();
 		for(const name of result.fields){const field=result.template.variables[name];const row=document.querySelector('#fill-field').content.firstElementChild.cloneNode(true);const input=row.querySelector(field.multiline?'textarea':'input');row.querySelector('input').hidden=field.multiline;row.querySelector('textarea').hidden=!field.multiline;input.id='fill-'+name;input.dataset.answer=name;input.value=field.default;input.required=field.required;row.querySelector('label').htmlFor=input.id;row.querySelector('label').textContent=field.label+(field.required?' *':'');container.append(row);}
 		document.querySelector('#fill-submit').textContent=mode==='copy'?'Copy filled text':'Insert';document.querySelector('#fill-copy').hidden=mode==='copy';
-		document.querySelector('#fill-actions').textContent=result.enter_actions?(mode==='copy'?'Copy omits Enter key actions.':'Includes '+result.enter_actions+' Enter keypress(es).'):'';
+		document.querySelector('#fill-actions').textContent=result.cursor?(mode==='copy'?'Copy omits cursor positioning.':'Cursor returns to the marked position after insertion.'):result.enter_actions?(mode==='copy'?'Copy omits Enter key actions.':'Includes '+result.enter_actions+' Enter keypress(es).'):'';
 		await this.previewFill();container.querySelector('[data-answer]')?.focus();
 	}
-	async previewFill(){const hit=this.filling;if(!hit)return;const sequence=++this.fillSequence;try{const result=await this.invoke('prepare_template',{hit,values:this.answers()});if(this.filling!==hit||sequence!==this.fillSequence)return;document.querySelector('#fill-preview').textContent=result.steps.map(step=>step.kind==='enter'?'⏎ [Enter key]':step.text).join('');}catch(error){await this.reportStatus(error);}}
-	async commit(){const hit=this.filling;if(!hit)return;const values=this.answers();await this.invoke(this.fillMode==='copy'?'copy_snippet':'insert',{hit,values});const copied=this.fillMode==='copy';this.filling=null;document.querySelector('#fill-fields').replaceChildren();document.querySelector('#fill-view').hidden=true;await this.invoke('set_prompt_view',{enabled:false});if(copied){document.querySelector('#search-view').hidden=false;await this.notify(this.enterActions?'Copied text; Enter key actions omitted.':'Copied');}}
+	async previewFill(){const hit=this.filling;if(!hit)return;const sequence=++this.fillSequence;try{const result=await this.invoke('prepare_template',{hit,values:this.answers()});if(this.filling!==hit||sequence!==this.fillSequence)return;document.querySelector('#fill-preview').textContent=result.cursor?result.text.slice(0,result.cursor.utf16)+'▏ [Cursor position]'+result.text.slice(result.cursor.utf16):result.steps.map(step=>step.kind==='enter'?'⏎ [Enter key]':step.text).join('');}catch(error){await this.reportStatus(error);}}
+	async commit(){const hit=this.filling;if(!hit)return;const values=this.answers();await this.invoke(this.fillMode==='copy'?'copy_snippet':'insert',{hit,values});const copied=this.fillMode==='copy';this.filling=null;document.querySelector('#fill-fields').replaceChildren();document.querySelector('#fill-view').hidden=true;await this.invoke('set_prompt_view',{enabled:false});if(copied){document.querySelector('#search-view').hidden=false;await this.notify(this.cursor?'Copied text; cursor positioning omitted.':this.enterActions?'Copied text; Enter key actions omitted.':'Copied');}}
 
 }
 new Panel();

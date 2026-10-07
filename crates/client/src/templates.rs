@@ -9,7 +9,7 @@ impl Templates {
     }
     pub fn render_at(content:&serde_json::Value,values:BTreeMap<String,String>,preview:bool,clock:(i64,i32))->Result<Rendered>{
         let text = content["text"].as_str().context("Missing snippet text")?.to_owned();
-        if content["type"] != "template" { return Ok(Rendered { template: Template { text: text.clone(), variables: BTreeMap::new() }, fields: vec![], steps: vec![Step::Text { text: text.clone() }], text, enter_actions: 0 }); }
+        if content["type"] != "template" { return Ok(Rendered { template: Template { text: text.clone(), variables: BTreeMap::new() }, fields: vec![], steps: vec![Step::Text { text: text.clone() }], text, enter_actions: 0, cursor: None }); }
         Template::render(RenderRequest { template: Template { text, variables: serde_json::from_value(content.get("variables").cloned().unwrap_or_else(||serde_json::json!({})))? }, values, preview, now_ms: clock.0, offset_minutes: clock.1 }).map_err(anyhow::Error::msg)
     }
 }
@@ -17,7 +17,8 @@ impl Templates {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test] fn code_and_plain_text_are_never_interpreted(){for kind in ["code","plain_text"]{let value=serde_json::json!({"type":kind,"text":"{{name}}{{key:enter}}"});let rendered=Templates::render(&value,BTreeMap::new(),false).unwrap();assert_eq!(rendered.text,"{{name}}{{key:enter}}");assert_eq!(rendered.enter_actions,0);}}
+    #[test] fn cursor_survives_yaml_snapshot_and_paste_metadata(){let root=tempfile::tempdir().unwrap();let db=crate::database::Database::open(root.path()).unwrap();let library=db.import("Cursor","matches:\n- trigger: hello\n  replace: 'Hi {{cursor:here}}{{name}}'\n  type: template\n  variables:\n    name:\n      default: 😀\n").unwrap();let file=db.editor(&library.name).unwrap();let exported=crate::bridge::Bridge::export(&file.entries).unwrap();assert!(exported.contains("{{cursor:here}}"));let mut engine=typerelay_core::Engine::new(db.snapshot().unwrap());for c in ";hello".chars(){engine.feed(typerelay_core::Input::Character(c));}assert!(engine.feed(typerelay_core::Input::Enter).unwrap().template.is_some());let hit=crate::panel::Panel::search(root.path(),"hello",None).unwrap().remove(0);let steps=crate::panel::Panel::steps_at(root.path(),&hit,Default::default(),false,(0,0)).unwrap();let crate::clipboard_payload::ClipboardStep::Payload(payload)=&steps[0] else{panic!("Expected payload")};assert_eq!(payload.plain,"Hi 😀");assert_eq!(payload.cursor.as_ref().unwrap().utf16,3);assert_eq!(payload.characters,4);}
+    #[test] fn code_and_plain_text_are_never_interpreted(){for kind in ["code","plain_text"]{let value=serde_json::json!({"type":kind,"text":"{{name}}{{key:enter}}{{cursor:here}}"});let rendered=Templates::render(&value,BTreeMap::new(),false).unwrap();assert_eq!(rendered.text,"{{name}}{{key:enter}}{{cursor:here}}");assert_eq!(rendered.enter_actions,0);}}
     #[test] fn template_metadata_round_trips_and_snapshot_keeps_identity(){
         let root=tempfile::tempdir().unwrap();let db=crate::database::Database::open(root.path()).unwrap();
         let name=db.import("Template","matches:\n- trigger: hello\n  replace: 'Hi {{name}} {{date}}{{key:enter}}'\n  type: template\n  variables:\n    name:\n      label: Customer\n      default: Nitai\n      required: true\n      multiline: false\n    date:\n      timezone: utc\n      format: DD/MM/YYYY\n").unwrap();

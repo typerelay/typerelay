@@ -91,7 +91,7 @@ impl NativeAi {
     pub fn validate_proposal(original: &Match, proposal: &Match) -> Result<()> {
         ensure!(original.kind == proposal.kind && original.variables == proposal.variables && original.language == proposal.language && original.trigger == proposal.trigger, "AI changed protected snippet fields");
         ensure!(!proposal.replace.trim().is_empty() && proposal.replace.len() <= 65536, "Invalid AI draft length");
-        ensure!(Self::protected(&original.replace)? == Self::protected(&proposal.replace)?, "AI changed template variables, Enter actions or image references");
+        ensure!(Self::protected(&original.replace)? == Self::protected(&proposal.replace)?, "AI changed template variables, cursor positions, Enter actions or image references");
         if proposal.kind == "rich_text" {
             let images = [original,proposal].into_iter().map(|draft| {
                 let rendered = typerelay_core::rich_text::RichText::render(typerelay_core::rich_text::RichRequest { markdown:draft.replace.clone(), variables:draft.variables.clone(), preview:true, ..Default::default() }).map_err(anyhow::Error::msg)?;

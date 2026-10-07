@@ -22,3 +22,10 @@ test('shared renderers expose prompts, dates, Enter actions and rich formatting'
 	const image = await Runtime.rich({ markdown: `![Icon](typerelay-asset:${id})`, variables: {} }, {}, false, { [id]: 'data:image/png;base64,AA==' });
 	assert.match(image.html, /src="data:image\/png;base64,AA=="/);
 });
+
+test('cursor metadata counts rendered UTF-16 and leaves answer tokens literal', async () => {
+ const result = await Runtime.template({ text: '😀{{name}}{{cursor:here}}e\u0301\n👩‍💻', variables: {} }, { name: '{{cursor:here}}' }, false);
+ assert.equal(result.text, '😀{{cursor:here}}e\u0301\n👩‍💻'); assert.equal(result.cursor.utf16, 17); assert.equal(result.cursor.backward_graphemes, 3);
+ await assert.rejects(Runtime.template({ text: '{{cursor:here}}{{key:enter}}' }, {}, false), /cannot be combined/);
+ await assert.rejects(Runtime.rich({ markdown: '{{cursor:here}}' }, {}, false, {}), /only in Text/);
+});

@@ -155,7 +155,7 @@ impl RichText {
     pub fn render(mut request: RichRequest) -> Result<RichRendered, String> {
         request.markdown = request.markdown.replace("\r\n", "\n");
         Self::validate_actions(&request.markdown)?;
-		let validated=Template::render(RenderRequest{template:Template{text:request.markdown.clone(),variables:request.variables},values:request.values.clone(),now_ms:request.now_ms,offset_minutes:request.offset_minutes,preview:request.preview})?;let mut marker_values=BTreeMap::new();let mut replacements=BTreeMap::new();for(name,field)in &validated.template.variables{if Template::builtin(name){continue;}let value=request.values.get(name).unwrap_or(&field.default);let value=if request.preview&&value.is_empty(){format!("[{}]",field.label)}else{value.clone()};let marker=format!("TYRELAYVARIABLE{}TOKEN",replacements.len());marker_values.insert(name.clone(),marker.clone());replacements.insert(marker,value);}let rendered=Template::render(RenderRequest{template:validated.template.clone(),values:marker_values,now_ms:request.now_ms,offset_minutes:request.offset_minutes,preview:false})?;
+		let validated=Template::render(RenderRequest{template:Template{text:request.markdown.clone(),variables:request.variables},values:request.values.clone(),now_ms:request.now_ms,offset_minutes:request.offset_minutes,preview:request.preview})?;if validated.cursor.is_some(){return Err("Cursor position is supported only in Text snippets".into());}let mut marker_values=BTreeMap::new();let mut replacements=BTreeMap::new();for(name,field)in &validated.template.variables{if Template::builtin(name){continue;}let value=request.values.get(name).unwrap_or(&field.default);let value=if request.preview&&value.is_empty(){format!("[{}]",field.label)}else{value.clone()};let marker=format!("TYRELAYVARIABLE{}TOKEN",replacements.len());marker_values.insert(name.clone(),marker.clone());replacements.insert(marker,value);}let rendered=Template::render(RenderRequest{template:validated.template.clone(),values:marker_values,now_ms:request.now_ms,offset_minutes:request.offset_minutes,preview:false})?;
         let mut steps = Vec::new();
         let mut all_assets = BTreeSet::new();
         let mut full_html = String::new();
@@ -190,6 +190,7 @@ impl RichText {
 mod tests {
     use super::*;
     fn render(markdown: &str) -> RichRendered { RichText::render(RichRequest { markdown: markdown.into(), ..Default::default() }).unwrap() }
+    #[test] fn cursor_is_text_only(){assert!(RichText::render(RichRequest { markdown:"Hello {{cursor:here}}".into(),variables:BTreeMap::new(),values:BTreeMap::new(),now_ms:0,offset_minutes:0,preview:false,assets:BTreeMap::new() }).is_err());}
     #[test]
     fn renders_gfm_and_plain_projection() {
 		let value = render("# Heading\n\n- **One**\n- ~~Two~~\n\n| A | B |\n|---|---|\n| C | D |\n\n++Under++\n\n<p style=\"text-align:center\">Centered</p>");

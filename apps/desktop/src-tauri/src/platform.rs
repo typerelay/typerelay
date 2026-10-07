@@ -41,13 +41,17 @@ pub fn copy_payload(payload:typerelay_client::clipboard_payload::ClipboardPayloa
 #[cfg(not(target_os = "linux"))]
 pub fn paste(target: &Target, erase: usize, payload: Option<typerelay_client::clipboard_payload::ClipboardPayload>, current:impl Fn()->bool) -> Result<()> {
     use std::time::{Duration, Instant};
+    #[cfg(target_os="macos")]
+    if payload.as_ref().is_some_and(|payload|payload.cursor.is_some()){ensure!(native::input_monitoring(false)&&Target::input_ready().load(std::sync::atomic::Ordering::SeqCst),"Cursor positioning requires active keyboard monitoring. Allow Input Monitoring and restart TypeRelay, or use Copy; nothing inserted");}
+    let marked=payload.as_ref().is_some_and(|payload|payload.cursor.is_some());let epoch=Target::input_epoch().load(std::sync::atomic::Ordering::SeqCst);let guarded=||current()&&(!marked||Target::input_epoch().load(std::sync::atomic::Ordering::SeqCst)==epoch);
     let deadline = Instant::now() + Duration::from_secs(2);
     while native::keys_down() { ensure!(Instant::now() < deadline, "Release shortcut keys before inserting"); std::thread::sleep(Duration::from_millis(10)); }
-    ensure!(current(), "Expansion cancelled; nothing inserted");
+    ensure!(guarded(), "Expansion cancelled; nothing inserted");
     ensure!(target.focused()?, "Original window lost focus; nothing inserted");
     #[cfg(target_os="windows")]
-	if let Some(payload)=payload.as_ref()&&payload.html.is_none()&&payload.rtf.is_none()&&target.replace_text(erase,&payload.plain)?{return Ok(());}
-	let mut clipboard=None;let has_text=payload.is_some();
+	if let Some(payload)=payload.as_ref()&&payload.html.is_none()&&payload.rtf.is_none()&&target.replace_text(erase,&payload.plain,payload.cursor.as_ref())?{return Ok(());}
+	if let Some(cursor)=payload.as_ref().and_then(|payload|payload.cursor.as_ref()){ensure!(Target::input_ready().load(std::sync::atomic::Ordering::SeqCst),"Cursor positioning requires active keyboard monitoring. Restart TypeRelay or use Copy; nothing inserted");ensure!(cursor.backward_graphemes<=512,"This editor supports cursor positioning up to 512 characters from the end. Use Copy; nothing inserted");}
+	let mut clipboard=None;let has_text=payload.is_some();let cursor=payload.as_ref().and_then(|payload|payload.cursor.clone());
 	if let Some(payload)=payload {
         #[cfg(target_os="windows")]
         let preserve=!native::remote_session();
@@ -61,7 +65,7 @@ pub fn paste(target: &Target, erase: usize, payload: Option<typerelay_client::cl
     }}}
     }
     let insertion: Result<()> = (|| {
-        ensure!(current(), "Expansion cancelled; nothing inserted");
+        ensure!(guarded(), "Expansion cancelled; nothing inserted");
         ensure!(target.focused()?, "Original window lost focus; nothing inserted");
         #[cfg(target_os="windows")]
         {native::insert(target,erase,has_text)?;std::thread::sleep(Duration::from_millis(if has_text{350}else{100}));Ok(())}
@@ -71,7 +75,9 @@ pub fn paste(target: &Target, erase: usize, payload: Option<typerelay_client::cl
         }
     })();
     if let Some(clipboard)=&mut clipboard { clipboard.restore()?; }
-    insertion
+    insertion?;
+    if let Some(cursor)=cursor { ensure!(guarded(), "Text inserted; cursor positioning interrupted. Nothing retried"); ensure!(target.focused()?, "Text inserted; original window lost focus. Cursor positioning cancelled; nothing retried"); target.position_cursor(cursor.backward_graphemes,&guarded)?; }
+    Ok(())
 }
 
 pub fn start_observation(state:std::sync::Arc<crate::observation::Observation>) {native::ObservationAdapter::start(state);}

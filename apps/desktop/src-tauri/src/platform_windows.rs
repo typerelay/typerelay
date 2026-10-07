@@ -5,16 +5,18 @@ use typerelay_core::{Engine,Expansion,Input,FeedResult};
 use typerelay_client::browser_lease::BrowserLease;
 use windows::Win32::System::Threading::{OpenProcess,PROCESS_QUERY_LIMITED_INFORMATION};
 use windows::Win32::System::{Com::{DVASPECT_CONTENT,FORMATETC,IDataObject,STGMEDIUM,TYMED_HGLOBAL},Memory::{GlobalLock,GlobalSize,GlobalUnlock},Ole::{OleGetClipboard,OleInitialize,OleUninitialize,ReleaseStgMedium}};
-use windows::Win32::{Foundation::{HWND,LPARAM,LRESULT,RECT,WPARAM}, UI::{WindowsAndMessaging::{CallNextHookEx,DispatchMessageW,GetForegroundWindow,GetGUIThreadInfo,GetMessageW,GetSystemMetrics,GetWindowRect,GetWindowTextW,GetClassNameW,GetWindowThreadProcessId,IsWindow,KBDLLHOOKSTRUCT,KillTimer,MSG,SendMessageTimeoutW,SetForegroundWindow,SetTimer,SetWindowsHookExW,TranslateMessage,UnhookWindowsHookEx,WH_KEYBOARD_LL,WH_MOUSE_LL,WM_KEYDOWN,WM_KEYUP,WM_SYSKEYDOWN,WM_SYSKEYUP,WM_LBUTTONDOWN,WM_RBUTTONDOWN,WM_MBUTTONDOWN,WM_XBUTTONDOWN,WM_TIMER,GUITHREADINFO,HHOOK,SMTO_ABORTIFHUNG,SM_REMOTESESSION}, Input::KeyboardAndMouse::{GetAsyncKeyState,GetKeyboardLayout,GetKeyboardState,SendInput,ToUnicodeEx,INPUT,INPUT_0,INPUT_KEYBOARD,KEYBDINPUT,KEYEVENTF_KEYUP,VIRTUAL_KEY,VK_BACK,VK_CONTROL,VK_LWIN,VK_MENU,VK_RETURN,VK_RWIN,VK_SHIFT,VK_V}}};
+use windows::Win32::{Foundation::{HWND,LPARAM,LRESULT,RECT,WPARAM}, UI::{WindowsAndMessaging::{CallNextHookEx,DispatchMessageW,GetForegroundWindow,GetGUIThreadInfo,GetMessageW,GetSystemMetrics,GetWindowRect,GetWindowTextW,GetClassNameW,GetWindowThreadProcessId,IsWindow,KBDLLHOOKSTRUCT,KillTimer,MSG,SendMessageTimeoutW,SetForegroundWindow,SetTimer,SetWindowsHookExW,TranslateMessage,UnhookWindowsHookEx,WH_KEYBOARD_LL,WH_MOUSE_LL,WM_KEYDOWN,WM_KEYUP,WM_SYSKEYDOWN,WM_SYSKEYUP,WM_LBUTTONDOWN,WM_RBUTTONDOWN,WM_MBUTTONDOWN,WM_XBUTTONDOWN,WM_TIMER,GUITHREADINFO,HHOOK,SMTO_ABORTIFHUNG,SM_REMOTESESSION}, Input::KeyboardAndMouse::{GetAsyncKeyState,GetKeyboardLayout,GetKeyboardState,SendInput,ToUnicodeEx,INPUT,INPUT_0,INPUT_KEYBOARD,KEYBDINPUT,KEYEVENTF_KEYUP,VIRTUAL_KEY,VK_LEFT,VK_BACK,VK_CONTROL,VK_LWIN,VK_MENU,VK_RETURN,VK_RWIN,VK_SHIFT,VK_V}}};
 const TYPERELAY_EVENT_MARKER:usize=0x5452_4c59;
 #[derive(Clone,Debug)]
 pub struct Target { handle: isize, pid: u32, class:String, _process: Arc<OwnedHandle>, pub bounds: Option<(i32,i32,u32,u32)> }
 impl Target {
+    pub fn input_ready()->&'static std::sync::atomic::AtomicBool {static READY:std::sync::atomic::AtomicBool=std::sync::atomic::AtomicBool::new(false);&READY}
+    pub fn input_epoch()->&'static std::sync::atomic::AtomicU64 {static EPOCH:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(0);&EPOCH}
     pub fn capture() -> Result<Self> { unsafe { let window = GetForegroundWindow(); let mut pid=0; GetWindowThreadProcessId(window,Some(&mut pid)); ensure!(!window.0.is_null() && pid != std::process::id(),"Choose another application first"); let mut class=[0u16;256]; let len=GetClassNameW(window,&mut class); let class=String::from_utf16_lossy(&class[..len as usize]); ensure!(!["Shell_TrayWnd","NotifyIconOverflowWindow","#32768"].contains(&class.as_str()),"Tray has focus");let mut title=[0u16;256];let length=GetWindowTextW(window,&mut title);ensure!(!String::from_utf16_lossy(&title[..length.max(0) as usize]).starts_with("TypeRelay TUI"),"Expansion is paused in TypeRelay TUI"); let mut rect=RECT::default(); GetWindowRect(window,&mut rect)?; let process=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,false,pid)?; let process=OwnedHandle::from_raw_handle(process.0); Ok(Self { handle: window.0 as isize,pid,class,_process:Arc::new(process),bounds:Some((rect.left,rect.top,(rect.right-rect.left).max(1) as u32,(rect.bottom-rect.top).max(1) as u32)) }) } }
     fn valid(&self) -> bool { unsafe { let hwnd=HWND(self.handle as *mut _); let mut pid=0; GetWindowThreadProcessId(hwnd,Some(&mut pid)); IsWindow(Some(hwnd)).as_bool() && pid == self.pid } }
     pub fn restore(&self) -> Result<()> { ensure!(self.valid(),"Original window closed"); unsafe { let _ = SetForegroundWindow(HWND(self.handle as *mut _)); } for _ in 0..40 { if self.focused()? { return Ok(()); } std::thread::sleep(std::time::Duration::from_millis(15)); } anyhow::bail!("Windows refused focus restoration; use Copy") }
     pub fn focused(&self) -> Result<bool> { Ok(self.valid() && unsafe { GetForegroundWindow().0 as isize == self.handle }) }
-    pub fn replace_text(&self,erase:usize,text:&str)->Result<bool> {
+    pub fn replace_text(&self,erase:usize,text:&str,cursor:Option<&typerelay_core::template::Cursor>)->Result<bool> {
         if self.class!="Notepad"{return Ok(false);}
         ensure!(self.focused()?,"Original window lost focus");
         let window=HWND(self.handle as *mut _);let thread=unsafe{GetWindowThreadProcessId(window,None)};let mut info=GUITHREADINFO{cbSize:std::mem::size_of::<GUITHREADINFO>() as u32,..Default::default()};unsafe{GetGUIThreadInfo(thread,&mut info)?;}
@@ -23,8 +25,10 @@ impl Target {
         ensure!(unsafe{SendMessageTimeoutW(info.hwndFocus,0x00b0,WPARAM(&mut start as *mut u32 as usize),LPARAM(&mut end as *mut u32 as isize),SMTO_ABORTIFHUNG,500,None)}.0!=0,"Cannot read Notepad selection");
         ensure!(erase==0||(start==end&&start as usize>=erase),"Notepad caret changed; abbreviation kept");
         if erase>0{ensure!(unsafe{SendMessageTimeoutW(info.hwndFocus,0x00b1,WPARAM(start as usize-erase),LPARAM(end as isize),SMTO_ABORTIFHUNG,500,None)}.0!=0,"Cannot select abbreviation");}
+        let cursor=cursor.map(|cursor| start as usize-erase+cursor.utf16+if class=="Edit"{text.encode_utf16().take(cursor.utf16).filter(|unit|*unit==10).count()}else{0});
         let text:Vec<u16>=text.replace("\r\n","\n").replace('\n',"\r\n").encode_utf16().chain(Some(0)).collect();
         ensure!(unsafe{SendMessageTimeoutW(info.hwndFocus,0x00c2,WPARAM(1),LPARAM(text.as_ptr() as isize),SMTO_ABORTIFHUNG,500,None)}.0!=0,"Notepad did not accept replacement");
+        if let Some(cursor)=cursor {ensure!(self.focused()?,"Original window lost focus; cursor unchanged");ensure!(unsafe{SendMessageTimeoutW(info.hwndFocus,0x00b1,WPARAM(cursor),LPARAM(cursor as isize),SMTO_ABORTIFHUNG,500,None)}.0!=0,"Cannot position Notepad cursor");}
         Ok(true)
     }
 }
@@ -76,7 +80,7 @@ pub struct ExpansionSession;
 impl ExpansionSession {
     pub fn start(directory:PathBuf,settings:PathBuf)->Result<Receiver<ExpansionRequest>>{
         let (sender,receiver)=sync_channel(1);let (ready_sender,ready_receiver)=sync_channel(1);
-        std::thread::spawn(move||{let result=Self::run(directory,settings,sender,ready_sender.clone());if let Err(error)=result{let _=ready_sender.try_send(Err(error));}});
+        std::thread::spawn(move||{let result=Self::run(directory,settings,sender,ready_sender.clone());Target::input_ready().store(false,std::sync::atomic::Ordering::SeqCst);if let Err(error)=result{let _=ready_sender.try_send(Err(error));}});
         ready_receiver.recv_timeout(Duration::from_secs(3)).context("Windows expansion hook did not start")??;Ok(receiver)
     }
     fn run(directory:PathBuf,settings:PathBuf,sender:SyncSender<ExpansionRequest>,ready:SyncSender<Result<()>>)->Result<()>{
@@ -84,18 +88,18 @@ impl ExpansionSession {
         let hook=Hook(unsafe{SetWindowsHookExW(WH_KEYBOARD_LL,Some(Self::callback),None,0)}?);
         let mouse_hook=Hook(unsafe{SetWindowsHookExW(WH_MOUSE_LL,Some(Self::mouse_callback),None,0)}?);
         let timer=unsafe{SetTimer(None,1,500,None)};ensure!(timer!=0,"Cannot start Windows expansion reload timer");
-        let _=ready.send(Ok(()));let mut message=MSG::default();
+        Target::input_ready().store(true,std::sync::atomic::Ordering::SeqCst);let _=ready.send(Ok(()));let mut message=MSG::default();
         loop {let result=unsafe{GetMessageW(&mut message,None,0,0)}.0;if result==0{break;}ensure!(result>0,"Windows expansion event loop failed");if message.message==WM_TIMER{HOOK_STATE.with(|state|{if let Ok(mut state)=state.try_borrow_mut()&&let Some(state)=state.as_mut(){state.reload();}});}
             unsafe{let _=TranslateMessage(&message);DispatchMessageW(&message);}
         }
-        unsafe{let _=KillTimer(None,timer);}HOOK_STATE.with(|state|state.replace(None));drop(mouse_hook);drop(hook);Ok(())
+        Target::input_ready().store(false,std::sync::atomic::Ordering::SeqCst);unsafe{let _=KillTimer(None,timer);}HOOK_STATE.with(|state|state.replace(None));drop(mouse_hook);drop(hook);Ok(())
     }
     unsafe extern "system" fn callback(code:i32,wparam:WPARAM,lparam:LPARAM)->LRESULT {
-        if code>=0 {let event=unsafe{&*(lparam.0 as *const KBDLLHOOKSTRUCT)};if event.dwExtraInfo!=TYPERELAY_EVENT_MARKER{let message=wparam.0 as u32;let down=message==WM_KEYDOWN||message==WM_SYSKEYDOWN;let up=message==WM_KEYUP||message==WM_SYSKEYUP;if (down||up)&&HOOK_STATE.with(|state|state.try_borrow_mut().ok().and_then(|mut state|state.as_mut().map(|state|state.key(event.vkCode,event.scanCode,event.flags.0&1!=0,down))).unwrap_or(false)){return LRESULT(1);}}}
+        if code>=0 {let event=unsafe{&*(lparam.0 as *const KBDLLHOOKSTRUCT)};if event.dwExtraInfo!=TYPERELAY_EVENT_MARKER{let message=wparam.0 as u32;let down=message==WM_KEYDOWN||message==WM_SYSKEYDOWN;let up=message==WM_KEYUP||message==WM_SYSKEYUP;if down{Target::input_epoch().fetch_add(1,std::sync::atomic::Ordering::SeqCst);}if (down||up)&&HOOK_STATE.with(|state|state.try_borrow_mut().ok().and_then(|mut state|state.as_mut().map(|state|state.key(event.vkCode,event.scanCode,event.flags.0&1!=0,down))).unwrap_or(false)){return LRESULT(1);}}}
         unsafe{CallNextHookEx(None,code,wparam,lparam)}
     }
     unsafe extern "system" fn mouse_callback(code:i32,wparam:WPARAM,lparam:LPARAM)->LRESULT {
-        if code>=0&&[WM_LBUTTONDOWN,WM_RBUTTONDOWN,WM_MBUTTONDOWN,WM_XBUTTONDOWN].contains(&(wparam.0 as u32)){HOOK_STATE.with(|state|{if let Ok(mut state)=state.try_borrow_mut()&&let Some(state)=state.as_mut(){state.engine.feed(Input::Cancel);state.target=None;if let Some(pending)=&state.pending{pending.store(true,std::sync::atomic::Ordering::SeqCst);}}});}
+        if code>=0&&[WM_LBUTTONDOWN,WM_RBUTTONDOWN,WM_MBUTTONDOWN,WM_XBUTTONDOWN].contains(&(wparam.0 as u32)){Target::input_epoch().fetch_add(1,std::sync::atomic::Ordering::SeqCst);HOOK_STATE.with(|state|{if let Ok(mut state)=state.try_borrow_mut()&&let Some(state)=state.as_mut(){state.engine.feed(Input::Cancel);state.target=None;if let Some(pending)=&state.pending{pending.store(true,std::sync::atomic::Ordering::SeqCst);}}});}
         unsafe{CallNextHookEx(None,code,wparam,lparam)}
     }
 }
@@ -234,3 +238,5 @@ mod observation_tests {
     #[test]
     fn absent_or_mismatched_profile_cannot_authorize_capture(){let layout=HKL(0x04090409usize as *mut _);assert!(ObservationAdapter::profile_is_ime(&TF_INPUTPROCESSORPROFILE::default(),layout).is_err());let profile=TF_INPUTPROCESSORPROFILE{dwProfileType:TF_PROFILETYPE_KEYBOARDLAYOUT,hkl:HKL(0x04070407usize as *mut _),..Default::default()};assert!(ObservationAdapter::profile_is_ime(&profile,layout).is_err());}
 }
+
+impl Target { pub fn position_cursor(&self,count:usize,current:impl Fn()->bool)->Result<()> {let target=self;let deadline=std::time::Instant::now()+Duration::from_secs(2);for _ in 0..count {ensure!(std::time::Instant::now()<deadline&&current()&&target.focused()?,"Text inserted; cursor positioning interrupted or expired. Nothing retried");let events=[false,true].map(|up|INPUT{r#type:INPUT_KEYBOARD,Anonymous:INPUT_0{ki:KEYBDINPUT{wVk:VK_LEFT,dwFlags:if up{KEYEVENTF_KEYUP}else{Default::default()},dwExtraInfo:TYPERELAY_EVENT_MARKER,..Default::default()}}});ensure!(unsafe{SendInput(&events,std::mem::size_of::<INPUT>() as i32)}==2,"Windows rejected cursor input");std::thread::sleep(Duration::from_millis(2));}Ok(())} }

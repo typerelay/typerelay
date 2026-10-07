@@ -143,6 +143,7 @@ test('authoring yields a validated proposal without changing snippets', async ()
 	const definitions = { name: { label: 'Name', default: '', required: true, multiline: false, format: '', timezone: 'local' } };
 	await Fixture.provider(async () => { const result = await Ai.author(ctx, Fixture.author({ action: 'template', entry: { title: 'Name', content: { version: 1, type: 'template', text: 'Hello {{name}}, from London', variables: definitions } } })); assert.deepEqual(result.proposal.content.variables.name, definitions.name); assert.equal(result.proposal.content.variables.city.required, true); }, () => ({ status: 'completed', output_text: '{"title":"Name","text":"Hello {{name}}, from {{city}}"}' }));
 	await Fixture.provider(() => assert.rejects(Ai.author(ctx, Fixture.author({ entry: { content: { version: 1, type: 'template', text: 'Hello {{name}}', variables: definitions } } })), /existing template variable/));
+	await Fixture.provider(() => assert.rejects(Ai.author(ctx, Fixture.author()), /cursor position/), () => ({ status: 'completed', output_text: '{"title":"Bad","text":"Hi {{cursor:here}}"}' }));
 	await Fixture.provider(() => assert.rejects(Ai.author(ctx, Fixture.author()), /Enter action/), () => ({ status: 'completed', output_text: '{"title":"Bad","text":"Run {{key:enter}}"}' }));
 });
 

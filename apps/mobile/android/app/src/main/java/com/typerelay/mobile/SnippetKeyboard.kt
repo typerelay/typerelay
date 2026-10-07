@@ -260,7 +260,7 @@ class SnippetKeyboard: InputMethodService() {
 				overlayBody.addView(button("$label: ${values.optString(name)}") { showFieldEditing(name, label, definition.optBoolean("multiline")) }, LinearLayout.LayoutParams(-1, dp(48)))
 			}
 			if (message != null) overlayBody.addView(TextView(this).apply { text = message; setTextColor(if (messageIsError) Color.RED else palette.muted); setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f); setPadding(dp(8), dp(4), dp(8), dp(4)) })
-			overlayBody.addView(TextView(this).apply { text = rendered.optString("text"); setTextColor(palette.text); setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f); setPadding(dp(8), dp(8), dp(8), dp(8)) })
+			overlayBody.addView(TextView(this).apply { val source = rendered.optString("text"); val cursor = rendered.optJSONObject("cursor"); text = if (cursor != null) source.substring(0, cursor.getInt("utf16")) + "▏ [Cursor position]" + source.substring(cursor.getInt("utf16")) else source; setTextColor(palette.text); setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f); setPadding(dp(8), dp(8), dp(8), dp(8)) })
 			val supported = rendered.optInt("enter_actions") == 0
 			overlayBody.addView(TextView(this).apply { text = if (supported) "Formatting and images depend on the destination app." else "Desktop Enter actions cannot run on mobile."; setTextColor(palette.muted); setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f); setPadding(dp(8), 0, dp(8), dp(4)) })
 			overlayFooter.addView(button("Cancel") { values = JSONObject(); showTyping() }, LinearLayout.LayoutParams(0, dp(48), 1f))
@@ -300,12 +300,13 @@ class SnippetKeyboard: InputMethodService() {
 			if (!validAnchor()) throw Exception("Text changed. Select the snippet again.")
 			val text = if (rich) Html.fromHtml(rendered.getString("html").replace(Regex("<img\\b[^>]*>", RegexOption.IGNORE_CASE), "[Image]"), Html.FROM_HTML_MODE_COMPACT) else rendered.getString("text")
 			val connection = currentInputConnection ?: throw Exception("This field cannot accept the snippet.")
+			val cursor = rendered.optJSONObject("cursor"); val start = if (cursor != null) connection.getExtractedText(android.view.inputmethod.ExtractedTextRequest(), 0)?.let { it.startOffset + it.selectionStart - anchorFragment.length } ?: throw Exception("This field cannot position the cursor. Use copy/paste instead.") else 0
 			connection.beginBatchEdit()
-			try { if (anchorFragment.isNotEmpty() && !connection.deleteSurroundingText(anchorFragment.length, 0)) throw Exception("The abbreviation could not be replaced."); if (!connection.commitText(text, 1)) { if (anchorFragment.isNotEmpty()) connection.commitText(anchorFragment, 1); throw Exception("This field cannot accept the snippet.") } }
+			try { if (anchorFragment.isNotEmpty() && !connection.deleteSurroundingText(anchorFragment.length, 0)) throw Exception("The abbreviation could not be replaced."); if (!connection.commitText(text, 1)) { if (anchorFragment.isNotEmpty()) connection.commitText(anchorFragment, 1); throw Exception("This field cannot accept the snippet.") }; if (cursor != null && !connection.setSelection(start + cursor.getInt("utf16"), start + cursor.getInt("utf16"))) { recordUsage(rendered.optInt("characters", rendered.getString("text").codePointCount(0, rendered.getString("text").length)) - anchorFragment.codePointCount(0, anchorFragment.length)); selected = null; values = JSONObject(); throw Exception("Text inserted, but this app declined cursor positioning. Nothing will be retried.") } }
 			finally { connection.endBatchEdit() }
 			recordUsage(rendered.optInt("characters", rendered.getString("text").codePointCount(0, rendered.getString("text").length)) - anchorFragment.codePointCount(0, anchorFragment.length))
 			selected = null; values = JSONObject(); showTyping()
-		} catch (error: Exception) { showPreview(error.message ?: "The snippet could not be inserted.") }
+		} catch (error: Exception) { if (selected == null) { showTyping(); status.text = error.message; status.visibility = View.VISIBLE } else showPreview(error.message ?: "The snippet could not be inserted.") }
 	}
 	private fun insertImage(id: String) {
 		try {

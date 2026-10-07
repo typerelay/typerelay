@@ -36,6 +36,8 @@ struct PasteState {
     cancelled: bool,
     restore_space: bool,
     confirm_enter: bool,
+    cursor: Option<typerelay_core::template::Cursor>,
+    cursor_deadline: Option<Instant>,
 }
 
 struct ContextWatch {
@@ -411,7 +413,7 @@ impl Session {
                         capture.reset();engine.feed(Input::Cancel); last_input=Instant::now();
                         if let Some(wait)=&mut template_wait {wait.deadline=Instant::now()+Duration::from_secs(5);}
                         match request.step {
-							typerelay_client::clipboard_payload::ClipboardStep::Payload(payload) if !payload.plain.is_empty()||payload.html.is_some()=>{let text=payload.plain.clone();paste=Some(PasteState{job:PasteJob::start_payload(payload),expansion:Expansion{identity:None,template:None,erase:request.erase,text},target:Some(request.target),reply:Some(request.reply),generation:*input_generation,started:false,sent:false,cancelled:false,restore_space:false,confirm_enter:false});}
+							typerelay_client::clipboard_payload::ClipboardStep::Payload(payload) if !payload.plain.is_empty()||payload.html.is_some()=>{if payload.cursor.as_ref().is_some_and(|cursor|cursor.backward_graphemes>512){let _=request.reply.send(Err("This editor supports cursor positioning up to 512 characters from the end. Use Copy; nothing inserted".into()));continue;}let text=payload.plain.clone();let cursor=payload.cursor.clone();paste=Some(PasteState{job:PasteJob::start_payload(payload),expansion:Expansion{identity:None,template:None,erase:request.erase,text},target:Some(request.target),reply:Some(request.reply),generation:*input_generation,started:false,sent:false,cancelled:false,restore_space:false,confirm_enter:false,cursor,cursor_deadline:None});}
                             step => {
                                 if let Some(wait)=&mut template_wait {wait.started=true;}
                                 for _ in 0..request.erase { output.emit(&Self::stroke(KeyCode::KEY_BACKSPACE,false))?; }
@@ -423,6 +425,10 @@ impl Session {
             }
 
             if let Some(state) = &mut paste {
+                if let Some(deadline)=state.cursor_deadline {
+                    if Instant::now()>=deadline||state.cancelled||state.generation!=*input_generation||Self::target()?!=state.target {insertion.clear();if let Some(reply)=state.reply.take(){let _=reply.send(Err("Text inserted; cursor positioning interrupted or expired. Nothing retried".into()));}paste=None;continue;}
+                    if insertion.is_empty(){if let Some(reply)=state.reply.take(){let _=reply.send(Ok(state.generation));}paste=None;continue;}
+                } else {
                 match state.job.progress.try_recv() {
                     Ok(Ok(Progress::Ready)) if !state.cancelled && Self::target()? == state.target && !context.changed(state.target.as_deref())? => {
                         let active = Hyprland::query("activewindow")?;
@@ -432,7 +438,7 @@ impl Session {
                         state.started = true;
                     }
                     Ok(Ok(Progress::Ready)) => { state.cancelled = true; state.job.cancel(); }
-                    Ok(Ok(Progress::Finished)) => { if state.confirm_enter&&state.sent&&!state.cancelled&&state.generation==*input_generation&&Self::target()?==state.target&&!context.changed(state.target.as_deref())? {output.emit(&Self::stroke(KeyCode::KEY_ENTER,false))?;} if state.sent && !state.cancelled && state.reply.is_none() { Self::record_usage(&state.expansion); } if let Some(reply) = state.reply.take() { let _ = reply.send(if state.sent && !state.cancelled { Ok(state.generation) } else { Err("Insertion cancelled; nothing retried".into()) }); } paste = None; continue; }
+                    Ok(Ok(Progress::Finished)) => { if let Some(cursor)=state.cursor.take()&&state.sent&&!state.cancelled {insertion=(0..cursor.backward_graphemes).map(|_|Self::stroke(KeyCode::KEY_LEFT,false)).collect();state.cursor_deadline=Some(Instant::now()+Duration::from_secs(2));continue;} if state.confirm_enter&&state.sent&&!state.cancelled&&state.generation==*input_generation&&Self::target()?==state.target&&!context.changed(state.target.as_deref())? {output.emit(&Self::stroke(KeyCode::KEY_ENTER,false))?;} if state.sent && !state.cancelled && state.reply.is_none() { Self::record_usage(&state.expansion); } if let Some(reply) = state.reply.take() { let _ = reply.send(if state.sent && !state.cancelled { Ok(state.generation) } else { Err("Insertion cancelled; nothing retried".into()) }); } paste = None; continue; }
                     Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                         eprintln!("Clipboard paste failed; no automatic retry");
                         if state.restore_space && state.reply.is_none() && !state.started && !state.cancelled && Self::target()? == state.target { for event in Self::stroke(KeyCode::KEY_SPACE, false) { output.emit(&[event])?; } }
@@ -452,6 +458,7 @@ impl Session {
                     if state.started && !state.sent { state.job.pasted(); state.sent = true; }
                     thread::sleep(Duration::from_millis(1));
                     continue;
+                }
                 }
             }
             if !insertion.is_empty() {
@@ -529,7 +536,7 @@ impl Session {
                                 if code==KeyCode::KEY_SPACE {output.emit(&Self::stroke(KeyCode::KEY_SPACE,false))?;} target=None; continue;
                             }
                             if expansion.requires_paste() {
-                                paste = Some(PasteState { job: PasteJob::start(expansion.text.clone()), expansion, target: target.clone(), reply: None, generation:*input_generation, started: false, sent: false, cancelled: false, restore_space:code==KeyCode::KEY_SPACE,confirm_enter:matched_enter });
+                                paste = Some(PasteState { job: PasteJob::start(expansion.text.clone()), expansion, target: target.clone(), reply: None, generation:*input_generation, started: false, sent: false, cancelled: false, restore_space:code==KeyCode::KEY_SPACE,confirm_enter:matched_enter,cursor:None,cursor_deadline:None });
                             } else {
                                 insertion = Self::inject(&expansion, None)?; usage=Some(expansion);if matched_enter {confirmation=Some((destination,*input_generation));}
                             }

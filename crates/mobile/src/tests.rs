@@ -105,6 +105,7 @@ fn keyboard_renderer_shares_template_validation_and_retains_action_limits() {
     assert!(Mobile::render(&content, &json!({}), BTreeMap::new()).is_err());
     let rendered = Mobile::render(&content, &json!({"values":{"name":"Nitai"}}), BTreeMap::new()).unwrap();
     assert_eq!(rendered["text"], "Hi Nitai"); assert_eq!(rendered["enter_actions"], 1);
+    let cursor = Mobile::render(&json!({"version":1,"type":"template","text":"Hi {{cursor:here}}😀"}), &json!({}), BTreeMap::new()).unwrap(); assert_eq!(cursor["text"],"Hi 😀"); assert_eq!(cursor["cursor"]["utf16"],3); assert_eq!(cursor["cursor"]["backward_utf16"],2);
     let code = json!({"version":1,"type":"code","text":"{{name}}"});
     assert_eq!(Mobile::render(&code, &json!({}), BTreeMap::new()).unwrap()["text"], "{{name}}");
 }

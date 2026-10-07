@@ -473,7 +473,7 @@ impl App {
             if template.fields().map_err(anyhow::Error::msg)?.is_empty() {
                 let rendered = typerelay_client::templates::Templates::render(&entry.value()["content"], Default::default(), false)?;
                 let characters=rendered.text.chars().count();typerelay_client::clipboard::PasteJob::copy_text(rendered.text)?;self.record_copy(characters);
-                self.message(if rendered.enter_actions > 0 { "Copied text; enter key actions omitted" } else { "Copied" }, false);
+                self.message(if rendered.cursor.is_some() { "Copied text; cursor positioning omitted" } else if rendered.enter_actions > 0 { "Copied text; enter key actions omitted" } else { "Copied" }, false);
             } else {
                 self.fill_base = base;
                 self.template_dialog = Some(crate::template_dialog::Dialog::fill(template)?);
@@ -545,7 +545,7 @@ impl App {
                     if insert{self.expansion.insert_str(format!("{{{{{name}}}}}"));}},
 				crate::template_dialog::Outcome::Copy{rendered,values}=>{
 					if let Some((name,revision))=&self.fill_base{let current=self.store.open(name)?;anyhow::ensure!(current.revision==*revision,"Library changed; reopen the template before copying");}
-					if let Some(content)=self.rich_fill.take(){let(result,payload)=typerelay_client::panel::Panel::rich_payload(&self.store.directory,&content,values,false)?;typerelay_client::clipboard::PasteJob::copy_payload(payload)?;self.record_copy(result.characters);self.message(if result.enter_actions>0{"Copied rich text; enter key actions omitted"}else{"Copied rich text"},false);}else{let characters=rendered.text.chars().count();typerelay_client::clipboard::PasteJob::copy_text(rendered.text)?;self.record_copy(characters);self.message(if rendered.enter_actions>0{"Copied text; enter key actions omitted"}else{"Copied"},false);}
+					if let Some(content)=self.rich_fill.take(){let(result,payload)=typerelay_client::panel::Panel::rich_payload(&self.store.directory,&content,values,false)?;typerelay_client::clipboard::PasteJob::copy_payload(payload)?;self.record_copy(result.characters);self.message(if result.enter_actions>0{"Copied rich text; enter key actions omitted"}else{"Copied rich text"},false);}else{let characters=rendered.text.chars().count();typerelay_client::clipboard::PasteJob::copy_text(rendered.text)?;self.record_copy(characters);self.message(if rendered.cursor.is_some(){"Copied text; cursor positioning omitted"}else if rendered.enter_actions>0{"Copied text; enter key actions omitted"}else{"Copied"},false);}
 				}
 			} self.template_dialog=None; self.fill_base=None;self.rich_fill=None; } return Ok(());
         }

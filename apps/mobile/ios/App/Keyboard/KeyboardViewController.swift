@@ -214,7 +214,7 @@ final class KeyboardViewController: UIInputViewController {
             let definitions = rendered["variables"] as? [String: [String: Any]] ?? (rendered["template"] as? [String: Any])?["variables"] as? [String: [String: Any]] ?? [:]
             for name in rendered["fields"] as? [String] ?? [] { let definition = definitions[name] ?? [:]; if values[name] == nil { values[name] = definition["default"] as? String ?? "" }; let label = definition["label"] as? String ?? name; let item = choiceButton((label.isEmpty ? name : label) + ": " + (values[name] ?? "")) { [weak self] in self?.showFieldEditing(name: name, label: label.isEmpty ? name : label) }; item.heightAnchor.constraint(equalToConstant: 48).isActive = true; overlayBody.addArrangedSubview(item) }
             if let message { let warning = UILabel(); warning.text = message; warning.textColor = .systemRed; warning.numberOfLines = 2; warning.font = .preferredFont(forTextStyle: .caption1); overlayBody.addArrangedSubview(warning) }
-            let preview = UILabel(); preview.numberOfLines = 0; preview.font = .preferredFont(forTextStyle: .body); preview.text = rendered["text"] as? String; overlayBody.addArrangedSubview(preview)
+            let preview = UILabel(); preview.numberOfLines = 0; preview.font = .preferredFont(forTextStyle: .body); let text = rendered["text"] as? String ?? ""; if let cursor = rendered["cursor"] as? [String: Any], let offset = cursor["utf16"] as? Int { let source = text as NSString; preview.text = source.substring(to: offset) + "▏ [Cursor position]" + source.substring(from: offset) } else { preview.text = text }; overlayBody.addArrangedSubview(preview)
             let supported = (rendered["enter_actions"] as? Int ?? 0) == 0
             let guidance = UILabel(); guidance.text = supported ? "iOS inserts plain text. Use TypeRelay for rich copy." : "Desktop Enter actions cannot run on mobile."; guidance.font = .preferredFont(forTextStyle: .caption1); guidance.numberOfLines = 2; overlayBody.addArrangedSubview(guidance)
             let cancel = button("Cancel") { [weak self] in self?.values.removeAll(); self?.showTyping() }; overlayFooter.addArrangedSubview(cancel)
@@ -239,6 +239,7 @@ final class KeyboardViewController: UIInputViewController {
             changingHost = true
             for _ in anchorFragment { textDocumentProxy.deleteBackward() }
             textDocumentProxy.insertText(rendered["text"] as? String ?? "")
+            if let cursor = rendered["cursor"] as? [String: Any], let backward = cursor["backward_utf16"] as? Int { textDocumentProxy.adjustTextPosition(byCharacterOffset: -backward) }
             changingHost = false
             _ = try? TypeRelayCore.execute(["action": "keyboard_usage", "generation": snapshot["generation"] ?? "", "library": selectionLibrary, "id": selection?["id"] ?? "", "kind": "insert", "characters": max(0, ((rendered["characters"] as? Int) ?? (rendered["text"] as? String ?? "").unicodeScalars.count) - anchorFragment.unicodeScalars.count)], keyboard: true)
             values.removeAll(); selection = nil; field = nil; showTyping()
