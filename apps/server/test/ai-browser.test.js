@@ -69,6 +69,8 @@ test('saved snippet AI choices preserve inputs, validate translation, and previe
 	try {
 		const { form, root } = await BrowserFixture.editor(fixture, { id: 'saved', trigger: 'hello', title: 'Greeting', replace: 'Hello', content: { version: 1, type: 'plain_text', text: 'Hello' } });
 		root.open = true; const preview = root.querySelector('[data-ai-generate]'); const prompt = root.querySelector('[data-ai-prompt]'); const language = root.querySelector('[data-ai-language]'); const area = form.querySelector('#replace');
+		await fixture.client.click({ target: preview }); assert.equal(requests.at(-1).body.action, 'improve');
+		await fixture.client.click({ target: root.querySelector('[data-ai-discard]') });
 		for (const action of ['improve', 'template']) {
 			const before = requests.length; await fixture.client.click({ target: root.querySelector('[data-ai-edit-action="' + action + '"]') });
 			assert.equal(prompt.value, ''); assert.equal(requests.length, before);

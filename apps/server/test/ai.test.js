@@ -83,6 +83,15 @@ test('GPT-6.1 Sol and Astra use supported reasoning settings without changing Lu
 	}, call => call.path === '/responses' ? { status: 'completed', output_text: 'OK' } : { choices: [{ finish_reason: 'stop', message: { content: 'OK' } }] });
 });
 
+test('Cloudflare Gemma disables thinking for short JSON responses without changing other models', async () => {
+	await Fixture.provider(async calls => {
+		const connection = { provider: 'compatible', base_url: 'https://api.cloudflare.com/client/v4/accounts/test/ai/v1' };
+		const text = await AiProvider.generate(connection, {}, { model: '@cf/google/gemma-4-26b-a4b-it' }, 'Return JSON', 'Find search words', { tokens: 512 });
+		assert.deepEqual(AiProvider.json(text), { terms: ['damaged'] }); assert.equal(calls[0].body.max_tokens, 512);
+		for (const model of ['@cf/qwen/qwen3-30b-a3b-fp8', 'another-gemma-model']) { await AiProvider.generate(connection, {}, { model }, 'Test', 'Hello'); assert.equal(calls.at(-1).body.chat_template_kwargs, undefined); }
+	}, call => ({ choices: [{ finish_reason: call.body.model === '@cf/google/gemma-4-26b-a4b-it' && call.body.chat_template_kwargs?.enable_thinking !== false ? 'length' : 'stop', message: { content: '{"terms":["damaged"]}' } }] }));
+});
+
 test('private/team/installation precedence, masks, isolation and model inheritance', async () => {
 	const owner = await Fixture.context(); const account = await Account.findById(owner.account).lean(); const member = await Fixture.context('member', account);
 	await Fixture.configure(null, 'installation', 'managed-test-key', true);
@@ -121,6 +130,19 @@ test('authoring yields a validated proposal without changing snippets', async ()
 	await Fixture.provider(async () => { const result = await Ai.author(ctx, Fixture.author({ action: 'template', entry: { title: 'Name', content: { version: 1, type: 'template', text: 'Hello {{name}}, from London', variables: definitions } } })); assert.deepEqual(result.proposal.content.variables.name, definitions.name); assert.equal(result.proposal.content.variables.city.required, true); }, () => ({ status: 'completed', output_text: '{"title":"Name","text":"Hello {{name}}, from {{city}}"}' }));
 	await Fixture.provider(() => assert.rejects(Ai.author(ctx, Fixture.author({ entry: { content: { version: 1, type: 'template', text: 'Hello {{name}}', variables: definitions } } })), /existing template variable/));
 	await Fixture.provider(() => assert.rejects(Ai.author(ctx, Fixture.author()), /Enter action/), () => ({ status: 'completed', output_text: '{"title":"Bad","text":"Run {{key:enter}}"}' }));
+});
+
+test('ordinary authoring rejects unsolicited fields while preserving existing repeated fields and literal code', async () => {
+	const ctx = await Fixture.context(); await Fixture.configure(ctx);
+	for (const action of ['generate', 'improve', 'translate']) await Fixture.provider(() => assert.rejects(Ai.author(ctx, Fixture.author({ action })), /unexpected template variable/), () => ({ status: 'completed', output_text: '{"title":"Reply","text":"Hello {{customer_name}}"}' }));
+	await Fixture.provider(async () => {
+		const result = await Ai.author(ctx, Fixture.author({ entry: { content: { version: 1, type: 'template', text: 'Hello {{name}}, thank you {{name}}', variables: { name: { label: 'Name', required: true } } } } }));
+		assert.equal(result.proposal.content.text, 'Hi {{name}}, thanks {{name}}');
+	}, () => ({ status: 'completed', output_text: '{"title":"Reply","text":"Hi {{name}}, thanks {{name}}"}' }));
+	await Fixture.provider(async () => {
+		const result = await Ai.author(ctx, Fixture.author({ action: 'generate', entry: { content: { version: 1, type: 'code', language: 'JavaScript', text: '' } } }));
+		assert.equal(result.proposal.content.type, 'code'); assert.equal(result.proposal.content.text, 'const greeting = "{{name}}";');
+	}, () => ({ status: 'completed', output_text: JSON.stringify({ title: 'Code', text: 'const greeting = "{{name}}";' }) }));
 });
 
 test('template conversion adds sender and booking fields and rejects proposals without new fields', async () => {
@@ -215,6 +237,33 @@ test('managed reservations are released before dispatch and retained after dispa
 	} finally { AiProvider.request = previous; process.env.TYPERELAY_HOSTED_EDITION = 'false'; }
 });
 
+test('paid and trial users receive managed AI while free users retain BYO access', async () => {
+	process.env.TYPERELAY_HOSTED_EDITION = 'true'; process.env.BILLING_ENABLED = 'true';
+	try {
+		for (const [plan, status, trial, eligible] of [['pro', 'active', false, true], ['team', 'active', false, true], ['free', 'trialing', true, true], ['free', 'trial_expired', true, false], ['pro', 'canceled', false, false], ['free', 'active', false, false]]) {
+			const ctx = await Fixture.context();
+			await Account.updateOne({ _id: ctx.account }, { $set: { 'admin_override.plan': null, plan, 'billing.status': status, 'billing.trial_source': trial ? 'no_card' : null, 'billing.trial_ends_at': new Date(Date.now() + (status === 'trial_expired' ? -86400000 : 86400000)) } });
+			const state = await Ai.state(ctx);
+			if (eligible) assert.equal(Ai.route(state, 'authoring').managed, true); else assert.throws(() => Ai.route(state, 'authoring'), /Pro\/Team/);
+			await Fixture.configure(ctx); assert.equal(Ai.route(await Ai.state(ctx), 'authoring').scope, 'personal'); assert.equal(Ai.route(await Ai.state(ctx), 'authoring').managed, false);
+		}
+	} finally { process.env.TYPERELAY_HOSTED_EDITION = 'false'; process.env.BILLING_ENABLED = 'false'; }
+});
+
+test('two-call managed search counts once and BYO works after the managed allowance is exhausted', async () => {
+	process.env.TYPERELAY_HOSTED_EDITION = 'true'; process.env.BILLING_ENABLED = 'true';
+	const installation = await Ai.installation();
+	try {
+		await Ai.save(null, 'installation', { daily_limit: 1 }, true); const ctx = await Fixture.context();
+		await Fixture.provider(async calls => {
+			const result = await Ai.search(ctx, { request_id: randomUUID(), query: 'refund', local: [{ id: 'refund', library: 'local', revision: 1, text: 'Refund instructions' }] });
+			assert.equal(calls.length, 2); assert.equal(result.results.length, 1); assert.equal((await Ai.status(ctx)).allowance.used, 1);
+			await assert.rejects(Ai.author(ctx, Fixture.author()), /allowance/); assert.equal(calls.length, 2);
+		}, (call, count) => ({ status: 'completed', output_text: count === 1 ? '{"terms":["refund"]}' : '{"indices":[0]}' }));
+		await Fixture.configure(ctx); await Fixture.provider(async () => { await Ai.author(ctx, Fixture.author()); assert.equal((await Ai.status(ctx)).allowance.used, 1); });
+	} finally { await Ai.save(null, 'installation', { daily_limit: installation.daily_limit }, true); process.env.TYPERELAY_HOSTED_EDITION = 'false'; process.env.BILLING_ENABLED = 'false'; }
+});
+
 test('AI search ranks existing authorized snippets and transient local records only', async () => {
 	const owner = await Fixture.context(); const account = await Account.findById(owner.account).lean(); const member = await Fixture.context('member', account); await Fixture.configure(member);
 	const shared = await Library.create({ account: owner.account, creator: owner.user, name: 'Shared', shared: true, members: [member.user], state: 'active', revision: 1 });
@@ -227,6 +276,16 @@ test('AI search ranks existing authorized snippets and transient local records o
 	}, call => ({ status: 'completed', output_text: call.body.instructions.includes('Extract') ? '{"terms":["refund"]}' : '{"indices":[0,1,0]}' }));
 	await Fixture.provider(() => assert.rejects(Ai.search(member, { request_id: randomUUID(), query: 'refund' }), /invalid search results/), call => ({ status: 'completed', output_text: call.body.instructions.includes('Extract') ? '{"terms":["refund"]}' : '{"indices":[999]}' }));
 	await Fixture.provider(async () => { const result = await Ai.search(member, { request_id: randomUUID(), query: 'refund' }); assert.equal(result.results.length, 0); }, async (call, count) => { if (count === 2) await Snippet.updateOne({ id: 'shared-refund', account: owner.account }, { $inc: { revision: 1 } }); return { status: 'completed', output_text: count === 1 ? '{"terms":["refund"]}' : '{"indices":[0]}' }; });
+});
+
+test('multiword expansion retrieves relevant snippets even without an exact phrase match', async () => {
+	const ctx = await Fixture.context(); await Fixture.configure(ctx);
+	const library = await Library.create({ account: ctx.account, creator: ctx.user, name: 'Support', shared: false, state: 'active', revision: 1 });
+	await Snippet.create({ account: ctx.account, library: library._id, id: 'damaged-delivery', title: 'Damaged delivery', content: { version: 1, type: 'plain_text', text: 'For broken goods, send a photograph and order number to request a replacement.' }, revision: 1, state: 'active' });
+	await Fixture.provider(async calls => {
+		const result = await Ai.search(ctx, { request_id: randomUUID(), query: 'My parcel arrived smashed' });
+		assert.equal(calls.length, 2); assert.equal(result.results[0].id, 'damaged-delivery');
+	}, (call, count) => ({ status: 'completed', output_text: count === 1 ? '{"terms":["damaged package","broken parcel"]}' : '{"indices":[0]}' }));
 });
 
 test('revocation during query expansion prevents sharing snippet content with the provider', async () => {

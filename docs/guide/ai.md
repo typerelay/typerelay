@@ -69,6 +69,8 @@ Blank replacement-key fields preserve a saved key. **Clear stored key** removes 
 
 The API format defaults to **auto**. Override it if your gateway/model requires another supported format. For Cloudflare Workers AI, use the account-specific base URL, API token, and model. See [Cloudflare compatibility](https://developers.cloudflare.com/workers-ai/configuration/open-ai-compatibility/) and [OpenCode Zen endpoints](https://opencode.ai/docs/en/zen/).
 
+For Cloudflare Gemma 4 26B A4B, enter `@cf/google/gemma-4-26b-a4b-it` as the model with the compatible Chat Completions API. Typerelay automatically disables this model's thinking mode so short authoring and search responses do not spend their output budget on reasoning. Cloudflare processes these requests; this is separate from on-device AI.
+
 ## Hosted and self-hosted defaults
 
 Installation administrators configure providers and defaults at **Admin → Settings → AI**. **AI Providers** manages credentials and private endpoint approvals. **AI Defaults** manages the installation switch, daily allowance, and Authoring/Search providers and models. Each tab saves its own fields and preserves changes in the other tab.
