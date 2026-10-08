@@ -23,11 +23,14 @@ class BrowserFixture(http.server.BaseHTTPRequestHandler):
     output = None
     arrows = 0
     contenteditable = False
+    change_title = False
 
     def do_GET(self):
         body = b'<!doctype html><title>TypeRelay Browser Test</title><textarea id="field" autofocus rows="10" cols="80"></textarea><script>field.oninput=()=>fetch("/result",{method:"POST",body:field.value});field.onkeydown=e=>{if(e.key==="ArrowLeft")fetch("/arrow",{method:"POST",body:""});};</script>'
         if self.contenteditable:
             body = body.replace(b'<textarea id="field" autofocus rows="10" cols="80"></textarea>', b'<div id="field" contenteditable="true" tabindex="0"></div>').replace(b'body:field.value', b'body:Array.from(field.childNodes,n=>n.textContent).join("\\n")').replace(b'<script>', b'<script>field.focus();')
+        if self.change_title:
+            body = body.replace(b'field.oninput=()=>fetch', b'field.oninput=()=>{document.title="TypeRelay Browser Test "+(field.value??field.textContent).length;return fetch').replace(b';field.onkeydown', b';};field.onkeydown')
         self.send_response(200)
         self.send_header("Content-Type", "text/html")
         self.end_headers()

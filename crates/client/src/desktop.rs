@@ -54,7 +54,7 @@ impl Hyprland {
                                 let inserted: String = field.call("GetText", &(end - count, end))?;
                                 if inserted == text { return Ok((path.clone(), end, path.clone(), end, end - count + prefix)); }
                             }
-                            // Chromium multiline contenteditables expose one embedded block per line.
+                            // Chromium editors expose plain text inside embedded paragraph/section blocks.
                             // Only use this mapping when the complete block text exactly matches the paste.
                             let embedded: String = field.call("GetText", &(0i32, -1i32))?;
                             ensure!(embedded.contains('\u{fffc}'), "Field does not expose a plain text offset");
@@ -68,10 +68,11 @@ impl Hyprland {
                                 let child_accessible = Proxy::new(&bus, name.as_str(), child.as_str(), "org.a11y.atspi.Accessible")?;
                                 let role: String = child_accessible.call("GetRoleName", &())?;
                                 let line: String = child_field.call("GetText", &(0i32, -1i32))?;
-                                ensure!(!line.contains('\u{fffc}') && (line == "\n" || !line.contains('\n')), "Unsupported nested text block");
+                                ensure!(!line.contains('\u{fffc}'), "Unsupported nested text block");
+                                let logical = if role == "paragraph" { line.strip_suffix('\n').unwrap_or(&line) } else if line == "\n" { "" } else { &line };
                                 if role == "static" && lines.is_empty() { representation.push_str(&line); } else { ensure!(role == "section" || role == "paragraph", "Unsupported inline text block"); representation.push('\u{fffc}'); }
-                                if lines.len() + 1 == children.len() { let caret: i32 = child_field.get_property("CaretOffset")?; ensure!(caret == line.chars().count() as i32 || line == "\n" && caret == 0, "Caret is not at the end of pasted text"); }
-                                lines.push(if line == "\n" { String::new() } else { line });
+                                if lines.len() + 1 == children.len() { let caret: i32 = child_field.get_property("CaretOffset")?; ensure!(caret == line.chars().count() as i32 || caret == logical.chars().count() as i32, "Caret is not at the end of pasted text"); }
+                                lines.push(logical.to_owned());
                             }
                             ensure!(representation == embedded, "Text block structure changed");
                             let flattened = lines.join("\n");

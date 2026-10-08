@@ -252,8 +252,9 @@ class TemplateSmoke(desktop.Smoke):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(); parser.add_argument('--live', action='store_true'); parser.add_argument('--terminal', type=pathlib.Path); parser.add_argument('--cursor-only', action='store_true'); parser.add_argument('--binary-dir', type=pathlib.Path); parser.add_argument('--contenteditable', action='store_true'); args = parser.parse_args()
+    parser = argparse.ArgumentParser(); parser.add_argument('--live', action='store_true'); parser.add_argument('--terminal', type=pathlib.Path); parser.add_argument('--cursor-only', action='store_true'); parser.add_argument('--binary-dir', type=pathlib.Path); parser.add_argument('--contenteditable', action='store_true'); parser.add_argument('--change-title', action='store_true'); args = parser.parse_args()
     desktop.BrowserFixture.contenteditable = args.contenteditable
+    desktop.BrowserFixture.change_title = args.change_title
     if args.terminal: TemplateSmoke().terminal(args.terminal)
     elif args.live: TemplateSmoke(args.binary_dir).run_live(cursor_only=args.cursor_only)
     else: parser.error('Live testing requires explicit user authorization and --live')

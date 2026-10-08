@@ -381,7 +381,8 @@ impl Session {
                 if message != last_health { if !message.is_empty() { eprintln!("{message}"); } else { eprintln!("Typerelay input ready: {} keyboards", active.len()); } last_health = message; }
                 last_conflict_check = Instant::now();
             }
-            let context_changed=context.changed(target.as_deref())?;if context.pointer_changed{capture.pointer();}
+            let watched_target=paste.as_ref().and_then(|state|state.target.as_deref()).or_else(||template_wait.as_ref().map(|wait|wait.target.as_str())).or_else(||confirmation.as_ref().map(|(target,_)|target.as_str())).or(target.as_deref());
+            let context_changed=context.changed(watched_target)?;if context.pointer_changed{capture.pointer();}
             if context_changed {*input_generation=input_generation.wrapping_add(1);}
             if context_changed || last_input.elapsed() > Duration::from_secs(10) {
                 engine.feed(Input::Cancel); target = None; insertion.clear(); usage = None;confirmation=None;

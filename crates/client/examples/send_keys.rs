@@ -16,11 +16,12 @@ impl Sender {
         let expected_class = std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("Supply the disposable window's exact class"))?;
         let expected_address=std::env::args().nth(3);
         let focused=||->anyhow::Result<()>{let active=std::process::Command::new("hyprctl").args(["-j","activewindow"]).output()?;let active:serde_json::Value=serde_json::from_slice(&active.stdout)?;anyhow::ensure!(active["class"].as_str()==Some(&expected_class)&&expected_address.as_ref().is_none_or(|address|active["address"]==*address),"Test window lost focus; input aborted");Ok(())};
-        if text == "--ctrl-enter" {
+        if matches!(text.as_str(), "--ctrl-enter" | "--ctrl-a" | "--ctrl-s" | "--ctrl-w") {
+            let key = match text.as_str() { "--ctrl-a" => KeyCode::KEY_A, "--ctrl-s" => KeyCode::KEY_S, "--ctrl-w" => KeyCode::KEY_W, _ => KeyCode::KEY_ENTER };
             focused()?;
-            for key in [KeyCode::KEY_LEFTCTRL,KeyCode::KEY_ENTER]{device.emit(&[InputEvent::new(EventType::KEY.0,key.0,1)])?;}
+            for key in [KeyCode::KEY_LEFTCTRL,key]{device.emit(&[InputEvent::new(EventType::KEY.0,key.0,1)])?;}
             thread::sleep(Duration::from_millis(600));
-            for key in [KeyCode::KEY_ENTER,KeyCode::KEY_LEFTCTRL]{device.emit(&[InputEvent::new(EventType::KEY.0,key.0,0)])?;}
+            for key in [key,KeyCode::KEY_LEFTCTRL]{device.emit(&[InputEvent::new(EventType::KEY.0,key.0,0)])?;}
             thread::sleep(Duration::from_millis(800));return Ok(());
         }
         if text == "--panel-hotkey" {
