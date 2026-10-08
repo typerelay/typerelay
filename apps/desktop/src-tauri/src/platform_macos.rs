@@ -143,19 +143,19 @@ impl ExpansionState {
             return false;
         }
         if key!=KeyCode::SPACE&&self.release.as_ref().is_some_and(|(confirm,_)|*confirm==key){return true;}
-        if key==124&&self.suppress_right_up{return true;}
+        if key==124&&self.suppress_right_up{if event.get_integer_value_field(EventField::KEYBOARD_EVENT_AUTOREPEAT)==0{return true;}self.suppress_right_up=false;self.engine.feed(Input::Cancel);self.target=None;}
         if let Some(deferred)=&self.deferred {if matches!(event_type,CGEventType::KeyDown){let captured=deferred.capture(event_type,event);if !captured{Target::input_epoch().fetch_add(1,std::sync::atomic::Ordering::SeqCst);}return captured;}deferred.cancel();}
         Target::input_epoch().fetch_add(1,std::sync::atomic::Ordering::SeqCst);
         if !matches!(event_type,CGEventType::KeyDown){self.engine.feed(Input::Cancel);self.target=None;return false;}
 		if BrowserLease::active(){self.engine.feed(Input::Cancel);self.target=None;return false;}
         self.reload();
-        if matches!(key,124|36|76|49)&&event.get_integer_value_field(EventField::KEYBOARD_EVENT_AUTOREPEAT)!=0{self.engine.feed(Input::Cancel);self.target=None;return false;}
+        if matches!(key,36|76|49)&&event.get_integer_value_field(EventField::KEYBOARD_EVENT_AUTOREPEAT)!=0{self.engine.feed(Input::Cancel);self.target=None;return false;}
         let modifiers=event.get_flags();
         if modifiers.intersects(CGEventFlags::CGEventFlagCommand|CGEventFlags::CGEventFlagControl|CGEventFlags::CGEventFlagAlternate|CGEventFlags::CGEventFlagShift|CGEventFlags::CGEventFlagAlphaShift){self.engine.feed(Input::Cancel);self.target=None;return false;}
         let input=Self::input(event,key);
         if matches!(input,Input::Character(character)if character==self.engine.prefix()){self.target=Target::capture().ok();}
         if self.target.is_none(){self.engine.feed(Input::Cancel);return false;}
-        let result=self.engine.feed_event(input);
+        let result=if key==124&&event.get_integer_value_field(EventField::KEYBOARD_EVENT_AUTOREPEAT)!=0{self.engine.feed_repeated_event(input)}else{self.engine.feed_event(input)};
         let matched_enter=matches!(input,Input::Enter)&&matches!(result,FeedResult::Expand(_));
         if matches!(result,FeedResult::Suppress){self.suppress_right_up=true;return true;}
         if let FeedResult::Expand(mut expansion)=result&&let Some(target)=self.target.take()&&target.focused().ok()==Some(true){if matches!(input,Input::Space){expansion.erase+=1;}let (release,released)=sync_channel(1);let deferred=DeferredInput::new();if self.sender.try_send(ExpansionRequest{target,expansion,released,confirm_enter:matches!(input,Input::Enter),deferred:deferred.clone()}).is_ok(){self.release=Some((key,release));self.deferred=Some(deferred);return matches!(input,Input::Enter);}if matches!(input,Input::Enter){self.release=Some((key,release));return true;}}
@@ -299,6 +299,26 @@ mod expansion_tests {
     use super::*;
     #[test]
     fn prompt_guard_passes_editing_then_buffers_and_cancels_without_replaying_held_enter(){let deferred=DeferredInput::new();let retained=deferred.clone();deferred.discard();assert!(!deferred.finished());drop(retained);assert!(deferred.finished());let source=CGEventSource::new(CGEventSourceStateID::HIDSystemState).unwrap();let down=CGEvent::new_keyboard_event(source.clone(),36,true).unwrap();let up=CGEvent::new_keyboard_event(source,36,false).unwrap();deferred.observe();assert!(!deferred.capture(CGEventType::KeyDown,&down));assert!(deferred.cancelled());deferred.begin();assert!(!deferred.cancelled());deferred.0.lock().unwrap().confirmers.push(36);assert!(deferred.capture(CGEventType::KeyDown,&down));assert!(deferred.capture(CGEventType::KeyUp,&up));assert!(deferred.0.lock().unwrap().events.is_empty());deferred.cancel();assert!(deferred.cancelled());deferred.discard();assert!(!deferred.capture(CGEventType::KeyDown,&down));}
+    #[test]
+    fn held_right_from_suppressed_boundary_cancels_and_forwards_its_release() {
+        let directory=tempfile::tempdir().unwrap();let (sender,_)=sync_channel(1);let mut state=ExpansionState::new(&directory.path().join("snippets"),directory.path().join("settings.yml"),sender).unwrap();
+        state.engine=Engine::new(typerelay_core::Snapshot::new(vec![typerelay_core::Snippet{trigger:"apr".into(),replacement:"Corrected".into()}]).unwrap());
+        for c in ";xpr".chars(){state.engine.feed(Input::Character(c));}
+        for _ in 0..3{state.engine.feed(Input::Left);}
+        state.engine.feed(Input::Delete);state.engine.feed(Input::Character('a'));state.engine.feed(Input::Right);state.engine.feed(Input::Right);
+        assert!(matches!(state.engine.feed_event(Input::Right),FeedResult::Suppress));state.suppress_right_up=true;
+        let source=CGEventSource::new(CGEventSourceStateID::HIDSystemState).unwrap();let repeat=CGEvent::new_keyboard_event(source.clone(),124,true).unwrap();repeat.set_integer_value_field(EventField::KEYBOARD_EVENT_AUTOREPEAT,1);
+        assert!(!state.event(CGEventType::KeyDown,&repeat));assert!(!state.suppress_right_up);assert!(state.engine.feed(Input::Space).is_none());
+        let up=CGEvent::new_keyboard_event(source,124,false).unwrap();assert!(!state.event(CGEventType::KeyUp,&up));
+    }
+    #[test]
+    fn released_boundary_repeat_stays_buffered_during_pending_expansion() {
+        let directory=tempfile::tempdir().unwrap();let (sender,_)=sync_channel(1);let mut state=ExpansionState::new(&directory.path().join("snippets"),directory.path().join("settings.yml"),sender).unwrap();
+        state.suppress_right_up=true;let deferred=DeferredInput::new();state.deferred=Some(deferred.clone());
+        let source=CGEventSource::new(CGEventSourceStateID::HIDSystemState).unwrap();let repeat=CGEvent::new_keyboard_event(source.clone(),124,true).unwrap();repeat.set_integer_value_field(EventField::KEYBOARD_EVENT_AUTOREPEAT,1);
+        assert!(state.event(CGEventType::KeyDown,&repeat));assert!(!state.suppress_right_up);
+        let up=CGEvent::new_keyboard_event(source,124,false).unwrap();assert!(state.event(CGEventType::KeyUp,&up));let captured=deferred.0.lock().unwrap();assert_eq!(captured.events.len(),2);assert!(captured.events[0].down);assert!(!captured.events[1].down);
+    }
     #[test]
     fn return_release_does_not_accept_keypad_release_or_forward_repeats(){let directory=tempfile::tempdir().unwrap();let (sender,_)=sync_channel(1);let mut state=ExpansionState::new(&directory.path().join("snippets"),directory.path().join("settings.json"),sender).unwrap();let (release,released)=sync_channel(1);state.release=Some((36,release));let source=CGEventSource::new(CGEventSourceStateID::HIDSystemState).unwrap();let event=CGEvent::new_keyboard_event(source.clone(),36,true).unwrap();assert!(matches!(ExpansionState::input(&event,36),Input::Enter));assert!(matches!(ExpansionState::input(&event,76),Input::Enter));assert!(state.event(CGEventType::KeyDown,&event));let keypad=CGEvent::new_keyboard_event(source.clone(),76,false).unwrap();assert!(!state.event(CGEventType::KeyUp,&keypad));assert!(released.try_recv().is_err());let up=CGEvent::new_keyboard_event(source,36,false).unwrap();assert!(state.event(CGEventType::KeyUp,&up));assert!(released.try_recv().is_ok());}
 }

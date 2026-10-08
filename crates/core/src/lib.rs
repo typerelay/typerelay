@@ -103,6 +103,14 @@ impl Engine {
         match self.feed_event(input) { FeedResult::Expand(expansion) => Some(expansion), FeedResult::Forward | FeedResult::Suppress => None }
     }
 
+    /// Held navigation may move within a candidate, but must leave it at the boundary.
+    pub fn feed_repeated_event(&mut self, input: Input) -> FeedResult {
+        match self.feed_event(input) {
+            FeedResult::Suppress => { self.clear_pending(); FeedResult::Forward }
+            result => result,
+        }
+    }
+
     pub fn feed_event(&mut self, input: Input) -> FeedResult {
         match input {
             Input::Cancel => self.clear_pending(),
@@ -164,6 +172,36 @@ mod tests {
             for c in ";brb".chars(){engine.feed(Input::Character(c));}
             engine.feed(Input::Cancel);assert!(matches!(engine.feed_event(delimiter),FeedResult::Forward));
         }
+    }
+    #[test]
+    fn corrected_tail_and_repeated_navigation_expand_without_retyping_prefix() {
+        let snapshot=Snapshot::new(vec![Snippet { trigger: "apr".into(), replacement: "Corrected".into() }]).unwrap();
+        for delimiter in [Input::Space,Input::Enter] {
+            let mut engine=Engine::new(snapshot.clone());
+            Fixture::type_text(&mut engine,";arp");
+            engine.feed(Input::Backspace);engine.feed(Input::Backspace);
+            Fixture::type_text(&mut engine,"pr");
+            assert_eq!(engine.feed(delimiter).unwrap().text,"Corrected");
+            for erase in [Input::Delete,Input::Backspace] {
+                Fixture::type_text(&mut engine,";xpr");
+                for _ in 0..if matches!(erase,Input::Delete){3}else{2} { engine.feed(Input::Left); }
+                engine.feed(erase);engine.feed(Input::Character('a'));
+                assert!(matches!(engine.feed_event(Input::Right),FeedResult::Forward));
+                assert!(matches!(engine.feed_repeated_event(Input::Right),FeedResult::Forward));
+                assert_eq!(engine.feed(delimiter).unwrap().text,"Corrected");
+            }
+        }
+    }
+    #[test]
+    fn repeated_right_beyond_corrected_candidate_forwards_and_cancels() {
+        let mut engine=Engine::new(Fixture::snapshot());
+        Fixture::type_text(&mut engine,";xrb");
+        for _ in 0..3 { engine.feed(Input::Left); }
+        engine.feed(Input::Delete);engine.feed(Input::Character('b'));
+        engine.feed_event(Input::Right);engine.feed_repeated_event(Input::Right);
+        assert!(matches!(engine.feed_repeated_event(Input::Right),FeedResult::Forward));
+        assert!(engine.feed(Input::Space).is_none());
+        assert!(engine.feed(Input::Enter).is_none());
     }
     struct Fixture;
     impl Fixture {

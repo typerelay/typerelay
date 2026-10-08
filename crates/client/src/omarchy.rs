@@ -143,10 +143,13 @@ impl Session {
         *source=Some(incoming);engine.feed(Input::Cancel);*target=None;true
     }
 
+    fn resume_navigation_repeat(engine: &mut Engine, event: &InputEvent, pressed: &mut BTreeSet<u16>) -> InputEvent {
+        engine.feed(Input::Cancel);pressed.insert(event.code());InputEvent::new(EventType::KEY.0,event.code(),1)
+    }
     fn feed_input(engine: &mut Engine, event: &InputEvent, pressed: &BTreeSet<u16>, caps_control: bool, caps: &mut bool, allowed: bool) -> FeedResult {
         let code = KeyCode(event.code());
         if code == KeyCode::KEY_CAPSLOCK && event.value() == 1 && !caps_control { *caps = !*caps; }
-        if *caps || Self::modifiers_down(pressed, caps_control) || !allowed || (matches!(Self::input(code),Input::Right|Input::Space|Input::Enter) && event.value() == 2) { engine.feed(Input::Cancel); FeedResult::Forward } else { engine.feed_event(Self::input(code)) }
+        if *caps || Self::modifiers_down(pressed, caps_control) || !allowed || (matches!(Self::input(code),Input::Space|Input::Enter) && event.value() == 2) { engine.feed(Input::Cancel); FeedResult::Forward } else if code == KeyCode::KEY_RIGHT && event.value() == 2 { engine.feed_repeated_event(Self::input(code)) } else { engine.feed_event(Self::input(code)) }
     }
 
     fn interference_present(devices: &serde_json::Value) -> bool {
@@ -348,6 +351,7 @@ impl Session {
         engine.set_prefix(&settings.settings.trigger_prefix).map_err(anyhow::Error::msg)?;
         let mut pressed = BTreeSet::new();
         let mut suppressed = BTreeSet::<(u64,u16)>::new();
+        let mut suppressed_navigation = None;
         let mut template_wait: Option<TemplateWait> = None;
         let mut confirmation:Option<(String,u64)>=None;
         let mut panel_shortcut = typerelay_client::panel::Panel::settings(settings.config_dir()).ok().and_then(|value|typerelay_client::panel::Panel::shortcut(&value.shortcut).ok());
@@ -491,7 +495,13 @@ impl Session {
                 let event = input.event;
                 let code = KeyCode(event.code());
                 let logical = keyboard.transition(&input);
-                if suppressed.contains(&(input.device,code.0)) { if event.value() == 0 { suppressed.remove(&(input.device,code.0)); if logical { pressed.remove(&code.0); capture.key(&event); } } continue; }
+                if suppressed.contains(&(input.device,code.0)) {
+                    if event.value() == 2 && suppressed_navigation == Some((input.device,code.0)) {
+                        suppressed.remove(&(input.device,code.0));suppressed_navigation=None;target=None;
+                        if logical { let down=Self::resume_navigation_repeat(&mut engine,&event,&mut pressed);capture.key(&down);output.emit(&[down])?; }
+                    } else if event.value() == 0 { suppressed.remove(&(input.device,code.0));if suppressed_navigation == Some((input.device,code.0)){suppressed_navigation=None;}if logical { pressed.remove(&code.0);capture.key(&event); } }
+                    continue;
+                }
                 if !logical { continue; }
                 if event.value() != 0 && Self::switch_keyboard(&mut source,input.device,&mut engine,&mut target) {
                     if let Some(name) = keyboard.name(input.device) {
@@ -513,7 +523,7 @@ impl Session {
                     if context.changed(target.as_deref())? { engine.feed(Input::Cancel); target = None; }
                     if matches!(Self::input(code), Input::Character(c) if c == engine.prefix()) { target = Self::target()?; if std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some() { eprintln!("Candidate target available: {}", target.is_some()); } }
                     let result = Self::feed_input(&mut engine, &event, &pressed, caps_control, &mut caps, target.is_some());
-                    if matches!(result, FeedResult::Suppress) { suppressed.insert((input.device,code.0)); pressed.remove(&code.0); continue; }
+                    if matches!(result, FeedResult::Suppress) { suppressed.insert((input.device,code.0));suppressed_navigation=Some((input.device,code.0));pressed.remove(&code.0);continue; }
                     let matched_enter=matches!(Self::input(code),Input::Enter)&&matches!(result,FeedResult::Expand(_));
                     let expansion = if let FeedResult::Expand(expansion) = result { Some(expansion) } else { None };
                     if expansion.is_some() && std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some() { eprintln!("Match found; held-key count {}", pressed.len()); }
@@ -576,6 +586,25 @@ mod tests {
                 assert_eq!(matches!(result,FeedResult::Expand(_)),expands);
                 assert!(matches!(engine.feed_event(Input::Enter),FeedResult::Forward));
             }
+        }
+    }
+    #[test]
+    fn resumed_boundary_repeat_establishes_key_down_and_discards_candidate() {
+        let mut engine=Engine::new(typerelay_core::Snapshot::new(vec![typerelay_core::Snippet{trigger:"apr".into(),replacement:"Corrected".into()}]).unwrap());
+        for c in ";apr".chars(){engine.feed(Input::Character(c));}
+        let mut pressed=BTreeSet::new();let down=Session::resume_navigation_repeat(&mut engine,&InputEvent::new(EventType::KEY.0,KeyCode::KEY_RIGHT.0,2),&mut pressed);
+        assert_eq!(down,InputEvent::new(EventType::KEY.0,KeyCode::KEY_RIGHT.0,1));assert!(pressed.contains(&KeyCode::KEY_RIGHT.0));assert!(engine.feed(Input::Space).is_none());
+    }
+    #[test]
+    fn repeated_right_tracks_corrected_candidate_and_cancels_after_its_end() {
+        for beyond_end in [false,true] {
+            let mut engine=Engine::new(typerelay_core::Snapshot::new(vec![typerelay_core::Snippet{trigger:"apr".into(),replacement:"Corrected".into()}]).unwrap());
+            for c in ";xpr".chars(){engine.feed(Input::Character(c));}
+            for _ in 0..3{engine.feed(Input::Left);}
+            engine.feed(Input::Delete);engine.feed(Input::Character('a'));
+            for value in [1,2] { assert!(matches!(Session::feed_input(&mut engine,&InputEvent::new(EventType::KEY.0,KeyCode::KEY_RIGHT.0,value),&BTreeSet::new(),false,&mut false,true),FeedResult::Forward)); }
+            if beyond_end { assert!(matches!(Session::feed_input(&mut engine,&InputEvent::new(EventType::KEY.0,KeyCode::KEY_RIGHT.0,2),&BTreeSet::new(),false,&mut false,true),FeedResult::Forward)); }
+            assert_eq!(engine.feed(Input::Space).is_some(),!beyond_end);
         }
     }
     #[test]

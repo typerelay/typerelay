@@ -13,8 +13,13 @@ private enum Scenario: String, CaseIterable {
 	case afterRelease = "after-release"
 	case burst
 	case releaseTimeout = "release-timeout"
+	case correctedTail = "corrected-tail"
+	case correctedInternal = "corrected-internal"
+	case repeatedRight = "repeated-right"
+	case repeatedRightBeyondEnd = "repeated-right-beyond-end"
+	case repeatedRightFromEnd = "repeated-right-from-end"
 
-	var expected: String { switch self { case .burst: "Be right back.xyz";case .releaseTimeout: ";brb xy";default: "Be right back.x" } }
+	var expected: String { switch self { case .burst: "Be right back.xyz";case .releaseTimeout: ";brb xy";case .correctedTail,.correctedInternal,.repeatedRight: "Be right back.";case .repeatedRightBeyondEnd,.repeatedRightFromEnd: "x;brby ";default: "Be right back.x" } }
 }
 
 private func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
@@ -23,12 +28,14 @@ private func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
 	return value
 }
 
-private func post(_ key: CGKeyCode, down: Bool) {
+private func post(_ key: CGKeyCode, down: Bool, repeating: Bool = false) {
 	let source = CGEventSource(stateID: .hidSystemState)!
 	let event = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: down)!
 	if down, var character = [41: ";", 11: "b", 15: "r", 49: " ", 7: "x", 16: "y", 6: "z"][key]?.utf16.first {
 		event.keyboardSetUnicodeString(stringLength: 1, unicodeString: &character)
 	}
+	event.flags = []
+	event.setIntegerValueField(.keyboardEventAutorepeat, value: repeating ? 1 : 0)
 	event.post(tap: .cghidEventTap)
 	Thread.sleep(forTimeInterval: 0.008)
 }
@@ -39,6 +46,24 @@ private func stroke(_ key: CGKeyCode) {
 }
 
 private func run(_ scenario: Scenario) {
+	if [.correctedTail,.correctedInternal,.repeatedRight,.repeatedRightBeyondEnd,.repeatedRightFromEnd].contains(scenario) {
+		stroke(53)
+		if scenario == .repeatedRightBeyondEnd || scenario == .repeatedRightFromEnd { stroke(7);stroke(16);stroke(123) }
+		let keys: [CGKeyCode] = switch scenario {
+		case .correctedTail: [41,11,15,7,51,51,15,11]
+		case .correctedInternal: [41,11,7,11,123,123,117,15,124]
+		case .repeatedRightFromEnd: [41,11,7,11,123,123,117,15,124]
+		default: [41,7,15,11,123,123,123,117,11]
+		}
+		for key in keys { stroke(key) }
+		if scenario == .repeatedRight || scenario == .repeatedRightBeyondEnd || scenario == .repeatedRightFromEnd {
+			post(124, down: true);post(124, down: true, repeating: true)
+			if scenario == .repeatedRightBeyondEnd { post(124, down: true, repeating: true) }
+			post(124, down: false)
+		}
+		stroke(49)
+		return
+	}
 	let trigger: [CGKeyCode] = [41, 11, 15, 11, 49]
 	post(trigger[0], down: true)
 	for index in 1..<trigger.count {
@@ -61,6 +86,7 @@ private func run(_ scenario: Scenario) {
 		Thread.sleep(forTimeInterval: 2.3)
 		post(49, down: false)
 		stroke(16)
+	case .correctedTail,.correctedInternal,.repeatedRight,.repeatedRightBeyondEnd,.repeatedRightFromEnd: break
 	case .overlap:
 		post(49, down: false)
 		Thread.sleep(forTimeInterval: 0.7)

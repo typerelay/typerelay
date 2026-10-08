@@ -54,14 +54,15 @@ impl HookState {
         if self.suppress_delimiter.as_ref().is_some_and(|(key,_)|*key==physical){return true;}
         if vk==0x0d&&!self.enter_forwarded.insert((scan,extended)){return false;}
         if let Some(pending)=&self.pending{pending.store(true,std::sync::atomic::Ordering::SeqCst);}
+        let repeated_right=vk==0x27&&self.right_forwarded;
+        if vk==0x27{if self.suppress_right{self.suppress_right=false;self.right_forwarded=true;self.engine.feed(Input::Cancel);self.target=None;return false;}self.right_forwarded=true;}
 		if BrowserLease::active(){self.engine.feed(Input::Cancel);self.target=None;return false;}
-        if vk==0x27{if self.suppress_right{return true;}if self.right_forwarded{self.engine.feed(Input::Cancel);self.target=None;return false;}self.right_forwarded=true;}
         if Self::modified(){self.engine.feed(Input::Cancel);self.target=None;return false;}
         if self.target.as_ref().is_some_and(|target|target.focused().ok()!=Some(true)){self.engine.feed(Input::Cancel);self.target=None;}
         let input=Self::input(vk,scan);
         if matches!(input,Input::Character(character)if character==self.engine.prefix()){self.target=Target::capture().ok();}
         if self.target.is_none(){self.engine.feed(Input::Cancel);return false;}
-        let result=self.engine.feed_event(input);
+        let result=if repeated_right{self.engine.feed_repeated_event(input)}else{self.engine.feed_event(input)};
         let matched_enter=matches!(input,Input::Enter)&&matches!(result,FeedResult::Expand(_));
         if matches!(result,FeedResult::Suppress){self.right_forwarded=false;self.suppress_right=true;return true;}
         if let FeedResult::Expand(expansion)=result&&let Some(target)=self.target.take()&&target.focused().ok()==Some(true){let (release,released)=sync_channel(1);let cancelled=Arc::new(std::sync::atomic::AtomicBool::new(false));self.pending=Some(cancelled.clone());if self.sender.try_send(ExpansionRequest{target,expansion,released,confirm_enter:matches!(input,Input::Enter),cancelled,restore_space:matches!(input,Input::Space)}).is_ok()||matches!(input,Input::Enter){self.suppress_delimiter=Some((physical,release));return true;}}
@@ -227,6 +228,8 @@ mod observation_tests {
     use super::{ObservationAdapter,HookState};
     #[test]
     fn prompt_guard_rearms_but_new_typing_cancels_confirmation(){let directory=tempfile::tempdir().unwrap();let (sender,_)=std::sync::mpsc::sync_channel(1);let mut state=HookState::new(directory.path().join("snippets"),directory.path().join("settings.json"),sender).unwrap();let pending=std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));state.pending=Some(pending.clone());state.enter_forwarded.insert((0x1c,false));assert!(!state.key(0x0d,0x1c,false,true));assert!(!pending.load(std::sync::atomic::Ordering::SeqCst));assert!(!state.key(0x41,0x1e,false,true));assert!(pending.load(std::sync::atomic::Ordering::SeqCst));pending.store(false,std::sync::atomic::Ordering::SeqCst);assert!(!state.key(0x42,0x30,false,true));assert!(pending.load(std::sync::atomic::Ordering::SeqCst));}
+    #[test]
+    fn held_right_from_suppressed_boundary_forwards_down_and_release(){let directory=tempfile::tempdir().unwrap();let (sender,_)=std::sync::mpsc::sync_channel(1);let mut state=HookState::new(directory.path().join("snippets"),directory.path().join("settings.yml"),sender).unwrap();state.engine=typerelay_core::Engine::new(typerelay_core::Snapshot::new(vec![typerelay_core::Snippet{trigger:"apr".into(),replacement:"Corrected".into()}]).unwrap());for c in ";apr".chars(){state.engine.feed(typerelay_core::Input::Character(c));}state.suppress_right=true;assert!(!state.key(0x27,0x4d,true,true));assert!(!state.suppress_right);assert!(state.right_forwarded);assert!(!state.key(0x27,0x4d,true,false));assert!(!state.right_forwarded);assert!(state.engine.feed(typerelay_core::Input::Space).is_none());}
     #[test]
     fn matching_delimiter_release_uses_physical_identity(){let directory=tempfile::tempdir().unwrap();let (sender,_)=std::sync::mpsc::sync_channel(1);let mut state=HookState::new(directory.path().join("snippets"),directory.path().join("settings.json"),sender).unwrap();let (release,released)=std::sync::mpsc::sync_channel(1);state.suppress_delimiter=Some(((0x0d,0x1c,false),release));assert!(state.key(0x0d,0x1c,false,true));assert!(!state.key(0x0d,0x1c,true,false));assert!(released.try_recv().is_err());assert!(state.key(0x0d,0x1c,false,false));assert!(released.try_recv().is_ok());assert!(matches!(HookState::input(0x0d,0x1c),typerelay_core::Input::Enter));}
 
