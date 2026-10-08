@@ -299,10 +299,11 @@ impl Session {
         let panel = typerelay_client::panel_ipc::PanelIpc::engine(running.clone())?;
         let progress=Arc::new(AtomicU64::new(0));let guarded=Arc::new(AtomicBool::new(true));Self::guard_relay(guarded.clone(),progress.clone());
         let mut input_generation = 0u64;
+        let cursor_discovery = Arc::new(AtomicBool::new(false));
         let result = Self::keep_connected(&running, &progress, || {
             input_generation = input_generation.wrapping_add(1);
             while let Ok(request) = panel.0.try_recv() { let _ = request.reply.send(Err("Keyboard reconnected; insertion cancelled".into())); }
-            Self::relay(&mut store, device_name, &running, &progress, &panel, &mut input_generation)
+            Self::relay(&mut store, device_name, &running, &progress, &panel, &mut input_generation, &cursor_discovery)
         });
         running.store(false, Ordering::SeqCst);
         guarded.store(false, Ordering::SeqCst);
@@ -327,7 +328,7 @@ impl Session {
         Ok(())
     }
 
-    fn relay(store: &mut DatabaseSnapshot, requested: &str, running: &AtomicBool, progress: &AtomicU64, panel: &(std::sync::mpsc::Receiver<typerelay_client::panel_ipc::Insertion>, std::sync::mpsc::SyncSender<typerelay_client::panel_ipc::Insertion>), input_generation: &mut u64) -> Result<()> {
+    fn relay(store: &mut DatabaseSnapshot, requested: &str, running: &AtomicBool, progress: &AtomicU64, panel: &(std::sync::mpsc::Receiver<typerelay_client::panel_ipc::Insertion>, std::sync::mpsc::SyncSender<typerelay_client::panel_ipc::Insertion>), input_generation: &mut u64, cursor_discovery: &Arc<AtomicBool>) -> Result<()> {
         let (panel_requests, template_tx) = panel;
         let devices = Hyprland::query("devices")?;
         Self::check_interference(&devices)?;
@@ -442,7 +443,7 @@ impl Session {
                         state.started = true;
                     }
                     Ok(Ok(Progress::Ready)) => { state.cancelled = true; state.job.cancel(); }
-                    Ok(Ok(Progress::Finished)) => { if let Some(cursor)=state.cursor.take()&&state.sent&&!state.cancelled {state.cursor_remaining=Some(cursor.backward_graphemes);continue;} if state.confirm_enter&&state.sent&&!state.cancelled&&state.generation==*input_generation&&Self::target()?==state.target&&!context.changed(state.target.as_deref())? {output.emit(&Self::stroke(KeyCode::KEY_ENTER,false))?;} if state.sent && !state.cancelled && state.reply.is_none() { Self::record_usage(&state.expansion); } if let Some(reply) = state.reply.take() { let _ = reply.send(if state.sent && !state.cancelled { Ok(state.generation) } else { Err("Insertion cancelled; nothing retried".into()) }); } paste = None; continue; }
+                    Ok(Ok(Progress::Finished)) => { if let Some(cursor)=state.cursor.take()&&state.sent&&!state.cancelled {if state.generation!=*input_generation||Self::target()?!=state.target {state.cancelled=true;} else {match Hyprland::position_cursor(state.target.as_deref().unwrap_or_default(),&state.expansion.text,cursor.utf16,cursor_discovery,||Ok(Self::target()?==state.target&&!context.changed(state.target.as_deref())?)) {Ok(true)=>{if std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some(){eprintln!("Cursor positioned directly");}state.cursor_remaining=Some(0);continue;},Ok(false)=>{state.cursor_remaining=Some(cursor.backward_graphemes);continue;},Err(error)=>{eprintln!("Cursor positioning cancelled: {error:#}");state.cancelled=true;}}}} if state.confirm_enter&&state.sent&&!state.cancelled&&state.generation==*input_generation&&Self::target()?==state.target&&!context.changed(state.target.as_deref())? {output.emit(&Self::stroke(KeyCode::KEY_ENTER,false))?;} if state.sent && !state.cancelled && state.reply.is_none() { Self::record_usage(&state.expansion); } if let Some(reply) = state.reply.take() { let _ = reply.send(if state.sent && !state.cancelled { Ok(state.generation) } else { Err("Insertion cancelled; nothing retried".into()) }); } paste = None; continue; }
                     Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                         eprintln!("Clipboard paste failed; no automatic retry");
                         if state.restore_space && state.reply.is_none() && !state.started && !state.cancelled && Self::target()? == state.target { for event in Self::stroke(KeyCode::KEY_SPACE, false) { output.emit(&[event])?; } }

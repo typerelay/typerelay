@@ -21,16 +21,22 @@ import time
 
 class BrowserFixture(http.server.BaseHTTPRequestHandler):
     output = None
+    arrows = 0
+    contenteditable = False
 
     def do_GET(self):
-        body = b'<!doctype html><title>TypeRelay Browser Test</title><textarea id="field" autofocus rows="10" cols="80"></textarea><script>field.oninput=()=>fetch("/result",{method:"POST",body:field.value});</script>'
+        body = b'<!doctype html><title>TypeRelay Browser Test</title><textarea id="field" autofocus rows="10" cols="80"></textarea><script>field.oninput=()=>fetch("/result",{method:"POST",body:field.value});field.onkeydown=e=>{if(e.key==="ArrowLeft")fetch("/arrow",{method:"POST",body:""});};</script>'
+        if self.contenteditable:
+            body = body.replace(b'<textarea id="field" autofocus rows="10" cols="80"></textarea>', b'<div id="field" contenteditable="true" tabindex="0"></div>').replace(b'body:field.value', b'body:Array.from(field.childNodes,n=>n.textContent).join("\\n")').replace(b'<script>', b'<script>field.focus();')
         self.send_response(200)
         self.send_header("Content-Type", "text/html")
         self.end_headers()
         self.wfile.write(body)
 
     def do_POST(self):
-        self.output.write_bytes(self.rfile.read(int(self.headers["Content-Length"])))
+        body = self.rfile.read(int(self.headers["Content-Length"]))
+        if self.path == '/arrow': type(self).arrows += 1
+        else: self.output.write_bytes(body)
         self.send_response(204)
         self.end_headers()
 

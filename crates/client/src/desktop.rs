@@ -4,6 +4,128 @@ use std::{fs, io::{Read, Write}, os::unix::{fs::{MetadataExt, PermissionsExt}, n
 
 pub struct Hyprland;
 impl Hyprland {
+    /// Use a private D-Bus connection: libatspi's shared GLib state belongs to the GTK thread.
+    /// Unsupported/read failures may fall back; a failed write must never trigger a second move.
+    pub fn position_cursor(target: &str, text: &str, utf16: usize, discovering: &std::sync::Arc<std::sync::atomic::AtomicBool>, mut current: impl FnMut() -> Result<bool>) -> Result<bool> {
+        use zbus::{blocking::{connection::Builder, Proxy}, zvariant::OwnedObjectPath};
+        use std::sync::atomic::Ordering;
+        ensure!(current()?, "Cursor target changed");
+        if discovering.swap(true, Ordering::SeqCst) { return Ok(false); }
+        let worker_active = discovering.clone();
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let owned_target = target.to_owned();
+        let text = text.to_owned();
+        let worker = std::thread::Builder::new().name("cursor-discovery".into()).spawn(move || {
+            let prepared = (|| -> Result<_> {
+                let target = owned_target.as_str();
+                let active = Self::query("activewindow")?;
+                ensure!(active["address"] == target, "Cursor target changed");
+                let pid = active["pid"].as_u64().context("Missing target process")? as u32;
+                let session = Builder::session()?.method_timeout(Duration::from_millis(25)).build()?;
+                let address: String = session.call_method(Some("org.a11y.Bus"), "/org/a11y/bus", Some("org.a11y.Bus"), "GetAddress", &())?.body().deserialize()?;
+                let bus = Builder::address(address.as_str())?.method_timeout(Duration::from_millis(25)).build()?;
+                let apps: Vec<(String, OwnedObjectPath)> = bus.call_method(Some("org.a11y.atspi.Registry"), "/org/a11y/atspi/accessible/root", Some("org.a11y.atspi.Accessible"), "GetChildren", &())?.body().deserialize()?;
+                let deadline = std::time::Instant::now() + Duration::from_millis(150);
+                for (name, root) in apps.into_iter().take(64) {
+                    if std::time::Instant::now() >= deadline { break; }
+                    let owner: u32 = bus.call_method(Some("org.freedesktop.DBus"), "/org/freedesktop/DBus", Some("org.freedesktop.DBus"), "GetConnectionUnixProcessID", &(name.as_str(),))?.body().deserialize()?;
+                    if owner != pid { continue; }
+                    let rule = (vec![(1i32 << 7) | (1 << 12) | (1 << 24), 0], 1i32, std::collections::HashMap::<String, String>::new(), 1i32, vec![0i32; 5], 1i32, vec!["Text"], 1i32, false);
+                    let fields: Vec<(String, OwnedObjectPath)> = bus.call_method(Some(name.as_str()), root.as_str(), Some("org.a11y.atspi.Collection"), "GetMatches", &(rule, 1u32, 8i32, true))?.body().deserialize()?;
+                    ensure!(fields.len() < 8, "Too many focused text fields");
+                    let mut matched = None;
+                    for (destination, path) in fields {
+                        if destination != name { continue; }
+                        let candidate = (|| -> Result<_> {
+                            let accessible = Proxy::new(&bus, name.as_str(), path.as_str(), "org.a11y.atspi.Accessible")?;
+                            let states: Vec<u32> = accessible.call("GetState", &())?;
+                            let required = (1 << 7) | (1 << 12) | (1 << 24);
+                            ensure!(states.first().is_some_and(|state| state & required == required), "Field is not editable and focused");
+                            let field: Proxy = zbus::blocking::proxy::Builder::new(&bus).destination(name.as_str())?.path(path.as_str())?.interface("org.a11y.atspi.Text")?.cache_properties(zbus::proxy::CacheProperties::No).build()?;
+                            let selections: i32 = field.call("GetNSelections", &())?;
+                            ensure!(selections == 0, "Field has a selection");
+                            let end: i32 = field.get_property("CaretOffset")?;
+                            let count = i32::try_from(text.chars().count())?;
+                            let mut units = 0;
+                            let mut prefix = 0;
+                            for ch in text.chars() { if units >= utf16 { break; } units += ch.len_utf16(); prefix += 1; }
+                            ensure!(units == utf16, "Invalid cursor boundary");
+                            if end >= count {
+                                let inserted: String = field.call("GetText", &(end - count, end))?;
+                                if inserted == text { return Ok((path.clone(), end, path.clone(), end, end - count + prefix)); }
+                            }
+                            // Chromium multiline contenteditables expose one embedded block per line.
+                            // Only use this mapping when the complete block text exactly matches the paste.
+                            let embedded: String = field.call("GetText", &(0i32, -1i32))?;
+                            ensure!(embedded.contains('\u{fffc}'), "Field does not expose a plain text offset");
+                            let children: Vec<(String, OwnedObjectPath)> = accessible.call("GetChildren", &())?;
+                            ensure!(!children.is_empty() && end >= embedded.chars().count() as i32 - 1, "Caret is not at the last text block");
+                            let mut lines = Vec::new();
+                            let mut representation = String::new();
+                            for (owner, child) in &children {
+                                ensure!(std::time::Instant::now() < deadline && owner == &name, "Text block discovery unavailable");
+                                let child_field = Proxy::new(&bus, name.as_str(), child.as_str(), "org.a11y.atspi.Text")?;
+                                let child_accessible = Proxy::new(&bus, name.as_str(), child.as_str(), "org.a11y.atspi.Accessible")?;
+                                let role: String = child_accessible.call("GetRoleName", &())?;
+                                let line: String = child_field.call("GetText", &(0i32, -1i32))?;
+                                ensure!(!line.contains('\u{fffc}') && (line == "\n" || !line.contains('\n')), "Unsupported nested text block");
+                                if role == "static" && lines.is_empty() { representation.push_str(&line); } else { ensure!(role == "section" || role == "paragraph", "Unsupported inline text block"); representation.push('\u{fffc}'); }
+                                if lines.len() + 1 == children.len() { let caret: i32 = child_field.get_property("CaretOffset")?; ensure!(caret == line.chars().count() as i32 || line == "\n" && caret == 0, "Caret is not at the end of pasted text"); }
+                                lines.push(if line == "\n" { String::new() } else { line });
+                            }
+                            ensure!(representation == embedded, "Text block structure changed");
+                            let flattened = lines.join("\n");
+                            ensure!(flattened.ends_with(&text), "Text blocks differ from pasted text");
+                            let mut offset = flattened.chars().count() as i32 - count + prefix;
+                            for (line, (_, child)) in lines.iter().zip(&children) {
+                                let length = line.chars().count() as i32;
+                                if offset <= length {
+                                    let child_field = Proxy::new(&bus, name.as_str(), child.as_str(), "org.a11y.atspi.Text")?;
+                                    let initial: i32 = child_field.get_property("CaretOffset")?;
+                                    return Ok((path.clone(), end, child.clone(), initial, offset));
+                                }
+                                offset -= length + 1;
+                            }
+                            anyhow::bail!("Cursor text block unavailable")
+                        })();
+                        if let Err(error) = &candidate { if std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some() { eprintln!("Cursor candidate rejected: {error:#}"); } }
+                        if let Ok(candidate) = candidate { ensure!(matched.is_none(), "Ambiguous pasted text fields"); matched = Some(candidate); }
+                    }
+                    let (path, end, destination_path, initial, destination) = matched.context("No matching pasted text field")?;
+                    return Ok((bus.clone(), name.clone(), path, end, destination_path, initial, destination));
+                }
+                anyhow::bail!("Target does not expose accessible text")
+            })();
+            if let Err(error) = &prepared { if std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some() { eprintln!("Direct cursor unavailable: {error:#}"); } }
+            let _ = sender.send(prepared);
+            worker_active.store(false, Ordering::SeqCst);
+        });
+        if worker.is_err() { discovering.store(false, Ordering::SeqCst); return Ok(false); }
+        // The worker only reads. A timed-out discovery can never move a caret later.
+        let prepared = receiver.recv_timeout(Duration::from_millis(250)).ok().and_then(Result::ok);
+        ensure!(current()?, "Cursor target changed during discovery");
+        let (bus, name, path, end, destination_path, initial, destination) = match prepared { Some(value) => value, None => return Ok(false) };
+        ensure!(Self::query("locked")?["locked"] == false && Self::query("activewindow")?["address"] == target, "Cursor target changed");
+        let accessible = Proxy::new(&bus, name.as_str(), path.as_str(), "org.a11y.atspi.Accessible")?;
+        let states: Vec<u32> = accessible.call("GetState", &())?;
+        ensure!(states.first().is_some_and(|state| state & (1 << 12) != 0), "Cursor field lost focus");
+        let field: Proxy = zbus::blocking::proxy::Builder::new(&bus).destination(name.as_str())?.path(path.as_str())?.interface("org.a11y.atspi.Text")?.cache_properties(zbus::proxy::CacheProperties::No).build()?;
+        ensure!(field.get_property::<i32>("CaretOffset")? == end && field.call::<_, _, i32>("GetNSelections", &())? == 0, "Cursor changed after paste");
+        let field: Proxy = zbus::blocking::proxy::Builder::new(&bus).destination(name.as_str())?.path(destination_path.as_str())?.interface("org.a11y.atspi.Text")?.cache_properties(zbus::proxy::CacheProperties::No).build()?;
+        ensure!(field.get_property::<i32>("CaretOffset")? == initial, "Cursor text block changed");
+        ensure!(current()?, "Cursor target changed before positioning");
+        let moved: bool = field.call("SetCaretOffset", &(destination,))?;
+        let deadline = std::time::Instant::now() + Duration::from_millis(100);
+        loop {
+            ensure!(current()?, "Cursor target changed after positioning");
+            let actual: i32 = field.get_property("CaretOffset")?;
+            if !moved && actual == initial { return Ok(false); }
+            if moved && actual == destination { break; }
+            ensure!(moved && std::time::Instant::now() < deadline, "Could not confirm cursor positioning; nothing retried");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        Ok(true)
+    }
     pub fn keyboard<'a>(devices: &'a serde_json::Value, device: &str) -> Result<&'a serde_json::Value> {
         let name = device.to_lowercase().replace([' ', '\n', ','], "-");
         let rows = devices["keyboards"].as_array().context("Keyboard information unavailable")?;
@@ -104,6 +226,13 @@ impl Drop for Registration { fn drop(&mut self) { let _ = fs::remove_file(&self.
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn busy_cursor_discovery_falls_back_without_spawning_or_clearing_worker() {
+        let busy = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        assert!(!Hyprland::position_cursor("unused", "text", 0, &busy, || Ok(true)).unwrap());
+        assert!(busy.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(Hyprland::position_cursor("unused", "text", 0, &busy, || Ok(false)).is_err());
+    }
     #[test]
     fn shortcut_conflicts_accept_keysym_names_symbols_and_keycodes() {
         for binding in [serde_json::json!({"modmask":5,"key":"semicolon"}),serde_json::json!({"modmask":5,"key":";"}),serde_json::json!({"modmask":5,"keycode":47})] { assert!(Hyprland::shortcut_conflicts("Ctrl+Shift+Semicolon", &serde_json::json!([binding])).unwrap()); }

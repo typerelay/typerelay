@@ -110,7 +110,7 @@ class TemplateSmoke(desktop.Smoke):
   type: template
   replace: 'one{{key:enter}}two'
 ''')
-            cursor_cases = cursor_cases or [('start', '', 'a' * 2808), ('middle', 'before\n😀', ('e\u0301 tail\n' * 1800)), ('end', 'a' * 12000, ''), ('cancel', '', 'a' * 12000)]
+            cursor_cases = cursor_cases or [('start', '', 'a' * 2808), ('middle', 'before\n😀', ('e\u0301 tail\n' * (40 if desktop.BrowserFixture.contenteditable else 1800))), ('end', 'a' * 12000, ''), ('cancel', '', 'a' * 12000)]
             with (snippets / 'test.yml').open('a') as fixtures:
                 for trigger, before, after in cursor_cases:
                     fixtures.write('\n- trigger: ' + trigger + '\n  type: template\n  replace: ' + json.dumps(before + '{{cursor:here}}' + after) + '\n')
@@ -131,7 +131,9 @@ class TemplateSmoke(desktop.Smoke):
                     threading.Thread(target=server.serve_forever, daemon=True).start()
                     for trigger, before, after in cursor_cases:
                         browser_output.write_text('')
-                        browser = self.start('chromium', '--user-data-dir=' + str(root / ('browser-' + trigger)), '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--disable-sync', '--ozone-platform=wayland', '--app=http://127.0.0.1:' + str(server.server_port), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        desktop.BrowserFixture.arrows = 0
+                        direct_before = (root / 'engine.log').read_text().count('Cursor positioned directly')
+                        browser = self.start('chromium', '--user-data-dir=' + str(root / ('browser-' + trigger)), '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--disable-sync', *(['--disable-renderer-accessibility'] if trigger == 'cancel' else ['--force-renderer-accessibility']), '--ozone-platform=wayland', '--app=http://127.0.0.1:' + str(server.server_port), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                         self.focus('TypeRelay Browser Test'); target = self.active()
                         self.keys('z' * (len(trigger) + 2), target)
                         with sqlite3.connect(snippets / 'typerelay.sqlite') as db:
@@ -158,9 +160,18 @@ class TemplateSmoke(desktop.Smoke):
                             print('PASS: focus change cancels long cursor movement; service remains running', flush=True)
                             continue
                         assert json.loads(reply) == {'Ok': None}, reply
+                        assert (root / 'engine.log').read_text().count('Cursor positioned directly') == direct_before + 1, (root / 'engine.log').read_text()
+                        expected = before + 'x' + after
+                        assert self.record(browser_output) == before + after, 'Browser altered pasted text'
                         self.keys('x', target)
-                        self.wait(lambda: self.record(browser_output) == before + 'x' + after, seconds=10)
-                        print('PASS: cursor ' + trigger + ', suffix ' + str(len(after)) + ' code points, native insertion and typing at marker', flush=True)
+                        try: self.wait(lambda: self.record(browser_output) == expected, seconds=10)
+                        except Exception:
+                            import difflib
+                            actual = self.record(browser_output)
+                            print('Cursor output lengths:', len(actual), len(expected), 'differences:', [op for op in difflib.SequenceMatcher(None, expected, actual, autojunk=False).get_opcodes() if op[0] != 'equal'], flush=True)
+                            raise
+                        assert desktop.BrowserFixture.arrows == 0, 'Direct cursor positioning emitted arrow keys'
+                        print('PASS: direct cursor ' + trigger + ', suffix ' + str(len(after)) + ' code points, native insertion and typing at marker', flush=True)
                         browser.terminate(); browser.wait(timeout=5)
                     return
                 output = root / 'gtk.txt'
@@ -241,7 +252,8 @@ class TemplateSmoke(desktop.Smoke):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(); parser.add_argument('--live', action='store_true'); parser.add_argument('--terminal', type=pathlib.Path); parser.add_argument('--cursor-only', action='store_true'); parser.add_argument('--binary-dir', type=pathlib.Path); args = parser.parse_args()
+    parser = argparse.ArgumentParser(); parser.add_argument('--live', action='store_true'); parser.add_argument('--terminal', type=pathlib.Path); parser.add_argument('--cursor-only', action='store_true'); parser.add_argument('--binary-dir', type=pathlib.Path); parser.add_argument('--contenteditable', action='store_true'); args = parser.parse_args()
+    desktop.BrowserFixture.contenteditable = args.contenteditable
     if args.terminal: TemplateSmoke().terminal(args.terminal)
     elif args.live: TemplateSmoke(args.binary_dir).run_live(cursor_only=args.cursor_only)
     else: parser.error('Live testing requires explicit user authorization and --live')
