@@ -136,6 +136,12 @@ impl Template {
 mod tests {
     use super::*;
     fn render(text: &str, values: &[(&str,&str)]) -> Result<Rendered,String> { Template::render(RenderRequest { template: Template { text: text.into(), variables: BTreeMap::new() }, values: values.iter().map(|(k,v)| (k.to_string(),v.to_string())).collect(), now_ms: 0, offset_minutes: -300, preview: false }) }
+    #[test]
+    fn cursor_offsets_have_no_suffix_length_limit() {
+        for count in [0, 513, 2808, 8000] {
+            let suffix="e\u{301}😀\n".repeat(count);let rendered=render(&format!("before{{{{cursor:here}}}}{suffix}"),&[]).unwrap();let cursor=rendered.cursor.unwrap();assert_eq!(cursor.utf16,6);assert_eq!(cursor.backward_graphemes,count*3);assert_eq!(cursor.backward_utf16,count*5);assert_eq!(rendered.text,format!("before{suffix}"));
+        }
+    }
     #[test] fn fields_are_shared_and_literal() { let result = render("Hi {{name}} {{name}}", &[("name", "{{key:enter}}")]).unwrap(); assert_eq!(result.fields, ["name"]); assert_eq!(result.enter_actions, 0); assert_eq!(result.text,"Hi {{key:enter}} {{key:enter}}"); }
     #[test] fn dates_and_actions_are_ordered() { let result=render("{{date}} {{time}} {{timestamp}}{{key:enter}}Done", &[]).unwrap(); assert_eq!(result.text,"1969-12-31 19:00 1969-12-31T19:00:00-05:00Done"); assert!(matches!(result.steps[1],Step::Enter)); }
     #[test] fn escaping_validation_and_defaults() { assert_eq!(render(r"\{{name}} \\ hi", &[]).unwrap().text,r"{{name}} \ hi"); assert!(render("{{name}}", &[]).is_err()); assert!(render("{{shell:cmd}}", &[]).is_err()); assert!(render("{{bad", &[]).is_err()); let mut template=Template{text:"{{name}}".into(),variables:BTreeMap::new()}.normalize().unwrap(); template.variables.get_mut("name").unwrap().default="Nitai".into(); let result=Template::render(RenderRequest{template,values:BTreeMap::new(),now_ms:0,offset_minutes:0,preview:false}).unwrap(); assert_eq!(result.text,"Nitai"); }

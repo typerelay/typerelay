@@ -50,7 +50,7 @@ pub fn paste(target: &Target, erase: usize, payload: Option<typerelay_client::cl
     ensure!(target.focused()?, "Original window lost focus; nothing inserted");
     #[cfg(target_os="windows")]
 	if let Some(payload)=payload.as_ref()&&payload.html.is_none()&&payload.rtf.is_none()&&target.replace_text(erase,&payload.plain,payload.cursor.as_ref())?{return Ok(());}
-	if let Some(cursor)=payload.as_ref().and_then(|payload|payload.cursor.as_ref()){ensure!(Target::input_ready().load(std::sync::atomic::Ordering::SeqCst),"Cursor positioning requires active keyboard monitoring. Restart TypeRelay or use Copy; nothing inserted");ensure!(cursor.backward_graphemes<=512,"This editor supports cursor positioning up to 512 characters from the end. Use Copy; nothing inserted");}
+	if payload.as_ref().is_some_and(|payload|payload.cursor.is_some()){ensure!(Target::input_ready().load(std::sync::atomic::Ordering::SeqCst),"Cursor positioning requires active keyboard monitoring. Restart TypeRelay or use Copy; nothing inserted");}
 	let mut clipboard=None;let has_text=payload.is_some();let cursor=payload.as_ref().and_then(|payload|payload.cursor.clone());
 	if let Some(payload)=payload {
         #[cfg(target_os="windows")]

@@ -12,6 +12,9 @@ import json
 import os
 import pathlib
 import signal
+import socket
+import sqlite3
+import struct
 import subprocess
 import sys
 import tempfile
@@ -25,6 +28,10 @@ spec.loader.exec_module(desktop)
 
 
 class TemplateSmoke(desktop.Smoke):
+    def __init__(self, binary_dir=None):
+        super().__init__()
+        self.binary_dir = binary_dir or self.root / 'target/templates/release'
+
     def wait(self, check, seconds=8):
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
@@ -39,7 +46,7 @@ class TemplateSmoke(desktop.Smoke):
 
     def keys(self, text, expected=None):
         active = expected or self.active()
-        subprocess.run([str(self.root / 'target/templates/release/examples/send_keys'), text, active['class'], active['address']], check=True, timeout=15)
+        subprocess.run([str(self.binary_dir / 'examples/send_keys'), text, active['class'], active['address']], check=True, timeout=15)
 
     def panel_window(self, pid):
         return self.wait(lambda: next((window for window in json.loads(self.command('hyprctl', '-j', 'clients')) if window['pid'] == pid), None))
@@ -76,7 +83,7 @@ class TemplateSmoke(desktop.Smoke):
     def interrupted(*_):
         raise KeyboardInterrupt('Live check interrupted')
 
-    def run_live(self):
+    def run_live(self, cursor_only=False, cursor_cases=None):
         signal.signal(signal.SIGTERM, self.interrupted)
         signal.signal(signal.SIGALRM, self.interrupted)
         signal.alarm(240)
@@ -103,6 +110,10 @@ class TemplateSmoke(desktop.Smoke):
   type: template
   replace: 'one{{key:enter}}two'
 ''')
+            cursor_cases = cursor_cases or [('start', '', 'a' * 2808), ('middle', 'before\n😀', ('e\u0301 tail\n' * 1800)), ('end', 'a' * 12000, ''), ('cancel', '', 'a' * 12000)]
+            with (snippets / 'test.yml').open('a') as fixtures:
+                for trigger, before, after in cursor_cases:
+                    fixtures.write('\n- trigger: ' + trigger + '\n  type: template\n  replace: ' + json.dumps(before + '{{cursor:here}}' + after) + '\n')
             (config / 'settings.yml').write_text("trigger_prefix: ','\nsync_url: ''\n")
             (config / 'panel.json').write_text(json.dumps({'shortcut': 'Ctrl+Shift+Comma', 'launch_at_login': False}))
             env = {**os.environ, 'TYPERELAY_DIAGNOSTIC': '1', 'XDG_CONFIG_HOME': str(root / 'config'), 'XDG_DATA_HOME': str(root / 'data'), 'XDG_CACHE_HOME': str(root / 'cache')}
@@ -110,9 +121,48 @@ class TemplateSmoke(desktop.Smoke):
                 if service: self.command('systemctl', '--user', 'stop', 'typerelay')
                 if panel_running: subprocess.run([str(old_panel), '--quit'], check=True, timeout=10); time.sleep(.8)
                 engine_log = (root / 'engine.log').open('w+')
-                engine = self.start(str(self.root / 'target/templates/release/typerelay'), 'run', '--dir', str(snippets), env=env, stdout=engine_log, stderr=engine_log)
+                engine = self.start(str(self.binary_dir / 'typerelay'), 'run', '--dir', str(snippets), env=env, stdout=engine_log, stderr=engine_log)
                 time.sleep(1)
                 if engine.poll() is not None: raise RuntimeError((root / 'engine.log').read_text())
+                self.wait(lambda: 'Typerelay input ready:' in (root / 'engine.log').read_text(), seconds=15)
+                if cursor_only:
+                    browser_output = root / 'browser.txt'; desktop.BrowserFixture.output = browser_output
+                    server = http.server.HTTPServer(('127.0.0.1', 0), desktop.BrowserFixture)
+                    threading.Thread(target=server.serve_forever, daemon=True).start()
+                    for trigger, before, after in cursor_cases:
+                        browser_output.write_text('')
+                        browser = self.start('chromium', '--user-data-dir=' + str(root / ('browser-' + trigger)), '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--disable-sync', '--ozone-platform=wayland', '--app=http://127.0.0.1:' + str(server.server_port), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        self.focus('TypeRelay Browser Test'); target = self.active()
+                        self.keys('z' * (len(trigger) + 2), target)
+                        with sqlite3.connect(snippets / 'typerelay.sqlite') as db:
+                            record = next({**json.loads(row[0]), 'library': row[1]} for row in db.execute('SELECT data,library FROM snippets') if json.loads(row[0]).get('trigger') == trigger)
+                        hit = {'id': record['id'], 'library': record['library'], 'revision': record['revision'], 'library_name': '', 'title': '', 'abbreviation': trigger, 'preview': ''}
+                        request = json.dumps({'hit': hit, 'target': target['address'], 'created_ms': int(time.time() * 1000), 'erase': len(trigger) + 2}).encode()
+                        with socket.socket(socket.AF_UNIX) as connection:
+                            connection.settimeout(180)
+                            connection.connect(os.environ['XDG_RUNTIME_DIR'] + '/typerelay-panel/engine.sock')
+                            connection.sendall(struct.pack('<I', len(request)) + request)
+                            if trigger == 'cancel':
+                                self.wait(lambda: self.record(browser_output) == before + after)
+                                interruption = self.start('chromium', '--user-data-dir=' + str(root / 'browser-interruption'), '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--disable-sync', '--ozone-platform=wayland', '--app=http://127.0.0.1:' + str(server.server_port), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                window = self.panel_window(interruption.pid)
+                                self.command('hyprctl', 'eval', 'hl.dispatch(hl.dsp.focus({window=' + json.dumps('address:' + window['address']) + '}))')
+                            reply = b''
+                            while chunk := connection.recv(4096): reply += chunk
+                        if trigger == 'cancel':
+                            assert 'Err' in json.loads(reply), reply
+                            assert engine.poll() is None
+                            assert self.record(browser_output) == before + after
+                            interruption.terminate(); interruption.wait(timeout=5)
+                            browser.terminate(); browser.wait(timeout=5)
+                            print('PASS: focus change cancels long cursor movement; service remains running', flush=True)
+                            continue
+                        assert json.loads(reply) == {'Ok': None}, reply
+                        self.keys('x', target)
+                        self.wait(lambda: self.record(browser_output) == before + 'x' + after, seconds=10)
+                        print('PASS: cursor ' + trigger + ', suffix ' + str(len(after)) + ' code points, native insertion and typing at marker', flush=True)
+                        browser.terminate(); browser.wait(timeout=5)
+                    return
                 output = root / 'gtk.txt'
                 gtk = self.start(sys.executable, str(self.root / 'scripts/desktop-smoke.py'), '--fixture', 'gtk', '--output', str(output))
                 self.focus('TypeRelay GTK Test'); target = self.active()
@@ -124,7 +174,7 @@ class TemplateSmoke(desktop.Smoke):
                 # Clear the disposable target before testing prompts.
                 gtk.send_signal(signal.SIGUSR1); self.wait(lambda: self.record(output) == '')
                 panel_log = (root / 'panel.log').open('w+')
-                panel = self.start(str(self.root / 'target/templates/release/typerelay-panel'), '--background', env=env, stdout=panel_log, stderr=panel_log)
+                panel = self.start(str(self.binary_dir / 'typerelay-panel'), '--background', env=env, stdout=panel_log, stderr=panel_log)
                 time.sleep(1.5)
                 if panel.poll() is not None: raise RuntimeError((root / 'panel.log').read_text())
                 self.keys(',ask ', target); window = self.panel_window(panel.pid)
@@ -136,7 +186,7 @@ class TemplateSmoke(desktop.Smoke):
                 self.command('hyprctl', 'eval', 'hl.dispatch(hl.dsp.focus({window=' + json.dumps('address:' + window['address']) + '}))')
                 print('PASS: expansion continues in another app while a prompt is open', flush=True)
                 self.keys('nitai', window)
-                held = self.start(str(self.root / 'target/templates/release/examples/send_keys'), '--ctrl-enter', window['class'], window['address'])
+                held = self.start(str(self.binary_dir / 'examples/send_keys'), '--ctrl-enter', window['class'], window['address'])
                 time.sleep(1.0)
                 if self.record(output): raise AssertionError('Inserted before modifiers were released')
                 held.wait(timeout=5); self.wait(lambda: self.record(output) == 'Hi nitai nitai')
@@ -172,7 +222,7 @@ class TemplateSmoke(desktop.Smoke):
             except Exception:
                 for name in ['engine.log', 'panel.log', 'gtk.txt', 'terminal.json']:
                     path = root / name
-                    if path.exists(): print(name + ':\n' + path.read_text()[-3000:], file=sys.stderr)
+                    if path.exists(): print(name + ': length=' + str(len(path.read_text())) + ' x-index=' + str(path.read_text().find('x')) + '\n' + path.read_text()[-3000:], file=sys.stderr)
                 raise
             finally:
                 signal.alarm(0)
@@ -191,7 +241,7 @@ class TemplateSmoke(desktop.Smoke):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(); parser.add_argument('--live', action='store_true'); parser.add_argument('--terminal', type=pathlib.Path); args = parser.parse_args()
+    parser = argparse.ArgumentParser(); parser.add_argument('--live', action='store_true'); parser.add_argument('--terminal', type=pathlib.Path); parser.add_argument('--cursor-only', action='store_true'); parser.add_argument('--binary-dir', type=pathlib.Path); args = parser.parse_args()
     if args.terminal: TemplateSmoke().terminal(args.terminal)
-    elif args.live: TemplateSmoke().run_live()
+    elif args.live: TemplateSmoke(args.binary_dir).run_live(cursor_only=args.cursor_only)
     else: parser.error('Live testing requires explicit user authorization and --live')

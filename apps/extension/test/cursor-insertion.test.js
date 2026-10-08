@@ -30,3 +30,12 @@ test('marked insertion rejects maxlength truncation and single-line multiline fi
   try { assert.equal(fixture.reply.ok, false); assert.match(fixture.reply.error, message); assert.equal(fixture.editor.value, value); assert.deepEqual(fixture.commands, []); } finally { fixture.dom.window.close(); }
  }
 });
+
+
+test('cursor insertion accepts long suffixes at start, middle and end', async () => {
+ const text = 'a'.repeat(60000);
+ for (const offset of [0, 30000, 60000]) {
+  const fixture = await insertion('<textarea></textarea>', { text, fields: [], cursor: { utf16: offset, backward_utf16: text.length - offset, backward_graphemes: text.length - offset } }, 'before after', 7);
+  try { assert.equal(fixture.reply.ok, true); assert.equal(fixture.editor.value, 'before ' + text + 'after'); assert.equal(fixture.editor.selectionStart, 7 + offset); assert.equal(fixture.editor.selectionEnd, 7 + offset); } finally { fixture.dom.window.close(); }
+ }
+});

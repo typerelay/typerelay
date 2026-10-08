@@ -94,8 +94,9 @@ impl PanelIpc {
         for (index, step) in steps.into_iter().enumerate() {
             Panel::content(&Paths::config_dir()?.join("snippets"),hit)?;
             let (reply, wait)=mpsc::channel();
+            let marked=matches!(&step,ClipboardStep::Payload(payload) if payload.cursor.is_some());
             tx.try_send(Insertion { deadline: std::time::Instant::now()+Duration::from_secs(2), step, erase: if index == 0 {erase} else {0}, generation:expected_generation, target:target.into(), reply }).context("Expansion service is busy")?;
-            expected_generation=Some(wait.recv_timeout(Duration::from_secs(5)).context("Insertion timed out; no automatic retry")?.map_err(anyhow::Error::msg)?);
+            expected_generation=Some((if marked{wait.recv().context("Insertion service stopped; no automatic retry")}else{wait.recv_timeout(Duration::from_secs(5)).context("Insertion timed out; no automatic retry")})?.map_err(anyhow::Error::msg)?);
         }
         if record_usage { Panel::record_usage(&Paths::config_dir()?.join("snippets"),hit,"insert","desktop",characters); }
         Ok(())
@@ -128,7 +129,7 @@ impl PanelIpc {
     pub fn insert(request:Request)->Result<()> {
         let bytes=serde_json::to_vec(&request)?; anyhow::ensure!(bytes.len()<=1048576,"Template input exceeds IPC limit");
         let mut stream=UnixStream::connect(Self::directory()?.join("engine.sock")).context("Start the TypeRelay expansion service to insert")?;
-        stream.set_read_timeout(Some(Duration::from_secs(360)))?; stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+        stream.set_read_timeout(None)?; stream.set_write_timeout(Some(Duration::from_secs(2)))?;
         stream.write_all(&(bytes.len() as u32).to_le_bytes())?; stream.write_all(&bytes)?;
         let mut bytes=Vec::new(); stream.take(4096).read_to_end(&mut bytes)?;
         serde_json::from_slice::<std::result::Result<(),String>>(&bytes)?.map_err(anyhow::Error::msg)
