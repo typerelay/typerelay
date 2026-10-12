@@ -21,7 +21,7 @@ test('portable submission package has bounded listing text, real assets and comp
 	for (const testcase of openai.review.test_cases.positive) for (const field of ['description', 'prompt', 'tools_triggered', 'expected_behavior']) assert.ok(testcase[field]?.trim());
 	for (const testcase of openai.review.test_cases.negative) assert.ok(testcase.description.includes(': '));
 	assert.ok(openai.publication.release_notes.trim());
-	assert.equal(openai.review.demo_recording_url, undefined);
+	assert.equal(new URL(openai.review.demo_recording_url).protocol, 'https:');
 	assert.equal(openai.review.test_credentials, undefined);
 	assert.equal(openai.review.reviewer_instructions, undefined);
 	assert.equal(openai.apps, undefined);
