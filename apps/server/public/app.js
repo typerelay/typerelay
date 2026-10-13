@@ -436,6 +436,9 @@ class TypeRelay {
 		if (form.id === 'profile-form') this.profileSaving = true;
 		const data = new FormData(form);
 		const button = event.submitter;
+		let restoreProfileFocus = form.id === 'profile-form' && button === document.activeElement;
+		const trackProfileFocus = event => { if (event.target !== button && event.target !== document.body) restoreProfileFocus = false; };
+		if (restoreProfileFocus) document.addEventListener('focusin', trackProfileFocus);
 		if (button) button.disabled = true;
 		try {
 			if (form.id === 'team-seats-form' || form.id === 'change-to-team-form') { const result = await this.request('billing/change', 'POST', { plan: 'team', seats: Number(data.get('seats')) }); if (result.url) location.assign(result.url); else { this.applyBilling(result); this.toast('Change scheduled'); } return; }
@@ -477,7 +480,7 @@ class TypeRelay {
 			}
 			if (form.id === 'record-form') { this.submitting = true; if (await this.submit(data) !== false) { bootstrap.Modal.getInstance(document.querySelector('#form-modal')).hide(); this.toast('Saved'); } }
 		} catch (error) { const warning = form.querySelector('#import-error'); if (warning) { warning.textContent = error.message; warning.hidden = false; warning.scrollIntoView?.({ block: 'nearest' }); } this.toast(error.message, 'error'); }
-		finally { this.submitting = false; if (form.id === 'profile-form') this.profileSaving = false; if (button) button.disabled = false; }
+		finally { this.submitting = false; if (form.id === 'profile-form') this.profileSaving = false; if (button) button.disabled = false; document.removeEventListener('focusin', trackProfileFocus); if (restoreProfileFocus && button.isConnected && document.activeElement === document.body && !form.closest('[hidden], [aria-hidden="true"], .modal:not(.show)')) button.focus({ preventScroll: true }); }
 	}
 	async confirm(title) { return (await Swal.fire({ title, icon: 'warning', showCancelButton: true, allowOutsideClick: false, allowEscapeKey: false, confirmButtonText: 'Confirm' })).isConfirmed; }
 	async snippet(id, value, snapshot = null) {

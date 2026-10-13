@@ -111,7 +111,8 @@ test('profile saves update only visible avatars and own member, preserve form/fo
 	const saving = client.onSubmit(event);
 	await client.onSubmit(event);
 	assert.equal(requests, 1);
-	resolveSave({ ...updated, avatar: pug.renderFile('views/ajax/avatar.pug', { profile: updated }), member: { id: 'member', html: pug.renderFile('views/ajax/member.pug', { member: { ...member, profile: updated }, ctx, viewerAvatarStyle: 'bottts' }) }, avatars: [{ id: 'member', html: pug.renderFile('views/ajax/avatar-image.pug', { person: updated, avatarStyle: 'bottts', avatarKey: 'member' }) }], preview: pug.renderFile('views/ajax/avatar-image.pug', { person: updated, avatarStyle: 'bottts', avatarKey: 'preview' }) });
+	const savedResult = { ...updated, avatar: pug.renderFile('views/ajax/avatar.pug', { profile: updated }), member: { id: 'member', html: pug.renderFile('views/ajax/member.pug', { member: { ...member, profile: updated }, ctx, viewerAvatarStyle: 'bottts' }) }, avatars: [{ id: 'member', html: pug.renderFile('views/ajax/avatar-image.pug', { person: updated, avatarStyle: 'bottts', avatarKey: 'member' }) }], preview: pug.renderFile('views/ajax/avatar-image.pug', { person: updated, avatarStyle: 'bottts', avatarKey: 'preview' }) };
+	resolveSave(savedResult);
 	await saving;
 	assert.equal(document.querySelector('#settings'), settings);
 	assert.equal(document.querySelector('form'), form);
@@ -127,5 +128,23 @@ test('profile saves update only visible avatars and own member, preserve form/fo
 	assert.equal(select.value, 'glass');
 	assert.equal(client.avatarStyle, 'bottts');
 	assert.equal(event.submitter.disabled, false);
+	// JSDOM doesn't blur disabled buttons, so simulate Chrome's observed focus loss during the request.
+	document.body.tabIndex = -1;
+	event.submitter.focus();
+	client.request = async () => { document.body.focus(); return savedResult; };
+	await client.onSubmit(event);
+	assert.equal(document.activeElement, event.submitter);
+	event.submitter.focus();
+	client.request = async () => { document.body.focus(); throw Error('Failed save'); };
+	await client.onSubmit(event);
+	assert.equal(document.activeElement, event.submitter);
+	event.submitter.focus();
+	client.request = async () => { document.body.focus(); name.focus(); name.blur(); throw Error('Failed save'); };
+	await client.onSubmit(event);
+	assert.equal(document.activeElement, document.body);
+	event.submitter.focus();
+	client.request = async () => { document.body.focus(); settings.setAttribute('aria-hidden', 'true'); throw Error('Failed save'); };
+	await client.onSubmit(event);
+	assert.equal(document.activeElement, document.body);
 	dom.window.close();
 });
