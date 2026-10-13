@@ -1,6 +1,8 @@
+include avatar-image
 .team-member.d-flex.justify-content-between.align-items-start.gap-3(data-member=member._id)
 	.flex-grow-1
 		.d-flex.align-items-center.gap-2
+			+avatarImage(member.profile, typeof viewerAvatarStyle !== 'undefined' ? viewerAvatarStyle : (typeof profile !== 'undefined' ? profile.avatar_style : 'initials'), String(member._id))
 			strong= member.profile.name
 			if String(member.user) === String(ctx.user)
 				span.badge.text-bg-light You

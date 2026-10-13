@@ -289,3 +289,21 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 	#settings .settings-nav { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); flex: 0 0 auto; border-right: 0; border-bottom: .0625rem solid #e7dfd2; padding: 0; }
 	#settings .settings-content { min-height: 0; }
 }
+
+/* The avatar style is a preference of the viewer, including team thumbnails. */
+.avatar-picture { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 2.5rem; height: 2.5rem; flex-shrink: 0; overflow: hidden; background: #eadbcb; color: #633b29; }
+.avatar-image { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.avatar-image[hidden] { display: none; }
+.avatar-initials { font-weight: 600; }
+.avatar-preview .avatar-picture { width: 6.25rem; height: 6.25rem; font-size: 1.75rem; }
+.avatar-option { display: flex; align-items: center; gap: .75rem; width: 100%; }
+.avatar-option .avatar-picture { width: 1.875rem; height: 1.875rem; font-size: .75rem; }
+.avatar-check { margin-left: auto; visibility: hidden; }
+.avatar-picker .ts-dropdown .selected .avatar-check { visibility: visible; }
+.avatar-picker .ts-control .avatar-check { display: none; }
+.avatar-picker .ts-control { min-height: 2.625rem; padding: .375rem .75rem; cursor: pointer; }
+.avatar-picker .ts-control > .item { width: 100%; }
+.avatar-picker .ts-dropdown .option { padding: .5rem .75rem; cursor: pointer; }
+.avatar-picker .ts-dropdown .dropdown-input { margin: .5rem; width: calc(100% - 1rem); padding: .375rem .5rem; font-size: .875rem; }
+.avatar-picker .ts-dropdown { font-size: .875rem; }
+.avatar-picker .ts-dropdown-content { max-height: 15rem; }

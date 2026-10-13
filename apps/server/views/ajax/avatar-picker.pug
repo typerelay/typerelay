@@ -1,0 +1,20 @@
+include avatar-image
+.row.align-items-center.mb-5.avatar-picker
+	.col-lg-3.mb-3.mb-lg-0
+		label.form-label.mb-0(for="profile-avatar-style") Avatar
+	.col-lg-3.mb-3.mb-lg-0
+		#profile-avatar-preview.avatar-preview
+			+avatarImage(profile, profile.avatar_style, 'preview')
+	.col-lg-6
+		h6.mb-1 No boring avatars
+		.text-muted.small.mb-3 Choose how you see yourself and your teammates. This only changes your view.
+		select#profile-avatar-style.form-select.form-select-sm(name="avatar_style" aria-label="Avatar style")
+			each label, style in avatarStyles
+				option(value=style selected=style === (profile.avatar_style || 'initials'))= label
+		.avatar-templates(hidden)
+			each label, style in avatarStyles
+				template(data-avatar-option=style)
+					.avatar-option
+						+avatarImage(profile, style)
+						span= label
+						span.avatar-check(aria-hidden="true") ✓
