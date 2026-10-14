@@ -446,3 +446,58 @@ test('legacy Typerelay price metadata is recognized without accepting other prod
 	price.unit_amount = 1;
 	assert.throws(() => Billing.planFromSubscription(subscription), error => error.code === 'billing_mismatch');
 });
+
+test('legacy Team keeps five included seats until explicitly moved to per-user pricing', async () => {
+	const account = await Account.create({ name: 'Legacy Team', plan: 'team', billing: { stripe_customer_id: 'cus_legacy', stripe_subscription_id: 'sub_legacy', price_id: 'price_legacy_team', status: 'active', seat_quantity: 1 } });
+	const members = [];
+	for (let index = 0; index < 5; index++) { const user = await User.create({ email: `${randomUUID()}@example.test`, name: `Legacy member ${index}` }); members.push(await Member.create({ account: account._id, user: user._id, role: index === 0 ? 'owner' : 'member' })); }
+	assert.equal(Billing.seatCapacity(await Billing.account(account._id)), 5);
+	const price = { id: 'price_legacy_team', currency: 'usd', billing_scheme: 'tiered', tiers_mode: 'graduated', recurring: { interval: 'month', interval_count: 1, usage_type: 'licensed' }, metadata: { catalog: Billing.catalogName, catalog_version: '2026-09', plan_key: 'team' } };
+	const subscription = { id: 'sub_legacy', customer: 'cus_legacy', status: 'active', metadata: Billing.metadata(account, 'team'), items: { data: [{ id: 'si_legacy', price, quantity: 1 }] } };
+	await Billing.applySubscription(await Billing.account(account._id, null, true), subscription);
+	assert.equal(Billing.seatCapacity(await Billing.account(account._id)), 5);
+	await Support.context(String(members[4].user), String(account._id));
+	const fragments = await Billing.fragments(account._id, await Support.context(String(members[0].user), String(account._id)));
+	assert.equal(fragments.member_actions.length, 5);
+	assert.match(fragments.member_actions.find(item => item.id === String(members[4]._id)).html, /Make admin/);
+	subscription.items.data[0].price = { id: 'price_team' };
+	await Billing.applySubscription(await Billing.account(account._id, null, true), subscription);
+	assert.equal(Billing.seatCapacity(await Billing.account(account._id)), 1);
+	await assert.rejects(Support.context(String(members[4].user), String(account._id)), error => error.code === 'plan_limit');
+});
+
+test('already-applied legacy schedules are released while future changes remain protected', async () => {
+	const account = await Account.create({ name: 'Orphaned schedule', plan: 'pro', billing: { stripe_customer_id: 'cus_orphan', stripe_subscription_id: 'sub_orphan', status: 'active', seat_quantity: 3 } });
+	const subscription = { id: 'sub_orphan', customer: 'cus_orphan', status: 'active', schedule: 'sched_orphan', metadata: Billing.metadata(account, 'pro'), items: { data: [{ id: 'si_orphan', price: { id: 'price_pro' }, quantity: 3, current_period_start: 200, current_period_end: 300 }] } };
+	const schedule = { id: 'sched_orphan', customer: 'cus_orphan', status: 'active', end_behavior: 'release', current_phase: { start_date: 100 }, phases: [{ start_date: 100 }, { start_date: 200, metadata: Billing.metadata(account, 'pro'), items: [{ price: 'price_pro', quantity: 3 }] }] };
+	const released = [];
+	const stripe = { subscriptions: { retrieve: async () => structuredClone(subscription) }, subscriptionSchedules: { retrieve: async () => schedule, release: async id => { released.push(id); subscription.schedule = null; }, create: async () => ({ id: 'sched_next', current_phase: { start_date: 200 } }), update: async () => ({ id: 'sched_next' }) } };
+	await assert.rejects(Billing.change(account._id, { plan: 'pro', seats: 2 }, { stripe }), error => error.code === 'billing_change_scheduled');
+	assert.deepEqual(released, []);
+	schedule.current_phase.start_date = 200;
+	const result = await Billing.change(account._id, { plan: 'pro', seats: 2 }, { stripe });
+	assert.deepEqual(released, ['sched_orphan']);
+	assert.equal(result.scheduled_change.schedule_id, 'sched_next');
+});
+
+test('moving legacy included seats to fewer per-user seats waits for renewal and preserves the current quantity', async () => {
+	const account = await Account.create({ name: 'Legacy seat migration', plan: 'team', billing: { stripe_customer_id: 'cus_migrate', stripe_subscription_id: 'sub_migrate', status: 'active', seat_quantity: 1, price_id: 'price_old_team' } });
+	const price = { id: 'price_old_team', currency: 'usd', billing_scheme: 'tiered', tiers_mode: 'graduated', recurring: { interval: 'month', interval_count: 1, usage_type: 'licensed' }, metadata: { catalog: Billing.catalogName, catalog_version: '2026-09', plan_key: 'team' } };
+	const subscription = { id: 'sub_migrate', customer: 'cus_migrate', status: 'active', metadata: Billing.metadata(account, 'team'), items: { data: [{ id: 'si_migrate', price, quantity: 1, current_period_start: 100, current_period_end: 200 }] } };
+	let phases;
+	const released = [];
+	const stripe = { subscriptions: { retrieve: async () => subscription }, subscriptionSchedules: { create: async () => { subscription.schedule = 'sched_migrate'; return { id: 'sched_migrate', current_phase: { start_date: 100 } }; }, update: async (id, input) => { phases = input.phases; }, release: async id => { released.push(id); } } };
+	const result = await Billing.change(account._id, { plan: 'team', seats: 1 }, { stripe });
+	assert.equal(result.scheduled_change.seat_quantity, 1);
+	assert.equal(result.scheduled_change.price_id, 'price_team');
+	assert.equal(phases[0].items[0].quantity, 1);
+	assert.equal(phases[1].items[0].price, 'price_team');
+	assert.equal(phases[1].start_date, 200);
+	await Billing.applySubscription(await Billing.account(account._id, null, true), subscription, { stripe });
+	assert.deepEqual(released, []);
+	assert.equal((await Billing.account(account._id, null, true)).billing.scheduled_change.schedule_id, 'sched_migrate');
+	subscription.items.data[0].price = { id: 'price_team' };
+	await Billing.applySubscription(await Billing.account(account._id, null, true), subscription, { stripe });
+	assert.deepEqual(released, ['sched_migrate']);
+	assert.equal((await Billing.account(account._id)).billing.scheduled_change, null);
+});

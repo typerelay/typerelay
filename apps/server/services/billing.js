@@ -93,6 +93,8 @@ export class Billing {
 		if (entitlements.plan === 'free') return 1;
 		const purchased = Number(account?.billing?.seat_quantity);
 		let capacity = entitlements.trial ? Billing.plans.pro.limits.people : Number.isSafeInteger(purchased) && purchased > 0 ? purchased : 1;
+		// Existing Team records predate included_seats; their non-current price retained the five-seat base tier.
+		if (entitlements.plan === 'team') capacity = Math.max(capacity, account.billing?.included_seats ?? (account.billing?.price_id && account.billing.price_id !== Billing.priceId('team') ? 5 : 1));
 		if (entitlements.limits.people) capacity = Math.min(capacity, entitlements.limits.people);
 		if (account?.billing?.checkout?.seat_quantity) capacity = Math.min(capacity, account.billing.checkout.seat_quantity);
 		const scheduled = account?.billing?.scheduled_change;
@@ -359,11 +361,24 @@ export class Billing {
 		await Billing.validateChangeUsage(account, target, seats);
 		if (!account.billing?.stripe_subscription_id || !['active', 'past_due', 'trialing'].includes(account.billing.status)) throw Billing.error(409, 'No paid subscription to change', 'subscription_missing');
 		const stripe = options.stripe || Billing.stripe();
-		const subscription = await stripe.subscriptions.retrieve(account.billing.stripe_subscription_id);
-		const item = Billing.validateSubscription(account, subscription);
+		let subscription = await stripe.subscriptions.retrieve(account.billing.stripe_subscription_id);
+		let item = Billing.validateSubscription(account, subscription);
+		if (subscription.schedule && !account.billing?.scheduled_change?.plan) {
+			const schedule = await stripe.subscriptionSchedules.retrieve(subscription.schedule.id || subscription.schedule);
+			const phase = schedule.phases?.at(-1);
+			const phaseItem = phase?.items?.[0];
+			if (String(schedule.customer?.id || schedule.customer) !== String(account.billing.stripe_customer_id)) throw Billing.error(409, 'Schedule ownership mismatch', 'billing_mismatch');
+			// The previous implementation cleared local state at renewal, leaving the final Stripe phase attached for a month.
+			if (schedule.status === 'active' && schedule.end_behavior === 'release' && schedule.phases?.length > 1 && schedule.current_phase?.start_date === phase.start_date && phase.metadata?.catalog === Billing.catalogName && phase.metadata?.account_id === String(account._id) && phase.items?.length === 1 && (phaseItem.price?.id || phaseItem.price) === item.price.id && Number(phaseItem.quantity ?? 1) === Number(item.quantity ?? 1)) {
+				await stripe.subscriptionSchedules.release(schedule.id);
+				subscription = await stripe.subscriptions.retrieve(account.billing.stripe_subscription_id);
+				item = Billing.validateSubscription(account, subscription);
+			}
+		}
 		if (subscription.schedule || account.billing?.scheduled_change?.plan) throw Billing.error(409, 'Cancel the scheduled change before making another change', 'billing_change_scheduled');
 		const currentPlan = Billing.planFromSubscription(subscription);
-		const currentSeats = Number(item.quantity || account.billing.seat_quantity || 1);
+		const currentQuantity = Number(item.quantity || account.billing.seat_quantity || 1);
+		const currentSeats = currentPlan === 'team' && item.price.billing_scheme === 'tiered' && item.price.metadata?.catalog_version === '2026-09' ? Math.max(5, currentQuantity) : currentQuantity;
 		const downgrade = Billing.plans[target].rank < Billing.plans[currentPlan].rank || seats < currentSeats;
 		if (!downgrade) {
 			const configuration = await Billing.changePortalConfiguration(stripe, target, seats);
@@ -374,7 +389,7 @@ export class Billing {
 		if (!periodEnd) throw Billing.error(409, 'Stripe subscription period is unavailable', 'billing_mismatch');
 		const schedule = await stripe.subscriptionSchedules.create({ from_subscription: subscription.id });
 		const currentStart = Number(schedule.current_phase?.start_date || item.current_period_start || subscription.current_period_start);
-		const scheduled = { plan: target, seat_quantity: seats, effective_at: new Date(periodEnd * 1000), schedule_id: schedule.id, pending: true };
+		const scheduled = { plan: target, price_id: Billing.priceId(target), seat_quantity: seats, effective_at: new Date(periodEnd * 1000), schedule_id: schedule.id, pending: true };
 		try {
 			await AccountAccess.write(account._id, async session => {
 				const current = await Billing.account(account._id, session, true);
@@ -387,7 +402,7 @@ export class Billing {
 			throw error;
 		}
 		// Reserve capacity before Stripe changes. On uncertain failure retain it until cancellation, so invitations cannot exceed the future seat count.
-		await stripe.subscriptionSchedules.update(schedule.id, { end_behavior: 'release', phases: [{ items: [{ price: item.price.id, quantity: currentSeats }], start_date: currentStart, end_date: periodEnd, ...(subscription.trial_end && subscription.trial_end > Date.now() / 1000 ? { trial_end: subscription.trial_end } : {}), proration_behavior: 'none', metadata: subscription.metadata }, { items: [{ price: Billing.priceId(target), quantity: seats }], start_date: periodEnd, duration: { interval: 'month', interval_count: 1 }, proration_behavior: 'none', metadata: Billing.metadata(account, target) }] });
+		await stripe.subscriptionSchedules.update(schedule.id, { end_behavior: 'release', phases: [{ items: [{ price: item.price.id, quantity: currentQuantity }], start_date: currentStart, end_date: periodEnd, ...(subscription.trial_end && subscription.trial_end > Date.now() / 1000 ? { trial_end: subscription.trial_end } : {}), proration_behavior: 'none', metadata: subscription.metadata }, { items: [{ price: Billing.priceId(target), quantity: seats }], start_date: periodEnd, duration: { interval: 'month', interval_count: 1 }, proration_behavior: 'none', metadata: Billing.metadata(account, target) }] });
 		scheduled.pending = false;
 		await Account.updateOne({ _id: account._id, 'billing.scheduled_change.schedule_id': schedule.id }, { $set: { 'billing.scheduled_change.pending': false } });
 		return { scheduled_change: scheduled };
@@ -447,8 +462,9 @@ export class Billing {
 		const now = new Date();
 		const status = subscription.status;
 		const active = ['active', 'trialing', 'past_due'].includes(status);
-		const update = { plan: active ? plan : 'free', 'billing.stripe_subscription_id': subscription.id, 'billing.price_id': item.price.id, 'billing.seat_quantity': Number(item.quantity || 1), 'billing.status': status, 'billing.trial_source': subscription.trial_end ? 'stripe' : null, 'billing.trial_ends_at': subscription.trial_end ? new Date(subscription.trial_end * 1000) : null, 'billing.status_changed_at': now };
-		const appliedSchedule = account.billing?.scheduled_change?.plan === plan && Number(account.billing.scheduled_change.seat_quantity) === Number(item.quantity || 1);
+		const includedSeats = plan === 'team' && item.price.billing_scheme === 'tiered' && item.price.metadata?.catalog_version === '2026-09' ? 5 : 1;
+		const update = { plan: active ? plan : 'free', 'billing.stripe_subscription_id': subscription.id, 'billing.price_id': item.price.id, 'billing.seat_quantity': Number(item.quantity || 1), 'billing.included_seats': includedSeats, 'billing.status': status, 'billing.trial_source': subscription.trial_end ? 'stripe' : null, 'billing.trial_ends_at': subscription.trial_end ? new Date(subscription.trial_end * 1000) : null, 'billing.status_changed_at': now };
+		const appliedSchedule = account.billing?.scheduled_change?.plan === plan && Number(account.billing.scheduled_change.seat_quantity) === Number(item.quantity || 1) && (!account.billing.scheduled_change.price_id || account.billing.scheduled_change.price_id === item.price.id) && (!account.billing.scheduled_change.effective_at || new Date(account.billing.scheduled_change.effective_at) <= now);
 		if (active) update['billing.checkout'] = null;
 		await Account.updateOne({ _id: account._id }, { $set: update });
 		if (appliedSchedule) {
@@ -456,7 +472,7 @@ export class Billing {
 			if (schedule && schedule === account.billing.scheduled_change.schedule_id) await (options.stripe || Billing.stripe()).subscriptionSchedules.release(schedule);
 			await Account.updateOne({ _id: account._id, 'billing.scheduled_change.schedule_id': account.billing.scheduled_change.schedule_id }, { $set: { 'billing.scheduled_change': null } });
 		}
-		Object.assign(account, { plan: update.plan, billing: { ...account.billing, status, price_id: item.price.id, seat_quantity: Number(item.quantity || 1), stripe_subscription_id: subscription.id } });
+		Object.assign(account, { plan: update.plan, billing: { ...account.billing, status, price_id: item.price.id, seat_quantity: Number(item.quantity || 1), included_seats: includedSeats, stripe_subscription_id: subscription.id } });
 		if (Billing.entitlements(account).plan !== 'team') {
 			const { WhiteLabel } = await import('./white_label.js');
 			await WhiteLabel.disable(account, options).catch(error => console.error(`White-label disable after downgrade failed: ${error.message}`));
@@ -532,6 +548,7 @@ export class Billing {
 		const { Team } = await import('./team.js');
 		locals.ctx = { ...ctx, entitlements: locals.entitlements };
 		locals.team = await Team.list(locals.ctx);
-		return { account, entitlements: locals.entitlements, subscription_html: pug.renderFile('./views/ajax/subscription.pug', locals), trial_html: pug.renderFile('./views/ajax/trial-button.pug', locals), team_notice_html: pug.renderFile('./views/ajax/team-plan-notice.pug', locals), team_add_html: pug.renderFile('./views/ajax/team-add.pug', locals), team_groups_html: pug.renderFile('./views/ajax/team-groups.pug', locals), statistics_scope_html: pug.renderFile('./views/ajax/statistics-scope.pug', locals), tokens_form_html: locals.entitlements.capabilities.api ? pug.renderFile('./views/ajax/access-token-form.pug') : '', oauth_client_form_html: locals.entitlements.capabilities.api && ['owner', 'admin'].includes(ctx.role) ? pug.renderFile('./views/ajax/oauth-client-form.pug') : '' };
+		const member_actions = locals.team.members.map(member => ({ id: String(member._id), html: pug.renderFile('./views/ajax/member-actions.pug', { ...locals, member }) }));
+		return { account, member_actions, entitlements: locals.entitlements, subscription_html: pug.renderFile('./views/ajax/subscription.pug', locals), trial_html: pug.renderFile('./views/ajax/trial-button.pug', locals), team_notice_html: pug.renderFile('./views/ajax/team-plan-notice.pug', locals), team_add_html: pug.renderFile('./views/ajax/team-add.pug', locals), team_groups_html: pug.renderFile('./views/ajax/team-groups.pug', locals), statistics_scope_html: pug.renderFile('./views/ajax/statistics-scope.pug', locals), tokens_form_html: locals.entitlements.capabilities.api ? pug.renderFile('./views/ajax/access-token-form.pug') : '', oauth_client_form_html: locals.entitlements.capabilities.api && ['owner', 'admin'].includes(ctx.role) ? pug.renderFile('./views/ajax/oauth-client-form.pug') : '' };
 	}
 }

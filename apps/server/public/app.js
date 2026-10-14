@@ -252,6 +252,7 @@ class TypeRelay {
 			this.update('#team-plan-notice', '#settings-pane-team', result.team_notice_html);
 			this.update('#team-add-container', '#team-controls', result.team_add_html);
 			this.update('#team-groups-container', '#team-groups-row', result.team_groups_html);
+			for (const member of result.member_actions || []) { const actions = document.getElementById('member-actions-' + member.id); if (actions) actions.replaceWith(this.fragment(member.html)); }
 			document.querySelector('#team-members-column')?.classList.toggle('col-lg-7', !document.querySelector('#team-add-container').hidden);
 			if (document.querySelector('#team-member-form')) this.rotateTeamPassword(false);
 			const scope = document.querySelector('#statistics-scope');

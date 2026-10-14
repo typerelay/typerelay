@@ -27,6 +27,7 @@ const accountSchema = new mongoose.Schema({
 		stripe_free_subscription_id: { type: String, select: false },
 		price_id: { type: String, default: '' },
 		seat_quantity: { type: Number, default: 1 },
+		included_seats: Number,
 		status: { type: String, enum: ['incomplete', 'checkout_pending', 'trialing', 'trial_expired', 'active', 'past_due', 'canceled', 'unpaid', 'incomplete_expired'], default: 'incomplete' },
 		trial_source: { type: String, enum: ['no_card', 'stripe', null], default: null },
 		trial_started_at: { type: Date, default: null },
@@ -42,6 +43,7 @@ const accountSchema = new mongoose.Schema({
 		},
 		scheduled_change: {
 			plan: { type: String, enum: ['free', 'pro', 'team'] },
+			price_id: String,
 			seat_quantity: Number,
 			effective_at: Date,
 			schedule_id: { type: String, select: false },

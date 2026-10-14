@@ -56,21 +56,34 @@ test('starting Pro access updates collaboration controls without replacing membe
 	const { dom, client, document } = await Fixture.open();
 	try {
 		const locals = { ctx: { role: 'owner', entitlements: { capabilities: { team: false } } }, team: { groups: [], members: [] } };
+		locals.member = { _id: 'retained-member', user: 'another-user', role: 'member', profile: { name: 'Retained member', email: 'retained@example.test' } };
 		const render = name => pug.renderFile(`./views/ajax/${name}.pug`, locals);
 		document.body.insertAdjacentHTML('beforeend', `<section id="settings-pane-team">${render('team-plan-notice')}<div id="team-controls">${render('team-add')}<div id="team-members-column"><input id="member-filter" value="kept"></div></div><div id="team-groups-row">${render('team-groups')}</div></section><div>${render('statistics-scope')}<input id="report-filter" value="30"></div>`);
 		const memberFilter = document.querySelector('#member-filter');
 		const reportFilter = document.querySelector('#report-filter');
+		document.querySelector('#team-members-column').insertAdjacentHTML('beforeend', render('member'));
+		const memberRow = document.querySelector('[data-member="retained-member"]');
+		const memberName = memberRow.querySelector('strong');
+		assert.equal(memberRow.querySelector('[data-role]'), null);
 		locals.ctx.entitlements.capabilities.team = true;
 		delete client.applyBilling;
 		client.trialCountdown = { refresh() {} };
 		let initialized = false;
 		client.rotateTeamPassword = () => { initialized = true; };
-		client.applyBilling({ entitlements: locals.ctx.entitlements, team_notice_html: render('team-plan-notice'), team_add_html: render('team-add'), team_groups_html: render('team-groups'), statistics_scope_html: render('statistics-scope') });
+		const result = () => ({ entitlements: locals.ctx.entitlements, team_notice_html: render('team-plan-notice'), team_add_html: render('team-add'), team_groups_html: render('team-groups'), statistics_scope_html: render('statistics-scope'), member_actions: [{ id: locals.member._id, html: render('member-actions') }] });
+		client.applyBilling(result());
 		assert.ok(document.querySelector('#team-member-form'));
 		assert.ok(document.querySelector('#new-group'));
 		assert.ok(document.querySelector('#statistics-scope option[value="team"]'));
 		assert.equal(initialized, true);
 		assert.equal(document.querySelector('#member-filter'), memberFilter);
 		assert.equal(document.querySelector('#report-filter'), reportFilter);
+		assert.equal(document.querySelector('[data-member="retained-member"]'), memberRow);
+		assert.equal(memberRow.querySelector('strong'), memberName);
+		assert.equal(memberRow.querySelector('[data-role]').textContent, 'Make admin');
+		locals.ctx.entitlements.capabilities.team = false;
+		client.applyBilling(result());
+		assert.equal(memberRow.querySelector('[data-role]'), null);
+		assert.ok(memberRow.querySelector('[data-remove-member]'));
 	} finally { dom.window.close(); }
 });
