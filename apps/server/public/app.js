@@ -245,6 +245,16 @@ class TypeRelay {
 		if (result.subscription_html && document.querySelector('#settings-pane-subscription')) this.update('#subscription-content', '#settings-pane-subscription', result.subscription_html);
 		if (result.trial_html) this.update('#billing-nav-action', 'header .d-flex', result.trial_html);
 		this.trialCountdown.refresh();
+		const teamControl = document.querySelector('#team-add-container');
+		if (teamControl && result.team_add_html && teamControl.dataset.teamCapability !== String(result.entitlements.capabilities.team)) {
+			this.update('#team-plan-notice', '#settings-pane-team', result.team_notice_html);
+			this.update('#team-add-container', '#team-controls', result.team_add_html);
+			this.update('#team-groups-container', '#team-groups-row', result.team_groups_html);
+			document.querySelector('#team-members-column')?.classList.toggle('col-lg-7', !document.querySelector('#team-add-container').hidden);
+			if (document.querySelector('#team-member-form')) this.rotateTeamPassword(false);
+			const scope = document.querySelector('#statistics-scope');
+			if (scope) { const selected = scope.value; scope.replaceWith(this.fragment(result.statistics_scope_html)); const replacement = document.querySelector('#statistics-scope'); replacement.value = [...replacement.options].some(option => option.value === selected) ? selected : 'personal'; }
+		}
 		if (Object.hasOwn(result, 'tokens_form_html')) { if (result.tokens_form_html && !document.querySelector('#access-token-form')) document.querySelector('#access-token-form-container')?.replaceChildren(this.fragment(result.tokens_form_html)); else if (!result.tokens_form_html) document.querySelector('#access-token-form')?.remove(); }
 		if (Object.hasOwn(result, 'oauth_client_form_html')) { if (result.oauth_client_form_html && !document.querySelector('#oauth-client-form')) document.querySelector('#oauth-client-form-container')?.replaceChildren(this.fragment(result.oauth_client_form_html)); else if (!result.oauth_client_form_html) document.querySelector('#oauth-client-form')?.remove(); }
 	}
@@ -428,7 +438,8 @@ class TypeRelay {
 	async onSubmit(event) {
 		const form = event.target;
 		const groupForm = form.hasAttribute('data-group-form');
-		if (!groupForm && !['login', 'access-token-form', 'oauth-client-form', 'profile-form', 'account-form', 'team-member-form', 'record-form', 'team-seats-form', 'change-to-pro-form', 'change-to-team-form', 'checkout-team-form', 'white-label-domain-form'].includes(form.id)) return;
+		const billingForm = form.hasAttribute('data-billing-change') || form.hasAttribute('data-billing-checkout');
+		if (!groupForm && !billingForm && !['login', 'access-token-form', 'oauth-client-form', 'profile-form', 'account-form', 'team-member-form', 'record-form', 'white-label-domain-form'].includes(form.id)) return;
 		event.preventDefault();
 		const abbreviation = form.querySelector('#trigger');
 		if (abbreviation) Abbreviation.field(abbreviation);
@@ -441,9 +452,13 @@ class TypeRelay {
 		if (restoreProfileFocus) document.addEventListener('focusin', trackProfileFocus);
 		if (button) button.disabled = true;
 		try {
-			if (form.id === 'team-seats-form' || form.id === 'change-to-team-form') { const result = await this.request('billing/change', 'POST', { plan: 'team', seats: Number(data.get('seats')) }); if (result.url) location.assign(result.url); else { this.applyBilling(result); this.toast('Change scheduled'); } return; }
-			if (form.id === 'change-to-pro-form') { const result = await this.request('billing/change', 'POST', { plan: 'pro', seats: 1 }); this.applyBilling(result); this.toast('Change scheduled'); return; }
-			if (form.id === 'checkout-team-form') { const result = await this.request('billing/checkout', 'POST', { plan: 'team', seats: Number(data.get('seats')) }); location.assign(result.url); return; }
+			if (billingForm) {
+				const checkout = form.hasAttribute('data-billing-checkout');
+				const result = await this.request(checkout ? 'billing/checkout' : 'billing/change', 'POST', { plan: form.dataset.plan, seats: Number(data.get('seats')) });
+				if (result.url) location.assign(result.url);
+				else { this.applyBilling(result); this.toast('Change scheduled'); }
+				return;
+			}
 			if (form.id === 'white-label-domain-form') { await this.whiteLabelRequest('white-label/domain', 'PUT', { hostname: data.get('hostname') }); this.toast('Domain saved'); return; }
 			if (form.id === 'login') { await this.request('/auth/login', 'POST', { email: data.get('email') }); document.querySelector('#magic-link-form').classList.add('d-none'); document.querySelector('#magic-link-sent').classList.remove('d-none'); }
 			if (form.id === 'access-token-form') { ++this.tokensVersion; const row = await this.request('access-tokens', 'POST', { name: form.elements.name.value }); ++this.tokensVersion; this.update('[data-access-token="' + row.id + '"]', '#access-tokens', row.html); document.querySelector('#access-token-secret').replaceChildren(this.fragment(row.secret_html)); form.reset(); return; }
@@ -563,10 +578,11 @@ class TypeRelay {
 		if (!button) return;
 		if (button.dataset.settingsOpen) { bootstrap.Modal.getOrCreateInstance(document.querySelector('#settings')).show(); this.settingsTab(button.dataset.settingsOpen); return; }
 		if (button.hasAttribute('data-start-trial')) { button.disabled = true; try { this.applyBilling(await this.request('billing/trial', 'POST', {})); this.toast('Pro trial started'); } finally { button.disabled = false; } return; }
-		if (button.dataset.checkoutPlan) { button.disabled = true; try { location.assign((await this.request('billing/checkout', 'POST', { plan: button.dataset.checkoutPlan, seats: 1 })).url); } finally { button.disabled = false; } return; }
+		if (button.dataset.checkoutPlan) { for (const form of document.querySelectorAll('[data-billing-checkout]')) form.hidden = form.dataset.plan !== button.dataset.checkoutPlan; document.querySelector(`#checkout-${button.dataset.checkoutPlan}-seats`).focus(); return; }
 		if (button.hasAttribute('data-billing-portal')) { button.disabled = true; try { location.assign((await this.request('billing/portal', 'POST', {})).url); } finally { button.disabled = false; } return; }
-		if (button.hasAttribute('data-checkout-team')) { document.querySelector('#checkout-team-form').hidden = false; document.querySelector('#checkout-team-seats').focus(); return; }
-		if (button.hasAttribute('data-cancel-team-checkout')) { document.querySelector('#checkout-team-form').hidden = true; return; }
+		if (button.hasAttribute('data-cancel-checkout')) { button.closest('[data-billing-checkout]').hidden = true; return; }
+		if (button.hasAttribute('data-cancel-pending-checkout') && await this.confirm('Cancel the open checkout?')) { button.disabled = true; try { this.applyBilling(await this.request('billing/checkout/cancel', 'POST', {})); this.toast('Checkout canceled'); } finally { button.disabled = false; } return; }
+		if (button.hasAttribute('data-cancel-billing-change') && await this.confirm('Cancel the scheduled subscription change?')) { button.disabled = true; try { this.applyBilling(await this.request('billing/change/cancel', 'POST', {})); this.toast('Scheduled change canceled'); } finally { button.disabled = false; } return; }
 		if (button.dataset.whiteLabelDelete && await this.confirm('Remove this brand asset?')) { this.applyWhiteLabel(await this.request('white-label/assets/' + button.dataset.whiteLabelDelete, 'DELETE')); return; }
 		if (button.hasAttribute('data-white-label-verify')) { button.disabled = true; try { await this.whiteLabelRequest('white-label/domain/verify', 'POST', {}); this.toast('Domain verification started'); } finally { button.disabled = false; } return; }
 		if (button.hasAttribute('data-white-label-refresh')) { button.disabled = true; try { await this.whiteLabelRequest('white-label/domain/refresh', 'POST', {}); } finally { button.disabled = false; } return; }

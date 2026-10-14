@@ -5,15 +5,21 @@ description: "Understand TypeRelay Cloud plans, trials, billing, seat limits, ca
 
 # Billing
 
-Hosted TypeRelay accounts start on Free. Account owners and admins can open **Settings → Subscription** to start the one-time seven-day Pro trial, buy Pro or Team, change Team seat capacity, update payment details, view invoices, or cancel at the end of the billing period.
+Hosted TypeRelay accounts start on Free. Account owners and admins can open **Settings → Subscription** to start the one-time seven-day Pro trial, buy Pro or Team, change purchased seat capacity, update payment details, view invoices, or cancel at the end of the billing period.
 
-Free includes one person, 250 active snippets, one active library, and one connected machine. API and MCP access require Pro or Team. Sharing, team management, brand assets, and custom domains require Team. Trashed content does not count until restored; existing data is retained after a downgrade.
+Free includes one person, 250 active snippets, one active library, and one connected machine. API and MCP access require Pro or Team. Pro costs $4 per user per month for 1–5 users, including the owner. Team costs $8 per user per month with no plan user cap. Both paid plans include sharing, team management, team statistics and private web AI; local AI is available on all plans. Brand assets and custom domains require Team. Trashed content does not count until restored; existing data is retained after a downgrade.
 
-Team includes five prepaid seats. Purchase additional seats in Subscription before inviting more people. Seat reductions and Team-to-Pro changes take effect at renewal after current members and invitations fit the target.
+Both paid plans start at one purchased seat. Pending invitations reserve seats. Purchase enough seats in Subscription before inviting or adding people. An active Pro trial allows up to five users. Seat reductions and Team-to-Pro changes take effect at renewal after current members and invitations fit the target.
+
+Scheduled reductions reserve the future capacity immediately. Cancel a scheduled change in Subscription before choosing another plan or seat count. Stripe confirms upgrades using the exact plan and seat count selected in TypeRelay. The general customer portal manages invoices, payment details, billing details, and cancellation; plan and seat selection starts in TypeRelay.
+
+Opening Checkout reserves its selected capacity during a trial. Finish the existing checkout or cancel it in Subscription before choosing another quantity. An expired checkout releases its reservation when Stripe reports its expiration.
+
+If retained memberships exceed a plan's capacity, the owner and earliest members within that capacity keep access. Other memberships remain stored and regain access when enough seats become available; a Pro trial never activates more than five people.
 
 The no-card Pro trial becomes paid immediately when Checkout completes. Without Checkout, request-time checks end Pro access at the exact expiry timestamp and a protected scheduler persists the return to Free every five minutes. Trial owners are enrolled into the configured Helpmonks sequence by a durable worker with twelve attempts at five-minute intervals. A canceled paid subscription returns to Free after Stripe confirms the subscription ended.
 
-Stripe Tax is enabled for Checkout. Keep the live account's registrations active. TypeRelay Products use the business-use hosted SaaS tax code and tax-exclusive Prices.
+Stripe Tax is enabled for Checkout. Keep the live account's registrations active. Prices exclude applicable taxes. Existing product tax categories are preserved when updating the catalog.
 
 ## White-label domains
 

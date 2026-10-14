@@ -1,0 +1,5 @@
+select#statistics-scope.form-select.form-select-sm(name="scope")
+	option(value="personal") Personal
+	if ctx.role === 'owner' || ctx.role === 'admin'
+		if ctx.entitlements && ctx.entitlements.capabilities.team
+			option(value="team") Team

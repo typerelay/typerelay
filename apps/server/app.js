@@ -138,7 +138,8 @@ export class Server {
 			if (!req.session.user) { if (req.query.invite) req.session.return_to = '/?invite=' + encodeURIComponent(req.query.invite); return res.render('login'); }
 			const memberships = await Member.find({ user: req.session.user }).lean();
 			const records = await Account.find({ _id: { $in: memberships.map(member => member.account) } }).lean();
-			const accounts = records.filter(account => account.is_active !== false && !account.deletion?.requested_at && (Billing.entitlements(account).plan === 'team' || memberships.find(member => String(member.account) === String(account._id))?.role === 'owner'));
+			const allowed = await Promise.all(records.map(account => account.is_active !== false && !account.deletion?.requested_at ? Billing.memberAllowed(account, memberships.find(member => String(member.account) === String(account._id))) : false));
+			const accounts = records.filter((account, index) => allowed[index]);
 			const account = accounts.find(account => String(account._id) === (req.boundAccount || req.query.account)) || (!req.boundAccount ? accounts[0] : null);
 			Support.assert(account, 'Account access denied', 403);
 			const ctx = await Support.context(req.session.user, String(account._id));
@@ -196,6 +197,16 @@ export class Server {
 			res.json({ ...result, ...(!result.url ? await Billing.fragments(req.ctx.account, req.ctx) : {}) });
 		});
 		app.get('/api/v2/billing/fragments', async (req, res) => res.json(await Billing.fragments(req.ctx.account, req.ctx)));
+		app.post('/api/v2/billing/change/cancel', async (req, res) => {
+			Support.assert(Support.admin(req.ctx), 'Admin required', 403);
+			await Billing.cancelChange(req.ctx.account);
+			res.json(await Billing.fragments(req.ctx.account, req.ctx));
+		});
+		app.post('/api/v2/billing/checkout/cancel', async (req, res) => {
+			Support.assert(Support.admin(req.ctx), 'Admin required', 403);
+			await Billing.cancelCheckout(req.ctx.account);
+			res.json(await Billing.fragments(req.ctx.account, req.ctx));
+		});
 		app.get('/billing/success', async (req, res) => {
 			Support.assert(req.session.user, 'Sign in required', 401);
 			const account = await Billing.reconcileCheckout(Support.text(req.query.session_id, 256), req.session.user);

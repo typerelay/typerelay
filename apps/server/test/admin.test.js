@@ -118,11 +118,11 @@ test('overrides survive webhook updates and never change billing fields', async 
 	try {
 		const account = await M.Account.create({ name: 'Override', plan: 'free', billing: { stripe_customer_id: 'cus_admin_test' }, admin_override: { plan: 'team', limits: { people: 10, snippets: 12 } } });
 		const subscription = { id: 'sub_admin_test', object: 'subscription', customer: 'cus_admin_test', status: 'active', metadata: Billing.metadata(account, 'pro'), items: { data: [{ id: 'si_test', price: { id: 'price_pro' }, quantity: 1 }] } };
-		await Billing.handleWebhook(null, null, { stripe: {}, event: { type: 'customer.subscription.updated', data: { object: subscription } } });
+		await Billing.handleWebhook(null, null, { stripe: { subscriptions: { retrieve: async () => subscription } }, event: { type: 'customer.subscription.updated', data: { object: subscription } } });
 		const updated = await M.Account.findById(account._id).lean(); assert.equal(updated.plan, 'pro'); assert.equal(Billing.entitlements(updated).plan, 'team'); assert.equal(Billing.entitlements(updated).limits.snippets, 12);
 		assert.throws(() => Billing.assertLimit({ entitlements: Billing.entitlements(updated) }, 'snippets', 12, 1), /allows 12/);
 		await M.Account.updateOne({ _id: account._id }, { $set: { is_active: false } });
-		await Billing.handleWebhook(null, null, { stripe: {}, event: { type: 'customer.subscription.updated', data: { object: { ...subscription, status: 'past_due' } } } });
+		await Billing.handleWebhook(null, null, { stripe: { subscriptions: { retrieve: async () => ({ ...subscription, status: 'past_due' }) } }, event: { type: 'customer.subscription.updated', data: { object: { ...subscription, status: 'past_due' } } } });
 		assert.equal((await M.Account.findById(account._id).lean()).billing.status, 'past_due', 'Suspension must not lose billing updates');
 		await AdminAccounts.requestDeletion(String(account._id), String(account._id));
 		assert.deepEqual(await Billing.handleWebhook(null, null, { stripe: {}, event: { type: 'customer.subscription.deleted', data: { object: subscription } } }), { handled: false });

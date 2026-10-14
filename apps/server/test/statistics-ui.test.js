@@ -11,7 +11,7 @@ class Fixture {
 		report.rows = Object.fromEntries(['days', 'snippets', 'libraries', 'members'].map(kind => [kind, report[kind].map(row => ({ id: row.id, html: pug.renderFile('./views/ajax/statistics-row.pug', { row, kind, settings: report.settings }) }))])); return report;
 	}
 	static async open() {
-		const dom = new JSDOM(pug.renderFile('./views/ajax/statistics.pug', { ctx: { role: 'owner', entitlements: { plan: 'team' } } }), { runScripts: 'outside-only', pretendToBeVisual: true });
+		const dom = new JSDOM(pug.renderFile('./views/ajax/statistics.pug', { ctx: { role: 'owner', entitlements: { plan: 'pro', capabilities: { team: true } } } }), { runScripts: 'outside-only', pretendToBeVisual: true });
 		dom.window.eval((await readFile('./public/statistics.js', 'utf8')).replace('export class Statistics', 'window.Statistics = class Statistics'));
 		const document = dom.window.document; const modal = document.querySelector('#statistics-modal'); const trend = document.querySelector('#statistics-trend'); const size = { width: 688 };
 		Object.defineProperties(trend, { clientWidth: { get: () => size.width }, clientHeight: { value: 224 } });

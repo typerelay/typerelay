@@ -13,7 +13,7 @@ A private library is visible only to its creator. Account owners and admins cann
 
 ## Share a library
 
-Sharing requires the Team plan. Open the library and choose **Sharing and settings**, then:
+Sharing is included in Pro and Team. Open the library and choose **Sharing and settings**, then:
 
 1. Enable **Shared with team**.
 2. Select individual members, groups, or both.

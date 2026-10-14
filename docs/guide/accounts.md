@@ -47,7 +47,7 @@ Passkeys are bound to the hostname configured as the main TypeRelay application.
 
 An invitation can add the same user to another TypeRelay account. Use the account selector above the library list to switch. Libraries, team roles, devices, subscriptions and access tokens are scoped to the selected account.
 
-On hosted plans, non-owner membership in another account requires that account to remain on Team. A desktop connection is also bound to one selected account; disconnect and authenticate again to switch it.
+On hosted plans, non-owner membership in another account requires that account to remain on Pro or Team. A desktop connection is also bound to one selected account; disconnect and authenticate again to switch it.
 
 ## Sign out
 

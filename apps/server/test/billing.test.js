@@ -2,7 +2,7 @@ import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { Account, Device, Library, Member, Snippet, User, mongoose } from '../model/index.js';
+import { Account, Device, Library, Member, Snippet, Ticket, User, mongoose } from '../model/index.js';
 import { Billing } from '../services/billing.js';
 import { WhiteLabel } from '../services/white_label.js';
 import { Support } from '../services/support.js';
@@ -10,6 +10,9 @@ import { Auth } from '../services/auth.js';
 import { Libraries } from '../services/libraries.js';
 import { StripeProvisioner } from '../scripts/provision-stripe.js';
 import { Helpmonks } from '../services/helpmonks.js';
+import { Team } from '../services/team.js';
+import { Statistics } from '../services/statistics.js';
+import { AdminSettings } from '../services/admin_settings.js';
 
 class Fixture {
 	static environment = {};
@@ -22,7 +25,9 @@ class Fixture {
 before(async () => {
 	for (const key of ['TYPERELAY_HOSTED_EDITION', 'BILLING_ENABLED', 'STRIPE_SECRET_KEY', 'STRIPE_FREE_PRICE_ID', 'STRIPE_PRO_PRICE_ID', 'STRIPE_TEAM_PRICE_ID', 'STRIPE_PORTAL_CONFIG_ID', 'WHITE_LABEL_ENABLED', 'WHITE_LABEL_CNAME_TARGET', 'WHITE_LABEL_ASSETS_DIR', 'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ZONE_ID', 'HELPMONKS_API_URL', 'HELPMONKS_SIGNUP_API_URL', 'HELPMONKS_SIGNUP_HOST_ID', 'HELPMONKS_SIGNUP_SEQUENCE_ID']) Fixture.environment[key] = process.env[key];
 	Object.assign(process.env, { TYPERELAY_HOSTED_EDITION: 'true', BILLING_ENABLED: 'true', STRIPE_SECRET_KEY: 'sk_test_fixture', STRIPE_FREE_PRICE_ID: 'price_free', STRIPE_PRO_PRICE_ID: 'price_pro', STRIPE_TEAM_PRICE_ID: 'price_team', STRIPE_PORTAL_CONFIG_ID: 'portal_account', WHITE_LABEL_ENABLED: 'true', WHITE_LABEL_CNAME_TARGET: 'custom.typerelay.com', CLOUDFLARE_API_TOKEN: 'cloudflare-fixture', CLOUDFLARE_ZONE_ID: 'zone-fixture', HELPMONKS_API_URL: 'http://helpmonks-general.test', HELPMONKS_SIGNUP_API_URL: 'http://helpmonks-signup.test', HELPMONKS_SIGNUP_HOST_ID: '53837271b7b1cbce6da6ce06', HELPMONKS_SIGNUP_SEQUENCE_ID: '6a8694a0e4e1989c9dafdbf2' });
-	await mongoose.connect(process.env.MONGO_URI.replace('/typerelay?', '/typerelay_billing_test?'));
+	const uri = new URL(process.env.MONGO_URI);
+	uri.pathname = '/typerelay_billing_test';
+	await mongoose.connect(uri.href);
 	await mongoose.connection.dropDatabase();
 	await Promise.all(Object.values(mongoose.models).map(model => model.init()));
 	Fixture.owner = await User.create({ email: `${randomUUID()}@example.test`, name: 'Billing owner' });
@@ -39,9 +44,13 @@ after(async () => {
 
 test('catalog exposes the approved Free, Pro and Team limits', () => {
 	assert.deepEqual(Billing.plans.free.limits, { people: 1, snippets: 250, libraries: 1, machines: 1 });
-	assert.equal(Billing.plans.pro.price, 8);
-	assert.equal(Billing.plans.team.price, 39);
-	assert.equal(Billing.plans.team.additionalSeatPrice, 6);
+	assert.equal(Billing.plans.pro.price, 4);
+	assert.equal(Billing.plans.pro.limits.people, 5);
+	assert.equal(Billing.plans.pro.capabilities.team, true);
+	assert.equal(Billing.plans.pro.capabilities.sharing, true);
+	assert.equal(Billing.plans.pro.capabilities.white_label, false);
+	assert.equal(Billing.plans.team.price, 8);
+	assert.equal(Billing.plans.team.seats, 1);
 	assert.equal(Billing.entitlements(Fixture.account).plan, 'free');
 	assert.equal(Billing.portalConfig(), 'portal_account');
 	assert.throws(() => Billing.assertApi(Fixture.ctx), error => error.status === 403 && error.code === 'plan_required');
@@ -157,7 +166,7 @@ test('Checkout uses dynamic payment methods and approved Team quantity', async (
 	const account = await Billing.account(Fixture.account._id, null, true);
 	await Account.updateOne({ _id: account._id }, { $set: { 'billing.stripe_customer_id': String(account._id) } });
 	let params;
-	const stripe = { checkout: { sessions: { create: async value => { params = value; return { url: 'https://checkout.example/session' }; } } } };
+	const stripe = { checkout: { sessions: { create: async value => { params = value; return { id: 'cs_fixture', url: 'https://checkout.example/session' }; } } } };
 	const url = await Billing.checkout(account._id, Fixture.owner, { plan: 'team', seats: 7 }, { stripe, successUrl: 'https://app.typerelay.com/billing/success?session_id={CHECKOUT_SESSION_ID}', cancelUrl: 'https://app.typerelay.com/#settings-subscription' });
 	assert.equal(url, 'https://checkout.example/session');
 	assert.deepEqual(params.line_items, [{ price: 'price_team', quantity: 7 }]);
@@ -192,8 +201,8 @@ test('Team to Pro downgrade uses a renewal subscription schedule', async () => {
 	assert.equal(phases[1].start_date, 200);
 });
 
-test('non-owner access is dormant after Team downgrades without deleting membership', async () => {
-	const account = await Account.create({ name: 'Downgraded', plan: 'pro', billing: { status: 'active' } });
+test('non-owner access is dormant on Free without deleting membership', async () => {
+	const account = await Account.create({ name: 'Downgraded', plan: 'free', billing: { status: 'active' } });
 	const owner = await User.create({ email: `${randomUUID()}@example.test`, name: 'Owner' });
 	const member = await User.create({ email: `${randomUUID()}@example.test`, name: 'Member' });
 	await Member.create([{ account: account._id, user: owner._id, role: 'owner' }, { account: account._id, user: member._id, role: 'member' }]);
@@ -243,21 +252,121 @@ test('Team branding validates and normalizes image assets', async () => {
 test('Stripe provisioner creates exact tax-exclusive price shapes', () => {
 	const product = { id: 'prod' };
 	assert.equal(StripeProvisioner.taxCode, 'txcd_10103001');
-	assert.equal(StripeProvisioner.priceParams(product, Billing.plans.pro).unit_amount, 800);
-	assert.deepEqual(StripeProvisioner.priceParams(product, Billing.plans.team).tiers, [{ up_to: 5, flat_amount: 3900, unit_amount: 0 }, { up_to: 'inf', unit_amount: 600 }]);
+	assert.equal(StripeProvisioner.priceParams(product, Billing.plans.pro).unit_amount, 400);
+	assert.equal(StripeProvisioner.priceParams(product, Billing.plans.team).unit_amount, 800);
+	assert.equal(StripeProvisioner.priceParams(product, Billing.plans.team).billing_scheme, 'per_unit');
+	assert.equal(StripeProvisioner.priceParams(product, Billing.plans.team).tiers, undefined);
 	assert.equal(StripeProvisioner.priceParams(product, Billing.plans.team).tax_behavior, 'exclusive');
 });
 
-test('Stripe provisioner uses one Portal configuration for management and confirmed changes', async () => {
+test('general Stripe Portal manages invoices, payments and cancellation without bypassing app plan checks', async () => {
 	let created;
 	const stripe = { billingPortal: { configurations: { list: async () => ({ data: [] }), create: async params => { created = params; return { id: 'portal', ...params }; } } } };
 	const products = [{ plan: Billing.plans.pro, product: { id: 'prod_pro' }, price: { id: 'price_pro' } }, { plan: Billing.plans.team, product: { id: 'prod_team' }, price: { id: 'price_team' } }];
 	const portal = await StripeProvisioner.portal(stripe, products);
 	assert.equal(portal.id, 'portal');
 	assert.equal(created.features.subscription_cancel.enabled, true);
-	assert.equal(created.features.subscription_update.enabled, true);
+	assert.equal(created.features.subscription_update.enabled, false);
 	assert.equal(created.features.payment_method_update.enabled, true);
-	assert.deepEqual(created.features.subscription_update.products, [{ product: 'prod_pro', prices: ['price_pro'] }, { product: 'prod_team', prices: ['price_team'] }]);
+	assert.equal(created.metadata.purpose, 'account_management');
+});
+
+test('Stripe confirmation configurations restrict the target price and Pro seat range', async () => {
+	let created;
+	const price = { id: 'price_pro', product: 'prod_pro', active: true, currency: 'usd', unit_amount: 400, billing_scheme: 'per_unit', recurring: { interval: 'month', interval_count: 1, usage_type: 'licensed' }, metadata: { catalog: Billing.catalogName, catalog_version: Billing.catalogVersion, plan_key: 'pro' } };
+	const stripe = { prices: { retrieve: async () => price }, billingPortal: { configurations: { list: async () => ({ data: [] }), create: async params => { created = params; return { id: 'portal_offer' }; } } } };
+	assert.equal(await Billing.changePortalConfiguration(stripe, 'pro', 3), 'portal_offer');
+	assert.deepEqual(created.features.subscription_update.products, [{ product: 'prod_pro', prices: ['price_pro'], adjustable_quantity: { enabled: true, minimum: 1, maximum: 5 } }]);
+	stripe.billingPortal.configurations.list = async () => ({ data: [{ id: 'portal_reused', ...created }] });
+	assert.equal(await Billing.changePortalConfiguration(stripe, 'pro', 3), 'portal_reused');
+	price.unit_amount = 800;
+	await assert.rejects(Billing.changePortalConfiguration(stripe, 'pro', 3), error => error.code === 'billing_mismatch');
+});
+
+test('scheduled seat reductions reserve capacity during Stripe calls and can be canceled', async () => {
+	const account = await Account.create({ name: 'Seat reduction', plan: 'pro', billing: { stripe_customer_id: 'cus_seats', stripe_subscription_id: 'sub_seats', status: 'active', price_id: 'price_pro', seat_quantity: 5 } });
+	const owner = await User.create({ email: `${randomUUID()}@example.test`, name: 'Seat owner' });
+	await Member.create({ account: account._id, user: owner._id, role: 'owner' });
+	const ctx = await Fixture.context(account, owner);
+	const subscription = { id: 'sub_seats', customer: 'cus_seats', status: 'active', metadata: Billing.metadata(account, 'pro'), items: { data: [{ id: 'si_seats', price: { id: 'price_pro' }, quantity: 5, current_period_start: 100, current_period_end: 200 }] } };
+	let released = false;
+	const stripe = { subscriptions: { retrieve: async () => subscription }, subscriptionSchedules: { create: async () => ({ id: 'sched_seats', current_phase: { start: 100 } }), retrieve: async () => ({ id: 'sched_seats', customer: 'cus_seats', status: 'active' }), release: async () => { released = true; }, update: async (id, input) => { await assert.rejects(Team.invite(ctx, `${randomUUID()}@example.test`), error => error.code === 'plan_limit'); assert.equal(input.phases[1].items[0].quantity, 1); } } };
+	await Billing.change(account._id, { plan: 'pro', seats: 1 }, { stripe });
+	assert.equal(Billing.seatCapacity(await Billing.account(account._id)), 1);
+	await assert.rejects(Billing.change(account._id, { plan: 'pro', seats: 4 }, { stripe }), error => error.code === 'billing_change_scheduled');
+	await Billing.cancelChange(account._id, { stripe });
+	assert.equal(released, true);
+	assert.equal(Billing.seatCapacity(await Billing.account(account._id)), 5);
+});
+
+test('open Checkout reserves trial seats, is reused, and releases capacity only after expiration or cancellation', async () => {
+	const account = await Account.create({ name: 'Checkout reservation', billing: { stripe_customer_id: 'cus_checkout', status: 'trialing', trial_source: 'no_card', trial_ends_at: new Date(Date.now() + 86400000) } });
+	const owner = await User.create({ email: `${randomUUID()}@example.test`, name: 'Checkout owner' });
+	await Member.create({ account: account._id, user: owner._id, role: 'owner' });
+	const checkout = { id: 'cs_reserved', status: 'open', url: 'https://checkout.example/reserved' };
+	let creates = 0;
+	const stripe = { checkout: { sessions: { create: async () => { creates++; return checkout; }, retrieve: async () => checkout, expire: async () => { checkout.status = 'expired'; } } } };
+	await Billing.checkout(account._id, owner, { plan: 'pro', seats: 1 }, { stripe });
+	assert.equal(await Billing.checkout(account._id, owner, { plan: 'pro', seats: 1 }, { stripe }), checkout.url);
+	assert.equal(creates, 1);
+	await assert.rejects(Billing.checkout(account._id, owner, { plan: 'pro', seats: 2 }, { stripe }), error => error.code === 'checkout_pending');
+	const ctx = await Fixture.context(account, owner);
+	await assert.rejects(Team.invite(ctx, `${randomUUID()}@example.test`), error => error.code === 'plan_limit');
+	await Billing.cancelCheckout(account._id, { stripe });
+	assert.equal(Billing.seatCapacity(await Billing.account(account._id)), 5);
+	checkout.id = 'cs_expiring'; checkout.status = 'open';
+	await Billing.checkout(account._id, owner, { plan: 'pro', seats: 1 }, { stripe });
+	await Billing.handleWebhook(null, null, { stripe, event: { type: 'checkout.session.expired', data: { object: { id: 'cs_reserved', customer: 'cus_checkout' } } } });
+	assert.equal(Billing.seatCapacity(await Billing.account(account._id)), 1);
+	await Billing.handleWebhook(null, null, { stripe, event: { type: 'checkout.session.expired', data: { object: { id: 'cs_expiring', customer: 'cus_checkout' } } } });
+	assert.equal(Billing.seatCapacity(await Billing.account(account._id)), 5);
+});
+
+test('an applied renewal change releases its Stripe schedule and clears local pending state', async () => {
+	const account = await Account.create({ name: 'Applied renewal', plan: 'team', billing: { stripe_customer_id: 'cus_renew', stripe_subscription_id: 'sub_renew', status: 'active', seat_quantity: 5, scheduled_change: { plan: 'pro', seat_quantity: 2, schedule_id: 'sched_renew' } } });
+	const subscription = { id: 'sub_renew', customer: 'cus_renew', status: 'active', schedule: 'sched_renew', metadata: Billing.metadata(account, 'pro'), items: { data: [{ id: 'si_renew', price: { id: 'price_pro' }, quantity: 2 }] } };
+	let released;
+	const stripe = { subscriptionSchedules: { release: async id => { released = id; assert.equal((await Billing.account(account._id)).billing.seat_quantity, 2); } } };
+	await Billing.applySubscription(await Billing.account(account._id, null, true), subscription, { stripe });
+	assert.equal(released, 'sched_renew');
+	assert.equal((await Billing.account(account._id)).billing.scheduled_change, null);
+});
+
+test('delayed renewal reconciliation cannot release a newer scheduled change', async () => {
+	const account = await Account.create({ name: 'Newer schedule', plan: 'pro', billing: { stripe_customer_id: 'cus_newer', stripe_subscription_id: 'sub_newer', status: 'active', seat_quantity: 2, scheduled_change: { plan: 'pro', seat_quantity: 2, schedule_id: 'sched_old' } } });
+	const stale = await Billing.account(account._id, null, true);
+	await Account.updateOne({ _id: account._id }, { $set: { 'billing.scheduled_change': { plan: 'pro', seat_quantity: 1, schedule_id: 'sched_new' } } });
+	const subscription = { id: 'sub_newer', customer: 'cus_newer', status: 'active', schedule: 'sched_new', metadata: Billing.metadata(account, 'pro'), items: { data: [{ id: 'si_newer', price: { id: 'price_pro' }, quantity: 2 }] } };
+	const stripe = { subscriptionSchedules: { release: async () => assert.fail('Must not release the newer schedule') } };
+	await Billing.applySubscription(stale, subscription, { stripe });
+	assert.equal((await Billing.account(account._id, null, true)).billing.scheduled_change.schedule_id, 'sched_new');
+});
+
+test('retained memberships cannot exceed Pro trial or purchased capacity', async () => {
+	const account = await Account.create({ name: 'Retained members', plan: 'free', billing: { status: 'trialing', trial_source: 'no_card', trial_ends_at: new Date(Date.now() + 86400000) } });
+	const users = [];
+	for (let index = 0; index < 6; index++) { const user = await User.create({ email: `${randomUUID()}@example.test`, name: `Retained ${index}` }); users.push(user); await Member.create({ account: account._id, user: user._id, role: index ? 'member' : 'owner' }); }
+	await Fixture.context(account, users[4]);
+	await assert.rejects(Fixture.context(account, users[5]), error => error.code === 'plan_limit');
+	await Account.updateOne({ _id: account._id }, { $set: { plan: 'pro', 'billing.status': 'active', 'billing.trial_source': null, 'billing.seat_quantity': 2 } });
+	await Fixture.context(account, users[1]);
+	await assert.rejects(Fixture.context(account, users[2]), error => error.code === 'plan_limit');
+	await Account.updateOne({ _id: account._id }, { $set: { plan: 'team', 'billing.seat_quantity': 6 } });
+	await Fixture.context(account, users[5]);
+	assert.equal(await Member.countDocuments({ account: account._id }), 6);
+});
+
+test('delayed subscription and invoice events reconcile current Stripe state without reviving old subscriptions', async () => {
+	const account = await Account.create({ name: 'Webhook order', plan: 'pro', billing: { stripe_customer_id: 'cus_order', stripe_subscription_id: 'sub_current', status: 'active', price_id: 'price_pro', seat_quantity: 1 } });
+	const current = { object: 'subscription', id: 'sub_current', customer: 'cus_order', status: 'active', metadata: Billing.metadata(account, 'team'), items: { data: [{ id: 'si_order', price: { id: 'price_team' }, quantity: 2 }] } };
+	const stale = { ...current, metadata: Billing.metadata(account, 'pro'), items: { data: [{ price: { id: 'price_pro' }, quantity: 1 }] } };
+	const stripe = { subscriptions: { retrieve: async id => { assert.equal(id, 'sub_current'); return current; } } };
+	await Billing.handleWebhook(null, null, { stripe, event: { type: 'customer.subscription.updated', data: { object: stale } } });
+	assert.equal((await Billing.account(account._id)).plan, 'team');
+	await Billing.handleWebhook(null, null, { stripe, event: { type: 'invoice.payment_failed', data: { object: { customer: 'cus_order', parent: { subscription_details: { subscription: 'sub_current' } } } } } });
+	assert.equal((await Billing.account(account._id)).billing.status, 'active');
+	await Billing.handleWebhook(null, null, { stripe, event: { type: 'customer.subscription.deleted', data: { object: { ...stale, id: 'sub_old' } } } });
+	assert.equal((await Billing.account(account._id)).plan, 'team');
 });
 
 test('Stripe provisioner requires an active Tax registration', async () => {
@@ -273,4 +382,67 @@ test('billing and white-label browser mutations replace only their fragments', a
 	assert.match(source, /update\('#subscription-content'/);
 	assert.match(source, /update\('#white-label-content'/);
 	assert.doesNotMatch(source, /location\.reload/);
+});
+
+
+test('paid seat quantities accept Pro 1–5 and Team from one, rejecting invalid quantities', () => {
+	for (const seats of [1, 2, 5]) assert.equal(Billing.checkoutSeats('pro', seats), seats);
+	for (const seats of [1, 5, 6, 15]) assert.equal(Billing.checkoutSeats('team', seats), seats);
+	for (const seats of [0, -1, 1.5, 6, NaN, Infinity, 'bad', '']) assert.throws(() => Billing.checkoutSeats('pro', seats), error => error.code === 'invalid_seat_quantity');
+	assert.equal(Billing.checkoutSeats('team'), 1);
+	assert.throws(() => Billing.checkoutSeats('free', 1), error => error.code === 'invalid_plan');
+});
+
+test('Pro collaboration admits paid members but reserves seats atomically for invitations', async () => {
+	const account = await Account.create({ name: 'Pro collaboration', plan: 'pro', billing: { status: 'active', seat_quantity: 2 } });
+	const owner = await User.create({ email: `${randomUUID()}@example.test`, name: 'Pro owner' });
+	await Member.create({ account: account._id, user: owner._id, role: 'owner' });
+	const ctx = await Fixture.context(account, owner);
+	assert.doesNotThrow(() => Billing.assertTeam(ctx, 'sharing'));
+	assert.equal(Statistics.scope(ctx, 'team').user, null);
+	assert.equal(ctx.entitlements.capabilities.white_label, false);
+	const send = AdminSettings.send;
+	const sent = [];
+	AdminSettings.send = async (kind, email, variables) => { sent.push({ email, variables }); };
+	try {
+		const results = await Promise.allSettled([Team.invite(ctx, `${randomUUID()}@example.test`), Team.invite(ctx, `${randomUUID()}@example.test`)]);
+		assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
+		assert.equal(results.find(result => result.status === 'rejected').reason.code, 'plan_limit');
+		assert.equal(await Ticket.countDocuments({ account: account._id, kind: 'invite' }), 1);
+		const member = await User.create({ email: sent[0].email, name: 'Accepted Pro member' });
+		const token = new URL(sent[0].variables.url).searchParams.get('invite');
+		await mongoose.connection.transaction(session => Team.accept({ user: String(member._id) }, token, session));
+		assert.equal(await Ticket.countDocuments({ account: account._id, kind: 'invite' }), 0);
+		assert.equal(await Member.countDocuments({ account: account._id }), 2);
+		const memberCtx = await Fixture.context(account, member);
+		assert.equal(memberCtx.entitlements.capabilities.sharing, true);
+		assert.throws(() => Statistics.scope(memberCtx, 'team'), error => error.status === 403);
+		await assert.rejects(Billing.validateChangeUsage(account, 'pro', 1), error => error.code === 'plan_limit');
+		await Billing.validateChangeUsage(account, 'pro', 2);
+	} finally { AdminSettings.send = send; }
+});
+
+test('capacity honors purchased seats, Pro cap, scheduled reductions, trials and self-hosting', () => {
+	const paid = { plan: 'pro', billing: { status: 'active', seat_quantity: 2 } };
+	assert.equal(Billing.seatCapacity(paid), 2);
+	assert.equal(Billing.seatCapacity({ ...paid, billing: { status: 'active', seat_quantity: 20 } }), 5);
+	assert.equal(Billing.seatCapacity({ plan: 'team', billing: { status: 'active', seat_quantity: 1 } }), 1);
+	assert.equal(Billing.seatCapacity({ plan: 'team', billing: { status: 'active', seat_quantity: 8, scheduled_change: { plan: 'pro', seat_quantity: 3 } } }), 3);
+	assert.equal(Billing.seatCapacity({ plan: 'free', billing: { status: 'trialing', trial_source: 'no_card', trial_ends_at: new Date(Date.now() + 60000) } }), 5);
+	assert.equal(Billing.seatCapacity(paid, { billing_enabled: false, limits: { people: 0 } }), 0);
+	assert.equal(Billing.seatCapacity({ ...paid, admin_override: { plan: 'team' } }), 0);
+});
+
+test('legacy Typerelay price metadata is recognized without accepting other product catalogs', () => {
+	const price = { id: 'price_legacy', currency: 'usd', billing_scheme: 'per_unit', unit_amount: 800, recurring: { interval: 'month', interval_count: 1, usage_type: 'licensed' }, metadata: { catalog: Billing.catalogName, catalog_version: '2026-09', plan_key: 'pro' } };
+	const subscription = { items: { data: [{ price }] } };
+	assert.equal(Billing.planFromSubscription(subscription), 'pro');
+	price.metadata = { ...price.metadata, plan_key: 'team' }; price.billing_scheme = 'tiered'; price.tiers_mode = 'graduated';
+	assert.equal(Billing.planFromSubscription(subscription), 'team');
+	price.metadata.catalog = 'streamient';
+	assert.throws(() => Billing.planFromSubscription(subscription), error => error.code === 'billing_mismatch');
+	price.metadata = { catalog: Billing.catalogName, catalog_version: Billing.catalogVersion, plan_key: 'pro' }; price.billing_scheme = 'per_unit'; price.unit_amount = 400;
+	assert.equal(Billing.planFromSubscription(subscription), 'pro');
+	price.unit_amount = 1;
+	assert.throws(() => Billing.planFromSubscription(subscription), error => error.code === 'billing_mismatch');
 });

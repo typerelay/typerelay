@@ -5,7 +5,7 @@ description: "Manage TypeRelay team roles, invitations, groups, shared-library a
 
 # Teams and roles
 
-Team management and library sharing require the Team plan. Open the avatar menu, choose **Settings → My team**, and confirm the correct account is selected.
+Team management and library sharing are included in Pro and Team. Open the avatar menu, choose **Settings → My team**, and confirm the correct account is selected.
 
 ## Roles
 
@@ -67,6 +67,6 @@ An existing personal abbreviation remains usable if your access becomes read-onl
 
 ## Plan changes
 
-Team includes five prepaid seats; extra seats must be purchased before more invitations or members fit. Seat reductions and Team-to-Pro changes take effect at renewal only after active members and pending invitations fit the requested capacity.
+Pro costs $4 per user per month for 1–5 users. Team costs $8 per user per month from the first seat. The owner and pending invitations count toward purchased capacity; buy enough seats before adding more people. Seat reductions and Team-to-Pro changes take effect at renewal only after active members and pending invitations fit the requested capacity.
 
 After a downgrade from Team, non-owner memberships cannot use that account and sharing controls are disabled. Existing content is retained. Upgrade again or remove extra members and sharing grants as appropriate.

@@ -24,7 +24,8 @@ export class Support {
 		Support.assert(record, 'Account missing', 404);
 		AccountAccess.assert(record);
 		const entitlements = Billing.entitlements(record);
-		if (Billing.enabled() && entitlements.plan !== 'team' && member.role !== 'owner') throw new Fault(403, 'This account requires the Team plan', 'plan_required', { capability: 'people', upgrade_url: '/#settings-subscription' });
+		if (!entitlements.capabilities.team && member.role !== 'owner') throw new Fault(403, 'This account requires Pro or Team', 'plan_required', { capability: 'people', upgrade_url: '/#settings-subscription' });
+		if (!await Billing.memberAllowed(record, member, session)) throw new Fault(403, 'This membership exceeds the account seat capacity. Ask the owner to add seats or remove extra members.', 'plan_limit', { resource: 'people', upgrade_url: '/#settings-subscription' });
 		const groups = await Group.find({ account, users: user }).session(session || null).lean();
 		return { user: String(user), account: String(account), role: member.role, groups: groups.map(group => String(group._id)), plan: record.plan || 'free', entitlements };
 	}

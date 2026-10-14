@@ -1,0 +1,12 @@
+#team-groups-container.col-lg-7(hidden=!ctx.entitlements.capabilities.team)
+	if ctx.entitlements.capabilities.team
+		.card.team-settings-card
+			.card-body
+				h6.card-title.mb-3 Groups
+				ul#groups.list-group.list-group-flush.mb-3
+					each group in team.groups
+						include group
+				if ['owner', 'admin'].includes(ctx.role)
+					button#new-group.btn.btn-outline-secondary.btn-sm.mb-3(type="button") New group
+					- var groupForm = null
+					include group-form

@@ -39,6 +39,12 @@ const accountSchema = new mongoose.Schema({
 			seat_quantity: Number,
 			effective_at: Date,
 			schedule_id: { type: String, select: false },
+			pending: { type: Boolean, default: false },
+		},
+		checkout: {
+			session_id: { type: String, select: false },
+			plan: { type: String, enum: ['pro', 'team'] },
+			seat_quantity: Number,
 		},
 	},
 	white_label: {
