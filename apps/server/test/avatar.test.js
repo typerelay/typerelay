@@ -1,0 +1,150 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { JSDOM } from 'jsdom';
+import pug from 'pug';
+import { avatarStyles } from '../model/avatar_styles.js';
+import { User } from '../model/index.js';
+import { Security } from '../services/security.js';
+
+const profile = { name: 'Avatar Person', email: 'avatar+space&quote@example.test' };
+
+test('avatar catalog matches the Helpmonks order, legacy defaults and safely encoded seeds', async () => {
+	assert.equal(Object.keys(avatarStyles).length, 30);
+	assert.equal(avatarStyles['avataaars-neutral'], 'AvAvataaars Neutral');
+	assert.equal(new User(profile).avatar_style, 'initials');
+	await assert.rejects(new User({ ...profile, avatar_style: 'unsupported' }).validate(), /avatar_style/);
+	const dom = new JSDOM(pug.renderFile('views/ajax/avatar-picker.pug', { profile, avatarStyles }));
+	assert.deepEqual([...dom.window.document.querySelector('select').options].map(option => option.value), Object.keys(avatarStyles));
+	assert.equal(dom.window.document.querySelector('select').value, 'initials');
+	assert.equal(dom.window.document.querySelector('#profile-avatar-preview img').getAttribute('src'), 'https://ava.helpmonks.com/9.x/initials/svg?seed=' + encodeURIComponent(profile.email));
+	dom.window.close();
+});
+
+test('real Tom Select uses internal search, thumbnails, stable order and immediate preview without reinitializing', () => {
+	const dom = new JSDOM(pug.renderFile('views/ajax/avatar-picker.pug', { profile, avatarStyles }), { url: 'https://example.test', runScripts: 'outside-only', pretendToBeVisual: true });
+	const window = dom.window;
+	window.CSS ??= { escape: value => value };
+	window.eval(readFileSync('node_modules/tom-select/dist/js/tom-select.complete.min.js', 'utf8'));
+	window.eval(readFileSync('public/app.js', 'utf8').replace(/^import .*;$/gm, '').replace('const client = new TypeRelay();', '').replace('export { client };', 'window.TypeRelay = TypeRelay;'));
+	const client = Object.create(window.TypeRelay.prototype);
+	client.avatarPicker();
+	const select = window.document.querySelector('select');
+	const picker = select.tomselect;
+	client.avatarPicker();
+	assert.equal(select.tomselect, picker);
+	assert.equal(window.document.querySelectorAll('.ts-wrapper').length, 1);
+	picker.refreshOptions(false);
+	picker.open();
+	assert.ok(picker.dropdown.contains(picker.control_input));
+	assert.equal(picker.control_input.getAttribute('aria-label'), 'Search avatar styles');
+	assert.equal(picker.control.querySelector('img').getAttribute('src'), 'https://ava.helpmonks.com/9.x/initials/svg?seed=' + encodeURIComponent(profile.email));
+	assert.deepEqual([...picker.dropdown.querySelectorAll('[data-value]')].map(option => option.dataset.value), Object.keys(avatarStyles));
+	assert.ok(picker.dropdown.querySelector('[data-value="initials"].selected .avatar-check'));
+	picker.setValue('bottts');
+	assert.match(window.document.querySelector('#profile-avatar-preview img').src, /\/bottts\/svg/);
+	assert.equal(select.value, 'bottts');
+	picker.control_input.value = 'pixel';
+	picker.onInput();
+	picker.refreshOptions(false);
+	assert.deepEqual([...picker.dropdown.querySelectorAll('[data-value]')].map(option => option.dataset.value), ['pixel-art', 'pixel-art-neutral']);
+	dom.window.close();
+});
+
+test('late member fragments keep the latest saved viewer style without changing picker preview', () => {
+	const dom = new JSDOM('<div id="members"></div>', { url: 'https://example.test', runScripts: 'outside-only' });
+	dom.window.eval(readFileSync('public/app.js', 'utf8').replace(/^import .*;$/gm, '').replace('const client = new TypeRelay();', '').replace('export { client };', 'window.TypeRelay = TypeRelay;'));
+	const client = Object.create(dom.window.TypeRelay.prototype);
+	client.avatarStyle = 'pixel-art';
+	const member = { _id: 'member', user: 'other', role: 'member', profile };
+	const html = pug.renderFile('views/ajax/member.pug', { member, ctx: { user: 'viewer', role: 'member', entitlements: { capabilities: { team: true } } }, viewerAvatarStyle: 'initials' });
+	client.update('[data-member="member"]', '#members', html);
+	assert.equal(dom.window.document.querySelector('img').src, 'https://ava.helpmonks.com/9.x/pixel-art/svg?seed=' + encodeURIComponent(profile.email));
+	client.update('[data-member="member"]', '#members', html);
+	assert.equal(dom.window.document.querySelectorAll('[data-member]').length, 1);
+	dom.window.close();
+});
+
+test('profile saves only supplied fields, rejects unknown styles before mutation and retains other viewer preferences', async context => {
+	const stored = { _id: 'viewer', ...profile, avatar_style: 'initials' };
+	const other = { _id: 'other', ...profile, avatar_style: 'glass' };
+	const users = new Map([['viewer', stored], ['other', other]]);
+	const updates = [];
+	const mocks = context.mock;
+	mocks.method(User, 'findById', id => ({ lean: async () => ({ ...users.get(id) }) }));
+	mocks.method(User, 'findOneAndUpdate', (filter, update) => ({ lean: async () => { updates.push(update.$set); const user = users.get(filter._id); if (updates.length === 1) user.name = 'Concurrent Name'; Object.assign(user, update.$set); return { ...user }; } }));
+	try {
+		const request = body => ({ ctx: { user: 'viewer' }, body });
+		const result = await Security.profile(request({ avatar_style: 'bottts' }));
+		assert.deepEqual(updates[0], { avatar_style: 'bottts' });
+		assert.equal(result.name, 'Concurrent Name');
+		assert.equal(result.avatar_style, 'bottts');
+		await Security.profile(request({ name: 'Changed Name' }));
+		assert.deepEqual(updates[1], { name: 'Changed Name' });
+		assert.equal(stored.avatar_style, 'bottts');
+		assert.equal(other.avatar_style, 'glass');
+		for (const avatar_style of ['unknown', '__proto__', ['initials'], null, '']) await assert.rejects(Security.profile(request({ avatar_style })), /Unsupported avatar style/);
+		assert.equal(updates.length, 2);
+	} finally { mocks.restoreAll(); }
+});
+
+test('profile saves update only visible avatars and own member, preserve form/focus and reject duplicate or failed saves', async () => {
+	const member = { _id: 'member', user: 'viewer', role: 'owner', profile };
+	const ctx = { user: 'viewer', role: 'owner', entitlements: { capabilities: { team: true } } };
+	const header = pug.renderFile('views/ajax/avatar.pug', { profile });
+	const row = pug.renderFile('views/ajax/member.pug', { member, ctx, viewerAvatarStyle: 'initials' });
+	const picker = pug.renderFile('views/ajax/avatar-picker.pug', { profile, avatarStyles });
+	const dom = new JSDOM('<header><div class="dropdown">' + header + '</div></header><div id="members">' + row + '</div><div id="settings"><form id="profile-form">' + picker + '<input id="profile-name" name="name" value="Avatar Person"><input name="email" value="' + profile.email + '"><div id="profile-status"></div><button>Save Changes</button></form></div>', { url: 'https://example.test', runScripts: 'outside-only' });
+	dom.window.CSS ??= { escape: value => value };
+	dom.window.eval(readFileSync('public/app.js', 'utf8').replace(/^import .*;$/gm, '').replace('const client = new TypeRelay();', '').replace('export { client };', 'window.TypeRelay = TypeRelay;'));
+	const client = Object.create(dom.window.TypeRelay.prototype);
+	client.avatarStyle = 'initials'; client.toast = () => {};
+	const document = dom.window.document;
+	const settings = document.querySelector('#settings');
+	const form = document.querySelector('form');
+	const name = document.querySelector('#profile-name'); name.focus();
+	const select = document.querySelector('select'); select.value = 'bottts';
+	const updated = { ...profile, avatar_style: 'bottts' };
+	let resolveSave; let requests = 0;
+	client.request = async () => { requests++; return new Promise(resolve => { resolveSave = resolve; }); };
+	const event = { target: form, preventDefault() {}, submitter: form.querySelector('button') };
+	const saving = client.onSubmit(event);
+	await client.onSubmit(event);
+	assert.equal(requests, 1);
+	const savedResult = { ...updated, avatar: pug.renderFile('views/ajax/avatar.pug', { profile: updated }), member: { id: 'member', html: pug.renderFile('views/ajax/member.pug', { member: { ...member, profile: updated }, ctx, viewerAvatarStyle: 'bottts' }) }, avatars: [{ id: 'member', html: pug.renderFile('views/ajax/avatar-image.pug', { person: updated, avatarStyle: 'bottts', avatarKey: 'member' }) }], preview: pug.renderFile('views/ajax/avatar-image.pug', { person: updated, avatarStyle: 'bottts', avatarKey: 'preview' }) };
+	resolveSave(savedResult);
+	await saving;
+	assert.equal(document.querySelector('#settings'), settings);
+	assert.equal(document.querySelector('form'), form);
+	assert.equal(document.activeElement, name);
+	assert.match(document.querySelector('#account-avatar img').src, /\/bottts\/svg/);
+	assert.match(document.querySelector('#members img').src, /\/bottts\/svg/);
+	assert.equal(client.profileSaving, false);
+	const avatar = document.querySelector('#account-avatar');
+	select.value = 'glass';
+	client.request = async () => { throw Error('Failed save'); };
+	await client.onSubmit(event);
+	assert.equal(document.querySelector('#account-avatar'), avatar);
+	assert.equal(select.value, 'glass');
+	assert.equal(client.avatarStyle, 'bottts');
+	assert.equal(event.submitter.disabled, false);
+	// JSDOM doesn't blur disabled buttons, so simulate Chrome's observed focus loss during the request.
+	document.body.tabIndex = -1;
+	event.submitter.focus();
+	client.request = async () => { document.body.focus(); return savedResult; };
+	await client.onSubmit(event);
+	assert.equal(document.activeElement, event.submitter);
+	event.submitter.focus();
+	client.request = async () => { document.body.focus(); throw Error('Failed save'); };
+	await client.onSubmit(event);
+	assert.equal(document.activeElement, event.submitter);
+	event.submitter.focus();
+	client.request = async () => { document.body.focus(); name.focus(); name.blur(); throw Error('Failed save'); };
+	await client.onSubmit(event);
+	assert.equal(document.activeElement, document.body);
+	event.submitter.focus();
+	client.request = async () => { document.body.focus(); settings.setAttribute('aria-hidden', 'true'); throw Error('Failed save'); };
+	await client.onSubmit(event);
+	assert.equal(document.activeElement, document.body);
+	dom.window.close();
+});

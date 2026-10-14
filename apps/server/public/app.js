@@ -8,6 +8,7 @@ import { PasswordField } from './password-field.js';
 import { AiClient } from './ai.js';
 class TypeRelay {
 	account = document.querySelector('#workspace')?.dataset.account;
+	avatarStyle = document.querySelector('#profile-avatar-style')?.value || 'initials';
 	libraries = new Map();
 	tombstones = new Set();
 	formOperation = null;
@@ -28,6 +29,8 @@ class TypeRelay {
 	searchFocus = null;
 	submit = null;
 	constructor() {
+		this.avatarPicker();
+		document.addEventListener('error', event => { if (event.target.matches?.('.avatar-image')) event.target.hidden = true; }, true);
 		this.ai = new AiClient({ local: false, request: (path, method, body) => this.request('ai' + path, method, body), identity: () => location.origin + ':' + this.account + ':' + document.querySelector('#workspace')?.dataset.user, notify: (message, icon) => this.toast(message, icon), manage: () => { bootstrap.Modal.getOrCreateInstance(document.querySelector('#settings')).show(); this.settingsTab('ai'); } });
 		this.ai.bindSearch(document.querySelector('[data-ai-search]'), async () => ({}), async result => { await this.open(result.library); const snippet = this.libraries.get(result.library)?.snippets.find(item => item.id === result.id); if (!snippet || snippet.revision !== result.revision) throw Error('This snippet changed. Search again.'); bootstrap.Modal.getOrCreateInstance(document.querySelector('#search-modal')).hide(); const node = document.querySelector('[data-snippet="' + CSS.escape(result.id) + '"]'); node?.focus(); node?.scrollIntoView({ block: 'center' }); });
 		this.statistics = new Statistics(this);
@@ -119,6 +122,12 @@ class TypeRelay {
 		const input = document.querySelector('#team-member-password'); const status = document.querySelector('#team-member-password-status');
 		await PasswordField.copy(input, status, () => this.toast('Password copied'));
 	}
+	avatarPicker() {
+		const select = document.querySelector('#profile-avatar-style');
+		if (!select || select.tomselect || !globalThis.TomSelect) return;
+		const render = item => document.querySelector('template[data-avatar-option="' + CSS.escape(item.value) + '"]').content.firstElementChild.cloneNode(true);
+		new globalThis.TomSelect(select, { plugins: ['dropdown_input'], maxItems: 1, maxOptions: 30, create: false, sortField: { field: '$order', direction: 'asc' }, render: { option: render, item: render }, onChange: value => { const option = document.querySelector('template[data-avatar-option="' + CSS.escape(value) + '"]'); if (!option) return; const picture = option.content.querySelector('.avatar-picture').cloneNode(true); picture.dataset.viewerAvatar = 'preview'; document.querySelector('#profile-avatar-preview').replaceChildren(picture); }, onInitialize() { this.control_input.removeAttribute('placeholder'); this.control_input.setAttribute('aria-label', 'Search avatar styles'); } });
+	}
 	async request(path, method = 'GET', body, raw = false) {
 		const response = await fetch(path.startsWith('/') ? path : '/api/v2/' + path, { method, headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': document.querySelector('meta[name=csrf-token]').content, 'X-Account-Id': this.account || '', 'X-TypeRelay-Personal-Abbreviations': '1' }, body: body ? JSON.stringify({ operation_id: this.submitting ? this.formOperation : crypto.randomUUID(), ...body }) : undefined });
 		if (!response.ok) { const result = await response.json(); const error = new Error(result.error); Object.assign(error, result); throw error; }
@@ -131,7 +140,7 @@ class TypeRelay {
 		return response.json();
 	}
 	async bundle(file) { const response = await fetch('/api/v2/import/bundle', { method: 'POST', headers: { 'Content-Type': 'application/zip', 'X-CSRF-Token': document.querySelector('meta[name=csrf-token]').content, 'X-Account-Id': this.account || '', 'X-Operation-Id': this.formOperation }, body: file }); const result = await response.json(); if (!response.ok) throw new Error(result.error); return result; }
-	fragment(html) { const template = document.createElement('template'); template.innerHTML = html; for (const time of template.content.querySelectorAll('time[data-local-time]')) time.textContent = new Date(time.dateTime).toLocaleString(); for (const time of template.content.querySelectorAll('time[data-local-date]')) time.textContent = new Date(time.dateTime).toLocaleDateString(); return template.content.firstElementChild; }
+	fragment(html) { const template = document.createElement('template'); template.innerHTML = html; for (const image of template.content.querySelectorAll('[data-viewer-avatar] .avatar-image')) { if (this.avatarStyle) { const url = new URL(image.src); const path = url.pathname.split('/'); path[2] = this.avatarStyle; url.pathname = path.join('/'); image.src = url.href; } } for (const time of template.content.querySelectorAll('time[data-local-time]')) time.textContent = new Date(time.dateTime).toLocaleString(); for (const time of template.content.querySelectorAll('time[data-local-date]')) time.textContent = new Date(time.dateTime).toLocaleDateString(); return template.content.firstElementChild; }
 	update(selector, container, html, before) {
 		const old = document.querySelector(selector);
 		const next = this.fragment(html);
@@ -423,8 +432,13 @@ class TypeRelay {
 		event.preventDefault();
 		const abbreviation = form.querySelector('#trigger');
 		if (abbreviation) Abbreviation.field(abbreviation);
+		if (form.id === 'profile-form' && this.profileSaving) return;
+		if (form.id === 'profile-form') this.profileSaving = true;
 		const data = new FormData(form);
 		const button = event.submitter;
+		let restoreProfileFocus = form.id === 'profile-form' && button === document.activeElement;
+		const trackProfileFocus = event => { if (event.target !== button && event.target !== document.body) restoreProfileFocus = false; };
+		if (restoreProfileFocus) document.addEventListener('focusin', trackProfileFocus);
 		if (button) button.disabled = true;
 		try {
 			if (form.id === 'team-seats-form' || form.id === 'change-to-team-form') { const result = await this.request('billing/change', 'POST', { plan: 'team', seats: Number(data.get('seats')) }); if (result.url) location.assign(result.url); else { this.applyBilling(result); this.toast('Change scheduled'); } return; }
@@ -435,9 +449,12 @@ class TypeRelay {
 			if (form.id === 'access-token-form') { ++this.tokensVersion; const row = await this.request('access-tokens', 'POST', { name: form.elements.name.value }); ++this.tokensVersion; this.update('[data-access-token="' + row.id + '"]', '#access-tokens', row.html); document.querySelector('#access-token-secret').replaceChildren(this.fragment(row.secret_html)); form.reset(); return; }
 			if (form.id === 'oauth-client-form') { ++this.oauthClientsVersion; const row = await this.request('oauth/clients', 'POST', { client_name: data.get('client_name'), client_uri: data.get('client_uri') || undefined, redirect_uris: String(data.get('redirect_uris')).split(/\n|,/).map(value => value.trim()).filter(Boolean), token_endpoint_auth_method: data.get('token_endpoint_auth_method') }); ++this.oauthClientsVersion; this.update('[data-oauth-client="' + row.id + '"]', '#oauth-clients', row.html, document.querySelector('#oauth-clients').firstElementChild); document.querySelector('#oauth-client-secret').replaceChildren(...(row.secret_html ? [this.fragment(row.secret_html)] : [])); form.reset(); return; }
 			if (form.id === 'profile-form') {
-				const result = await this.request('profile', 'PATCH', { name: data.get('name'), email: data.get('email') });
+				const result = await this.request('profile', 'PATCH', { name: data.get('name'), email: data.get('email'), avatar_style: data.get('avatar_style') || undefined });
+				this.avatarStyle = result.avatar_style || 'initials';
 				this.update('#account-avatar', 'header .dropdown', result.avatar);
-				this.update('[data-member="' + result.member.id + '"]', '#members', result.member.html);
+				if (document.querySelector('[data-member="' + result.member.id + '"]')) this.update('[data-member="' + result.member.id + '"]', '#members', result.member.html);
+				for (const avatar of result.avatars || []) { const selector = '[data-viewer-avatar="' + CSS.escape(avatar.id) + '"]'; if (document.querySelector(selector)) this.update(selector, '#members', avatar.html); }
+				if (result.preview && data.get('avatar_style') === document.querySelector('#profile-avatar-style')?.value) document.querySelector('#profile-avatar-preview').replaceChildren(this.fragment(result.preview));
 				document.querySelector('#profile-status').textContent = result.pending_email ? 'Verification sent to ' + result.pending_email + '. Your current email remains ' + result.email + ' until confirmed.' : 'Profile saved.';
 				this.toast(result.pending_email ? 'Name saved. Check your new email to confirm the change.' : 'Profile saved');
 			}
@@ -463,7 +480,7 @@ class TypeRelay {
 			}
 			if (form.id === 'record-form') { this.submitting = true; if (await this.submit(data) !== false) { bootstrap.Modal.getInstance(document.querySelector('#form-modal')).hide(); this.toast('Saved'); } }
 		} catch (error) { const warning = form.querySelector('#import-error'); if (warning) { warning.textContent = error.message; warning.hidden = false; warning.scrollIntoView?.({ block: 'nearest' }); } this.toast(error.message, 'error'); }
-		finally { this.submitting = false; if (button) button.disabled = false; }
+		finally { this.submitting = false; if (form.id === 'profile-form') this.profileSaving = false; if (button) button.disabled = false; document.removeEventListener('focusin', trackProfileFocus); if (restoreProfileFocus && button.isConnected && document.activeElement === document.body && !form.closest('[hidden], [aria-hidden="true"], .modal:not(.show)')) button.focus({ preventScroll: true }); }
 	}
 	async confirm(title) { return (await Swal.fire({ title, icon: 'warning', showCancelButton: true, allowOutsideClick: false, allowEscapeKey: false, confirmButtonText: 'Confirm' })).isConfirmed; }
 	async snippet(id, value, snapshot = null) {

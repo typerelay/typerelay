@@ -1,5 +1,6 @@
 // Adapted from Streamient auth routes, profile/security views and passkey_service (AGPL-3.0).
 import bcrypt from 'bcryptjs';
+import { avatarStyles } from '../model/avatar_styles.js';
 import { AdminSettings } from './admin_settings.js';
 import { generateSecret, generateURI, verifySync } from 'otplib';
 import QRCode from 'qrcode';
@@ -77,16 +78,17 @@ export class Security {
 		await AdminSettings.send(kind, email, { url: Auth.origin + path + '?token=' + token, name });
 	}
 	static async profile(req) {
-		const name = Support.text(req.body.name);
+		if (req.body.avatar_style !== undefined) Support.assert(typeof req.body.avatar_style === 'string' && Object.hasOwn(avatarStyles, req.body.avatar_style), 'Unsupported avatar style');
 		const user = await User.findById(req.ctx.user).lean();
+		const name = req.body.name === undefined ? user.name : Support.text(req.body.name);
 		const email = req.body.email === undefined ? user.email : Security.email(req.body.email);
 		if (email !== user.email) {
 			Security.browserSession(req);
 			Support.assert(!await User.exists({ email }), 'Email address unavailable', 409);
 			await Security.issue(email, 'email-change', { user: String(user._id), old: user.email, version: user.auth_version || 0 }, '/auth/email', name);
 		}
-		await User.updateOne({ _id: user._id }, { $set: { name } });
-		return { name, email: user.email, pending_email: email !== user.email ? email : null };
+		const updated = await User.findOneAndUpdate({ _id: user._id }, { $set: { ...(req.body.name !== undefined ? { name } : {}), ...(req.body.avatar_style !== undefined ? { avatar_style: req.body.avatar_style } : {}) } }, { returnDocument: 'after' }).lean();
+		return { name: updated.name, avatar_style: updated.avatar_style || 'initials', email: user.email, pending_email: email !== user.email ? email : null };
 	}
 	static async confirmEmail(req) {
 		Support.assert(req.session.user, 'Sign in to confirm your email', 401);

@@ -259,7 +259,13 @@ test('Magic Link browser authorization finishes on the app origin in a normal ta
 test('profile name updates incrementally, email requires confirmation and cannot steal an existing address', async () => {
 	const { browser, email, user } = await Fixture.account();
 	const replacement = randomUUID() + '@example.test';
-	const result = await browser.json('/api/v2/profile', 'PATCH', { name: 'Updated Name', email: replacement });
+	const result = await browser.json('/api/v2/profile', 'PATCH', { name: 'Updated Name', email: replacement, avatar_style: 'bottts' });
+	assert.equal(result.avatar_style, 'bottts');
+	assert.match(result.avatar, new RegExp('/bottts/svg\\?seed=' + encodeURIComponent(email)));
+	await browser.json('/api/v2/profile', 'PATCH', { avatar_style: '__proto__' }, 400);
+	await browser.json('/api/v2/profile', 'PATCH', { avatar_style: ['initials'] }, 400);
+	await browser.json('/api/v2/profile', 'PATCH', { name: 'Updated Name' });
+	assert.equal((await User.findById(user._id).lean()).avatar_style, 'bottts');
 	assert.equal(result.pending_email, replacement);
 	assert.equal((await User.findById(user._id).lean()).email, email);
 	assert.match(result.avatar, /UN/);
@@ -268,6 +274,8 @@ test('profile name updates incrementally, email requires confirmation and cannot
 	await anonymous.json('/auth/email', 'POST', { token: confirm.searchParams.get('token') }, 401);
 	await browser.json('/auth/email', 'POST', { token: confirm.searchParams.get('token') });
 	assert.equal((await User.findById(user._id).lean()).email, replacement);
+	assert.equal((await User.findById(user._id).lean()).avatar_style, 'bottts');
+	assert.match(await (await browser.call('/')).text(), new RegExp('/bottts/svg\\?seed=' + encodeURIComponent(replacement)));
 	await browser.json('/auth/email', 'POST', { token: confirm.searchParams.get('token') }, 400);
 	const other = await Fixture.account();
 	await browser.json('/api/v2/profile', 'PATCH', { name: 'Updated Name', email: other.email }, 409);
@@ -286,6 +294,14 @@ test('profile name updates incrementally, email requires confirmation and cannot
 	assert.equal(dom.window.document.activeElement, name);
 	assert.equal(dom.window.document.querySelector('#account-avatar span').textContent, 'AC');
 	assert.ok(dom.window.document.querySelector('#members').textContent.includes('Avatar Changed'));
+	assert.match(dom.window.document.querySelector('#account-avatar img').src, /\/bottts\/svg/);
+	assert.equal((await User.findById(other.user._id).lean()).avatar_style, 'initials');
+	const originalAvatar = dom.window.document.querySelector('#account-avatar');
+	dom.window.client.request = async () => { throw Error('Save failed'); };
+	await dom.window.client.onSubmit({ target: form, preventDefault() {}, submitter: form.querySelector('button') });
+	assert.equal(dom.window.document.querySelector('#account-avatar'), originalAvatar);
+	assert.equal(dom.window.client.profileSaving, false);
+	assert.equal(form.querySelector('button').disabled, false);
 	dom.window.close();
 });
 test('TOTP setup, password and magic-link challenges, invalid codes, replay prevention and disable', async () => {

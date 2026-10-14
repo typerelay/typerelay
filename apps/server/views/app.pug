@@ -87,13 +87,14 @@ block content
 							section.settings-pane(id="settings-pane-profile" role="tabpanel" aria-labelledby="settings-tab-profile" hidden=false)
 								h3.h6.fw-bold Profile
 								form#profile-form.card.p-4.mb-5
+									include ajax/avatar-picker
 									label.form-label(for="profile-name") Name
 									input#profile-name.form-control.form-control-sm.mb-3(name="name" value=profile.name required)
 									label.form-label(for="profile-email") Email address
 									input#profile-email.form-control.form-control-sm.mb-3(name="email" type="email" value=profile.email required)
 									p#profile-status.text-muted New email addresses must be verified before they replace your current address.
 									.d-flex.justify-content-end
-										button.btn.btn-primary.btn-sm Save
+										button.btn.btn-primary.btn-sm Save Changes
 							section.settings-pane(id="settings-pane-security" role="tabpanel" aria-labelledby="settings-tab-security" hidden=true)
 								include ajax/security
 							section.settings-pane(id="settings-pane-team" role="tabpanel" aria-labelledby="settings-tab-team" hidden=true)

@@ -1,3 +1,4 @@
+import { avatarStyles } from './model/avatar_styles.js';
 import express from 'express';
 import { Admin } from './admin.js';
 import { AdminSettings } from './services/admin_settings.js';
@@ -73,7 +74,7 @@ export class Server {
 		}
 		const docsDist = process.env.DOCS_DIR || fileURLToPath(new URL('./docs-dist/', import.meta.url));
 		if (existsSync(docsDist)) app.use('/docs', helmet({ contentSecurityPolicy: false }), express.static(docsDist, docsOptions), (req, res) => res.status(404).sendFile(docsDist + '/404.html'));
-		app.use(helmet({ contentSecurityPolicy: { directives: { 'upgrade-insecure-requests': Auth.origin.startsWith('https:') ? [] : null, 'script-src': ["'self'", "'wasm-unsafe-eval'"], 'style-src': ["'self'", (req, res) => "'nonce-" + res.locals.styleNonce + "'"], 'style-src-elem': ["'self'", "'unsafe-inline'"], 'style-src-attr': ["'unsafe-inline'"], 'img-src': ["'self'", 'data:', ...(ProductUpdates.enabled() ? ['https:', 'http:'] : [])] } } }));
+		app.use(helmet({ contentSecurityPolicy: { directives: { 'upgrade-insecure-requests': Auth.origin.startsWith('https:') ? [] : null, 'script-src': ["'self'", "'wasm-unsafe-eval'"], 'style-src': ["'self'", (req, res) => "'nonce-" + res.locals.styleNonce + "'"], 'style-src-elem': ["'self'", "'unsafe-inline'"], 'style-src-attr': ["'unsafe-inline'"], 'img-src': ["'self'", 'data:', 'https://ava.helpmonks.com', ...(ProductUpdates.enabled() ? ['https:', 'http:'] : [])] } } }));
 		app.use(AccountAccess.middleware);
 		app.post('/billing/webhook', express.raw({ type: 'application/json' }), async (req, res) => { Support.assert(req.headers['stripe-signature'], 'Missing Stripe-Signature', 400); try { await Billing.handleWebhook(req.body, req.headers['stripe-signature']); res.json({ received: true }); } catch (error) { error.status ||= 400; throw error; } });
 		app.use(express.json({ limit: '12mb' }), express.urlencoded({ extended: false, limit: '32kb' }));
@@ -146,7 +147,7 @@ export class Server {
 			const usage = await Billing.usage(account._id);
 			const profile = await User.findById(ctx.user).lean();
 			await AdminSettings.application(req, res, profile, ctx);
-			res.render('app', { productUpdatesEnabled: ProductUpdates.eligible(req), news: req.path === '/news', product_updates: req.path === '/news' ? await ProductUpdates.listProductUpdates() : null, importFormats: Libraries.importFormats, accounts, account, ctx, libraries: await Libraries.list(ctx), team: await Team.list(ctx), profile, ...Billing.locals(account, ctx, usage), whiteLabelSettings: WhiteLabel.serialize(account) });
+			res.render('app', { productUpdatesEnabled: ProductUpdates.eligible(req), news: req.path === '/news', product_updates: req.path === '/news' ? await ProductUpdates.listProductUpdates() : null, importFormats: Libraries.importFormats, accounts, account, ctx, libraries: await Libraries.list(ctx), team: await Team.list(ctx), profile, avatarStyles, ...Billing.locals(account, ctx, usage), whiteLabelSettings: WhiteLabel.serialize(account) });
 		});
 		app.get('/snippet-assets/:account/:id', async (req, res) => { const ctx = await Support.context(req.session.user, req.params.account); const asset = await Assets.get(ctx, req.params.id, true); res.set({ 'Content-Type': asset.mime_type, 'Content-Length': String(asset.size), ETag: `"${asset.id}"`, 'Cache-Control': 'private, max-age=31536000, immutable' }).send(asset.data); });
 		app.use('/api/v1', (req, res) => res.status(426).json({ error: 'Upgrade TypeRelay: rich text requires sync protocol 6', protocol: 6 }));
@@ -268,7 +269,7 @@ export class Server {
 		app.get('/api/v2/sync', async (req, res) => res.json({ ...await Libraries.download(req.ctx, Number(req.query.cursor || 0), req.headers['x-typerelay-personal-abbreviations'] === '1'), statistics_identity: { account: req.ctx.account, user: req.ctx.user, device: req.ctx.device || null } }));
 		app.post('/api/v2/conflicts/:id', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.resolve(ctx, req.params.id, req.body, session))));
 		app.get('/api/v2/team', async (req, res) => res.json(await Team.list(req.ctx)));
-		app.post('/api/v2/team/members', async (req, res) => { const result = await Team.add(req.ctx, req.body); res.json({ ...result, html: pug.renderFile('./views/ajax/member.pug', { member: result.member, ctx: req.ctx }) }); });
+		app.post('/api/v2/team/members', async (req, res) => { const result = await Team.add(req.ctx, req.body); res.json({ ...result, html: pug.renderFile('./views/ajax/member.pug', { member: result.member, ctx: req.ctx, viewerAvatarStyle: (await User.findById(req.ctx.user).select('avatar_style').lean()).avatar_style }) }); });
 		app.post('/api/v2/team/invitations', async (req, res) => res.json(await Team.invite(req.ctx, req.body.email)));
 		app.delete('/api/v2/team/invitations/:id', async (req, res) => { Support.assert(Support.admin(req.ctx), 'Admin required', 403); await Ticket.deleteOne({ _id: Support.id(req.params.id), account: req.ctx.account, kind: 'invite' }); res.json({ deleted: req.params.id }); });
 		app.post('/api/v2/team/accept', async (req, res) => res.json(await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Team.accept(ctx, req.body.token, session))));
@@ -281,7 +282,8 @@ export class Server {
 		app.patch('/api/v2/profile', async (req, res) => {
 			const result = await Security.profile(req);
 			const member = await Member.findOne({ account: req.ctx.account, user: req.ctx.user }).lean();
-			res.json({ ...result, avatar: pug.renderFile('./views/ajax/avatar.pug', { profile: result }), member: { id: String(member._id), html: pug.renderFile('./views/ajax/member.pug', { member: { ...member, profile: result }, ctx: req.ctx }) } });
+			const team = await Team.list(req.ctx);
+			res.json({ ...result, avatar: pug.renderFile('./views/ajax/avatar.pug', { profile: result }), member: { id: String(member._id), html: pug.renderFile('./views/ajax/member.pug', { member: { ...member, profile: result }, ctx: req.ctx, viewerAvatarStyle: result.avatar_style }) }, avatars: team.members.map(item => ({ id: String(item._id), html: pug.renderFile('./views/ajax/avatar-image.pug', { person: item.profile, avatarStyle: result.avatar_style, avatarKey: String(item._id) }) })), preview: pug.renderFile('./views/ajax/avatar-image.pug', { person: result, avatarStyle: result.avatar_style, avatarKey: 'preview' }) });
 		});
 		app.patch('/api/v2/account', async (req, res) => { Support.assert(Support.admin(req.ctx), 'Admin required', 403); await Account.updateOne({ _id: req.ctx.account }, { $set: { name: Support.text(req.body.name) } }); res.json({ name: req.body.name }); });
 		app.get('/api/v2/forms/:kind', async (req, res) => {
@@ -324,7 +326,7 @@ export class Server {
 			const team = await Team.list(req.ctx);
 			const record = team[req.params.type === 'group' ? 'groups' : 'members'].find(item => String(item._id) === req.params.id);
 			Support.assert(record, 'Record missing', 404);
-			res.render('ajax/' + req.params.type, { [req.params.type]: record, team, ctx: req.ctx });
+			res.render('ajax/' + req.params.type, { [req.params.type]: record, team, ctx: req.ctx, viewerAvatarStyle: (await User.findById(req.ctx.user).select('avatar_style').lean()).avatar_style });
 		});
 		app.use((error, req, res, next) => {
 			if (res.headersSent) return next(error);
