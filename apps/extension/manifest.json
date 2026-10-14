@@ -7,6 +7,7 @@
   "permissions": ["storage", "unlimitedStorage", "alarms", "activeTab", "scripting", "nativeMessaging", "clipboardWrite"],
   "optional_host_permissions": ["https://*/*"],
   "host_permissions": ["https://app.typerelay.com/*"],
+  "content_security_policy": { "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';" },
   "background": { "service_worker": "worker.js", "type": "module" },
   "action": { "default_popup": "popup.html", "default_title": "Typerelay", "default_icon": "icon.png" },
   "options_page": "options.html",
