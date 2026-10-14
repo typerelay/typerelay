@@ -46,3 +46,7 @@ Hosted account owners and admins can manage the plan, seats, payment details and
 ## Local desktop settings
 
 The desktop panel has separate settings for the global search shortcut, launch at login, server authentication and local-library enrollment. The trigger prefix and server origin are stored per machine; they do not synchronize. See [Search panel](../desktop/panel) and [Sync](./sync).
+
+## Single sign-on
+
+Owners and admins can configure [SAML SSO](./sso-setup), test their provider, control enforcement/provisioning, and view login logs under **Single sign-on**. Available on Pro and Team.

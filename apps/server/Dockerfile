@@ -26,6 +26,7 @@ COPY apps/server ./apps/server
 COPY apps/mcp ./apps/mcp
 COPY apps/mobile ./apps/mobile
 COPY docs ./docs
+COPY .github/CONTRIBUTING.md ./.github/CONTRIBUTING.md
 RUN pnpm --filter @typerelay/docs build && mv docs/.vitepress/dist docs/.vitepress/dist-prefixed && TYPERELAY_DOCS_BASE=/ pnpm --filter @typerelay/docs build && mv docs/.vitepress/dist docs/.vitepress/dist-root && mv docs/.vitepress/dist-prefixed docs/.vitepress/dist
 RUN pnpm --filter @typerelay/server deploy --prod /opt/deploy/server && pnpm --filter @typerelay/mcp deploy --prod /opt/deploy/mcp && pnpm --filter @typerelay/mobile deploy /opt/deploy/mobile
 

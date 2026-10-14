@@ -30,3 +30,7 @@ Brand assets accept PNG, JPG, WebP, AVIF, GIF or ICO images up to 5 MB and are n
 Domain states distinguish missing DNS from pending SSL. **Refresh** rechecks the existing Cloudflare hostname; **Verify** checks the DNS CNAME and creates or recovers the Cloudflare custom hostname. Removing the domain stops branded-host routing but does not remove the account or its libraries. A Team-plan loss disables the custom hostname until the entitlement returns.
 
 Passkeys remain bound to `app.typerelay.com`; branded domains support password, magic-link, and authenticator-code sign-in.
+
+## Single sign-on
+
+[SAML SSO](../guide/sso) is available on Pro and Team, including the Pro trial. A custom domain is optional and remains a Team feature. SSO sign-in and enforcement are inactive on Free; configuration is retained and owners can use ordinary sign-in.

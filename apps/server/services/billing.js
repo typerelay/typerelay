@@ -9,9 +9,9 @@ export class Billing {
 	static catalogVersion = '2026-10';
 	static stripeClient = null;
 	static plans = {
-		free: { key: 'free', name: 'Free', rank: 0, price: 0, seats: 1, limits: { people: 1, snippets: 250, libraries: 1, machines: 1 }, capabilities: { api: false, mcp: false, sharing: false, team: false, white_label: false, sync: true, dynamic_extensions: true } },
-		pro: { key: 'pro', name: 'Pro', rank: 1, price: 4, seats: 1, limits: { people: 5, snippets: 0, libraries: 0, machines: 0 }, capabilities: { api: true, mcp: true, sharing: true, team: true, white_label: false, sync: true, dynamic_extensions: true } },
-		team: { key: 'team', name: 'Team', rank: 2, price: 8, seats: 1, limits: { people: 0, snippets: 0, libraries: 0, machines: 0 }, capabilities: { api: true, mcp: true, sharing: true, team: true, white_label: true, sync: true, dynamic_extensions: true } },
+		free: { key: 'free', name: 'Free', rank: 0, price: 0, seats: 1, limits: { people: 1, snippets: 250, libraries: 1, machines: 1 }, capabilities: { sso: false, api: false, mcp: false, sharing: false, team: false, white_label: false, sync: true, dynamic_extensions: true } },
+		pro: { key: 'pro', name: 'Pro', rank: 1, price: 4, seats: 1, limits: { people: 5, snippets: 0, libraries: 0, machines: 0 }, capabilities: { sso: true, api: true, mcp: true, sharing: true, team: true, white_label: false, sync: true, dynamic_extensions: true } },
+		team: { key: 'team', name: 'Team', rank: 2, price: 8, seats: 1, limits: { people: 0, snippets: 0, libraries: 0, machines: 0 }, capabilities: { sso: true, api: true, mcp: true, sharing: true, team: true, white_label: true, sync: true, dynamic_extensions: true } },
 	};
 
 	static hosted() {

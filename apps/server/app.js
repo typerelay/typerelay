@@ -77,6 +77,7 @@ export class Server {
 		app.use(helmet({ contentSecurityPolicy: { directives: { 'upgrade-insecure-requests': Auth.origin.startsWith('https:') ? [] : null, 'script-src': ["'self'", "'wasm-unsafe-eval'"], 'style-src': ["'self'", (req, res) => "'nonce-" + res.locals.styleNonce + "'"], 'style-src-elem': ["'self'", "'unsafe-inline'"], 'style-src-attr': ["'unsafe-inline'"], 'img-src': ["'self'", 'data:', 'https://ava.helpmonks.com', ...(ProductUpdates.enabled() ? ['https:', 'http:'] : [])] } } }));
 		app.use(AccountAccess.middleware);
 		app.post('/billing/webhook', express.raw({ type: 'application/json' }), async (req, res) => { Support.assert(req.headers['stripe-signature'], 'Missing Stripe-Signature', 400); try { await Billing.handleWebhook(req.body, req.headers['stripe-signature']); res.json({ received: true }); } catch (error) { error.status ||= 400; throw error; } });
+		app.use('/auth/sso/:account/callback', express.urlencoded({ extended: false, limit: '200kb', parameterLimit: 8 }));
 		app.use(express.json({ limit: '12mb' }), express.urlencoded({ extended: false, limit: '32kb' }));
 		const publicAssets = express.static('public');
 		app.use(['/assets/generated', `/assets/${assetVersion}/generated`], express.static('/data/editor'));
@@ -100,7 +101,8 @@ export class Server {
 			res.locals.serverOrigin = Auth.origin;
 			res.locals.passkeysAvailable = !req.boundAccount;
 			res.locals.signupEnabled = Security.signupEnabled();
-			const tokenEndpoint = ['/oauth/token', '/integrations/token', '/integrations/register'].includes(req.path);
+			if (req.boundAccount) { const account = await Billing.account(req.boundAccount); res.locals.ssoLogin = Security.ssoActive(account) ? Security.ssoUrls(account).login : null; }
+			const tokenEndpoint = ['/oauth/token', '/integrations/token', '/integrations/register'].includes(req.path) || (req.method === 'POST' && /^\/auth\/sso\/[a-f0-9]{24}\/callback$/.test(req.path));
 			const bearerApi = req.headers.authorization && /^\/api\/v[23](?:\/|$)/.test(req.path);
 			res.locals.csrf = req.session.csrf;
 			if (!tokenEndpoint && !bearerApi) res.locals.csrf = req.session.csrf ||= Support.token();
@@ -127,10 +129,10 @@ export class Server {
 			const redirect = new URL(Auth.redirect(req.query.redirect_uri, req.query.client_id));
 			res.setHeader('Content-Security-Policy', String(res.getHeader('Content-Security-Policy')).replace("form-action 'self'", "form-action 'self' " + (['typerelay:', 'com.typerelay.mobile:'].includes(redirect.protocol) ? redirect.protocol : redirect.origin)));
 			const memberships = await Member.find({ user: req.session.user }).lean();
-			const accounts = (await Account.find({ _id: { $in: memberships.map(member => member.account) } }).lean()).filter(account => !req.boundAccount || String(account._id) === req.boundAccount);
+			const accounts = (await Account.find({ _id: { $in: memberships.map(member => member.account) } }).lean()).filter(account => (!req.boundAccount || String(account._id) === req.boundAccount) && (!req.session.sso || String(account._id) === req.session.sso.account));
 			res.render('authorize', { accounts, request: req.query });
 		});
-		app.post('/oauth/authorize', async (req, res) => { Support.assert(req.session.user, 'Sign in required', 401); res.redirect(await Auth.authorize(req.session.user, req.body)); });
+		app.post('/oauth/authorize', async (req, res) => Security.authorizeWithSso(req, res));
 		ProductUpdates.mount(app);
 		app.get(['/', '/news'], async (req, res) => {
 			if (req.path === '/news' && !req.session.user) { req.session.return_to = req.originalUrl; return res.render('login'); }
@@ -138,11 +140,11 @@ export class Server {
 			if (!req.session.user) { if (req.query.invite) req.session.return_to = '/?invite=' + encodeURIComponent(req.query.invite); return res.render('login'); }
 			const memberships = await Member.find({ user: req.session.user }).lean();
 			const records = await Account.find({ _id: { $in: memberships.map(member => member.account) } }).lean();
-			const allowed = await Promise.all(records.map(account => account.is_active !== false && !account.deletion?.requested_at ? Billing.memberAllowed(account, memberships.find(member => String(member.account) === String(account._id))) : false));
+			const allowed = await Promise.all(records.map(account => (!req.session.sso || String(account._id) === req.session.sso.account) && account.is_active !== false && !account.deletion?.requested_at ? Billing.memberAllowed(account, memberships.find(member => String(member.account) === String(account._id))) : false));
 			const accounts = records.filter((account, index) => allowed[index]);
 			const account = accounts.find(account => String(account._id) === (req.boundAccount || req.query.account)) || (!req.boundAccount ? accounts[0] : null);
 			Support.assert(account, 'Account access denied', 403);
-			const ctx = await Support.context(req.session.user, String(account._id));
+			const ctx = await Security.context(req, String(account._id));
 			req.ctx = ctx;
 			res.locals.whiteLabel = WhiteLabel.public(account);
 			const usage = await Billing.usage(account._id);
@@ -150,11 +152,11 @@ export class Server {
 			await AdminSettings.application(req, res, profile, ctx);
 			res.render('app', { productUpdatesEnabled: ProductUpdates.eligible(req), news: req.path === '/news', product_updates: req.path === '/news' ? await ProductUpdates.listProductUpdates() : null, importFormats: Libraries.importFormats, accounts, account, ctx, libraries: await Libraries.list(ctx), team: await Team.list(ctx), profile, avatarStyles, ...Billing.locals(account, ctx, usage), whiteLabelSettings: WhiteLabel.serialize(account) });
 		});
-		app.get('/snippet-assets/:account/:id', async (req, res) => { const ctx = await Support.context(req.session.user, req.params.account); const asset = await Assets.get(ctx, req.params.id, true); res.set({ 'Content-Type': asset.mime_type, 'Content-Length': String(asset.size), ETag: `"${asset.id}"`, 'Cache-Control': 'private, max-age=31536000, immutable' }).send(asset.data); });
+		app.get('/snippet-assets/:account/:id', async (req, res) => { const ctx = await Security.context(req, req.params.account); const asset = await Assets.get(ctx, req.params.id, true); res.set({ 'Content-Type': asset.mime_type, 'Content-Length': String(asset.size), ETag: `"${asset.id}"`, 'Cache-Control': 'private, max-age=31536000, immutable' }).send(asset.data); });
 		app.use('/api/v1', (req, res) => res.status(426).json({ error: 'Upgrade TypeRelay: rich text requires sync protocol 6', protocol: 6 }));
 		app.use('/api/v2', async (req, res, next) => {
 			if (req.headers.authorization && req.headers['x-typerelay-sync-protocol'] !== '6') return res.status(426).json({ error: 'Upgrade TypeRelay: rich text requires sync protocol 6', protocol: 6 });
-			req.ctx = req.headers.authorization ? await Auth.bearer(req.headers.authorization.replace(/^Bearer /, '')) : await Support.context(req.session.user, req.headers['x-account-id']);
+			req.ctx = req.headers.authorization ? await Auth.bearer(req.headers.authorization.replace(/^Bearer /, '')) : await Security.context(req, req.headers['x-account-id']);
 			if (req.boundAccount) Support.assert(req.ctx.account === req.boundAccount, 'Custom domain account mismatch', 403);
 			next();
 		});
@@ -283,7 +285,7 @@ export class Server {
 		app.post('/api/v2/team/members', async (req, res) => { const result = await Team.add(req.ctx, req.body); res.json({ ...result, html: pug.renderFile('./views/ajax/member.pug', { member: result.member, ctx: req.ctx, viewerAvatarStyle: (await User.findById(req.ctx.user).select('avatar_style').lean()).avatar_style }) }); });
 		app.post('/api/v2/team/invitations', async (req, res) => res.json(await Team.invite(req.ctx, req.body.email)));
 		app.delete('/api/v2/team/invitations/:id', async (req, res) => { Support.assert(Support.admin(req.ctx), 'Admin required', 403); await Ticket.deleteOne({ _id: Support.id(req.params.id), account: req.ctx.account, kind: 'invite' }); res.json({ deleted: req.params.id }); });
-		app.post('/api/v2/team/accept', async (req, res) => res.json(await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Team.accept(ctx, req.body.token, session))));
+		app.post('/api/v2/team/accept', async (req, res) => { Support.assert(req.ctx.sso_revision == null, 'Sign in with password, Magic Link or passkey to accept account invitations', 403); res.json(await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Team.accept(ctx, req.body.token, session))); });
 		app.patch('/api/v2/team/members/:id', async (req, res) => res.json(await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Team.member(ctx, req.params.id, req.body, session))));
 		app.post('/api/v2/team/groups', async (req, res) => { const result = await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Team.group(ctx, null, req.body, session)); const team = await Team.list(req.ctx); res.json({ ...result, html: pug.renderFile('./views/ajax/group.pug', { group: result.group, team, ctx: req.ctx }) }); });
 		app.patch('/api/v2/team/groups/:id', async (req, res) => { const result = await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Team.group(ctx, req.params.id, req.body, session)); if (result.group) { const team = await Team.list(req.ctx); result.html = pug.renderFile('./views/ajax/group.pug', { group: result.group, team, ctx: req.ctx }); } res.json(result); });
@@ -342,6 +344,8 @@ export class Server {
 		app.use((error, req, res, next) => {
 			if (res.headersSent) return next(error);
 			const status = error.status || (error.code === 11000 ? 409 : 0) || (error.name === 'ValidationError' || error.name === 'CastError' ? 400 : 500);
+			if (error.code === 'sso_required' && req.method === 'GET' && !req.path.startsWith('/api/')) return res.status(403).render('sso-message', { title: 'SSO sign-in required', message: error.message, destination: error.details.login_url, recovery: error.details.recovery_url });
+			if (req.path.startsWith('/auth/sso/') && req.method === 'GET' || /^\/auth\/sso\/[^/]+\/callback$/.test(req.path)) return res.status(status).render('sso-message', { title: 'SSO sign-in failed', message: status === 500 ? 'Unable to complete sign-in. Start again or contact your administrator.' : error.message, destination: '/login' });
 			if (status === 500) { recordException(error); console.error(error); }
 			res.status(status).json({ error: status === 500 ? 'Request failed; please retry' : (error.code === 11000 ? 'Abbreviation or name already exists' : error.message), ...(typeof error.code === 'string' && error.code ? { code: error.code } : {}), ...(error.details ? { details: error.details } : {}), ...(error.settings ? { settings: error.settings, html: pug.renderFile('./views/ajax/white-label.pug', { whiteLabelSettings: error.settings }) } : {}) });
 		});

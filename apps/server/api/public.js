@@ -5,6 +5,7 @@ import pug from 'pug';
 import Ajv from 'ajv/dist/2020.js';
 import { ApiSchema } from './openapi.js';
 import { Auth } from '../services/auth.js';
+import { Security } from '../services/security.js';
 import { Support, Yaml } from '../services/support.js';
 import { Libraries } from '../services/libraries.js';
 import { Team } from '../services/team.js';
@@ -52,11 +53,11 @@ export class PublicApi {
 			if (!req.session.user) { req.session.return_to = req.originalUrl; return res.render('login', { returnTo: req.originalUrl }); }
 			res.setHeader('Content-Security-Policy', String(res.getHeader('Content-Security-Policy') || '').replace("form-action 'self'", "form-action 'self' " + new URL(req.query.redirect_uri).origin));
 			const members = await Member.find({ user: req.session.user }).lean();
-			const accounts = (await Account.find({ _id: { $in: members.map(member => member.account) } }).lean()).filter(account => (!req.boundAccount || String(account._id) === req.boundAccount) && (!client.account || Support.equal(client.account, account._id)) && Billing.entitlements(account).capabilities.api);
+			const accounts = (await Account.find({ _id: { $in: members.map(member => member.account) } }).lean()).filter(account => (!req.boundAccount || String(account._id) === req.boundAccount) && (!req.session.sso || String(account._id) === req.session.sso.account) && (!client.account || Support.equal(client.account, account._id)) && Billing.entitlements(account).capabilities.api);
 			Support.assert(accounts.length, 'API and MCP access require Pro or Team', 403);
 			res.render('integration-authorize', { client, scopes, request: req.query, accounts });
 		});
-		app.post('/integrations/authorize', async (req, res) => { Support.assert(req.session.user, 'Sign in required', 401); res.redirect(await Auth.approveIntegration(req.session.user, req.body)); });
+		app.post('/integrations/authorize', async (req, res) => Security.authorizeWithSso(req, res, true));
 		app.post('/integrations/delegate', authLimit, async (req, res) => {
 			const expected = Buffer.from(process.env.JWT_SECRET || 'change-me');
 			const supplied = Buffer.from(String(req.headers['x-mcp-secret'] || ''));

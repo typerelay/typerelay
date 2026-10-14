@@ -1,0 +1,9 @@
+extends auth-layout
+block head
+	title= title + ' — TypeRelay'
+block content
+	h1.h2.mb-3= title
+	p.mb-5= message
+	a.btn.btn-primary.btn-sm(href=destination) Continue
+	if recovery
+		a.btn.btn-link.btn-sm.ms-3(href=recovery) Owner recovery
