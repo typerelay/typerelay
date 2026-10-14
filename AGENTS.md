@@ -9,6 +9,8 @@
 
 ## Git and worktrees
 - `develop` is the integration and push destination for product changes. Never substitute `main`, `master`, or a detached HEAD.
+- Read `.github/CONTRIBUTING.md` before creating a pull request. Base contribution branches on `develop`; all contribution pull requests must target `develop`.
+- Set the PR base explicitly with `gh pr create --base develop` and verify it after creation and before merging. `main` is release-only; update it only through explicitly authorized release work.
 - After plan approval, fetch the latest changes, update `develop` without discarding existing work, and create a uniquely named task branch and worktree from it. Plan approval authorizes this branch/worktree and its completion lifecycle. Respect an explicitly supplied approved feature branch.
 - Implement, review, and test in the task worktree. Verify the path and branch before edits or Git mutations; include both in every subagent brief.
 - Commit completed code. If `develop` advances, incorporate it into the task branch, resolve conflicts, and repeat affected checks and review.

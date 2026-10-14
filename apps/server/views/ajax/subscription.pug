@@ -3,6 +3,11 @@
 	if !billingEnabled
 		.alert.alert-secondary Billing is managed only by the hosted TypeRelay service.
 	else
+		if account.billing && account.billing.checkout && account.billing.checkout.plan
+			.alert.alert-info
+				span= `Checkout is open for ${account.billing.checkout.seat_quantity} ${plans[account.billing.checkout.plan].name} seats. Finish checkout or cancel it to choose a different quantity.`
+				if canManageBilling
+					button.btn.btn-outline-secondary.btn-sm.ms-3(type="button" data-cancel-pending-checkout) Cancel checkout
 		if isTrialing
 			.alert.alert-info
 				span Your Pro trial is active. 
@@ -14,7 +19,10 @@
 		else
 			.alert.alert-success= `Your ${plans[plan].name} subscription is active.`
 		if account.billing && account.billing.scheduled_change && account.billing.scheduled_change.plan
-			.alert.alert-info= `Change to ${plans[account.billing.scheduled_change.plan].name} is scheduled for ${new Date(account.billing.scheduled_change.effective_at).toLocaleDateString()}.`
+			.alert.alert-info
+				span= account.billing.scheduled_change.pending ? 'The subscription change is awaiting confirmation. Cancel it before trying again.' : `Change to ${plans[account.billing.scheduled_change.plan].name} with ${account.billing.scheduled_change.seat_quantity} seats is scheduled for ${new Date(account.billing.scheduled_change.effective_at).toLocaleDateString()}.`
+				if canManageBilling
+					button.btn.btn-outline-secondary.btn-sm.ms-3(type="button" data-cancel-billing-change) Cancel scheduled change
 		.table-responsive.mb-5
 			table.table.table-sm.align-middle
 				tbody
@@ -32,55 +40,56 @@
 						td= `${usage.machines} / ${entitlements.limits.machines || 'Unlimited'}`
 					tr
 						th People and invitations
-						td= plan === 'team' ? `${usage.people + usage.invitations} / ${account.billing.seat_quantity || plans.team.seats}` : `${usage.people + usage.invitations} / 1`
+						td= `${usage.people + usage.invitations} / ${seatCapacity || 'Unlimited'}`
 		if canManageBilling
 			.d-flex.flex-wrap.justify-content-end.gap-3.mb-5
 				if isTrialing || plan === 'free'
 					if trialAvailable
 						button.btn.btn-outline-primary.btn-sm(type="button" data-start-trial) Start 7-day Pro trial
-					button.btn.btn-primary.btn-sm(type="button" data-checkout-plan="pro") Upgrade to Pro — $8/month
-					button.btn.btn-outline-primary.btn-sm(type="button" data-checkout-team) Choose Team
+					button.btn.btn-primary.btn-sm(type="button" data-checkout-plan="pro")= `Choose Pro — $${plans.pro.price}/user/month`
+					button.btn.btn-outline-primary.btn-sm(type="button" data-checkout-plan="team")= `Choose Team — $${plans.team.price}/user/month`
 				else
 					button.btn.btn-outline-secondary.btn-sm(type="button" data-billing-portal) Manage billing, invoices, or cancellation
-			if plan === 'team' && !isTrialing
-				form#team-seats-form.card.p-3.mb-5
-					h3.h6.fw-bold Team seats
-					p.text-muted Five people are included. Additional seats cost $6 per person each month.
-					label.form-label(for="team-seats") Purchased seats
-					input#team-seats.form-control.form-control-sm.mb-3(type="number" name="seats" min="5" max="10000" value=account.billing.seat_quantity || 5 required)
+			if !isTrialing && plan !== 'free'
+				form#subscription-seats-form.card.p-3.mb-5(data-billing-change data-plan=plan)
+					h3.h6.fw-bold= `${plans[plan].name} seats`
+					p.text-muted= `$${plans[plan].price} per user each month, including the owner. Pending invitations reserve seats.`
+					label.form-label(for="subscription-seats") Purchased seats
+					input#subscription-seats.form-control.form-control-sm.mb-3(type="number" name="seats" min="1" max=plans[plan].limits.people || 10000 value=Math.min(account.billing.seat_quantity || 1, plans[plan].limits.people || 10000) required)
 					.d-flex.justify-content-between
 						button.btn.btn-outline-secondary.btn-sm(type="reset") Cancel
 						button.btn.btn-primary.btn-sm(type="submit") Update seats
-				form#change-to-pro-form.mb-5
-					.d-flex.justify-content-end
-						button.btn.btn-outline-primary.btn-sm(type="submit") Change to Pro at renewal
-			else if plan === 'pro' && !isTrialing
-				form#change-to-team-form.card.p-3.mb-5
-					h3.h6.fw-bold Upgrade to Team
-					label.form-label(for="upgrade-team-seats") Purchased seats
-					input#upgrade-team-seats.form-control.form-control-sm.mb-3(type="number" name="seats" min="5" max="10000" value="5" required)
+				- const target = plan === 'team' ? 'pro' : 'team'
+				form#change-plan-form.card.p-3.mb-5(data-billing-change data-plan=target)
+					h3.h6.fw-bold= `Change to ${plans[target].name}`
+					p.text-muted= target === 'pro' ? 'Up to five people. Remove extra members and invitations before scheduling a change at renewal.' : 'All Pro features, white-labeling, and custom domains.'
+					label.form-label(for="change-plan-seats") Purchased seats
+					input#change-plan-seats.form-control.form-control-sm.mb-3(type="number" name="seats" min="1" max=plans[target].limits.people || 10000 value=Math.min(Math.max(1, usage.people + usage.invitations), plans[target].limits.people || 10000) required)
 					.d-flex.justify-content-between
 						button.btn.btn-outline-secondary.btn-sm(type="reset") Cancel
-						button.btn.btn-primary.btn-sm(type="submit") Continue in Stripe
-			if (plan === 'free' || isTrialing)
-				form#checkout-team-form.card.p-3.mb-5(hidden)
-					h3.h6.fw-bold Team seats
-					label.form-label(for="checkout-team-seats") Purchased seats
-					input#checkout-team-seats.form-control.form-control-sm.mb-3(type="number" name="seats" min="5" max="10000" value="5" required)
-					.d-flex.justify-content-between
-						button.btn.btn-outline-secondary.btn-sm(type="button" data-cancel-team-checkout) Cancel
-						button.btn.btn-primary.btn-sm(type="submit") Continue — $39/month
+						button.btn.btn-primary.btn-sm(type="submit")= target === 'pro' ? 'Change at renewal' : 'Continue in Stripe'
+			else
+				each target in ['pro', 'team']
+					form.card.p-3.mb-5(id=`checkout-${target}-form` data-billing-checkout data-plan=target hidden)
+						h3.h6.fw-bold= `${plans[target].name} — $${plans[target].price}/user/month`
+						p.text-muted= target === 'pro' ? 'For 1–5 users, including the owner.' : 'Per user from the first seat, including the owner.'
+						label.form-label(for=`checkout-${target}-seats`) Purchased seats
+						input.form-control.form-control-sm.mb-3(id=`checkout-${target}-seats` type="number" name="seats" min="1" max=plans[target].limits.people || 10000 value=Math.min(Math.max(1, usage.people + usage.invitations), plans[target].limits.people || 10000) required)
+						.d-flex.justify-content-between
+							button.btn.btn-outline-secondary.btn-sm(type="button" data-cancel-checkout) Cancel
+							button.btn.btn-primary.btn-sm(type="submit") Continue in Stripe
 		h3.h6.fw-bold Plans
 		.row.g-3.mb-5
 			.col-lg-4
 				.card.p-3.h-100
 					h3.h6.fw-bold Free — $0
-					p.small.mb-0 1 person, 250 snippets, 1 library, 1 synced machine, local dynamic extensions; no API or MCP.
+					p.small.mb-0 1 person, 250 snippets, 1 library, 1 synced machine, local AI and dynamic extensions; no API or MCP.
 			.col-lg-4
 				.card.p-3.h-100
-					h3.h6.fw-bold Pro — $8/month
-					p.small.mb-0 1 person, unlimited snippets, libraries and machines, web sync, dynamic extensions, API and MCP.
+					h3.h6.fw-bold= `Pro — $${plans.pro.price}/user/month`
+					p.small.mb-0 Up to 5 users. Unlimited snippets, libraries and machines, sync, shared libraries, team management, statistics, API, MCP, private web AI and local AI.
 			.col-lg-4
 				.card.p-3.h-100
-					h3.h6.fw-bold Team — $39/month
-					p.small.mb-0 5 people included, Pro features, shared libraries, team management and white-labeling. Extra seats are $6/month.
+					h3.h6.fw-bold= `Team — $${plans.team.price}/user/month`
+					p.small.mb-0 No plan user cap. Everything in Pro, white-labeling and custom domains. Billed per user from the first seat.
+		p.small.text-muted Prices in USD, billed monthly per user, excluding applicable taxes. Seat reductions and changes to Pro take effect at renewal.

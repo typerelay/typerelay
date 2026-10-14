@@ -8,11 +8,7 @@
 				form#statistics-filters.row.align-items-center.mb-5
 					.col-md-3.mb-3
 						label.form-label(for="statistics-scope") Report
-						select#statistics-scope.form-select.form-select-sm(name="scope")
-							option(value="personal") Personal
-							if ctx.role === 'owner' || ctx.role === 'admin'
-								if ctx.entitlements && ctx.entitlements.plan === 'team'
-									option(value="team") Team
+						include statistics-scope
 					.col-md-3.mb-3
 						label.form-label(for="statistics-range") Date range
 						select#statistics-range.form-select.form-select-sm(name="range")

@@ -369,6 +369,13 @@ main() {
 	repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || fail "not inside a git repository"
 	cd "$repo_root"
 
+	if [ "$dry_run" -eq 0 ] && [ -z "${NITAI_RELEASE_CONFIG:-}" ]; then
+		local release_launcher="${HOME}/repos/helpmonks-install-script/scripts/github-app-release/release.mjs"
+		[ -f "$release_launcher" ] || fail "shared release launcher missing; update ~/repos/helpmonks-install-script"
+		require_command node
+		exec node "$release_launcher" --remote "$remote" -- bash "$repo_root/release.sh" "$@"
+	fi
+
 	if [ -z "$(current_branch)" ]; then
 		fail "detached HEAD is not supported"
 	fi

@@ -17,7 +17,7 @@ execFileSync('cargo', ['build', '--release', '-p', 'typerelay-template-wasm', '-
 for (const name of ['usage.js', 'worker.js', 'content.js', 'runtime.js', 'messages.js', 'popup.js', 'popup.css', 'options.js', 'options.css', 'prompt.css', 'prompt.js', 'notice.css']) copyFileSync(new URL(name, import.meta.url), new URL(name, `file://${dist}/`));
 copyFileSync(new URL('../../target/wasm32-unknown-unknown/release/typerelay_template_wasm.wasm', import.meta.url), new URL('template.wasm', `file://${dist}/`));
 copyFileSync(new URL('../desktop/src-tauri/icons/icon.png', import.meta.url), new URL('icon.png', `file://${dist}/`));
-for (const name of ['popup', 'options', 'prompt', 'notice']) writeFileSync(new URL(`${name}.html`, `file://${dist}/`), pug.renderFile(fileURLToPath(new URL(`${name}.pug`, import.meta.url)), { pretty: true }));
+for (const name of ['popup', 'options', 'prompt']) writeFileSync(new URL(`${name}.html`, `file://${dist}/`), pug.renderFile(fileURLToPath(new URL(`${name}.pug`, import.meta.url)), { pretty: true }));
 const manifest = JSON.parse(readFileSync(new URL('manifest.json', import.meta.url), 'utf8'));
 if (packaging) delete manifest.key;
 manifest.host_permissions = [`${origin}/*`];

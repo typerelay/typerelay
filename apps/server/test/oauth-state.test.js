@@ -26,6 +26,7 @@ before(async () => {
 	mock.method(User, 'updateOne', async () => ({ modifiedCount: 1 }));
 	mock.method(Support, 'context', async () => ({ user: 'user', account: 'account' }));
 	mock.method(Billing, 'entitlements', () => ({ capabilities: { api: true } }));
+	mock.method(Billing, 'account', async () => ({ _id: 'account' }));
 	mock.method(Billing, 'assertApi', () => {});
 	mock.method(Billing, 'assertDeviceEnrollment', async () => {});
 	mock.method(Ticket, 'create', async ticket => { StateFixture.tickets.push(ticket); return ticket; });

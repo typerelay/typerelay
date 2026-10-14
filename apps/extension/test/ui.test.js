@@ -1,18 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
-import pug from 'pug';
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 function page(name) {
-	const html = pug.renderFile(fileURLToPath(new URL('../' + name + '.pug', import.meta.url)));
+	const html = readFileSync(new URL('../dist/' + name + '.html', import.meta.url), 'utf8');
 	const dom = new JSDOM(html, { url: 'https://extension.test', pretendToBeVisual: true });
 	globalThis.window = dom.window;
 	globalThis.document = dom.window.document;
+	globalThis.localStorage = dom.window.localStorage;
 	return dom;
 }
 
@@ -23,8 +22,8 @@ test('popup stays empty until search and Enter copies the arrow-selected snippet
 	const items = [...Array.from({ length: 101 }, (_, index) => ({ id: 'generic-' + index, title: 'Snippet ' + index, trigger: 'snip' + index, library: 'Mine' })), { id: 'alpha', title: 'Alpha', trigger: 'al', library: 'Mine' }, { id: 'alpine', title: 'Alpine', trigger: 'alp', library: 'Mine' }];
 	let closed = 0;
 	dom.window.close = () => { closed++; };
-	globalThis.chrome = { runtime: { sendMessage: async message => ({ ok: true, value: message.type === 'status' ? { connected: true, bridgeVerified: true } : message.type === 'snapshot' ? { items } : message.type === 'prepare' ? { item: { content: { type: 'plain_text' } }, rendered: { text: message.id, fields: [] } } : assert.fail('Unexpected request: ' + message.type) }), openOptionsPage: async () => {} } };
-	await import('../popup.js?ui=' + randomUUID());
+	globalThis.chrome = { storage: { onChanged: { addListener() {} } }, runtime: { sendMessage: async message => ({ ok: true, value: message.type === 'status' ? { connected: true, bridgeVerified: true } : message.type === 'snapshot' ? { items } : message.type === 'prepare' ? { item: { content: { type: 'plain_text' } }, rendered: { text: message.id, fields: [] } } : message.type === 'ai-request' ? { status: { enabled: false, effective: {} } } : message.type === 'usage' ? {} : assert.fail('Unexpected request: ' + message.type) }), openOptionsPage: async () => {} } };
+	await import('../dist/popup.js?ui=' + randomUUID());
 	await tick();
 	const search = document.querySelector('#search');
 	const results = document.querySelector('#results');
@@ -52,8 +51,8 @@ test('signed-out popup opens the options page', async () => {
 	let opened = 0;
 	let closed = 0;
 	dom.window.close = () => { closed++; };
-	globalThis.chrome = { runtime: { sendMessage: async () => ({ ok: true, value: { connected: false } }), openOptionsPage: async () => { opened++; } } };
-	await import('../popup.js?ui=' + randomUUID());
+	globalThis.chrome = { storage: { onChanged: { addListener() {} } }, runtime: { sendMessage: async () => ({ ok: true, value: { connected: false } }), openOptionsPage: async () => { opened++; } } };
+	await import('../dist/popup.js?ui=' + randomUUID());
 	await tick();
 	assert.equal(opened, 1);
 	assert.equal(closed, 1);
@@ -62,8 +61,8 @@ test('signed-out popup opens the options page', async () => {
 test('options page updates account, sync and prefix controls in place', async () => {
 	page('options');
 	let state = { connected: false, authPending: false, count: 0, prefix: ';', origin: 'https://tr.n.lan' };
-	let changed;
-	globalThis.chrome = { permissions: { request: async ({ origins }) => { assert.deepEqual(origins, ['https://custom.example.com/*']); return true; } }, storage: { onChanged: { addListener: listener => { changed = listener; } } }, runtime: { getManifest: () => ({ version: '1.2.0' }), sendMessage: async message => {
+	const listeners = [];
+	globalThis.chrome = { permissions: { request: async ({ origins }) => { assert.deepEqual(origins, ['https://custom.example.com/*']); return true; } }, storage: { onChanged: { addListener: listener => { listeners.push(listener); } } }, runtime: { getManifest: () => ({ version: '1.2.0' }), sendMessage: async message => {
 		if (message.type === 'prefix' && message.value === '.') return { ok: false, error: 'Save failed' };
 		if (message.type === 'connect') state = { ...state, authPending: true, origin: message.origin };
 		if (message.type === 'sync') state = { ...state, count: 4, lastSync: Date.now() };
@@ -71,7 +70,7 @@ test('options page updates account, sync and prefix controls in place', async ()
 		if (message.type === 'disconnect') state = { ...state, connected: false, count: 0 };
 		return { ok: true, value: message.type === 'status' ? state : {} };
 	} } };
-	await import('../options.js?ui=' + randomUUID());
+	await import('../dist/options.js?ui=' + randomUUID());
 	await tick();
 	assert.equal(document.querySelector('#version').textContent, 'Typerelay Extension Version 1.2.0');
 	assert.equal(document.querySelector('a[href="mailto:hi@typerelay.com"]').textContent, 'Email');
@@ -89,7 +88,7 @@ test('options page updates account, sync and prefix controls in place', async ()
 	assert.equal(state.origin, 'https://custom.example.com');
 	assert.equal(document.querySelector('section'), accountSection);
 	state = { ...state, connected: true, authPending: false, count: 3 };
-	changed({ tokens: {} }, 'local');
+	for (const changed of listeners) changed({ tokens: {} }, 'local');
 	await tick();
 	assert.equal(document.querySelector('section'), accountSection);
 	assert.equal(document.querySelector('#sync').disabled, false);
@@ -119,14 +118,14 @@ test('Detail previews toggle independently without inserting and ignore stale re
 	const pending = [];
 	const items = [{ id: 'one', title: 'One', library: 'Mine' }, { id: 'two', title: 'Two', library: 'Mine' }];
 	dom.window.close = () => {};
-	globalThis.chrome = { runtime: { sendMessage: async message => {
+	globalThis.chrome = { storage: { onChanged: { addListener() {} } }, runtime: { sendMessage: async message => {
 		if (message.type === 'status') return { ok: true, value: { connected: true, bridgeVerified: true, origin: 'https://custom.example.com' } };
 		if (message.type === 'snapshot') return { ok: true, value: { items } };
 		if (message.type === 'prepare') { assert.equal(message.preview, true); return new Promise(resolve => pending.push(resolve)); }
 		if (message.type === 'insert') inserted.push(message.id);
 		return { ok: true, value: {} };
 	} } };
-	await import('../popup.js?ui=' + randomUUID());
+	await import('../dist/popup.js?ui=' + randomUUID());
 	await tick();
 	const search = document.querySelector('#search');
 	const results = document.querySelector('#results');
@@ -205,10 +204,12 @@ async function copyPopup(rendered, type = 'plain_text', write = async () => {}) 
 		messages.push(message);
 		if (message.type === 'status') return { ok: true, value: { connected: true, bridgeVerified: false } };
 		if (message.type === 'snapshot') return { ok: true, value: { items: [{ id: 'copy', title: 'Copy', library: 'Mine' }] } };
+		if (message.type === 'ai-request') { assert.equal(message.path, '/settings'); return { ok: true, value: { status: { enabled: false, effective: {} } } }; }
+		if (message.type === 'usage') return { ok: true, value: {} };
 		assert.equal(message.type, 'prepare', 'copy must never send page insertion messages');
 		return { ok: true, value: { item: { content: { type } }, rendered: typeof rendered === 'function' ? rendered(message) : rendered } };
 	} } };
-	await import('../popup.js?ui=' + randomUUID());
+	await import('../dist/popup.js?ui=' + randomUUID());
 	await tick();
 	const search = document.querySelector('#search');
 	search.value = 'copy';
@@ -307,7 +308,6 @@ test('rendering failure leaves the clipboard unchanged and popup open', async ()
 });
 
 test('copying a cursor snippet strips marker output and explains omitted positioning', async () => {
- globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
  const fixture = await copyPopup({ text: 'Hello world', fields: [], cursor: { utf16: 6, backward_graphemes: 5, backward_utf16: 5 } }, 'template');
  fixture.click(); await tick();
  assert.deepEqual(fixture.writes, ['Hello world']); assert.match(fixture.dom.window.document.querySelector('#status').textContent, /Cursor positioning was omitted/);

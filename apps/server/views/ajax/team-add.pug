@@ -1,0 +1,36 @@
+#team-add-container.col-lg-5(hidden=!(ctx.entitlements.capabilities.team && ['owner', 'admin'].includes(ctx.role)) data-team-capability=String(ctx.entitlements.capabilities.team))
+	if ctx.entitlements.capabilities.team && ['owner', 'admin'].includes(ctx.role)
+		.card.team-settings-card.h-100
+			.card-body
+				h6.card-title.d-flex.align-items-center.gap-2.mb-3
+					svg(width="1.25rem" height="1.25rem" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true")
+						circle(cx="9" cy="7" r="4")
+						path(d="M3 21v-2a6 6 0 0 1 6-6h2")
+						path(d="M19 8v6")
+						path(d="M16 11h6")
+					span Add teammate
+				form#team-member-form
+					label.form-label(for="team-member-name") Name
+					input#team-member-name.form-control.form-control-sm.mb-3(name="name" required autocomplete="name")
+					label.form-label(for="team-member-email") Email
+					input#team-member-email.form-control.form-control-sm.mb-3(name="email" type="email" required autocomplete="email")
+					label.form-label(for="team-member-password") Password
+					.input-group.input-group-sm
+						input#team-member-password.form-control.form-control-sm(name="password" type="text" readonly autocomplete="off" spellcheck="false" aria-describedby="team-member-password-help team-member-password-status")
+						button#team-member-copy-password.btn.btn-outline-secondary.btn-sm.d-inline-flex.align-items-center(type="button" aria-label="Copy password" title="Copy password")
+							svg(width="0.875rem" height="0.875rem" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true")
+								rect(x="9" y="9" width="13" height="13" rx="2")
+								path(d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1")
+							span.ms-1 Copy
+						button#team-member-rotate-password.btn.btn-outline-secondary.btn-sm.d-inline-flex.align-items-center(type="button" aria-label="Rotate password" title="Rotate password")
+							svg(width="0.875rem" height="0.875rem" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true")
+								path(d="M20 7h-5V2")
+								path(d="M20 7a9 9 0 1 0 2 9")
+							span.ms-1 Rotate
+					p#team-member-password-help.small.text-muted.mt-2.mb-1 Generated for new Type Relay users. Existing users keep their password.
+					p#team-member-password-status.small.text-muted.mb-3(aria-live="polite")
+					.form-check.form-switch.mb-3
+						input#team-member-send-welcome.form-check-input.h-20px.w-30px(type="checkbox" role="switch" name="send_welcome_email" checked)
+						label.form-check-label(for="team-member-send-welcome") Send email notification
+					.text-end
+						button.btn.btn-primary.btn-sm(type="submit") Add user

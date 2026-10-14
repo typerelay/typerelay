@@ -139,9 +139,9 @@ docker compose down -v
 
 ## Contributing
 
-Contributions and [bug reports](https://github.com/typerelay/typerelay/issues) are welcome. Maintainer and Codex work stays on `develop`: pull before starting, commit focused changes and push `develop` directly. Do not create a topic branch or pull request unless the task explicitly requests one. External pull requests target `develop` without a required branch-name convention. Include focused tests and describe manual verification where desktop input behavior changes.
+Contributions and [bug reports](https://github.com/typerelay/typerelay/issues) are welcome. Start contribution branches from current `develop`; all contribution pull requests target `develop`. Maintainer and agent tasks use a task branch and worktree, then integrate into `develop` after independent review and validation. External branch names are unrestricted. `main` is reserved for explicitly authorized releases.
 
-Read the [development workflow](docs/development/workflow.md) before contributing. Please do not include real snippets, credentials, signing material or local SQLite databases in issues, fixtures or commits.
+Read the [contributor guide](.github/CONTRIBUTING.md) and [development workflow](docs/development/workflow.md) before contributing. Include focused tests and describe manual verification where desktop input behavior changes. Please do not include real snippets, credentials, signing material or local SQLite databases in issues, fixtures or commits.
 
 ## Security and attribution
 

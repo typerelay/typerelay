@@ -49,13 +49,15 @@ async function notice(message) {
 	try {
 		const host = document.createElement('div');
 		const shadow = host.attachShadow({ mode: 'closed' });
-		const html = await fetch(chrome.runtime.getURL('notice.html')).then(response => response.text());
 		const css = await fetch(chrome.runtime.getURL('notice.css')).then(response => response.text());
 		const style = document.createElement('style');
 		style.textContent = css;
 		const panel = document.createElement('div');
-		panel.innerHTML = html;
-		panel.querySelector('[data-message]').textContent = message;
+		panel.className = 'notice';
+		panel.setAttribute('role', 'alert');
+		const text = document.createElement('span');
+		text.textContent = message;
+		panel.append(text);
 		shadow.append(style, panel);
 		document.documentElement.append(host);
 		setTimeout(() => host.remove(), 5000);
@@ -104,7 +106,8 @@ function insert(editor, saved, expected, erase, rendered, rich) {
 	if (erase) { selection.collapseToEnd(); for (let index = 0; index < erase; index++) selection.modify('extend', 'backward', 'character'); }
 	if (expected && selection.toString() !== expected) { restore(editor, saved); throw new Error('The rich editor moved; abbreviation left unchanged'); }
 	if (rich && rendered.html) {
-		if (!document.execCommand('insertHTML', false, rendered.html)) { restore(editor, saved); throw new Error('This editor rejected formatted insertion'); }
+		// Chrome can insert the HTML but report failure when its final node is formatting whitespace.
+		if (!document.execCommand('insertHTML', false, rendered.html.trim())) { restore(editor, saved); throw new Error('This editor rejected formatted insertion'); }
 	} else if (!document.execCommand('insertText', false, rendered.text)) { restore(editor, saved); throw new Error('This editor rejected insertion'); }
 	if (rendered.cursor) { for (let index = 0; index < rendered.cursor.backward_graphemes; index++) selection.modify('move', 'backward', 'character'); }
 }

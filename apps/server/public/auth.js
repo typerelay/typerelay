@@ -3,15 +3,31 @@ import { client } from './app.js';
 
 class AccountUI {
 	totpAction = 'confirm';
+	ssoVersion = 0;
+	ssoRevision = -1;
 	constructor() {
 		document.addEventListener('submit', event => this.submit(event));
 		document.addEventListener('click', event => this.click(event).catch(error => client.toast(error.message, 'error')));
+		document.addEventListener('sso-settings-open', () => this.sso().catch(error => client.toast(error.message, 'error')));
 		document.querySelector('#settings')?.addEventListener('show.bs.modal', () => this.security().catch(error => client.toast(error.message, 'error')));
 		document.querySelector('#settings')?.addEventListener('hidden.bs.modal', () => {
+			document.querySelector('#sso-recovery-secret')?.remove();
 			const password = document.querySelector('#new-password');
 			if (password) password.value = '';
 			document.querySelector('#password-result')?.classList.add('d-none');
 		});
+		if (location.hash === '#settings-sso' && document.querySelector('#sso-settings-container')) this.sso().catch(error => client.toast(error.message, 'error'));
+	}
+	async sso(method = 'GET', body, suffix = '') {
+		const version = ++this.ssoVersion;
+		const result = await client.request('sso' + suffix, method, body);
+		if (version !== this.ssoVersion || result.revision < this.ssoRevision) return;
+		this.ssoRevision = result.revision;
+		const panel = document.querySelector('#settings .modal-body');
+		const scroll = panel?.scrollTop;
+		client.update('#sso-configuration', '#sso-settings-container', result.html);
+		if (panel) panel.scrollTop = scroll;
+		if (result.secret_html) client.update('#sso-recovery-secret', '#sso-secret-container', result.secret_html);
 	}
 	async finish(result) {
 		if (result.csrf) document.querySelector('meta[name=csrf-token]').content = result.csrf;
@@ -21,7 +37,9 @@ class AccountUI {
 	async submit(event) {
 		const form = event.target;
 		const routes = { 'password-login-form': '/auth/password', 'signup-form': '/auth/signup', 'forgot-form': '/auth/forgot-password', 'factor-form': '/auth/two-factor', 'redeem-reset-form': '/auth/reset-password', 'confirm-email-form': '/auth/email' };
-		if (!routes[form.id] && !['totp-form', 'passkey-add-form'].includes(form.id)) return;
+		routes['sso-start-form'] = '/auth/sso/start';
+		if (form.id === 'sso-recover-form') routes[form.id] = '/auth/sso/' + form.dataset.account + '/recovery';
+		if (!routes[form.id] && !['totp-form', 'passkey-add-form', 'sso-settings-form'].includes(form.id)) return;
 		event.preventDefault();
 		const button = event.submitter;
 		if (button) button.disabled = true;
@@ -38,6 +56,11 @@ class AccountUI {
 					document.querySelector('#public-password-result').classList.remove('d-none');
 					form.hidden = true;
 				} else await this.finish(result);
+			} else if (form.id === 'sso-settings-form') {
+				const body = { ...fields, revision: Number(form.dataset.revision), enabled: Boolean(fields.enabled), enforce: Boolean(fields.enforce), provision: Boolean(fields.provision) };
+				if (body.enforce && form.dataset.enforced !== 'true' && !await client.confirm('Require SSO for this account? Members and connected apps must authenticate through SSO. Keep your owner recovery code available.')) return;
+				await this.sso('PUT', body);
+				client.toast('Single sign-on settings saved');
 			} else if (form.id === 'totp-form') {
 				const result = await client.request('security/totp/' + this.totpAction, 'POST', fields);
 				this.factorState(result.enabled);
@@ -79,6 +102,19 @@ class AccountUI {
 	async click(event) {
 		const button = event.target.closest('button');
 		if (!button) return;
+		if (button.hasAttribute('data-sso-refresh')) {
+			button.disabled = true;
+			try { await this.sso(); } finally { button.disabled = false; }
+		}
+		if (button.hasAttribute('data-sso-recovery-code') && await client.confirm('Generate a new recovery code? The previous code will stop working. Save the new code outside TypeRelay.')) {
+			button.disabled = true;
+			try { await this.sso('POST', {}, '/recovery-code'); } finally { button.disabled = false; }
+		}
+		if (button.hasAttribute('data-sso-hide-secret')) document.querySelector('#sso-recovery-secret')?.remove();
+		if (button.hasAttribute('data-sso-logs')) {
+			button.disabled = true;
+			try { const result = await client.request('sso/logs'); client.update('#sso-login-logs', '#sso-logs-container', result.html); } finally { button.disabled = false; }
+		}
 		if (button.id === 'magic-link-btn' || button.id === 'magic-link-back') {
 			const magic = button.id === 'magic-link-btn';
 			document.querySelector('#login-options').classList.toggle('d-none', magic);

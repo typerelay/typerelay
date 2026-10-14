@@ -14,12 +14,14 @@ export class Team {
 	}
 	static async invite(ctx, email) {
 		Support.assert(Support.admin(ctx), 'Admin required', 403);
-		await Billing.assertSeatCapacity(ctx);
 		email = Support.text(email, 254).toLowerCase();
 		Support.assert(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email), 'Invalid email');
 		const token = Support.token();
 		let invitation;
-		await AccountAccess.write(ctx.account, async session => { [invitation] = await Ticket.create([{ hash: Support.hash(token), kind: 'invite', email, account: ctx.account, expires: new Date(Date.now() + 7 * 86400000) }], { session }); });
+		await AccountAccess.write(ctx.account, async session => {
+			await Billing.assertSeatCapacity(ctx, 1, session);
+			[invitation] = await Ticket.create([{ hash: Support.hash(token), kind: 'invite', email, account: ctx.account, expires: new Date(Date.now() + 7 * 86400000) }], { session });
+		});
 		const [inviter, account] = await Promise.all([User.findById(ctx.user).select('name').lean(), Account.findById(ctx.account).select('name').lean()]);
 		await AdminSettings.send('invite', email, { url: Auth.origin + '/?invite=' + token, inviterName: inviter?.name || 'Your team', tenantName: account?.name || 'your team' });
 		return { invited: email, invitation: String(invitation._id) };

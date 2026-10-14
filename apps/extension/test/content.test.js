@@ -21,7 +21,7 @@ async function fixture() {
 		if (message.type === 'prepare') { if (delayed) await delayed; return { ok: true, value: { item: { content: { type: 'plain_text' } }, rendered: { text: 'Hello' } } }; }
 		return { ok: true, value: {} };
 	} } };
-	dom.window.fetch = async () => ({ text: async () => '<span data-message></span>' });
+	dom.window.fetch = async () => ({ text: async () => '' });
 	document.execCommand = (_command, _ui, text) => { const editor = document.activeElement; editor.value = editor.value.slice(0, editor.selectionStart) + text + editor.value.slice(editor.selectionEnd); return true; };
 	dom.window.eval(readFileSync(new URL('../content.js', import.meta.url), 'utf8'));
 	await tick();

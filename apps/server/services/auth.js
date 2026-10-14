@@ -6,6 +6,7 @@ import { scopes } from '../api/catalog.js';
 import { createHash } from 'node:crypto';
 import { mongoose, User, Account, Member, Ticket, Device, Integration, IntegrationToken, OAuthClient } from '../model/index.js';
 import { Support } from './support.js';
+import { Security } from './security.js';
 import { Billing } from './billing.js';
 import { SignupNotifications } from './signup_notifications.js';
 import { StarterContent } from './starter_content.js';
@@ -101,8 +102,8 @@ export class Auth {
 		Support.assert(((!mobile && loopback) || app || preview) && !url.username && !url.password && !url.search && !url.hash, mobile ? 'Invalid mobile callback URL' : 'Invalid desktop callback URL');
 		return url.href;
 	}
-	static async authorize(user, body) {
-		const ctx = await Support.context(user, body.account);
+	static async authorize(user, body, context = null) {
+		const ctx = context || await Support.context(user, body.account);
 		await Billing.assertDeviceEnrollment(ctx, null, body.client_id);
 		const redirect = Auth.redirect(body.redirect_uri, body.client_id);
 		Support.assert(['typerelay-desktop', 'typerelay-mobile', 'typerelay-browser'].includes(body.client_id) && body.code_challenge_method === 'S256' && /^[A-Za-z0-9_-]{43}$/.test(body.code_challenge), 'Invalid PKCE request');
@@ -110,7 +111,7 @@ export class Auth {
 		const code = Support.token();
 		Support.assert((body.client_id !== 'typerelay-mobile' && body.client_id !== 'typerelay-browser' && body.client_type === undefined) || (body.client_id === 'typerelay-mobile' ? ['mobile'] : body.client_id === 'typerelay-browser' ? ['browser'] : ['desktop', 'cli']).includes(body.client_type), 'Invalid client type');
 		Support.assert((body.client_id !== 'typerelay-mobile' && body.client_id !== 'typerelay-browser' && body.os === undefined) || (body.client_id === 'typerelay-mobile' ? (redirect.startsWith('https:') || redirect.startsWith('http:') ? ['web'] : ['ios', 'android']) : body.client_id === 'typerelay-browser' ? ['web'] : ['macos', 'windows', 'linux']).includes(body.os), 'Invalid operating system');
-		await Ticket.create({ hash: Support.hash(code), kind: 'oauth', account: ctx.account, data: { user, client: body.client_id, redirect, challenge: body.code_challenge, name: Support.text(body.device_name || (body.client_id === 'typerelay-mobile' ? 'TypeRelay mobile' : 'Desktop')), client_type: body.client_type, os: body.os }, expires: new Date(Date.now() + 300000) });
+		await Ticket.create({ hash: Support.hash(code), kind: 'oauth', account: ctx.account, data: { user, sso_revision: ctx.sso_revision, client: body.client_id, redirect, challenge: body.code_challenge, name: Support.text(body.device_name || (body.client_id === 'typerelay-mobile' ? 'TypeRelay mobile' : 'Desktop')), client_type: body.client_type, os: body.os }, expires: new Date(Date.now() + 300000) });
 		const url = new URL(redirect);
 		url.searchParams.set('code', code);
 		url.searchParams.set('state', body.state);
@@ -126,15 +127,17 @@ export class Auth {
 				const ticket = await Ticket.findOne({ hash: Support.hash(Support.text(body.code, 256)), kind: 'oauth', expires: { $gt: new Date() } }).session(session).lean();
 				Support.assert(ticket && (ticket.data.client || 'typerelay-desktop') === body.client_id && ticket.data.redirect === Auth.redirect(body.redirect_uri, body.client_id) && ticket.data.challenge === createHash('sha256').update(body.code_verifier).digest('base64url'), 'Invalid authorization code', 401);
 				const ctx = await Support.context(ticket.data.user, String(ticket.account), session);
+				await Security.credential(ctx, ticket.data);
 				await Billing.assertDeviceEnrollment(ctx, session, body.client_id);
 				await Ticket.deleteOne({ _id: ticket._id }, { session });
-				[device] = await Device.create([{ account: ticket.account, user: ticket.data.user, name: ticket.data.name, client_type: ticket.data.client_type, os: ticket.data.os, oauth_client: ticket.data.client || 'typerelay-desktop' }], { session });
+				[device] = await Device.create([{ account: ticket.account, user: ticket.data.user, name: ticket.data.name, sso_revision: ticket.data.sso_revision, client_type: ticket.data.client_type, os: ticket.data.os, oauth_client: ticket.data.client || 'typerelay-desktop' }], { session });
 			} else {
 				Support.assert(body.grant_type === 'refresh_token', 'Unsupported grant');
 				device = await Device.findOne({ refresh: Support.hash(Support.text(body.refresh_token, 256)), refresh_expires: { $gt: new Date() }, revoked: false }).session(session).lean();
 				Support.assert(device, 'Invalid refresh token', 401);
 				Support.assert(['typerelay-mobile', 'typerelay-browser'].includes(device.oauth_client) ? body.client_id === device.oauth_client : (!body.client_id || body.client_id === (device.oauth_client || 'typerelay-desktop')), 'Invalid refresh client', 401);
 				const ctx = await Support.context(String(device.user), String(device.account), session);
+				await Security.credential(ctx, device);
 				await Billing.assertDevice(ctx, device, session);
 			}
 			await Device.updateOne({ _id: device._id }, { $set: { access: Support.hash(access), access_expires: new Date(Date.now() + 900000), refresh: Support.hash(refresh), refresh_expires: new Date(Date.now() + 90 * 86400000) }, $max: { last_active: new Date() } }, { session });
@@ -145,9 +148,10 @@ export class Auth {
 		const device = await Device.findOne({ access: Support.hash(token), access_expires: { $gt: new Date() }, revoked: false }).lean();
 		Support.assert(device, 'Device authentication expired or revoked', 401);
 		const ctx = await Support.context(String(device.user), String(device.account));
+		await Security.credential(ctx, device);
 		await Billing.assertDevice(ctx, device);
 		await Device.updateOne({ _id: device._id, revoked: false }, { $max: { last_active: new Date() } }, { timestamps: false });
-		return { ...ctx, device: String(device._id) };
+		return { ...ctx, device: String(device._id), sso_revision: device.sso_revision };
 	}
 	static scopes = scopes;
 	static apiResource() { return Auth.origin + '/api/v3'; }
@@ -161,7 +165,7 @@ export class Auth {
 	static async createIntegration(ctx, body) {
 		Billing.assertApi(ctx);
 		const token = 'tr_pat_' + Support.token();
-		const grant = await AccountAccess.write(ctx.account, async session => (await Integration.create([{ account: ctx.account, user: ctx.user, name: Support.text(body.name), kind: 'pat', scopes: Auth.scopes, hash: Support.hash(token), expires: null }], { session }))[0]);
+		const grant = await AccountAccess.write(ctx.account, async session => (await Integration.create([{ account: ctx.account, user: ctx.user, name: Support.text(body.name), sso_revision: ctx.sso_revision, kind: 'pat', scopes: Auth.scopes, hash: Support.hash(token), expires: null }], { session }))[0]);
 		return { token, grant: grant.toObject() };
 	}
 	static async integration(header, resource = Auth.apiResource()) {
@@ -175,6 +179,7 @@ export class Auth {
 		}
 		Support.assert(grant, 'Integration token expired, revoked or invalid for this resource', 401);
 		const ctx = await Support.context(String(grant.user), String(grant.account));
+		await Security.credential(ctx, grant);
 		Billing.assertApi(ctx);
 		await Integration.updateOne({ _id: grant._id }, { $set: { last_used: new Date() } });
 		return { ...ctx, credential: String(grant._id), scopes: grant.scopes, grant };
@@ -228,14 +233,14 @@ export class Auth {
 		const scopes = Auth.integrationScopes(typeof body.scope === 'string' ? body.scope.split(' ') : ['content:read']);
 		return { client, scopes };
 	}
-	static async approveIntegration(user, body) {
+	static async approveIntegration(user, body, context = null) {
 		const { client, scopes } = await Auth.integrationRequest(body);
 		if (body.decision === 'deny') { const redirect = new URL(body.redirect_uri); redirect.searchParams.set('error', 'access_denied'); redirect.searchParams.set('state', body.state); return redirect.href; }
-		const ctx = await Support.context(user, body.account);
+		const ctx = context || await Support.context(user, body.account);
 		Billing.assertApi(ctx);
 		if (client.account) Support.assert(Support.equal(client.account, ctx.account), 'OAuth client is registered for another account', 403);
 		const code = Support.token();
-		await Ticket.create({ hash: Support.hash(code), kind: 'integration-code', account: ctx.account, expires: new Date(Date.now() + 300000), data: { user, client: client.client_id, name: client.name, scopes, resource: body.resource, redirect: body.redirect_uri, challenge: body.code_challenge } });
+		await Ticket.create({ hash: Support.hash(code), kind: 'integration-code', account: ctx.account, expires: new Date(Date.now() + 300000), data: { user, sso_revision: ctx.sso_revision, client: client.client_id, name: client.name, scopes, resource: body.resource, redirect: body.redirect_uri, challenge: body.code_challenge } });
 		const url = new URL(body.redirect_uri); url.searchParams.set('code', code); url.searchParams.set('state', body.state);
 		return url.href;
 	}
@@ -254,13 +259,15 @@ export class Auth {
 				const ticket = await Ticket.findOneAndDelete({ hash: Support.hash(String(body.code || '')), kind: 'integration-code', expires: { $gt: new Date() } }, { session }).lean();
 				Support.assert(ticket && ticket.data.client === body.client_id && ticket.data.redirect === body.redirect_uri && ticket.data.resource === body.resource && ticket.data.challenge === createHash('sha256').update(body.code_verifier).digest('base64url'), 'Invalid authorization code, resource or verifier', 401);
 				const ctx = await Support.context(ticket.data.user, String(ticket.account), session);
+				await Security.credential(ctx, ticket.data);
 				Billing.assertApi(ctx);
-				[grant] = await Integration.create([{ user: ticket.data.user, account: ticket.account, name: ticket.data.name, kind: 'oauth', client: body.client_id, resource: body.resource, scopes: ticket.data.scopes, expires: new Date(Date.now() + 90 * 86400000) }], { session });
+				[grant] = await Integration.create([{ user: ticket.data.user, account: ticket.account, name: ticket.data.name, sso_revision: ticket.data.sso_revision, kind: 'oauth', client: body.client_id, resource: body.resource, scopes: ticket.data.scopes, expires: new Date(Date.now() + 90 * 86400000) }], { session });
 			} else {
 				Support.assert(body.grant_type === 'refresh_token', 'Unsupported grant');
 				grant = await Integration.findOne({ refresh: Support.hash(String(body.refresh_token || '')), client: body.client_id, resource: body.resource, revoked: false, refresh_expires: { $gt: new Date() }, expires: { $gt: new Date() } }).session(session).lean();
 				Support.assert(grant, 'Invalid refresh token or resource', 401);
 				const ctx = await Support.context(String(grant.user), String(grant.account), session);
+				await Security.credential(ctx, grant);
 				Billing.assertApi(ctx);
 				await Ticket.create([{ hash: Support.hash(body.refresh_token), kind: 'used-integration-refresh', data: { grant: grant._id }, expires: grant.expires }], { session });
 			}
