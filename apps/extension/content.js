@@ -49,13 +49,15 @@ async function notice(message) {
 	try {
 		const host = document.createElement('div');
 		const shadow = host.attachShadow({ mode: 'closed' });
-		const html = await fetch(chrome.runtime.getURL('notice.html')).then(response => response.text());
 		const css = await fetch(chrome.runtime.getURL('notice.css')).then(response => response.text());
 		const style = document.createElement('style');
 		style.textContent = css;
 		const panel = document.createElement('div');
-		panel.innerHTML = html;
-		panel.querySelector('[data-message]').textContent = message;
+		panel.className = 'notice';
+		panel.setAttribute('role', 'alert');
+		const text = document.createElement('span');
+		text.textContent = message;
+		panel.append(text);
 		shadow.append(style, panel);
 		document.documentElement.append(host);
 		setTimeout(() => host.remove(), 5000);
