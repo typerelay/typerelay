@@ -13,7 +13,6 @@ FROM node:24-bookworm-slim AS workspace-dependencies
 RUN npm install -g pnpm@12.0.0
 WORKDIR /opt/typerelay
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml README.md ./
-COPY .github/CONTRIBUTING.md ./.github/CONTRIBUTING.md
 COPY apps/server/package.json ./apps/server/package.json
 COPY apps/server/patches ./apps/server/patches
 COPY apps/server/observability/package.json ./apps/server/observability/package.json
