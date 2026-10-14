@@ -5,6 +5,16 @@ block head
 block content
 	if returnTo
 		.alert.alert-secondary.small.mb-3 Sign in to continue connecting your device.
+	if ssoLogin
+		a.btn.btn-primary.btn-sm.w-100.mb-3(href=ssoLogin) Sign in with SSO
+	details.mb-5
+		summary.cursor-pointer Sign in with your organization's SSO
+		form#sso-start-form.mt-3
+			label.form-label(for="sso-account") SSO sign-in link or account ID
+			input#sso-account.form-control.form-control-sm.mb-3(name="account" required autocomplete="off")
+			.text-muted.small.mb-3 Ask your administrator for your account's SSO sign-in link.
+			.d-flex.justify-content-end
+				button.btn.btn-primary.btn-sm(type="submit") Continue with SSO
 	#login-options
 		.text-secondary.small.mb-2 Sign in with
 		.auth-methods

@@ -12,6 +12,7 @@ class ResourceFixture { static server; static url; static tokens = []; static gr
 before(async () => {
 	process.env.JWT_SECRET = 'synthetic-resource-secret';
 	mock.method(Support, 'context', async () => ({ user: 'synthetic-user', account: 'synthetic-account' })); mock.method(Billing, 'assertApi', () => {});
+	mock.method(Billing, 'account', async () => ({ _id: 'synthetic-account' }));
 	mock.method(mongoose.connection, 'transaction', async callback => callback({}));
 	mock.method(OAuthClient, 'findOne', () => { const result = { lean: async () => ({ client_id: 'synthetic-client', redirects: ['https://synthetic.test/callback'], token_endpoint_auth_method: 'none' }), select: () => result }; return result; });
 	mock.method(Ticket, 'findOneAndDelete', () => ({ lean: async () => ResourceFixture.ticket })); mock.method(Ticket, 'findOne', () => ({ lean: async () => null })); mock.method(Ticket, 'create', async () => []);

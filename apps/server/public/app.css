@@ -307,3 +307,5 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .avatar-picker .ts-dropdown .dropdown-input { margin: .5rem; width: calc(100% - 1rem); padding: .375rem .5rem; font-size: .875rem; }
 .avatar-picker .ts-dropdown { font-size: .875rem; }
 .avatar-picker .ts-dropdown-content { max-height: 15rem; }
+
+.auth-page summary { cursor: pointer; }

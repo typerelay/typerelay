@@ -1,0 +1,6 @@
+#sso-recovery-secret.alert.alert-success(role="status")
+	label.form-label(for="sso-recovery-value") Copy this recovery code now. It is shown only once.
+	.input-group.input-group-sm
+		input#sso-recovery-value.form-control.form-control-sm(value=code readonly autocomplete="off" data-secret-value)
+		button.btn.btn-outline-secondary.btn-sm(type="button" data-copy-secret) Copy
+	button.btn.btn-link.btn-sm.mt-3(type="button" data-sso-hide-secret) I saved the code

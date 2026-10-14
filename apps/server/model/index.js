@@ -15,6 +15,12 @@ const accountSchema = new mongoose.Schema({
 	deletion: { requested_at: Date, stage: String, error: String, users: [objectid], grants: [objectid], lease: String, lease_until: Date },
 	sequence: { type: Number, default: 0 },
 	plan: { type: String, enum: ['free', 'pro', 'team'], default: 'free' },
+	sso: {
+		enabled: { type: Boolean, default: false }, enforce: { type: Boolean, default: false }, provision: { type: Boolean, default: false },
+		issuer: { type: String, default: '' }, login_url: { type: String, default: '' }, certificate: { type: String, default: '', select: false },
+		revision: { type: Number, default: 0 }, tested_fingerprint: { type: String, default: '' }, tested_at: Date,
+		recovery_hash: { type: String, select: false }, recovery_ready: { type: Boolean, default: false },
+	},
 	billing: {
 		stripe_customer_id: { type: String, select: false },
 		stripe_subscription_id: { type: String, select: false },
@@ -86,6 +92,7 @@ const SnippetAsset = mongoose.model('SnippetAsset', snippetAssetSchema);
 const Migration = mongoose.model('Migration', new mongoose.Schema({ key: { type: String, unique: true }, completed: Boolean }));
 const MigrationBackup = mongoose.model('MigrationBackup', new mongoose.Schema({ key: { type: String, unique: true }, source_collection: String, payload: mixed }));
 const Device = mongoose.model('Device', new mongoose.Schema({ account: objectid, user: objectid, name: String, oauth_client: { type: String, enum: ['typerelay-desktop', 'typerelay-mobile', 'typerelay-browser'] }, client_type: { type: String, enum: ['desktop', 'cli', 'mobile', 'browser'] }, os: { type: String, enum: ['macos', 'windows', 'linux', 'ios', 'android', 'web'] }, last_active: Date, access: String, access_expires: Date, refresh: String, refresh_expires: Date, revoked: { type: Boolean, default: false } }, { timestamps: true }));
+Device.schema.add({ sso_revision: Number });
 const change = new mongoose.Schema({ account: objectid, sequence: Number, library: objectid, kind: String, departures: [String] });
 change.index({ account: 1, sequence: 1 }, { unique: true });
 const Change = mongoose.model('Change', change);
@@ -98,6 +105,8 @@ export { mongoose, User, Account, Member, Group, Ticket, SignupNotification, Lib
 
 // Integration credentials are independent of desktop enrollment.
 export const Integration = mongoose.model('Integration', new mongoose.Schema({ account: objectid, user: objectid, name: String, kind: { type: String, enum: ['pat', 'oauth'] }, scopes: [String], hash: { type: String, select: false }, expires: Date, revoked: { type: Boolean, default: false }, last_used: Date, client: String, resource: String, refresh: { type: String, select: false }, refresh_expires: Date }, { timestamps: true }));
+Integration.schema.add({ sso_revision: Number });
+export const SsoLog = mongoose.model('SsoLog', new mongoose.Schema({ account: { type: objectid, index: true }, user: objectid, event: String, expires: { type: Date, expires: 0 } }, { timestamps: true }));
 export const OAuthClient = mongoose.model('OAuthClient', new mongoose.Schema({ account: objectid, created_by: objectid, client_id: { type: String, unique: true }, name: String, client_uri: String, redirects: [String], registration_source: { type: String, enum: ['dynamic', 'manual'], default: 'dynamic' }, token_endpoint_auth_method: { type: String, enum: ['none', 'client_secret_post'], default: 'none' }, secret_hash: { type: String, select: false } }, { timestamps: true }));
 export const IntegrationToken = mongoose.model('IntegrationToken', new mongoose.Schema({ hash: { type: String, unique: true }, grant: objectid, resource: String, expires: Date }, { timestamps: true }));
 export const ApiAudit = mongoose.model('ApiAudit', new mongoose.Schema({ account: objectid, user: objectid, credential: objectid, operation: String, status: Number, expires: { type: Date, expires: 0 } }, { timestamps: true }));

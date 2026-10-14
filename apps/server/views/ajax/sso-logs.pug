@@ -1,0 +1,16 @@
+#sso-login-logs
+	if !logs.length
+		p.text-muted No SSO events in the last 30 days.
+	else
+		.table-responsive
+			table.table.table-sm.align-middle
+				thead
+					tr
+						th Time
+						th Event
+				tbody
+					each log in logs
+						tr(data-sso-log=log._id)
+							td
+								time(datetime=log.createdAt.toISOString() data-local-time)= log.createdAt.toISOString()
+							td= ({ settings_saved: 'Settings saved', recovery_generated: 'Recovery code generated', recovered: 'Owner recovery used', login_success: 'Identity verified; session sign-in started', login_failed: 'SAML response rejected', test_success: 'Provider test passed' })[log.event] || 'SSO event'

@@ -77,6 +77,8 @@ block content
 					.modal-body.settings-body.p-0
 						nav.settings-nav.list-group.list-group-flush(role="tablist" aria-label="Settings sections" aria-orientation="vertical")
 							- var settingsSections = {profile: 'Profile', security: 'Security', team: 'My team', ai: 'AI', devices: 'Connected devices', tokens: 'Apps Access'}
+							if ['owner', 'admin'].includes(ctx.role)
+								- settingsSections.sso = 'Single sign-on'
 							if billingEnabled
 								- settingsSections.subscription = 'Subscription'
 								if ['owner', 'admin'].includes(ctx.role)
@@ -84,6 +86,13 @@ block content
 							each label, key in settingsSections
 								button.list-group-item.list-group-item-action(type="button" role="tab" id='settings-tab-' + key data-settings-tab=key aria-controls='settings-pane-' + key aria-selected=(key === 'profile').toString() tabindex=key === 'profile' ? '0' : '-1' class=key === 'profile' ? 'active' : '')= label
 						.settings-content
+							if ['owner', 'admin'].includes(ctx.role)
+								section.settings-pane(id="settings-pane-sso" role="tabpanel" aria-labelledby="settings-tab-sso" hidden=true)
+									#sso-settings-container
+									#sso-secret-container
+									h3.h6.mb-3.mt-5 Login logs
+									button.btn.btn-outline-secondary.btn-sm.mb-3(type="button" data-sso-logs) Refresh logs
+									#sso-logs-container
 							section.settings-pane(id="settings-pane-profile" role="tabpanel" aria-labelledby="settings-tab-profile" hidden=false)
 								h3.h6.fw-bold Profile
 								form#profile-form.card.p-4.mb-5

@@ -1,0 +1,18 @@
+extends auth-layout
+block head
+	title Owner SSO recovery — TypeRelay
+block content
+	h1.h2.mb-3 Owner SSO recovery
+	p.mb-5 Sign in as the account owner using password, Magic Link or passkey, then enter your recovery code. This disables SSO enforcement and consumes the code.
+	if !signedIn
+		a.btn.btn-primary.btn-sm(href="/login") Sign in to recover
+	else
+		form#sso-recover-form(data-account=account)
+			.mb-3
+				label.form-label(for="sso-code") Recovery code
+				input#sso-code.form-control.form-control-sm(type="password" name="code" required autocomplete="off")
+			.d-flex.justify-content-between.align-items-center
+				a.btn.btn-outline-secondary.btn-sm(href="/") Cancel
+				button.btn.btn-primary.btn-sm(type="submit") Recover account
+block scripts
+	script(src='/assets/' + assetVersion + '/auth.js' type="module")

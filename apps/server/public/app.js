@@ -91,6 +91,7 @@ class TypeRelay {
 			this.productNews = new ProductNews(this);
 			this.trialCountdown.refresh();
 			if (location.hash === '#settings-subscription') { bootstrap.Modal.getOrCreateInstance(document.querySelector('#settings')).show(); this.settingsTab('subscription'); }
+			if (location.hash === '#settings-sso') { bootstrap.Modal.getOrCreateInstance(document.querySelector('#settings')).show(); this.settingsTab('sso'); }
 		}
 	}
 	updateScrollTop() {
@@ -240,6 +241,7 @@ class TypeRelay {
 		if (id === 'ai') this.ai.loadSettings(document.querySelector('#settings-pane-ai')).catch(error => this.toast(error.message, 'error'));
 		if (id === 'whiteLabel') this.refreshWhiteLabel().catch(error => this.toast(error.message, 'error'));
 		if (id === 'subscription') this.refreshBilling().catch(error => this.toast(error.message, 'error'));
+		if (id === 'sso') document.dispatchEvent(new Event('sso-settings-open'));
 	}
 	applyBilling(result) {
 		if (result.subscription_html && document.querySelector('#settings-pane-subscription')) this.update('#subscription-content', '#settings-pane-subscription', result.subscription_html);
