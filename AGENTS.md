@@ -8,6 +8,8 @@
 - Keep model selection and subagent configuration in the task prompt. Give agents bounded ownership, the absolute worktree path, and the expected branch. Report missing tools or access as blockers.
 
 ## Git and worktrees
+- Never stage or commit worktree directories or Git worktree metadata into a repository. Keep worktree directories inside a repository ignored, and inspect staged paths before committing. Intended source changes made within a worktree may still be committed normally.
+- Never push a branch whose name starts with `codex/` or `claude/` to any remote unless the user explicitly instructs you to push that branch. Permission to create a worktree, implement a task, or commit locally does not authorize pushing these branches. This restriction applies to all agents and takes precedence over general push instructions.
 - `develop` is the integration and push destination for product changes. Never substitute `main`, `master`, or a detached HEAD.
 - Read `.github/CONTRIBUTING.md` before creating a pull request. Base contribution branches on `develop`; all contribution pull requests must target `develop`.
 - Set the PR base explicitly with `gh pr create --base develop` and verify it after creation and before merging. `main` is release-only; update it only through explicitly authorized release work.
