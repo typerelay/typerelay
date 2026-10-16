@@ -116,10 +116,35 @@ export class Server {
 		await PublicApi.mount(app, authLimit);
 		app.post('/auth/login', authLimit, async (req, res) => { await Auth.login(req.body.email, null, { origin: req.boundAccount ? Server.requestOrigin(req) : Auth.origin, account: req.boundAccount, return_to: req.session.return_to?.startsWith('/oauth/authorize?') ? req.session.return_to : undefined }); res.json({ message: 'Check your email for a sign-in link.' }); });
 		app.get('/auth/callback', async (req, res) => {
+			res.set('Referrer-Policy', 'no-referrer');
 			const login = await Auth.consume(req.query.token, true);
 			if (login.return_to) req.session.return_to = login.return_to;
 			const result = await Security.establish(req, login.user);
+			if (login.signup_account && Auth.adsEnabled(req) && req.session.user) {
+				req.session.signupConversion = { account: login.signup_account, redirect: result.redirect };
+				await new Promise((resolve, reject) => req.session.save(error => error ? reject(error) : resolve()));
+				return res.redirect('/auth/confirmed');
+			}
 			res.redirect(result.redirect);
+		});
+		app.get('/auth/confirmed', async (req, res) => {
+			res.set({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Robots-Tag': 'noindex, nofollow' });
+			const conversion = await Auth.signupConversion(req);
+			const destination = req.session.signupConversion?.redirect || '/';
+			if (!conversion || conversion.dispatched_at) return res.redirect(destination);
+			const params = new URLSearchParams();
+			for (const key of ['gclid', 'gbraid', 'wbraid']) if (conversion[key]) params.set(key, conversion[key]);
+			const path = '/auth/confirmed' + (params.size ? '?' + params.toString() : '');
+			// Load third-party code only after the one-time sign-in token and untrusted query fields are gone.
+			if (req.originalUrl !== path) return res.redirect(path);
+			const google = ['https://www.googletagmanager.com', 'https://www.googleadservices.com', 'https://www.google.com', 'https://googleads.g.doubleclick.net', 'https://pagead2.googlesyndication.com'];
+			helmet.contentSecurityPolicy({ directives: { 'script-src': ["'self'", ...google.slice(0, 3)], 'style-src': ["'self'", "'nonce-" + res.locals.styleNonce + "'"], 'style-src-elem': ["'self'", "'unsafe-inline'"], 'style-src-attr': ["'unsafe-inline'"], 'img-src': ["'self'", 'data:', ...google], 'connect-src': ["'self'", ...google, 'https://ad.doubleclick.net'], 'frame-src': ['https://www.googletagmanager.com'], 'form-action': ["'self'"] } })(req, res, () => res.render('signup-confirmed', { transactionId: conversion.transaction_id, adsDestination: Auth.adsDestination, destination }));
+		});
+		app.post('/auth/confirmed', async (req, res) => {
+			const conversion = await Auth.signupConversion(req);
+			Support.assert(conversion && req.body.transaction_id === conversion.transaction_id, 'Conversion unavailable', 403);
+			await Account.updateOne({ _id: req.session.signupConversion.account, 'acquisition.transaction_id': conversion.transaction_id, 'acquisition.dispatched_at': null }, { $set: { 'acquisition.dispatched_at': new Date() } });
+			res.json({ acknowledged: true });
 		});
 		app.post('/auth/logout', async (req, res) => { await new Promise(resolve => req.session.destroy(resolve)); res.json({ signed_out: true }); });
 		app.post('/oauth/token', authLimit, async (req, res) => res.json(await Auth.exchange(req.body)));

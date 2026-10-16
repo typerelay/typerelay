@@ -3,7 +3,7 @@ import nodemailer from 'nodemailer';
 import { AdminSettings } from './admin_settings.js';
 import { AccountAccess } from './account_access.js';
 import { scopes } from '../api/catalog.js';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mongoose, User, Account, Member, Ticket, Device, Integration, IntegrationToken, OAuthClient } from '../model/index.js';
 import { Support } from './support.js';
 import { Security } from './security.js';
@@ -14,6 +14,27 @@ import bcrypt from 'bcryptjs';
 
 export class Auth {
 	static origin = process.env.APP_URL || 'http://localhost:3040';
+	static adsDestination = 'AW-11228128444/Wj_dCIWk3Z4dELzJ_ukp';
+	static adsEnabled(req) { return process.env.NODE_ENV === 'production' && Billing.hosted() && Auth.origin === 'https://app.typerelay.com' && (!req || (!req.boundAccount && req.hostname === 'app.typerelay.com')); }
+	static attribution(source = {}) {
+		const result = {};
+		for (const key of ['gclid', 'gbraid', 'wbraid', 'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'matchtype', 'device', 'landing_path']) {
+			if (typeof source[key] !== 'string') continue;
+			const value = source[key].replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, key === 'landing_path' ? 500 : 250);
+			if (!value || (['gclid', 'gbraid', 'wbraid'].includes(key) && !/^[A-Za-z0-9._~-]+$/.test(value))) continue;
+			if (key === 'matchtype' && !/^[bep]$/.test(value)) continue;
+			if (key === 'device' && !/^[cmt]$/.test(value)) continue;
+			if (key === 'landing_path' && (!value.startsWith('/') || value.startsWith('//'))) continue;
+			result[key] = key === 'landing_path' ? value.split(/[?#]/)[0] : value;
+		}
+		return result;
+	}
+	static async signupConversion(req) {
+		if (!Auth.adsEnabled(req) || !req.session.user || !req.session.signupConversion) return null;
+		const account = await Account.findOne({ _id: req.session.signupConversion.account, is_active: true, 'deletion.requested_at': null }).select('+acquisition').lean();
+		if (!account?.acquisition?.transaction_id || !await Member.exists({ account: account._id, user: req.session.user, role: 'owner' })) return null;
+		return account.acquisition;
+	}
 	static smtpIndex = 0;
 	static smtpTransports = new Map();
 	static mail = { sendMail: message => Auth.sendMail(message) };
@@ -49,7 +70,7 @@ export class Auth {
 		const origin = options.origin || Auth.origin;
 		if (options.account) { await AccountAccess.acquire(options.account); AccountAccess.assert(await Account.findById(options.account).lean()); }
 		const continuation = options.return_to ? Auth.continuation(options.return_to) : undefined;
-		const data = { ...(name ? { name: Support.text(name) } : {}), ...(options.account ? { account: String(options.account) } : {}), ...(continuation ? { return_to: continuation } : {}), origin };
+		const data = { ...(name ? { name: Support.text(name) } : {}), ...(options.account ? { account: String(options.account) } : {}), ...(continuation ? { return_to: continuation } : {}), ...(Auth.adsEnabled() ? { acquisition: Auth.attribution(options.acquisition) } : {}), origin };
 		await mongoose.connection.transaction(async session => {
 			if (options.account) await AccountAccess.fence(options.account, session);
 			await User.updateOne({ email }, { $inc: { activity_sequence: 1 } }, { session });
@@ -78,7 +99,8 @@ export class Auth {
 			if (ticket.data?.account) Support.assert(user && await Member.exists({ account: ticket.data.account, user: user._id }).session(session), 'Account access denied', 403);
 			if (!user) {
 				[user] = await User.create([{ email: ticket.email, name: ticket.data?.name || ticket.email.split('@')[0] }], { session });
-				[account] = await Account.create([{ name: user.name + '’s team' }], { session });
+				const acquisition = Auth.adsEnabled() ? { ...Auth.attribution(ticket.data?.acquisition), transaction_id: 'typerelay-signup-' + randomUUID(), confirmed_at: new Date() } : undefined;
+				[account] = await Account.create([{ name: user.name + '’s team', ...(acquisition ? { acquisition } : {}) }], { session });
 				await Member.create([{ account: account._id, user: user._id, role: 'owner' }], { session });
 				await StarterContent.create(account, user, session);
 				if (Billing.hosted()) signupNotification = await SignupNotifications.create(user, account, session);
@@ -86,7 +108,7 @@ export class Auth {
 		});
 		if (account) await Billing.initializeAccount(account, user).catch(error => console.error(`Stripe setup failed for new TypeRelay account: ${error.message}`));
 		if (signupNotification) { const sendMail = Auth.mail.sendMail; void SignupNotifications.deliver(signupNotification._id, message => sendMail(message)).catch(error => console.error(`Type Relay signup notification deferred: ${error.message}`)); }
-		const result = { user: String(user._id), return_to: returnTo ? Auth.continuation(returnTo) : undefined };
+		const result = { user: String(user._id), return_to: returnTo ? Auth.continuation(returnTo) : undefined, ...(account?.acquisition ? { signup_account: String(account._id) } : {}) };
 		return details ? result : result.user;
 	}
 	static redirect(uri, client = 'typerelay-desktop') {

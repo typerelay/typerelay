@@ -397,8 +397,20 @@ export class Security {
 		app.get('/auth/sso/:account/recovery', limit, (req, res) => res.render('sso-recovery', { account: Support.id(req.params.account), signedIn: Boolean(req.session.user && !req.session.sso) }));
 		app.post('/auth/sso/:account/recovery', limit, async (req, res) => res.json(await Security.ssoRecover(req)));
 		app.get('/login', (req, res) => res.render('login'));
-		app.get('/signup', (req, res) => req.boundAccount ? res.redirect(new URL('/signup', Auth.origin).toString()) : res.render('auth', { kind: 'signup' }));
-		app.post('/auth/signup', limit, async (req, res) => { Support.assert(Security.signupEnabled(), 'Signup is disabled', 403); Support.assert(!req.boundAccount, 'Create accounts at app.typerelay.com', 403); await Auth.login(Security.email(req.body.email), req.body.name); res.json({ message: 'Check your email to finish creating your account.' }); });
+		app.get('/signup', (req, res) => {
+			if (req.boundAccount) return res.redirect(new URL('/signup', Auth.origin).toString());
+			if (Auth.adsEnabled(req)) {
+				const attribution = Auth.attribution(req.query);
+				if (Object.keys(attribution).length) req.session.signupAttribution = { ...attribution, captured_at: Date.now() };
+			}
+			res.render('auth', { kind: 'signup' });
+		});
+		app.post('/auth/signup', limit, async (req, res) => {
+			Support.assert(Security.signupEnabled(), 'Signup is disabled', 403); Support.assert(!req.boundAccount, 'Create accounts at app.typerelay.com', 403);
+			const acquisition = Auth.adsEnabled(req) && req.session.signupAttribution?.captured_at > Date.now() - 30 * 86400000 ? Auth.attribution(req.session.signupAttribution) : undefined;
+			await Auth.login(Security.email(req.body.email), req.body.name, { acquisition });
+			res.json({ message: 'Check your email to finish creating your account.' });
+		});
 		app.post('/auth/password', limit, async (req, res) => res.json(await Security.passwordLogin(req)));
 		app.get('/auth/two-factor', (req, res) => res.render('auth', { kind: 'factor' }));
 		app.post('/auth/two-factor', limit, async (req, res) => res.json(await Security.factor(req)));
