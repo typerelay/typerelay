@@ -29,7 +29,7 @@
 - Whole-view rendering is limited to initial navigation, explicit refresh, or a documented unrecoverable reconciliation case. Add relevant regression coverage for immediate item updates without page/section reloads.
 
 ## Development and testing
-- Development uses Docker Compose (`compose.yml`); use OrbStack on local macOS hosts. Avoid new environment variables; if required, update production Swarm files under `/Users/nitai/repos/helpmonks-install-script/docker/` and the relevant development secrets.
+- Development uses Docker Compose (`compose.yml`); Avoid new environment variables; if required, update production Swarm files under `/Users/nitai/repos/helpmonks-install-script/docker/` and the relevant development secrets.
 - On `NadaMini`, projects/worktrees under `/Users/nitai/repos` and `/Users/nitai/repos-denise` use remote Docker through `dbh-run`; never local Docker or hand-written SSH sync. Other development hosts use local Docker per project instructions. Non-Docker unit tests stay on `NadaMini`.
 - Use `dbh-run compose -- <args>`, `dbh-run test`, and `dbh-run exec -- <command>`. Use `status` and `logs` for diagnosis. Run `dbh-run urls` before starting/testing a stack; repository metadata and its named URLs are authoritative.
 - `dbh-run` syncs the exact current worktree. Sync requires neither committing nor pushing. Verify the source worktree/revision being tested; do not assume an existing server serves the task branch.
@@ -39,6 +39,8 @@
 - Agents perform frontend testing on `NadaMini` against the named dbh URLs, superseding earlier user-only testing rules. Exercise affected flows, relevant UI states, responsive layout, and console/network failures. Fix findings and repeat affected checks. Report unavailable browser/host access and untested flows.
 - Run relevant automated checks and independent review before integration. Refresh and verify the integrated `develop` stack before final completion.
 - `dbh-run` is development/test only: never production Compose, Swarm, production builds, or install-script deployments.
+- Do not run docker on the local machine; use `dbh-run` for all Docker commands. Do not run `docker-compose` or `docker` directly on the host unless instructed.
+
 
 ## Production context
 - Deployments use Docker Swarm behind Cloudflare → Caddy → Swarm.

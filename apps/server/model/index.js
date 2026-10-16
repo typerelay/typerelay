@@ -8,6 +8,7 @@ const User = mongoose.model('User', new mongoose.Schema({ email: { type: String,
 const Passkey = mongoose.model('Passkey', new mongoose.Schema({ user: { type: objectid, index: true }, credential_id: { type: String, unique: true }, public_key: { type: String, select: false }, counter: Number, transports: [String], name: String }, { timestamps: true }));
 const accountSchema = new mongoose.Schema({
 	name: String,
+	acquisition: { type: new mongoose.Schema({ gclid: String, gbraid: String, wbraid: String, utm_source: String, utm_medium: String, utm_campaign: String, utm_content: String, utm_term: String, matchtype: String, device: String, landing_path: String, transaction_id: String, confirmed_at: Date, dispatched_at: Date }, { _id: false }), select: false },
 	is_active: { type: Boolean, default: true },
 	admin_revision: { type: Number, default: 0 },
 	activity_sequence: { type: Number, default: 0 },

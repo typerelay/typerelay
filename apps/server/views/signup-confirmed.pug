@@ -1,0 +1,12 @@
+extends auth-layout
+
+block head
+	title Account confirmed — Typerelay
+
+block content
+	h1.h2.mb-5 Your account is ready
+	div.text-muted.mb-5 Opening your Typerelay workspace.
+	a#signup-continue.btn.btn-primary.btn-sm(href=destination data-transaction-id=transactionId data-send-to=adsDestination) Continue to Typerelay
+
+block scripts
+	script(src='/assets/' + assetVersion + '/signup-conversion.js' defer)
