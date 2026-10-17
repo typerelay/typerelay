@@ -1,12 +1,12 @@
 - const effectiveTrigger = snippet.effective_trigger === undefined ? snippet.trigger : snippet.effective_trigger;
 article.snippet(tabindex="0" role="group" aria-label="Snippet " + (snippet.title || effectiveTrigger || 'Untitled snippet') + " — Enter to edit" data-snippet=snippet.id data-revision=snippet.revision)
-	.d-flex.align-items-center.justify-content-between.mb-3
-		.snippet-selection.d-flex.align-items-center.gap-3
+	.d-flex.flex-column.flex-sm-row.align-items-start.align-items-sm-center.justify-content-between.gap-3.mb-3
+		.snippet-selection.d-flex.flex-wrap.align-items-center.gap-3
 			label.d-flex.align-items-center.mb-0
 				input.form-check-input.m-0(type="checkbox" data-select-snippet=snippet.id disabled=!library.permissions.edit aria-label="Select " + (snippet.title || effectiveTrigger || 'Untitled snippet'))
-			h3.h6.mb-0.fw-bold= (snippet.title || effectiveTrigger || 'Untitled snippet')
+			h3.h6.mb-0.fw-bold.text-break= (snippet.title || effectiveTrigger || 'Untitled snippet')
 			if snippet.title && effectiveTrigger
-				span.small.text-muted= effectiveTrigger
+				span.small.text-muted.text-break= effectiveTrigger
 		.d-flex.align-items-center
 			button.btn.btn-outline-secondary.btn-sm.ms-3(type="button" data-copy-snippet=snippet.id)= snippet.content && ['template', 'rich_text'].includes(snippet.content.type) && Object.keys(snippet.content.variables || {}).length ? 'Fill and copy' : 'Copy'
 			if library.permissions.edit
