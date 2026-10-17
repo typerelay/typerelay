@@ -507,11 +507,16 @@ export class Libraries {
 		}
 		return rows;
 	}
-	static async validateVisible(ctx, session) {
+	static async validateVisible(ctx, session, restoredIds = null) {
 		const libraries = await Libraries.list(ctx, session);
 		Support.assert(libraries.length <= 256, 'Active libraries exceed the engine limit', 409);
 		const entries = libraries.flatMap(library => library.snippets);
-		await Libraries.validate(entries, ctx, session);
+		if (restoredIds) {
+			const restored = new Set(restoredIds);
+			const occupied = new Set(entries.filter(entry => !restored.has(entry.id) && entry.trigger).map(entry => entry.trigger));
+			Support.assert(!entries.some(entry => restored.has(entry.id) && entry.trigger && occupied.has(entry.trigger)), 'Duplicate trigger', 422);
+			await Libraries.validate(entries.map(entry => restored.has(entry.id) ? entry : { ...entry, trigger: null }), ctx, session);
+		} else await Libraries.validate(entries, ctx, session);
 		Support.assert(Buffer.byteLength(JSON.stringify(entries)) <= 8 * 1048576, 'Active snippets exceed the engine limit', 409);
 		for (const library of libraries) Support.assert(Buffer.byteLength(JSON.stringify(library.snippets)) <= 1048576, 'Library exceeds the engine limit', 409);
 	}
@@ -551,7 +556,7 @@ export class Libraries {
 			const now = new Date();
 			await model.updateOne({ _id: record._id }, { $set: { state: action === 'trash' ? 'trashed' : 'active', ...(action === 'trash' ? { trashed_at: now, expires_at: new Date(+now + Libraries.retention), trashed_by: ctx.user } : {}) }, ...(action === 'restore' ? { $unset: { trashed_at: 1, expires_at: 1, trashed_by: 1 } } : {}), $inc: { revision: 1 } }, { session });
 			if (target.type === 'snippet') await Library.updateOne({ _id: library._id }, { $inc: { revision: 1 } }, { session });
-			if (action === 'restore') await Libraries.validateVisible(ctx, session);
+			if (action === 'restore') await Libraries.validateVisible(ctx, session, target.type === 'library' ? library.snippets.map(entry => entry.id) : [record.id]);
 			await Support.change(ctx.account, library._id, action, session);
 		}
 		const current = await Library.findById(library._id).session(session).lean();
