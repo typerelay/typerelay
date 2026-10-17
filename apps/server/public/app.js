@@ -450,9 +450,9 @@ class TypeRelay {
 		if (form.id === 'profile-form') this.profileSaving = true;
 		const data = new FormData(form);
 		const button = event.submitter;
-		let restoreProfileFocus = form.id === 'profile-form' && button === document.activeElement;
-		const trackProfileFocus = event => { if (event.target !== button && event.target !== document.body) restoreProfileFocus = false; };
-		if (restoreProfileFocus) document.addEventListener('focusin', trackProfileFocus);
+		let restoreSubmitFocus = button === document.activeElement;
+		const trackSubmitFocus = event => { if (event.target !== button && event.target !== document.body) restoreSubmitFocus = false; };
+		if (restoreSubmitFocus) document.addEventListener('focusin', trackSubmitFocus);
 		if (button) button.disabled = true;
 		try {
 			if (billingForm) {
@@ -498,7 +498,7 @@ class TypeRelay {
 			}
 			if (form.id === 'record-form') { this.submitting = true; if (await this.submit(data) !== false) { bootstrap.Modal.getInstance(document.querySelector('#form-modal')).hide(); this.toast('Saved'); } }
 		} catch (error) { const warning = form.querySelector('#import-error'); if (warning) { warning.textContent = error.message; warning.hidden = false; warning.scrollIntoView?.({ block: 'nearest' }); } this.toast(error.message, 'error'); }
-		finally { this.submitting = false; if (form.id === 'profile-form') this.profileSaving = false; if (button) button.disabled = false; document.removeEventListener('focusin', trackProfileFocus); if (restoreProfileFocus && button.isConnected && document.activeElement === document.body && !form.closest('[hidden], [aria-hidden="true"], .modal:not(.show)')) button.focus({ preventScroll: true }); }
+		finally { this.submitting = false; if (form.id === 'profile-form') this.profileSaving = false; if (button) button.disabled = false; document.removeEventListener('focusin', trackSubmitFocus); if (restoreSubmitFocus && button.isConnected && document.activeElement === document.body && !form.closest('[hidden], [aria-hidden="true"], .modal:not(.show)')) button.focus({ preventScroll: true }); }
 	}
 	async confirm(title) { return (await Swal.fire({ title, icon: 'warning', showCancelButton: true, allowOutsideClick: false, allowEscapeKey: false, confirmButtonText: 'Confirm' })).isConfirmed; }
 	async snippet(id, value, snapshot = null) {

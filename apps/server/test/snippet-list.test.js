@@ -113,3 +113,19 @@ test('library export sends its account, downloads the named bundle and preserves
 		assert.equal(downloaded, 1); assert.equal(button.disabled, false); assert.equal(document.querySelector('[data-editor]'), editor);
 	} finally { dom.window.close(); }
 });
+
+
+test('failed saves restore the submitter focus without stealing moved focus or reopening a closed form', async () => {
+ const dom = new JSDOM('<div id="form-modal" class="modal show"><form id="record-form"><textarea name="replace">Unsaved edit</textarea><button type="submit">Save</button></form></div><input id="other">', { runScripts: 'outside-only' });
+ try {
+  const source = (await readFile('./public/app.js', 'utf8')).replace(/^import .*;$/gm, '').replace('const client = new TypeRelay();', '').replace('export { client };', 'window.TypeRelay = TypeRelay;');
+  dom.window.eval(source);
+  const client = Object.create(dom.window.TypeRelay.prototype); const errors = []; client.toast = message => errors.push(message);
+  const { document } = dom.window; const form = document.querySelector('form'); const button = form.querySelector('button'); const other = document.querySelector('#other');
+  const submit = async during => { button.focus(); client.submit = async () => { assert.equal(button.disabled, true); document.body.tabIndex = -1; document.body.focus(); during?.(); throw new Error('Save unavailable'); }; await client.onSubmit({ target: form, submitter: button, preventDefault() {} }); assert.equal(button.disabled, false); assert.equal(form.elements.replace.value, 'Unsaved edit'); assert.equal(document.querySelector('form'), form); };
+  await submit(); assert.equal(document.activeElement, button);
+  await submit(() => other.focus()); assert.equal(document.activeElement, other);
+  await submit(() => document.querySelector('#form-modal').classList.remove('show')); assert.equal(document.activeElement, document.body);
+  assert.deepEqual(errors, ['Save unavailable', 'Save unavailable', 'Save unavailable']);
+ } finally { dom.window.close(); }
+});
