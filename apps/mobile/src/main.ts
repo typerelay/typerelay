@@ -297,6 +297,7 @@ export class MobileApp {
   (globalThis as any).Swal = Swal;
   MobileApp.$('app').replaceChildren(...new DOMParser().parseFromString(shell(), 'text/html').body.childNodes);
   MobileApp.$('form-modal').addEventListener('hidden.bs.modal', () => { MobileApp.editorCloseJob = MobileApp.editorCloseJob.catch(() => undefined).then(MobileApp.finishEditorClose).catch(MobileApp.error); });
+  MobileApp.input('server').oninvalid = () => { (MobileApp.$('login-advanced') as HTMLDetailsElement).open = true; };
   MobileApp.$('login-form').onsubmit = event => { event.preventDefault(); void MobileApp.busy((event.target as HTMLFormElement).querySelector('button')!, () => Auth.begin(MobileApp.input('server').value)); };
   MobileApp.$('settings-sync').onclick = () => { void MobileApp.busy(MobileApp.$('settings-sync') as HTMLButtonElement, MobileApp.sync); };
   MobileApp.$('profile').onclick = MobileApp.showSettings;

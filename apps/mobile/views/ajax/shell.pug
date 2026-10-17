@@ -7,12 +7,14 @@ main.mobile-app#workspace
 			p Search, edit, and sync your TypeRelay libraries. Then use the TypeRelay keyboard in any app.
 		.auth-card
 			form#login-form
-				label.mobile-field(for="server")
-					span Server URL
-					input#server(type="url" required value="https://app.typerelay.com" autocomplete="url")
 				button.primary-button.wide(type="submit")
 					span Sign in with browser
 					span.material-symbols-outlined arrow_forward
+				details.login-advanced#login-advanced
+					summary Advanced
+					label.mobile-field(for="server")
+						span Server URL
+						input#server(type="url" required value="https://app.typerelay.com" autocomplete="url" autocapitalize="none" spellcheck="false")
 			p#preview-notice.preview-notice(hidden) Browser preview uses your development account. Native keyboard behavior requires the installed app.
 	section#signed-in(hidden)
 		section.mobile-screen#snippets-screen(data-screen="snippets")
