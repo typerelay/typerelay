@@ -1,3 +1,4 @@
+import { TestDatabase } from './database.js';
 import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { request as httpRequest } from 'node:http';
@@ -32,14 +33,13 @@ class Fixture {
 
 before(async () => {
 	Object.assign(process.env, { NODE_ENV: 'test', PORT: '3195', SYSADMIN_EMAIL: 'sysadmin@example.test', SYSADMIN_PASSWORD: randomUUID(), GIT_ENCRYPTION_KEY: 'a'.repeat(64), BILLING_ENABLED: 'false', TYPERELAY_HOSTED_EDITION: 'false', WHITE_LABEL_ENABLED: 'false', APP_URL: Fixture.origin });
-	process.env.MONGO_URI = process.env.MONGO_URI.replace('/typerelay?', '/typerelay_admin_test?');
-	assert.match(process.env.MONGO_URI, /\/typerelay_admin_test\?/);
+	process.env.MONGO_URI = TestDatabase.uri(process.env.MONGO_URI, 'typerelay_admin_test');
 	Auth.origin = Fixture.origin;
 	Fixture.root = await mkdtemp(join(tmpdir(), 'type-relay-admin-')); process.env.WHITE_LABEL_ASSETS_DIR = Fixture.root;
 	Fixture.originalMail = Auth.mail.sendMail; Auth.mail.sendMail = async message => { Fixture.emails.push(message); };
 	const { Server } = await import('../app.js'); Fixture.server = await Server.start();
 });
-after(async () => { Auth.mail.sendMail = Fixture.originalMail; if (Fixture.server) await new Promise(resolve => Fixture.server.close(resolve)); await M.mongoose.connection.dropDatabase(); await M.mongoose.disconnect(); await rm(Fixture.root, { recursive: true, force: true }); });
+after(async () => { Auth.mail.sendMail = Fixture.originalMail; if (Fixture.server) await new Promise(resolve => Fixture.server.close(resolve)); await TestDatabase.drop(M.mongoose.connection, 'typerelay_admin_test'); await M.mongoose.disconnect(); await rm(Fixture.root, { recursive: true, force: true }); });
 
 test('sysadmin credentials fail closed and admin auth requires platform host, CSRF, separate session', async () => {
 	assert.equal(Admin.credentials(' SYSADMIN@EXAMPLE.TEST ', process.env.SYSADMIN_PASSWORD), true);

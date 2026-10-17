@@ -1,3 +1,4 @@
+import { TestDatabase } from './database.js';
 import { before, after, test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -25,8 +26,7 @@ class Fixture {
 
 before(async () => {
 	process.env.NODE_ENV = 'test'; process.env.PORT = '0';
-	process.env.MONGO_URI = process.env.MONGO_URI.replace('/typerelay?', '/typerelay_session_test?');
-	assert.match(process.env.MONGO_URI, /\/typerelay_session_test\?/);
+	process.env.MONGO_URI = TestDatabase.uri(process.env.MONGO_URI, 'typerelay_session_test');
 	Auth.origin = 'http://127.0.0.1';
 	const create = MongoStore.create;
 	const capture = mock.method(MongoStore, 'create', options => { Fixture.store = create(options); return Fixture.store; });
@@ -45,7 +45,7 @@ before(async () => {
 after(async () => {
 	Fixture.writes?.mock.restore();
 	if (Fixture.server) await new Promise(resolve => Fixture.server.close(resolve));
-	if (mongoose.connection.name === 'typerelay_session_test') await mongoose.connection.dropDatabase();
+	await TestDatabase.drop(mongoose.connection, 'typerelay_session_test');
 	await mongoose.disconnect(); mock.restoreAll();
 });
 

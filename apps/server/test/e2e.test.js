@@ -1,3 +1,4 @@
+import { TestDatabase } from './database.js';
 import { BrowserSource } from './browser-source.js';
 import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -39,7 +40,7 @@ class Fixture {
 before(async () => {
 	process.env.NODE_ENV = 'test';
 	process.env.PORT = '3140';
-	process.env.MONGO_URI = process.env.MONGO_URI.replace('/typerelay?', '/typerelay_e2e?');
+	process.env.MONGO_URI = TestDatabase.uri(process.env.MONGO_URI, 'typerelay_e2e_test');
 	Fixture.root = await mkdtemp(join(tmpdir(), 'typerelay-e2e-'));
 	process.env.SESSION_SECRET = Support.token();
 	process.env.JWT_SECRET = Support.token();
@@ -62,7 +63,7 @@ before(async () => {
 });
 after(async () => {
 	await new Promise(resolve => Fixture.server.close(resolve));
-	await mongoose.connection.dropDatabase();
+	await TestDatabase.drop(mongoose.connection, 'typerelay_e2e_test');
 	await mongoose.disconnect();
 	await rm(Fixture.root, { recursive: true, force: true });
 });

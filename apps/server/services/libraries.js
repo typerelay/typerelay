@@ -1,3 +1,4 @@
+import { Assets } from './assets.js';
 import { AccountAccess } from './account_access.js';
 import { parse as parseCsv } from 'csv-parse/sync';
 import { parseDocument } from 'htmlparser2';
@@ -95,13 +96,14 @@ export class Libraries {
 		if (!ctx) return;
 		const ids = [...new Set(values.flatMap(value => value.content.type === 'rich_text' ? value.content.assets : []))];
 		if (!ids.length) return;
+		Support.assert((await Assets.visible(ctx, ids, session)).length === ids.length, 'Rich text references an inaccessible image asset', 422);
 		const assets = await SnippetAsset.find({ account: ctx.account, id: { $in: ids } }).select('id size').session(session || null).lean();
 		Support.assert(assets.length === ids.length, 'Rich text references a missing image asset', 422);
 		const sizes = new Map(assets.map(asset => [asset.id, asset.size]));
 		for (const value of values.filter(value => value.content.type === 'rich_text')) {
 			Support.assert(value.content.assets.reduce((total, id) => total + sizes.get(id), 0) <= 8 * 1048576, 'Rich-text images exceed 8 MiB', 422);
 		}
-		await SnippetAsset.updateMany({ account: ctx.account, id: { $in: ids } }, { $set: { last_referenced_at: new Date() } }, { session: session || null });
+		await SnippetAsset.updateMany({ account: ctx.account, id: { $in: ids } }, { $set: { last_referenced_at: new Date() }, $pull: { staged_by: ctx.user } }, { session: session || null });
 	}
 	static importFormats = {
 		typerelay: { name: 'TypeRelay bundle', accept: '.typerelay.zip,.zip', instructions: 'Choose a TypeRelay bundle containing snippets.yml and its deduplicated image assets.', beta: false },
@@ -422,6 +424,8 @@ export class Libraries {
 			const server = await Snippet.findOne({ account: ctx.account, id: change.id }).session(session).lean();
 			Support.assert(!server || Support.equal(server.library, library._id), 'Snippet moved to another library; review your changes', 409);
 			Support.assert(server?.state !== 'purged', 'Snippet was permanently purged; it cannot be restored', 410);
+			const baseAssets = change.base?.content?.assets || [];
+			Support.assert(Array.isArray(baseAssets) && (!baseAssets.length || (await Assets.visible(ctx, baseAssets, session)).length === baseAssets.length), 'Conflict base references an inaccessible image asset', 422);
 			const local = change.value === null ? null : Libraries.value(await Libraries.prepared(ctx,change.value,session), server?.content);
 			if (local) await Libraries.validate([local], ctx, session);
 			if (server?.state === 'active' && library.state === 'active' && Libraries.same(server, local)) continue;
@@ -474,6 +478,7 @@ export class Libraries {
 			for (const record of selected) {
 				const item = body.items.find(item => item.id === record.id);
 				const change = item.value === undefined ? {} : Libraries.value(await Libraries.prepared(ctx,item.value,session), record.content);
+				if (item.value !== undefined) await Libraries.validate([change], ctx, session);
 				await Snippet.updateOne({ _id: record._id }, { $set: { library: destination._id, position: position++, ...change }, $inc: { revision: 1 } }, { session, timestamps: item.value !== undefined });
 				await Conflict.updateMany({ account: ctx.account, library: source._id, snippet: record.id }, { $set: { library: destination._id } }, { session });
 			}
@@ -518,7 +523,8 @@ export class Libraries {
 		await Conflict.deleteMany({ library: library._id, ...(entry ? { snippet: { $in: ids } } : {}) }, { session });
 		if (!entry) {
 			const readers = [];
-			for (const member of await Member.find({ account: library.account }).session(session).lean()) if (Support.access(await Support.context(String(member.user), String(library.account), session), library).read) readers.push(member.user);
+			const groups = await Group.find({ account: library.account }).session(session).lean();
+			for (const member of await Member.find({ account: library.account }).session(session).lean()) if (Support.access({ account: String(library.account), user: String(member.user), role: member.role, groups: groups.filter(group => group.users.some(user => Support.equal(user, member.user))).map(group => String(group._id)) }, library).read) readers.push(member.user);
 			await Library.updateOne({ _id: library._id }, { $set: { state: 'purged', purge_readers: readers }, $unset: { name: 1, members: 1, groups: 1, shared: 1, editable: 1, creator: 1, trashed_at: 1, trashed_by: 1, expires_at: 1 } }, { session });
 		}
 		await Library.updateOne({ _id: library._id }, { $inc: { revision: 1 } }, { session });
@@ -570,27 +576,29 @@ export class Libraries {
 		await SnippetAsset.deleteMany({ account, $and: [filter, { id: { $nin: Libraries.assetReferences([snippets, conflicts]) } }] }, { session });
 	}
 	static async cleanup() {
-		const summary = { libraries: 0, snippets: 0 };
+		const summary = { libraries: 0, snippets: 0, failed: 0 };
 		for (const account of await Account.find(AccountAccess.available).select('_id').lean()) {
-			const purged = await mongoose.connection.transaction(async session => {
-				const locked = await Account.updateOne({ _id: account._id, ...AccountAccess.available }, { $inc: { sequence: 1 } }, { session });
-				if (!locked.matchedCount) return { libraries: 0, snippets: 0 };
-				const now = new Date();
-				const libraries = await Library.find({ account: account._id, state: 'trashed', expires_at: { $lte: now } }).session(session).lean();
-				for (const library of libraries) await Libraries.purge(library, null, session);
-				let snippets = 0;
-				for (const entry of await Snippet.find({ account: account._id, state: 'trashed', expires_at: { $lte: now } }).session(session).lean()) {
-					const library = await Library.findById(entry.library).session(session).lean();
-					if (library && library.state !== 'purged') {
-						await Libraries.purge(library, entry, session);
-						snippets++;
+			try {
+				const purged = await mongoose.connection.transaction(async session => {
+					const locked = await Account.updateOne({ _id: account._id, ...AccountAccess.available }, { $inc: { sequence: 1 } }, { session });
+					if (!locked.matchedCount) return { libraries: 0, snippets: 0 };
+					const now = new Date();
+					const libraries = await Library.find({ account: account._id, state: 'trashed', expires_at: { $lte: now } }).session(session).lean();
+					for (const library of libraries) await Libraries.purge(library, null, session);
+					let snippets = 0;
+					for (const entry of await Snippet.find({ account: account._id, state: 'trashed', expires_at: { $lte: now } }).session(session).lean()) {
+						const library = await Library.findById(entry.library).session(session).lean();
+						if (library && library.state !== 'purged') {
+							await Libraries.purge(library, entry, session);
+							snippets++;
+						}
 					}
-				}
-				await Libraries.cleanupAssets(account._id, session, { updatedAt: { $lte: new Date(+now - Libraries.retention) } });
-				return { libraries: libraries.length, snippets };
-			});
-			summary.libraries += purged.libraries;
-			summary.snippets += purged.snippets;
+					await Libraries.cleanupAssets(account._id, session, { updatedAt: { $lte: new Date(+now - Libraries.retention) } });
+					return { libraries: libraries.length, snippets };
+				});
+				summary.libraries += purged.libraries;
+				summary.snippets += purged.snippets;
+			} catch (error) { console.error('Trash cleanup failed for account ' + account._id + ': ' + error.message); summary.failed++; }
 		}
 		return summary;
 	}

@@ -1,3 +1,4 @@
+import { TestDatabase } from './database.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -13,14 +14,14 @@ class Fixture {
 	static query = { range: 'all', timezone: 'UTC' };
 }
 before(async () => {
-	const uri = new URL(process.env.MONGO_URI); uri.pathname = '/typerelay_statistics_test';
-	await mongoose.connect(uri.toString()); await mongoose.connection.dropDatabase();
+	const uri = TestDatabase.uri(process.env.MONGO_URI, 'typerelay_statistics_test');
+	await mongoose.connect(uri); await TestDatabase.drop(mongoose.connection, 'typerelay_statistics_test');
 	await Promise.all(Object.values(mongoose.models).map(model => model.init()));
 	Fixture.account = await Account.create({ name: 'Statistics', plan: 'team', admin_override: { plan: 'team' } });
 	Fixture.owner = await Fixture.user('owner'); Fixture.member = await Fixture.user('member');
 	for (const name of ['shared', 'private']) { const library = await Library.create({ account: Fixture.account._id, creator: Fixture.owner.user, name, shared: name === 'shared', members: [Fixture.member.user], state: 'active' }); Fixture[name] = library; await Snippet.create({ account: Fixture.account._id, library: library._id, id: 'snippet-' + library._id, title: name, trigger: name, state: 'active' }); }
 });
-after(async () => { await mongoose.connection.dropDatabase(); await mongoose.disconnect(); });
+after(async () => { await TestDatabase.drop(mongoose.connection, 'typerelay_statistics_test'); await mongoose.disconnect(); });
 
 test('defaults, estimates, validation and CSV formula escaping', () => {
 	assert.deepEqual(Statistics.defaults, { wpm: 50, hourly_rate: 30, currency: 'USD' });

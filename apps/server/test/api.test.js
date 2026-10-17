@@ -1,3 +1,4 @@
+import { TestDatabase } from './database.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID, createHash } from 'node:crypto';
@@ -23,8 +24,8 @@ class ApiFixture {
 }
 before(async () => {
 	process.env.JWT_SECRET = Support.token();
-	await mongoose.connect(process.env.MONGO_URI.replace('/typerelay?', '/typerelay_api_test?'));
-	await mongoose.connection.dropDatabase(); await Promise.all(Object.values(mongoose.models).map(model => model.init()));
+	await mongoose.connect(TestDatabase.uri(process.env.MONGO_URI, 'typerelay_api_test'));
+	await TestDatabase.drop(mongoose.connection, 'typerelay_api_test'); await Promise.all(Object.values(mongoose.models).map(model => model.init()));
 	const account = await Account.create({ name: 'API test' });
 	ApiFixture.owner = await ApiFixture.user(account._id);
 	ApiFixture.outsider = await ApiFixture.user((await Account.create({ name: 'Other' }))._id);
@@ -34,7 +35,7 @@ before(async () => {
 	app.use((error, req, res, next) => res.status(error.status || 500).json({ error: error.message }));
 	ApiFixture.server = app.listen(0, '127.0.0.1'); await new Promise(resolve => ApiFixture.server.once('listening', resolve)); ApiFixture.base = 'http://127.0.0.1:' + ApiFixture.server.address().port;
 });
-after(async () => { await new Promise(resolve => ApiFixture.server.close(resolve)); await mongoose.connection.dropDatabase(); await mongoose.disconnect(); });
+after(async () => { await new Promise(resolve => ApiFixture.server.close(resolve)); await TestDatabase.drop(mongoose.connection, 'typerelay_api_test'); await mongoose.disconnect(); });
 
 test('public authentication is separate from desktop and scope-limited; no token hashes returned', async () => {
 	assert.equal((await ApiFixture.request('/me')).status, 200);

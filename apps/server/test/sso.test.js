@@ -1,3 +1,4 @@
+import { TestDatabase } from './database.js';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
@@ -90,17 +91,15 @@ class Fixture {
 	}
 }
 before(async () => {
-	const uri = new URL(process.env.MONGO_URI);
-	uri.pathname = '/typerelay_sso_test';
-	assert.equal(uri.pathname, '/typerelay_sso_test');
-	Object.assign(process.env, { NODE_ENV: 'test', IS_DOCKER: 'true', MONGO_URI: uri.href, PORT: '3157', SESSION_SECRET: Support.token(), TYPERELAY_HOSTED_EDITION: 'true', BILLING_ENABLED: 'true', WHITE_LABEL_ENABLED: 'false', ENABLE_SIGNUP: 'false', API_RATE_LIMIT_ENABLED: 'false' });
+	const uri = TestDatabase.uri(process.env.MONGO_URI, 'typerelay_sso_test');
+	Object.assign(process.env, { NODE_ENV: 'test', IS_DOCKER: 'true', MONGO_URI: uri, PORT: '3157', SESSION_SECRET: Support.token(), TYPERELAY_HOSTED_EDITION: 'true', BILLING_ENABLED: 'true', WHITE_LABEL_ENABLED: 'false', ENABLE_SIGNUP: 'false', API_RATE_LIMIT_ENABLED: 'false' });
 	Auth.origin = Fixture.origin;
 	const pems = await selfsigned.generate([{ name: 'commonName', value: 'saml-fixture' }], { keySize: 2048, algorithm: 'sha256', notBeforeDate: new Date(Date.now() - 60000), notAfterDate: new Date(Date.now() + 86400000) });
 	Fixture.certificate = pems.cert; Fixture.privateKey = pems.private;
 	const { Server } = await import('../app.js');
 	Fixture.server = await Server.start();
 });
-after(async () => { if (Fixture.server) await new Promise(resolve => Fixture.server.close(resolve)); if (mongoose.connection.name === 'typerelay_sso_test') await mongoose.connection.dropDatabase(); await mongoose.disconnect(); });
+after(async () => { if (Fixture.server) await new Promise(resolve => Fixture.server.close(resolve)); await TestDatabase.drop(mongoose.connection, 'typerelay_sso_test'); await mongoose.disconnect(); });
 
 test('Pro and Team allow configuration while Free is gated', async () => {
 	for (const plan of ['free', 'pro', 'team']) {

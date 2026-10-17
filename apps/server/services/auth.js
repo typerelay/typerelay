@@ -99,6 +99,7 @@ export class Auth {
 			if (ticket.data?.account) AccountAccess.assert(await Account.findById(ticket.data.account).session(session).lean());
 			if (ticket.data?.account) Support.assert(user && await Member.exists({ account: ticket.data.account, user: user._id }).session(session), 'Account access denied', 403);
 			if (!user) {
+				Support.assert(Security.signupEnabled(), 'Signup is disabled', 403);
 				[user] = await User.create([{ email: ticket.email, name: ticket.data?.name || ticket.email.split('@')[0] }], { session });
 				const acquisition = Auth.adsEnabled() ? { ...Auth.attribution(ticket.data?.acquisition), transaction_id: 'typerelay-signup-' + randomUUID(), confirmed_at: new Date() } : undefined;
 				[account] = await Account.create([{ name: user.name + '’s team', ...(acquisition ? { acquisition } : {}) }], { session });

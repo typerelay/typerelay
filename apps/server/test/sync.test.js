@@ -1,9 +1,11 @@
-import { test, before, after } from 'node:test';
+import { TestDatabase } from './database.js';
+import { test, before, after, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID, createHash } from 'node:crypto';
 import { mongoose, User, Account, Member, Library, Group, Device, Conflict, Snippet, SnippetAsset, MigrationBackup } from '../model/index.js';
 import { Support, Yaml } from '../services/support.js';
 import { Libraries } from '../services/libraries.js';
+import { Assets } from '../services/assets.js';
 import { Auth } from '../services/auth.js';
 import { StorageMigration } from '../services/storage_migration.js';
 import { Team } from '../services/team.js';
@@ -30,8 +32,8 @@ class Fixture {
 	static change(snippet, replace) { return { id: snippet.id, base_revision: snippet.revision, base: snippet, value: replace === null ? null : { trigger: snippet.trigger, replace } }; }
 }
 before(async () => {
-	await mongoose.connect(process.env.MONGO_URI.replace('/typerelay?', '/typerelay_test?'));
-	await mongoose.connection.dropDatabase();
+	await mongoose.connect(TestDatabase.uri(process.env.MONGO_URI, 'typerelay_sync_test'));
+	await TestDatabase.drop(mongoose.connection, 'typerelay_sync_test');
 	await Promise.all(Object.values(mongoose.models).map(model => model.init()));
 	const account = await Account.create({ name: 'One' });
 	Fixture.account = account._id;
@@ -40,7 +42,7 @@ before(async () => {
 	Fixture.member = await Fixture.user('member', account._id);
 	Fixture.outsider = await Fixture.user('owner', (await Account.create({ name: 'Two' }))._id);
 });
-after(async () => { await mongoose.connection.dropDatabase(); await mongoose.disconnect(); });
+after(async () => { await TestDatabase.drop(mongoose.connection, 'typerelay_sync_test'); await mongoose.disconnect(); });
 
 test('editing legacy snippets updates sort order while unchanged saves and retries preserve timestamps', async () => {
 	let { library } = await Fixture.create(Fixture.owner);
@@ -263,7 +265,7 @@ test('restore collisions roll back; expiry/purge erase content, conflicts and pr
 	await Library.updateOne({ _id: expiredLibrary._id }, { $set: { expires_at: new Date(Date.now() - 1000) } });
 	await assert.rejects(Libraries.mutate(ctx, randomUUID(), { target }, (fresh, session) => Libraries.trashAction(fresh, target, 'restore', session)), /expired/);
 	const summary = await Libraries.cleanup();
-	assert.deepEqual(summary, { libraries: 1, snippets: 1 });
+	assert.deepEqual(summary, { libraries: 1, snippets: 1, failed: 0 });
 	const purged = await Snippet.findOne({ library: library._id, id: target.id }).lean();
 	assert.equal(purged.state, 'purged');
 	assert.equal(purged.content, undefined);
@@ -626,4 +628,76 @@ test('import collision checks include effective personal abbreviations', async (
 	const result = await Libraries.mutate(owner, randomUUID(), body, (ctx, session) => Libraries.commitImport(ctx, 'keyboardmaestro', body, session));
 	assert.equal(result.import_summary.renamed[0].trigger, 'mine-2');
 	assert.equal((await Libraries.personalState(owner)).find(row => row.snippet === library.snippets[0].id).trigger, 'mine');
+});
+
+test('asset access follows libraries, conflicts and consumed staging grants, including legacy assets', async () => {
+	const owner = await Fixture.user('owner', (await Account.create({ name: 'Private assets' }))._id);
+	const member = await Fixture.user('member', owner.account);
+	const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
+	const asset = await Assets.put(owner, png);
+	assert.equal((await Assets.get(owner, asset.id)).id, asset.id);
+	await assert.rejects(Assets.get(member, asset.id), /not found/);
+	const body = { name: 'Image library', snippets: [{ trigger: 'image', content: { version: 2, type: 'rich_text', markdown: '![private](typerelay-asset:' + asset.id + ')', variables: {} } }] };
+	let { library } = await Libraries.mutate(owner, randomUUID(), body, (ctx, session) => Libraries.create(ctx, body, session).then(library => ({ library })));
+	assert.deepEqual((await SnippetAsset.findOne({ account: owner.account, id: asset.id }).lean()).staged_by, []);
+	await assert.rejects(Assets.get(member, asset.id, true), /not found/);
+	assert.deepEqual((await Assets.presence(member, [asset.id])).missing, [asset.id]);
+	const source = (await Fixture.create(member, 'matches: [{trigger: source, replace: Source}]')).library;
+	const destination = (await Fixture.create(member, 'matches: [{trigger: destination, replace: Destination}]')).library;
+	const move = { action: 'move', source_library: source._id, destination_library: destination._id, items: [{ id: source.snippets[0].id, base_revision: source.snippets[0].revision, value: body.snippets[0] }] };
+	await assert.rejects(Libraries.mutate(member, randomUUID(), move, (ctx, session) => Libraries.batch(ctx, move, session)), /inaccessible/);
+	const forgedBase = [{ id: source.snippets[0].id, base_revision: 0, value: { trigger: 'source', replace: 'Changed' }, base: { content: { type: 'rich_text', assets: [asset.id] } } }];
+	await assert.rejects(Fixture.upload(member, source, forgedBase), /inaccessible/);
+	await assert.rejects(Assets.get(member, asset.id), /not found/);
+
+	await assert.rejects(Libraries.mutate(member, randomUUID(), body, (ctx, session) => Libraries.create(ctx, body, session)), /inaccessible/);
+	({ library } = await Fixture.settings(owner, library, { members: [member.user] }));
+	assert.equal((await Assets.get(member, asset.id, true)).size, asset.size);
+	assert.deepEqual((await Assets.presence(member, [asset.id])).missing, []);
+	({ library } = await Fixture.settings(owner, library, { members: [] }));
+	await assert.rejects(Assets.get(member, asset.id), /not found/);
+	await assert.rejects(Assets.get(Fixture.outsider, asset.id), /not found/);
+	await SnippetAsset.updateOne({ account: owner.account, id: asset.id }, { $unset: { staged_by: '' } });
+	assert.equal((await Assets.get(owner, asset.id)).id, asset.id);
+	await Assets.put(member, png);
+	assert.equal((await Assets.get(member, asset.id)).id, asset.id);
+	const own = await Libraries.mutate(member, randomUUID(), body, (ctx, session) => Libraries.create(ctx, body, session));
+	assert.equal(own.snippets.length, 1);
+	const conflictAsset = await Assets.put(owner, await (await import('sharp')).default(png).resize(2, 2).png().toBuffer());
+	await Conflict.create({ account: owner.account, library: library._id, user: owner.user, snippet: randomUUID(), local: { content: { type: 'rich_text', assets: [conflictAsset.id] } } });
+	await SnippetAsset.updateOne({ account: owner.account, id: conflictAsset.id }, { $unset: { staged_by: '' } });
+	({ library } = await Fixture.settings(owner, library, { members: [member.user], editable: false }));
+	await assert.rejects(Assets.get(member, conflictAsset.id), /not found/);
+	({ library } = await Fixture.settings(owner, library, { members: [member.user], editable: true }));
+	assert.equal((await Assets.get(member, conflictAsset.id)).id, conflictAsset.id);
+});
+
+test('downgraded retained members do not block purge; cleanup continues after another account fails', async () => {
+	const owner = await Fixture.user('owner', (await Account.create({ name: 'Downgraded' }))._id);
+	const member = await Fixture.user('member', owner.account);
+	let { library } = await Fixture.create(owner);
+	({ library } = await Fixture.settings(owner, library, { members: [member.user] }));
+	const saved = { hosted: process.env.TYPERELAY_HOSTED_EDITION, enabled: process.env.BILLING_ENABLED };
+	try {
+		process.env.TYPERELAY_HOSTED_EDITION = 'true'; process.env.BILLING_ENABLED = 'true';
+		await assert.rejects(Support.context(member.user, member.account), /requires Pro/);
+		await mongoose.connection.transaction(session => Libraries.purge(library, null, session));
+		const purged = await Library.findById(library._id).lean();
+		assert.equal(purged.state, 'purged');
+		assert.ok(purged.purge_readers.some(id => String(id) === member.user));
+	} finally {
+		for (const [key, value] of [['TYPERELAY_HOSTED_EDITION', saved.hosted], ['BILLING_ENABLED', saved.enabled]]) if (value === undefined) delete process.env[key]; else process.env[key] = value;
+	}
+	const first = await Fixture.create(owner);
+	const secondOwner = await Fixture.user('owner', (await Account.create({ name: 'Cleanup continues' }))._id);
+	const second = await Fixture.create(secondOwner);
+	await Library.updateMany({ _id: { $in: [first.library._id, second.library._id] } }, { $set: { state: 'trashed', expires_at: new Date(0) } });
+	const purge = Libraries.purge;
+	const replacement = mock.method(Libraries, 'purge', async (library, entry, session) => { if (String(library._id) === first.library._id) throw new Error('synthetic account failure'); return purge(library, entry, session); });
+	try {
+		const summary = await Libraries.cleanup();
+		assert.equal(summary.failed, 1);
+		assert.equal((await Library.findById(second.library._id).lean()).state, 'purged');
+		assert.equal((await Library.findById(first.library._id).lean()).state, 'trashed');
+	} finally { replacement.mock.restore(); }
 });

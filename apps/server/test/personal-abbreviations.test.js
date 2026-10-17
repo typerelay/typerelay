@@ -1,3 +1,4 @@
+import { TestDatabase } from './database.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -22,11 +23,11 @@ class Fixture {
 }
 
 before(async () => {
-	await mongoose.connect(process.env.MONGO_URI.replace('/typerelay?', '/typerelay_personal_test?'));
-	await mongoose.connection.dropDatabase();
+	await mongoose.connect(TestDatabase.uri(process.env.MONGO_URI, 'typerelay_personal_test'));
+	await TestDatabase.drop(mongoose.connection, 'typerelay_personal_test');
 	await Promise.all(Object.values(mongoose.models).map(model => model.init()));
 });
-after(async () => { await mongoose.connection.dropDatabase(); await mongoose.disconnect(); });
+after(async () => { await TestDatabase.drop(mongoose.connection, 'typerelay_personal_test'); await mongoose.disconnect(); });
 
 test('personal abbreviation replaces only its owner’s trigger, normalizes, resets and retries without changing shared revisions', async () => {
 	const { contexts: [owner, editor], library, id } = await Fixture.setup();
