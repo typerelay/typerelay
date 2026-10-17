@@ -21,6 +21,11 @@ form#editor-form.mobile-editor
 				each item in libraries
 					if item.permissions.edit
 						option(value=item._id selected=item._id===library._id)= item.name
+		if draft && draft.editing && draft.editing.id
+			.mb-3
+				p.settings-note Save this draft as a new snippet to keep both versions. The copy starts without an abbreviation.
+				.d-flex.justify-content-end
+					button.secondary-button#save-as-new(type="button") Save as new
 		.mobile-field-grid
 			label.mobile-field(for="title")
 				span Title

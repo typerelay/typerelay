@@ -69,3 +69,34 @@ test('template answers refresh only the current drawer preview and ignore stale 
   assert.equal(dom.window.document.querySelector('#insert-preview').textContent, 'Hello [name]');
  } finally { dom.window.close(); }
 });
+
+
+test('a resumed stale draft saves as new without overwriting the original or duplicating a retry', async () => {
+ const dom = new JSDOM('<div id="form-modal"><button id="save"></button><button id="save-as-new"></button><button id="delete-editor-item"></button></div>', { runScripts: 'outside-only' });
+ try {
+  for (const [id, value] of Object.entries({ title: 'Local draft', trigger: 'shared', 'snippet-type': 'plain_text', language: 'plain_text', replace: 'Hello {{name}}', 'edit-library': 'library' })) { const field = dom.window.document.createElement('input'); field.id = id; field.value = value; dom.window.document.body.append(field); }
+  const source = await readFile(new URL('../src/main.ts', import.meta.url), 'utf8');
+  const methods = source.slice(source.indexOf(' static async persistDraft('), source.indexOf(' static async use('));
+  const remote = { id: 'original', revision: 2, text: 'Remote version' }; const saves = []; let draft; let failCopy = true; const copies = new Map();
+  dom.window.Native = { call: async (action, request) => {
+   if (action === 'draft') { draft = structuredClone(request.draft); return {}; }
+   assert.equal(action, 'save'); saves.push(structuredClone(request));
+   if (request.id) throw new Error('This snippet changed');
+   assert.equal(draft.editing.operation_id, request.operation_id); assert.equal(draft.editing.id, undefined);
+   if (failCopy) { assert.equal(dom.window.document.querySelector('#save').disabled, true); failCopy = false; throw new Error('Connection unavailable'); }
+   if (!copies.has(request.operation_id)) copies.set(request.operation_id, { id: 'new-snippet', ...request.entry });
+   return { id: 'new-snippet' };
+  } };
+  dom.window.Modal = { getInstance: () => ({ hide() {} }) };
+  dom.window.eval(stripTypeScriptTypes('window.MobileApp = class MobileApp { static draftJob = Promise.resolve(); static editorDirty = true; static template = { variables: { name: { required: true } }, content: async () => ({ variables: { name: { required: true } } }) }; static $(id) { return document.getElementById(id); } static input(id) { return this.$(id); } static async load() {} static switchScreen() {} static toast() {} static async sync() {} ' + methods + '}'));
+  const app = dom.window.MobileApp; app.editing = { library: 'library', id: 'original', record_revision: 1, revision: 1, operation_id: 'old-operation' };
+  const saveButton = dom.window.document.querySelector('#save'); saveButton.disabled = true; await app.saveAsNew(); assert.equal(app.editing.id, 'original'); assert.equal(saves.length, 0); saveButton.disabled = false;
+  await assert.rejects(app.save(), /This snippet changed/); assert.equal(saves[0].id, 'original'); assert.equal(saves[0].record_revision, 1);
+  const copy = app.saveAsNew(); await app.saveAsNew(); await assert.rejects(copy, /Connection unavailable/);
+  assert.equal(dom.window.document.querySelector('#save').disabled, false); assert.equal(saves.length, 2); const pending = saves[1]; assert.equal(pending.id, undefined); assert.equal(pending.record_revision, undefined); assert.notEqual(pending.operation_id, 'old-operation');
+  assert.equal(pending.entry.trigger, ''); assert.equal(pending.entry.replace, 'Hello {{name}}'); assert.equal(pending.entry.variables.name.required, true);
+  assert.equal(draft.fields.replace, 'Hello {{name}}'); assert.equal(draft.fields.trigger, '');
+  await app.save(); assert.equal(saves[2].operation_id, pending.operation_id); assert.equal(copies.size, 1); assert.equal(draft, null);
+  assert.deepEqual(remote, { id: 'original', revision: 2, text: 'Remote version' });
+ } finally { dom.window.close(); }
+});

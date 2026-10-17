@@ -156,6 +156,7 @@ export class MobileApp {
    if (snippet && library.permissions.edit) void MobileApp.deleteSnippet(library, snippet, true).catch(MobileApp.error);
    else if (draft) void MobileApp.discardDraft(true).catch(MobileApp.error);
   };
+  const saveAsNew = document.getElementById('save-as-new'); if (saveAsNew) saveAsNew.onclick = () => { void MobileApp.busy(saveAsNew as HTMLButtonElement, MobileApp.saveAsNew); };
   MobileApp.$('editor-form').onsubmit = event => { event.preventDefault(); void MobileApp.busy(MobileApp.$('save') as HTMLButtonElement, MobileApp.save); };
   MobileApp.enhanceEditorSelects(); MobileApp.selectObserver?.disconnect(); MobileApp.selectObserver = new MutationObserver(MobileApp.enhanceEditorSelects); MobileApp.selectObserver.observe(MobileApp.$('editor-content'), { childList: true, subtree: true });
   MobileApp.$('form-modal').classList.add('is-drawer');
@@ -180,6 +181,14 @@ export class MobileApp {
  static async hydrateImages() { for (const image of MobileApp.$('rich-editor').querySelectorAll<HTMLImageElement>('img[data-asset]')) { const id = image.dataset.asset!; if (!MobileApp.assetURLs.has(id)) { try { MobileApp.assetURLs.set(id, (await Native.call('asset', { id })).url); } catch { continue; } } if (image.isConnected) image.src = MobileApp.assetURLs.get(id)!; } }
  static scheduleDraft = () => { MobileApp.editorDirty = true; clearTimeout(MobileApp.draftTimer); MobileApp.draftTimer = setTimeout(() => { void MobileApp.persistDraft().catch(MobileApp.error); }, 250); };
  static async persistDraft() { clearTimeout(MobileApp.draftTimer); if (!MobileApp.editing || !MobileApp.editorDirty) return; MobileApp.richView?.content(); const fields = Object.fromEntries(['title','trigger','snippet-type','language','replace','edit-library'].map(id => [id, MobileApp.input(id).value])); const draft = { editing: MobileApp.editing, fields, variables: MobileApp.template?.variables || {} }; MobileApp.draftJob = MobileApp.draftJob.catch(() => undefined).then(() => Native.call('draft', { draft })); await MobileApp.draftJob; }
+ static saveAsNew = async () => {
+  const save = MobileApp.$('save') as HTMLButtonElement; if (save.disabled || !MobileApp.editing?.id) return;
+  MobileApp.editing = { library: MobileApp.editing.library, revision: MobileApp.editing.revision, operation_id: crypto.randomUUID() };
+  MobileApp.input('trigger').value = ''; MobileApp.editorDirty = true;
+  MobileApp.$('save-as-new').hidden = true; MobileApp.$('delete-editor-item').hidden = true;
+  save.disabled = true;
+  try { await MobileApp.save(); } finally { save.disabled = false; }
+ };
  static save = async () => {
   await MobileApp.persistDraft(); const selectedKind = MobileApp.input('snippet-type').value; const template = selectedKind !== 'code' ? await MobileApp.template.content() : null;
   const replace = MobileApp.richView?.content() ?? MobileApp.input('replace').value; const variables = template?.variables || {};
