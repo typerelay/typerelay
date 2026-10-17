@@ -16,7 +16,7 @@ impl Target {
     fn valid(&self) -> bool { unsafe { let hwnd=HWND(self.handle as *mut _); let mut pid=0; GetWindowThreadProcessId(hwnd,Some(&mut pid)); IsWindow(Some(hwnd)).as_bool() && pid == self.pid } }
     pub fn restore(&self) -> Result<()> { ensure!(self.valid(),"Original window closed"); unsafe { let _ = SetForegroundWindow(HWND(self.handle as *mut _)); } for _ in 0..40 { if self.focused()? { return Ok(()); } std::thread::sleep(std::time::Duration::from_millis(15)); } anyhow::bail!("Windows refused focus restoration; use Copy") }
     pub fn focused(&self) -> Result<bool> { Ok(self.valid() && unsafe { GetForegroundWindow().0 as isize == self.handle }) }
-    pub fn replace_text(&self,erase:usize,text:&str,cursor:Option<&typerelay_core::template::Cursor>)->Result<bool> {
+    pub fn replace_text(&self,erase:usize,text:&str)->Result<bool> {
         if self.class!="Notepad"{return Ok(false);}
         ensure!(self.focused()?,"Original window lost focus");
         let window=HWND(self.handle as *mut _);let thread=unsafe{GetWindowThreadProcessId(window,None)};let mut info=GUITHREADINFO{cbSize:std::mem::size_of::<GUITHREADINFO>() as u32,..Default::default()};unsafe{GetGUIThreadInfo(thread,&mut info)?;}
@@ -25,10 +25,8 @@ impl Target {
         ensure!(unsafe{SendMessageTimeoutW(info.hwndFocus,0x00b0,WPARAM(&mut start as *mut u32 as usize),LPARAM(&mut end as *mut u32 as isize),SMTO_ABORTIFHUNG,500,None)}.0!=0,"Cannot read Notepad selection");
         ensure!(erase==0||(start==end&&start as usize>=erase),"Notepad caret changed; abbreviation kept");
         if erase>0{ensure!(unsafe{SendMessageTimeoutW(info.hwndFocus,0x00b1,WPARAM(start as usize-erase),LPARAM(end as isize),SMTO_ABORTIFHUNG,500,None)}.0!=0,"Cannot select abbreviation");}
-        let cursor=cursor.map(|cursor| start as usize-erase+cursor.utf16+if class=="Edit"{text.encode_utf16().take(cursor.utf16).filter(|unit|*unit==10).count()}else{0});
         let text:Vec<u16>=text.replace("\r\n","\n").replace('\n',"\r\n").encode_utf16().chain(Some(0)).collect();
         ensure!(unsafe{SendMessageTimeoutW(info.hwndFocus,0x00c2,WPARAM(1),LPARAM(text.as_ptr() as isize),SMTO_ABORTIFHUNG,500,None)}.0!=0,"Notepad did not accept replacement");
-        if let Some(cursor)=cursor {ensure!(self.focused()?,"Original window lost focus; cursor unchanged");ensure!(unsafe{SendMessageTimeoutW(info.hwndFocus,0x00b1,WPARAM(cursor),LPARAM(cursor as isize),SMTO_ABORTIFHUNG,500,None)}.0!=0,"Cannot position Notepad cursor");}
         Ok(true)
     }
 }
@@ -240,6 +238,54 @@ mod observation_tests {
     fn text_service_stays_blocked_even_with_a_keyboard_substitute(){let layout=HKL(0x04090409usize as *mut _);let profile=TF_INPUTPROCESSORPROFILE{dwProfileType:TF_PROFILETYPE_INPUTPROCESSOR,hklSubstitute:layout,..Default::default()};assert!(ObservationAdapter::profile_is_ime(&profile,layout).unwrap());}
     #[test]
     fn absent_or_mismatched_profile_cannot_authorize_capture(){let layout=HKL(0x04090409usize as *mut _);assert!(ObservationAdapter::profile_is_ime(&TF_INPUTPROCESSORPROFILE::default(),layout).is_err());let profile=TF_INPUTPROCESSORPROFILE{dwProfileType:TF_PROFILETYPE_KEYBOARDLAYOUT,hkl:HKL(0x04070407usize as *mut _),..Default::default()};assert!(ObservationAdapter::profile_is_ime(&profile,layout).is_err());}
+}
+
+struct CursorApartment;
+impl Drop for CursorApartment {fn drop(&mut self){unsafe{windows::Win32::System::Com::CoUninitialize();}}}
+// UIA objects stay on the expansion worker and are released before its COM apartment.
+pub struct CursorTarget { automation:windows::Win32::UI::Accessibility::IUIAutomation2, field:windows::Win32::UI::Accessibility::IUIAutomationElement, text:Option<windows::Win32::UI::Accessibility::IUIAutomationTextPattern>, _apartment:CursorApartment }
+impl CursorTarget {
+    pub fn capture(target:&Target)->Option<Self> {
+        use windows::Win32::{System::Com::{CoInitializeEx,CoCreateInstance,COINIT_MULTITHREADED,CLSCTX_INPROC_SERVER},UI::Accessibility::*};
+        (||->Result<Self>{unsafe{
+            CoInitializeEx(None,COINIT_MULTITHREADED).ok()?;let apartment=CursorApartment;
+            let automation:IUIAutomation2=CoCreateInstance(&CUIAutomation8,None,CLSCTX_INPROC_SERVER)?;
+            automation.SetConnectionTimeout(100)?;automation.SetTransactionTimeout(100)?;automation.SetAutoSetFocus(false)?;
+            let field=automation.GetFocusedElement()?;ensure!(field.CurrentProcessId()?==target.pid as i32&&field.CurrentHasKeyboardFocus()?.as_bool()&&!field.CurrentIsPassword()?.as_bool(),"Unsupported text control");
+            let kind=field.CurrentControlType()?;ensure!(kind==UIA_EditControlTypeId||kind==UIA_DocumentControlTypeId,"Unsupported text control");
+            let text=field.GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId).ok();ensure!(target.focused()?,"Original window lost focus");
+            Ok(Self{automation,field,text,_apartment:apartment})
+        }})().ok()
+    }
+    pub fn focused(&self,target:&Target)->Result<bool> {unsafe{Ok(target.focused()?&&self.field.CurrentHasKeyboardFocus()?.as_bool()&&self.automation.CompareElements(&self.field,&self.automation.GetFocusedElement()?)?.as_bool())}}
+    fn selection(&self)->Result<windows::Win32::UI::Accessibility::IUIAutomationTextRange> {
+        use windows::Win32::UI::Accessibility::*;
+        unsafe{let ranges=self.text.as_ref().context("No text selection interface")?.GetSelection()?;ensure!(ranges.Length()?==1,"Unknown text selection");let range=ranges.GetElement(0)?;ensure!(range.CompareEndpoints(TextPatternRangeEndpoint_Start,&range,TextPatternRangeEndpoint_End)?==0,"Text selection changed");Ok(range)}
+    }
+    pub fn position(&self,target:&Target,text:&str,cursor:&typerelay_core::template::Cursor,current:impl Fn()->bool)->Result<bool> {
+        use windows::{core::BSTR,Win32::UI::Accessibility::*};
+        ensure!(current()&&self.focused(target)?,"Text inserted; original text field lost focus. Cursor unchanged");
+        let Some(pattern)=&self.text else{return Ok(false)};
+        let prefix=cursor.prefix(text).context("Cursor metadata does not match pasted text")?;
+        // Find text by range rather than assuming that UIA character units equal UTF-16 or graphemes.
+        unsafe{
+            let selection=self.selection()?;let before=pattern.DocumentRange()?;before.MoveEndpointByRange(TextPatternRangeEndpoint_End,&selection,TextPatternRangeEndpoint_Start)?;
+            let inserted=if text.is_empty(){selection.Clone()?}else{before.FindText(&BSTR::from(text),true,false)?};
+            ensure!(inserted.GetText(i32::try_from(text.encode_utf16().count()+1)?)?.to_string()==text&&inserted.CompareEndpoints(TextPatternRangeEndpoint_End,&selection,TextPatternRangeEndpoint_Start)?==0,"Accessible text differs from paste");
+            let destination=if prefix.is_empty(){let start=inserted.Clone()?;start.MoveEndpointByRange(TextPatternRangeEndpoint_End,&start,TextPatternRangeEndpoint_Start)?;start}else{
+                let found=inserted.FindText(&BSTR::from(prefix),false,false)?;
+                ensure!(found.GetText(i32::try_from(prefix.encode_utf16().count()+1)?)?.to_string()==prefix&&found.CompareEndpoints(TextPatternRangeEndpoint_Start,&inserted,TextPatternRangeEndpoint_Start)?==0,"Accessible prefix differs from paste");
+                found.MoveEndpointByRange(TextPatternRangeEndpoint_Start,&found,TextPatternRangeEndpoint_End)?;found
+            };
+            ensure!(self.selection()?.Compare(&selection)?.as_bool()&&inserted.GetText(i32::try_from(text.encode_utf16().count()+1)?)?.to_string()==text&&current()&&self.focused(target)?,"Text or focus changed before cursor positioning");
+            // A rejected/timed-out write can still take effect later. Never fall back after Select.
+            destination.Select().context("Could not set cursor position; nothing retried")?;
+            let deadline=std::time::Instant::now()+Duration::from_millis(150);
+            loop {ensure!(current()&&self.focused(target)?,"Focus changed after cursor positioning; nothing retried");if self.selection()?.Compare(&destination)?.as_bool(){break;}ensure!(std::time::Instant::now()<deadline,"Could not confirm cursor position; nothing retried");std::thread::sleep(Duration::from_millis(5));}
+            ensure!(inserted.GetText(i32::try_from(text.encode_utf16().count()+1)?)?.to_string()==text,"Text changed during cursor positioning; nothing retried");
+        }
+        if std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some(){eprintln!("Cursor positioned directly (Windows)");}Ok(true)
+    }
 }
 
 impl Target { pub fn position_cursor(&self,count:usize,current:impl Fn()->bool)->Result<()> {let target=self;for _ in 0..count {ensure!(current()&&target.focused()?,"Text inserted; cursor positioning interrupted. Nothing retried");let events=[false,true].map(|up|INPUT{r#type:INPUT_KEYBOARD,Anonymous:INPUT_0{ki:KEYBDINPUT{wVk:VK_LEFT,dwFlags:if up{KEYEVENTF_KEYUP}else{Default::default()},dwExtraInfo:TYPERELAY_EVENT_MARKER,..Default::default()}}});ensure!(unsafe{SendInput(&events,std::mem::size_of::<INPUT>() as i32)}==2,"Windows rejected cursor input");std::thread::sleep(Duration::from_millis(2));}Ok(())} }

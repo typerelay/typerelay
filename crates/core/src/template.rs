@@ -34,6 +34,19 @@ pub struct RenderRequest {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cursor { pub utf16: usize, pub backward_utf16: usize, pub backward_graphemes: usize }
+impl Cursor {
+    /// Validate cursor boundaries and suffix counts against the rendered text.
+    pub fn prefix<'a>(&self,text:&'a str)->Option<&'a str> {
+        let mut units=0;
+        for (byte,grapheme) in text.grapheme_indices(true).chain(std::iter::once((text.len(),""))) {
+            let prefix=&text[..byte];
+            if units==self.utf16 {let suffix=&text[byte..];return (suffix.encode_utf16().count()==self.backward_utf16&&suffix.graphemes(true).count()==self.backward_graphemes).then_some(prefix);}
+            units+=grapheme.encode_utf16().count();
+        }
+        None
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Rendered { pub template: Template, pub fields: Vec<String>, pub steps: Vec<Step>, pub text: String, pub enter_actions: usize, #[serde(default, skip_serializing_if = "Option::is_none")] pub cursor: Option<Cursor> }
 #[derive(Debug)]
@@ -159,4 +172,19 @@ mod tests {
         let json=serde_json::to_value(render("hello",&[]).unwrap()).unwrap();assert!(json.get("cursor").is_none());
     }
     #[test] fn multiline_and_size_validation() { assert!(render("{{name}}", &[("name","a\nb")]).is_err()); assert!(render("{{name}}", &[("name", &"a".repeat(65537))]).is_err()); }
+}
+
+#[cfg(test)]
+mod cursor_prefix_tests {
+    use super::*;
+    #[test]
+    fn verified_prefix_handles_unicode_edges_and_long_text() {
+        for (before,after) in [("".into(),"after".into()),("before".into(),"".into()),("😀e\u{301}👩‍💻\n".into(),"tail\n".into()),("same same ".into(),"same same".into()),("a".repeat(12000),"b".repeat(2808))] {
+            let text=format!("{before}{after}");let cursor=Cursor{utf16:before.encode_utf16().count(),backward_utf16:after.encode_utf16().count(),backward_graphemes:after.graphemes(true).count()};assert_eq!(cursor.prefix(&text),Some(before.as_str()));
+        }
+    }
+    #[test]
+    fn rejects_split_clusters_stale_text_and_inconsistent_metadata() {
+        for (text,cursor) in [("😀tail",Cursor{utf16:1,backward_utf16:5,backward_graphemes:5}),("e\u{301}",Cursor{utf16:1,backward_utf16:1,backward_graphemes:1}),("text",Cursor{utf16:1,backward_utf16:2,backward_graphemes:2}),("text",Cursor{utf16:1,backward_utf16:3,backward_graphemes:2}),("text",Cursor{utf16:usize::MAX,backward_utf16:0,backward_graphemes:0})] {assert_eq!(cursor.prefix(text),None);}
+    }
 }
