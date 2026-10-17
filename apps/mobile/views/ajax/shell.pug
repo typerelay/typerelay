@@ -28,7 +28,6 @@ main.mobile-app#workspace
 					span.material-symbols-outlined close
 			select#library.visually-hidden(aria-label="Selected snippet library")
 				option(value="") All libraries
-			include ../../../server/views/ajax/ai-search.pug
 			#library-filters.library-filters(role="group" aria-label="Filter by library")
 				button.library-filter.is-active(type="button" data-library-filter="") All
 			.notice-stack
@@ -58,7 +57,6 @@ main.mobile-app#workspace
 				div
 					span.eyebrow TypeRelay
 					h1 Settings
-			include ../../../server/views/ajax/ai-controls.pug
 			section.settings-section
 				header.settings-section-header
 					span.settings-icon
@@ -146,6 +144,11 @@ main.mobile-app#workspace
 				h2 Account
 				p.settings-description Remove credentials, cached snippets, pending edits, and drafts from this device.
 				button.danger-button.wide#logout(type="button") Sign out
+			section.settings-section(aria-label="Privacy and account deletion")
+				h2 Privacy and account
+				a.secondary-button.wide.mb-3(href="https://typerelay.com/privacy-policy/" data-external) Privacy Policy
+				button.danger-button.wide#delete-account(type="button") Delete account
+				p.settings-note Opens the secure account-deletion page. Nothing is deleted until you sign in and confirm.
 			footer.settings-family(aria-label="Other tools from our team")
 				small More tools from our team
 				ul

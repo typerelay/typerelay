@@ -1,0 +1,19 @@
+section.card.mb-5(id='deletion-' + request._id)
+	.card-body
+		h2.h5= request.email
+		p.mb-3
+			span User ID: #{request._id}. Requested: #{request.deletion.requested_at.toISOString()}.
+		if request.deletion.error
+			p.text-danger= request.deletion.error
+		ul.mb-3
+			each item in request.accounts
+				li
+					span #{item.account ? item.account.name : 'Removed account'} (#{item.id})
+					if item.review
+						strong  — Review personal contributions
+					if item.account && item.account.deletion && item.account.deletion.error
+						span.text-danger= ' — ' + item.account.deletion.error
+		if request.deletion.review_accounts.length && !request.deletion.reviewed_at
+			button.btn.btn-primary.btn-sm(type="button" data-deletion-review=String(request._id)) Record completed personal-data review
+		else
+			p.mb-0 Review complete or not required. Automatic cleanup is pending; check failed account purges if it remains blocked.

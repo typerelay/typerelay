@@ -1,6 +1,7 @@
 import { avatarStyles } from './model/avatar_styles.js';
 import express from 'express';
 import { Admin } from './admin.js';
+import { AdminAccounts } from './services/admin_accounts.js';
 import { AdminSettings } from './services/admin_settings.js';
 import { Ai } from './ai/index.js';
 import { AccountAccess } from './services/account_access.js';
@@ -95,8 +96,8 @@ export class Server {
 		app.use(WhiteLabel.resolveRequest);
 		app.use(async (req, res, next) => {
 			if (req.session.user) {
-				const user = await User.findById(req.session.user).select('auth_version').lean();
-				if (!user || (user.auth_version || 0) !== (req.session.auth_version || 0)) { delete req.session.user; delete req.session.auth_at; }
+				const user = await User.findById(req.session.user).select('auth_version deletion').lean();
+				if (!user || user.deletion?.requested_at || (user.auth_version || 0) !== (req.session.auth_version || 0)) { delete req.session.user; delete req.session.auth_at; }
 			}
 			res.locals.serverOrigin = Auth.origin;
 			res.locals.passkeysAvailable = !req.boundAccount;
@@ -114,7 +115,7 @@ export class Server {
 		const authLimit = rateLimit({ windowMs: 900000, limit: 30, message: { error: 'Too many sign-in attempts; try again later.' } });
 		Security.mount(app, authLimit);
 		await PublicApi.mount(app, authLimit);
-		app.post('/auth/login', authLimit, async (req, res) => { await Auth.login(req.body.email, null, { origin: req.boundAccount ? Server.requestOrigin(req) : Auth.origin, account: req.boundAccount, return_to: req.session.return_to?.startsWith('/oauth/authorize?') ? req.session.return_to : undefined }); res.json({ message: 'Check your email for a sign-in link.' }); });
+		app.post('/auth/login', authLimit, async (req, res) => { await Auth.login(req.body.email, null, { origin: req.boundAccount ? Server.requestOrigin(req) : Auth.origin, account: req.boundAccount, return_to: req.session.return_to && (req.session.return_to.startsWith('/oauth/authorize?') || req.session.return_to.startsWith('/account/delete')) ? req.session.return_to : undefined }); res.json({ message: 'Check your email for a sign-in link.' }); });
 		app.get('/auth/callback', async (req, res) => {
 			res.set('Referrer-Policy', 'no-referrer');
 			const login = await Auth.consume(req.query.token, true);
@@ -145,6 +146,22 @@ export class Server {
 			Support.assert(conversion && req.body.transaction_id === conversion.transaction_id, 'Conversion unavailable', 403);
 			await Account.updateOne({ _id: req.session.signupConversion.account, 'acquisition.transaction_id': conversion.transaction_id, 'acquisition.dispatched_at': null }, { $set: { 'acquisition.dispatched_at': new Date() } });
 			res.json({ acknowledged: true });
+		});
+		app.get('/account/delete', async (req, res) => {
+			res.set({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Robots-Tag': 'noindex, nofollow' });
+			const destination = Auth.continuation('/account/delete' + (req.query.user ? '?user=' + Support.id(req.query.user) : ''));
+			if (!req.session.user || req.session.sso || !req.session.auth_at || req.session.auth_at < Date.now() - 600000) { req.session.return_to = destination; delete req.session.user; delete req.session.sso; return res.render('login'); }
+			Support.assert(!req.query.user || req.query.user === req.session.user, 'Sign in with the same email address used in the mobile app.', 403);
+			res.render('account-deletion', await AdminAccounts.deletionSummary(req.session.user));
+		});
+		app.post('/account/delete', authLimit, async (req, res) => {
+			Security.browserSession(req);
+			Support.assert(req.headers['x-csrf-token'] === req.session.csrf && (!req.headers.origin || req.headers.origin === new URL(Auth.origin).origin), 'Session expired; reload and retry', 403);
+			Support.assert(req.session.auth_at > Date.now() - 600000, 'Sign in again before deleting your account.', 401);
+			Support.assert(req.body.user === req.session.user, 'Account changed; reload before deleting.', 409);
+			await AdminAccounts.requestUserDeletion(req.session.user, req.body);
+			delete req.session.user; delete req.session.auth_at;
+			res.status(202).json({ html: pug.renderFile('./views/ajax/account-deletion-receipt.pug') });
 		});
 		app.post('/auth/logout', async (req, res) => { await new Promise(resolve => req.session.destroy(resolve)); res.json({ signed_out: true }); });
 		app.post('/oauth/token', authLimit, async (req, res) => res.json(await Auth.exchange(req.body)));
@@ -186,6 +203,7 @@ export class Server {
 			next();
 		});
 		if (process.env.NODE_ENV === 'development' && process.env.TYPERELAY_MOBILE_PREVIEW_URL) app.get('/api/v2/mobile-preview/identity', (req, res) => { Support.assert(req.ctx.device, 'Device sign-in required', 401); res.json({ user: req.ctx.user, account: req.ctx.account, device: req.ctx.device }); });
+		app.get('/api/v2/account-deletion', (req, res) => res.json({ url: Auth.origin + '/account/delete?user=' + encodeURIComponent(req.ctx.user) }));
 		PublicApi.mountSettings(app);
 		Ai.mount(app);
 		app.post('/api/v2/statistics/events', async (req, res) => res.json(await Statistics.ingest(req.ctx, req.body)));

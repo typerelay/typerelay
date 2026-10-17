@@ -560,6 +560,15 @@ export class Libraries {
 		}
 		return { affected };
 	}
+	static assetReferences(values) {
+		const referenced = new Set(); const collect = value => { if (!value || typeof value !== 'object') return; if (value.type === 'rich_text' && Array.isArray(value.assets)) for (const id of value.assets) referenced.add(id); for (const item of Object.values(value)) collect(item); };
+		collect(values); return [...referenced];
+	}
+	static async cleanupAssets(account, session, filter) {
+		const snippets = await Snippet.find({ account, state: { $ne: 'purged' } }).select('content').session(session).lean();
+		const conflicts = await Conflict.find({ account }).select('local base server').session(session).lean();
+		await SnippetAsset.deleteMany({ account, $and: [filter, { id: { $nin: Libraries.assetReferences([snippets, conflicts]) } }] }, { session });
+	}
 	static async cleanup() {
 		const summary = { libraries: 0, snippets: 0 };
 		for (const account of await Account.find(AccountAccess.available).select('_id').lean()) {
@@ -577,7 +586,7 @@ export class Libraries {
 						snippets++;
 					}
 				}
-				const referenced=new Set();const collect=value=>{if(!value||typeof value!=='object')return;if(Array.isArray(value)){for(const item of value)collect(item);return;}if(value.type==='rich_text'&&Array.isArray(value.assets))for(const id of value.assets)referenced.add(id);for(const item of Object.values(value))collect(item);};for(const record of await Snippet.find({account:account._id,state:{$ne:'purged'}}).select('content').session(session).lean())collect(record.content);for(const conflict of await Conflict.find({account:account._id,resolved:false}).select('local base server').session(session).lean())collect(conflict);await SnippetAsset.deleteMany({account:account._id,id:{$nin:[...referenced]},updatedAt:{$lte:new Date(+now-Libraries.retention)}}).session(session);
+				await Libraries.cleanupAssets(account._id, session, { updatedAt: { $lte: new Date(+now - Libraries.retention) } });
 				return { libraries: libraries.length, snippets };
 			});
 			summary.libraries += purged.libraries;

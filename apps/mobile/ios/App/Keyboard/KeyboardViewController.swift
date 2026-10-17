@@ -22,6 +22,7 @@ final class KeyboardViewController: UIInputViewController {
     private var status = UILabel()
     private var keyStack = UIStackView()
     private var controls = UIStackView()
+    private var nextKeyboardButton = UIButton(type: .system)
     private var heightConstraint: NSLayoutConstraint?
     private var snapshot: [String: Any] = [:]
     private var query = ""
@@ -73,9 +74,11 @@ final class KeyboardViewController: UIInputViewController {
         keyStack.axis = .vertical; keyStack.spacing = 6; typingStack.addArrangedSubview(keyStack)
         for _ in 0..<3 { let row = UIStackView(); row.distribution = .fillEqually; row.spacing = 6; row.heightAnchor.constraint(equalToConstant: 44).isActive = true; letterRows.append(row); keyStack.addArrangedSubview(row) }
         controls.distribution = .fill; controls.spacing = 6; controls.heightAnchor.constraint(equalToConstant: 44).isActive = true; keyStack.addArrangedSubview(controls)
+        nextKeyboardButton.setTitle("Next keyboard", for: .normal); nextKeyboardButton.accessibilityLabel = "Next keyboard"; nextKeyboardButton.addTarget(self, action: #selector(handleInputModeList(from:with:)), for: .allTouchEvents); let nextKeyboardHeight = nextKeyboardButton.heightAnchor.constraint(equalToConstant: 32); nextKeyboardHeight.priority = .defaultHigh; nextKeyboardHeight.isActive = true; stack.addArrangedSubview(nextKeyboardButton)
         overlayStack.axis = .vertical; overlayStack.spacing = 4; overlayStack.isHidden = true; stack.addArrangedSubview(overlayStack)
         keys(); updateLayout()
     }
+    override func viewDidLayoutSubviews() { super.viewDidLayoutSubviews(); nextKeyboardButton.isHidden = !needsInputModeSwitchKey; updateLayout() }
     override func viewWillAppear(_ animated: Bool) { super.viewWillAppear(animated); refresh() }
     override func viewWillDisappear(_ animated: Bool) { super.viewWillDisappear(animated); values.removeAll(); selection = nil; field = nil; query = ""; matches = []; anchorValid = false; mode = .typing }
     override func textDidChange(_ textInput: UITextInput?) { super.textDidChange(textInput); if !changingHost { if mode == .typing { updateMatches() } else if !validAnchor() { anchorValid = false } } }
@@ -94,7 +97,7 @@ final class KeyboardViewController: UIInputViewController {
         case .fieldEditing: target = 300
         case .preview: target = 360
         }
-        heightConstraint?.constant = target
+        heightConstraint?.constant = target + (needsInputModeSwitchKey ? 32 : 0)
     }
     private func keys() {
         let rows = numbers ? ["1234567890", "@#%&*()-+=", ".,!?/:;_'\""] : ["qwertyuiop", "asdfghjkl", "zxcvbnm"]

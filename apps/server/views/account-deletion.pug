@@ -1,0 +1,33 @@
+extends auth-layout
+
+block content
+	main#account-deletion
+		h1.mb-5 Delete your account
+		p.mb-3
+			span Signed in as 
+			strong= user.email
+		p.mb-3 This permanently removes your Typerelay sign-in, libraries you created (including shared libraries), credentials, and personal settings across this server. You will lose access on all connected devices.
+		if accounts.length
+			ul.mb-5
+				each account in accounts
+					li.mb-3
+						strong= account.name
+						span= account.owned ? ' — You own this account. Its libraries and snippets will be deleted for everyone, and its subscriptions will be canceled.' : ' — Your membership and libraries you created will be deleted, including shared libraries. We review your contributions in other people’s libraries and remove personal content associated with your account.'
+		p.mb-3 Deletion begins immediately and cannot be undone. Cleanup normally finishes within 7 days; we will email you when it is complete. Required billing records and backup copies follow the Privacy Policy. Copies previously exported by other people cannot be recalled.
+		p.mb-3 This also removes libraries you created in teams you have already left. You do not need to contact support or regain access to former teams to submit this request.
+		p.mb-3 Export anything you need before continuing.
+		form#account-deletion-form(data-user=String(user._id) data-accounts=JSON.stringify(accounts.map(account => account.id)))
+			.mb-3
+				label.form-label(for="deletion-email") Type your email address to confirm
+				input#deletion-email.form-control.form-control-sm(type="email" name="confirmation" required autocomplete="off")
+			.form-check.d-flex.align-items-center.mb-5
+				input#deletion-confirm.form-check-input.h-20px.w-30px.me-3(type="checkbox" name="confirm" required)
+				label.form-check-label(for="deletion-confirm") I understand the permanent deletion described above, including any accounts I own.
+			.d-flex.justify-content-between.align-items-center
+				a.btn.btn-outline-secondary.btn-sm.me-3(href="/") Cancel
+				button.btn.btn-danger.btn-sm.ms-3(type="submit") Delete my account
+		p.mt-5
+			a(href="https://typerelay.com/privacy-policy/") Privacy Policy
+
+block scripts
+	script(src='/assets/' + assetVersion + '/account-deletion.js' defer)

@@ -7,6 +7,7 @@ import { Auth } from './auth.js';
 import { Security } from './security.js';
 import { Billing } from './billing.js';
 import { WhiteLabel } from './white_label.js';
+import { Libraries } from './libraries.js';
 import { StarterContent } from './starter_content.js';
 
 export class AdminAccounts {
@@ -127,6 +128,88 @@ export class AdminAccounts {
 		await Models.Account.updateOne({ _id: id, 'deletion.requested_at': null }, { $set: { is_active: false, 'deletion.requested_at': new Date(), 'deletion.stage': 'requested', 'deletion.error': '' }, $inc: { admin_revision: 1 } });
 		return AdminAccounts.get(id);
 	}
+	static async deletionSummary(userId) {
+		const user = await Models.User.findById(userId).lean();
+		Support.assert(user, 'Sign in required', 401);
+		const memberships = await Models.Member.find({ user: userId }).lean();
+		const accounts = await Models.Account.find({ _id: { $in: memberships.map(member => member.account) } }).select('name').lean();
+		return { user, accounts: accounts.map(account => ({ id: String(account._id), name: account.name, owned: memberships.some(member => Support.equal(member.account, account._id) && member.role === 'owner') })) };
+	}
+	static async requestUserDeletion(userId, body) {
+		await Models.mongoose.connection.transaction(async session => {
+			const user = await Models.User.findOneAndUpdate({ _id: userId }, { $inc: { activity_sequence: 1 } }, { session, returnDocument: 'after' }).lean();
+			Support.assert(user && body.confirmation === user.email && body.confirm === true, 'Confirm deletion using your email address');
+			if (user.deletion?.requested_at) return;
+			const memberships = await Models.Member.find({ user: userId }).session(session).lean();
+			const ids = memberships.map(member => String(member.account)).sort();
+			Support.assert(Array.isArray(body.accounts) && JSON.stringify([...body.accounts].sort()) === JSON.stringify(ids), 'Your accounts changed. Reload and review them before deleting.', 409);
+			const owned = memberships.filter(member => member.role === 'owner').map(member => member.account);
+			const accounts = new Set(ids);
+			for (const [name, field] of [['Library', 'creator'], ['Library', 'members'], ['Library', 'purge_readers'], ['Group', 'users'], ['Device', 'user'], ['Integration', 'user'], ['Conflict', 'user'], ['Operation', 'user'], ['UsageEvent', 'user'], ['PersonalAbbreviation', 'user']]) for (const id of await Models[name].distinct('account', { [field]: userId }).session(session)) if (id) accounts.add(String(id));
+			for (const row of await Models.MigrationBackup.find({ $or: [{ 'payload.user': { $in: [user._id, String(user._id)] } }, { 'payload.creator': { $in: [user._id, String(user._id)] } }] }).select('payload.account').session(session).lean()) if (row.payload?.account) accounts.add(String(row.payload.account));
+			const reviewAccounts = [...accounts].filter(id => !owned.some(value => String(value) === id));
+			await Models.User.updateOne({ _id: userId }, { $set: { 'deletion.requested_at': new Date(), 'deletion.accounts': [...accounts], 'deletion.owned_accounts': owned, 'deletion.review_accounts': reviewAccounts, 'deletion.next_attempt_at': new Date(), 'deletion.error': '' }, $inc: { auth_version: 1 } }, { session });
+			await Models.Account.updateMany({ _id: { $in: owned }, 'deletion.requested_at': null }, { $set: { is_active: false, 'deletion.requested_at': new Date(), 'deletion.stage': 'requested', 'deletion.error': '' }, $inc: { admin_revision: 1, activity_sequence: 1 } }, { session });
+			await Models.Device.updateMany({ user: userId }, { $set: { revoked: true } }, { session });
+			await Models.Integration.updateMany({ user: userId }, { $set: { revoked: true } }, { session });
+		});
+		return { requested: true };
+	}
+	static async personalDeletions(id = null) {
+		const users = await Models.User.find({ ...(id ? { _id: Support.id(id) } : {}), 'deletion.requested_at': { $ne: null } }).select('email deletion').sort({ 'deletion.requested_at': 1 }).lean();
+		const ids = users.flatMap(user => user.deletion.accounts);
+		const accounts = await Models.Account.find({ _id: { $in: ids } }).select('name deletion.stage deletion.error').lean();
+		return users.map(user => ({ ...user, accounts: user.deletion.accounts.map(id => ({ id: String(id), account: accounts.find(account => Support.equal(account._id, id)), review: user.deletion.review_accounts.some(value => Support.equal(value, id)) })) }));
+	}
+	static async reviewUserDeletion(id, confirmation) {
+		Support.assert(confirmation === id, 'Confirm the personal-data review with the user ID');
+		const result = await Models.User.updateOne({ _id: Support.id(id), 'deletion.requested_at': { $ne: null }, 'deletion.reviewed_at': null }, { $set: { 'deletion.reviewed_at': new Date(), 'deletion.next_attempt_at': new Date(), 'deletion.error': '' } });
+		Support.assert(result.matchedCount, 'Request already reviewed or completed', 409);
+		return (await AdminAccounts.personalDeletions(id))[0];
+	}
+	static async purgeUser(userId) {
+		const pending = await Models.User.findOne({ _id: userId, 'deletion.requested_at': { $ne: null } }).lean();
+		if (!pending || (pending.deletion.review_accounts?.length && !pending.deletion.reviewed_at)) return;
+		// Existing requests must finish before deleting their durable results.
+		if (await Models.AccountLease.exists({ account: { $in: pending.deletion.accounts }, expires: { $gt: new Date() } })) return;
+		if (await Models.Account.exists({ _id: { $in: pending.deletion.owned_accounts } })) return;
+		try {
+			await Models.mongoose.connection.transaction(async session => {
+				const user = await Models.User.findOneAndUpdate({ _id: userId, 'deletion.requested_at': { $ne: null } }, { $inc: { activity_sequence: 1 } }, { session, returnDocument: 'after' }).lean();
+				if (!user) return;
+				for (const accountId of user.deletion.accounts) {
+					const account = await Models.Account.findOneAndUpdate({ _id: accountId }, { $inc: { sequence: 1, activity_sequence: 1 } }, { session, returnDocument: 'after' }).lean();
+					if (!account) continue;
+					// Erase libraries created by this person, including shared and former-team libraries.
+					const libraries = await Models.Library.find({ account: accountId, creator: userId }).session(session).lean();
+					const libraryIds = libraries.map(library => library._id);
+					const snippets = await Models.Snippet.find({ library: { $in: libraryIds } }).select('id content').session(session).lean();
+					const conflicts = await Models.Conflict.find({ $or: [{ library: { $in: libraryIds } }, { account: accountId, user: userId }] }).select('local base server').session(session).lean();
+					const assetIds = Libraries.assetReferences([snippets, conflicts]);
+					await Models.PersonalAbbreviation.deleteMany({ account: accountId, snippet: { $in: snippets.map(snippet => snippet.id) } }, { session });
+					await Models.Operation.deleteMany({ account: accountId, $or: [{ 'result.library_id': { $in: libraryIds.map(String) } }, { 'result.library_ids': { $in: libraryIds.map(String) } }] }, { session });
+					await Models.Snippet.deleteMany({ library: { $in: libraryIds } }, { session });
+					await Models.Conflict.deleteMany({ $or: [{ library: { $in: libraryIds } }, { account: accountId, user: userId }] }, { session });
+					await Models.Library.deleteMany({ _id: { $in: libraryIds } }, { session });
+					const references = [...libraryIds, ...libraryIds.map(String)];
+					await Models.MigrationBackup.deleteMany({ $or: [{ 'payload.library': { $in: references } }, { source_collection: 'libraries', 'payload._id': { $in: references } }, { 'payload.result.library._id': { $in: references } }, { 'payload.result.library_id': { $in: references } }, { 'payload.result.library_ids': { $in: references } }] }, { session });
+					await Models.Library.updateMany({ account: accountId }, { $pull: { members: userId, purge_readers: userId } }, { session });
+					await Models.Group.updateMany({ account: accountId }, { $pull: { users: userId } }, { session });
+					await Libraries.cleanupAssets(accountId, session, { id: { $in: assetIds } });
+					await Models.Change.create([{ account: accountId, sequence: account.sequence, kind: 'membership' }], { session });
+				}
+				const grants = await Models.Integration.find({ user: userId }).select('_id').session(session).lean();
+				await Models.IntegrationToken.deleteMany({ grant: { $in: grants.map(grant => grant._id) } }, { session });
+				for (const name of ['Member', 'Passkey', 'Device', 'Integration', 'PersonalAbbreviation', 'Conflict', 'Operation', 'UsageEvent', 'StatisticsPreference', 'AiSetting', 'AiUsage', 'AiRequest', 'SsoLog', 'ApiAudit', 'SignupNotification']) await Models[name].deleteMany({ user: userId }, { session });
+				await Models.OAuthClient.deleteMany({ created_by: userId }, { session });
+				await Models.Ticket.deleteMany({ $or: [{ email: user.email }, { 'data.user': { $in: [user._id, String(user._id)] } }] }, { session });
+				await Models.MigrationBackup.deleteMany({ $or: [{ 'payload.user': { $in: [user._id, String(user._id)] } }, { 'payload.creator': { $in: [user._id, String(user._id)] } }, { source_collection: 'users', 'payload._id': { $in: [user._id, String(user._id)] } }] }, { session });
+				await Models.Ticket.create([{ hash: 'deletion-complete-' + userId, kind: 'deletion-complete', email: user.email, data: {} }], { session });
+				await Models.User.deleteOne({ _id: userId }, { session });
+			});
+			for await (const row of Models.mongoose.connection.collection('web_sessions').find({})) { let value; try { value = typeof row.session === 'string' ? JSON.parse(row.session) : row.session; } catch { continue; } if (String(value?.user) === String(userId) || String(value?.pending_factor?.user) === String(userId)) await Models.mongoose.connection.collection('web_sessions').deleteOne({ _id: row._id }); }
+		} catch (error) { await Models.User.updateOne({ _id: userId }, { $set: { 'deletion.error': 'Personal data cleanup will retry automatically.' } }); throw error; }
+	}
 	static async retry(id) {
 		const result = await Models.Account.updateOne({ _id: Support.id(id), 'deletion.stage': 'failed' }, { $set: { 'deletion.stage': 'requested', 'deletion.error': '' }, $inc: { admin_revision: 1 } });
 		Support.assert(result.matchedCount, 'No failed deletion to retry', 409);
@@ -191,7 +274,7 @@ export class AdminAccounts {
 			stage = 'users';
 			for (const userId of account.deletion.users) await Models.mongoose.connection.transaction(async session => {
 				const user = await Models.User.findOneAndUpdate({ _id: userId }, { $inc: { activity_sequence: 1 } }, { session, returnDocument: 'after' }).lean();
-				if (!user) return;
+				if (!user || user.deletion?.requested_at) return;
 				const memberships = await Models.Member.find({ user: userId }).select('account').session(session).lean();
 				if (await Models.Account.exists({ _id: { $in: memberships.map(member => member.account) } }).session(session)) return;
 				await Models.Member.deleteMany({ user: userId }, { session });
@@ -228,6 +311,9 @@ export class AdminAccounts {
 	static async recover() {
 		const accounts = await Models.Account.find({ 'deletion.requested_at': { $ne: null }, 'deletion.stage': { $ne: 'failed' } }).select('_id').limit(25).lean();
 		for (const account of accounts) { try { await AdminAccounts.purge(account._id); } catch { /* Failure is durable and visible to the administrator. */ } }
-		return { checked: accounts.length };
+		const users = await Models.User.find({ 'deletion.requested_at': { $ne: null }, 'deletion.next_attempt_at': { $lte: new Date() }, $or: [{ 'deletion.review_accounts': { $size: 0 } }, { 'deletion.reviewed_at': { $ne: null } }] }).sort({ 'deletion.next_attempt_at': 1 }).select('_id').limit(25).lean();
+		for (const user of users) { try { await Models.User.updateOne({ _id: user._id }, { $set: { 'deletion.next_attempt_at': new Date(Date.now() + 300000) } }); await AdminAccounts.purgeUser(user._id); } catch { console.error('Personal account deletion will retry'); } }
+		for (const ticket of await Models.Ticket.find({ kind: 'deletion-complete' }).limit(25).lean()) { try { await Auth.mail.sendMail({ to: ticket.email, subject: 'Your Typerelay account has been deleted', text: 'Your Typerelay sign-in and personal data have been deleted. Accounts you owned have been deleted and their subscriptions canceled. Libraries you created, including shared libraries, have been deleted. Personal contributions in other people’s libraries have been reviewed before completing this request. Legally required billing records and backup retention remain subject to our Privacy Policy: https://typerelay.com/privacy-policy/' }); await Models.Ticket.deleteOne({ _id: ticket._id }); } catch { console.error('Account deletion confirmation will retry'); } }
+		return { checked: accounts.length + users.length };
 	}
 }

@@ -34,7 +34,8 @@ export class Team {
 		const result = await AccountAccess.write(ctx.account, async session => {
 			await Ticket.deleteMany({ account: ctx.account, kind: 'invite', email }, { session });
 			await Billing.assertSeatCapacity(ctx, 1, session);
-			let user = await User.findOne({ email }).session(session).lean();
+			let user = await User.findOneAndUpdate({ email, 'deletion.requested_at': null }, { $inc: { activity_sequence: 1 } }, { session, returnDocument: 'after' }).lean();
+			Support.assert(user || !await User.exists({ email }).session(session), 'Account deletion requested', 409);
 			Support.assert(!user || !await Member.exists({ account: ctx.account, user: user._id }).session(session), 'User is already a member of this account', 409);
 			let temporaryPassword;
 			if (!user) {
@@ -56,6 +57,7 @@ export class Team {
 	}
 	static async accept(ctx, token, session) {
 		const user = await User.findById(ctx.user).session(session).lean();
+		Support.assert(user && !user.deletion?.requested_at, 'Account deletion requested', 409);
 		const ticket = await Ticket.findOneAndDelete({ hash: Support.hash(token), kind: 'invite', email: user.email, expires: { $gt: new Date() } }, { session }).lean();
 		Support.assert(ticket, 'Invitation invalid, expired, or for another email');
 		const account = await Account.findById(ticket.account).session(session).lean();

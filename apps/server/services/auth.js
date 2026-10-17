@@ -79,6 +79,7 @@ export class Auth {
 		await AdminSettings.send(name ? 'signup' : 'login', email, { url: origin + '/auth/callback?token=' + token, name: data.name });
 	}
 	static continuation(value) {
+		if (typeof value === 'string' && /^\/account\/delete(?:\?user=[a-f0-9]{24})?$/.test(value)) return value;
 		Support.assert(typeof value === 'string' && value.startsWith('/oauth/authorize?'), 'Invalid sign-in continuation');
 		const url = new URL(value, Auth.origin);
 		Support.assert(url.origin === new URL(Auth.origin).origin && url.pathname === '/oauth/authorize', 'Invalid sign-in continuation');

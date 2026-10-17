@@ -1,0 +1,9 @@
+extends layout
+block content
+	h1.mb-5 Account deletions
+	p.mb-5 Review this queue daily. Requests involving other people’s libraries require a personal-data review before final cleanup. Remove the requester’s contributions, personal content, and historical copies using the affected account’s approved data-management procedure. Do not require the requester to contact support or rejoin a team. Record review only after that work is complete.
+	if !requests.length
+		p No pending requests.
+	#admin-deletions
+		each request in requests
+			include ../ajax/admin-deletion

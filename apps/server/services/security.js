@@ -30,7 +30,7 @@ export class Security {
 	static browserSession(req) { Support.assert((!req.ctx || (!req.ctx.device && req.ctx.user === req.session.user)) && req.session.user, 'Sign in to change security settings', 401); Support.assert(!req.session.sso, 'Sign in with password, Magic Link or passkey to change personal security settings', 403); }
 	static async establish(req, id, verifiedFactor = false, sso = null) {
 		const user = await User.findById(id).lean();
-		Support.assert(user, 'Sign-in failed', 401);
+		Support.assert(user && !user.deletion?.requested_at, 'Sign-in unavailable: account deletion requested', 401);
 		const destination = req.session.return_to || '/';
 		await new Promise((resolve, reject) => req.session.regenerate(error => error ? reject(error) : resolve()));
 		req.session.csrf = Support.token();
@@ -197,7 +197,7 @@ export class Security {
 		Security.checkSso(await Billing.account(id), req.session.sso?.revision);
 		return { ...ctx, ...(req.session.sso ? { sso_revision: req.session.sso.revision } : {}) };
 	}
-	static async credential(ctx, credential) { Security.checkSso(await Billing.account(ctx.account), credential.sso_revision); return ctx; }
+	static async credential(ctx, credential) { Support.assert(await User.exists({ _id: ctx.user, 'deletion.requested_at': null }), 'Account deletion requested', 401); Security.checkSso(await Billing.account(ctx.account), credential.sso_revision); return ctx; }
 	static async ssoAccount(id, secrets = false) {
 		Support.id(String(id));
 		let query = Account.findById(id);
@@ -339,7 +339,8 @@ export class Security {
 		const user = await AccountAccess.write(account._id, async session => {
 			const current = await Account.findById(account._id).session(session).lean();
 			Security.checkSso(current, data.revision);
-			let user = await User.findOne({ email: data.email }).session(session).lean();
+			let user = await User.findOneAndUpdate({ email: data.email, 'deletion.requested_at': null }, { $inc: { activity_sequence: 1 } }, { session, returnDocument: 'after' }).lean();
+			Support.assert(user || !await User.exists({ email: data.email }).session(session), 'Account deletion is in progress', 403);
 			if (!user || !await Member.exists({ account: account._id, user: user._id }).session(session)) {
 				Support.assert(current.sso.provision, 'Ask an administrator to add you to this account', 403);
 				const ctx = { account: String(account._id), entitlements: Billing.entitlements(current) };
