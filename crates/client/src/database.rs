@@ -257,6 +257,11 @@ impl Database {
         let id = index.map(|index| file.ids[index].clone()).unwrap_or_else(|| Uuid::new_v4().to_string());
         let records = self.records(&file.id)?;
         let old = records.iter().find(|record| record["id"] == id).cloned();
+        if let Some(entry) = &entry && !entry.trigger.is_empty() && old.as_ref().is_none_or(|old| old["trigger"] != entry.trigger) {
+            for library in self.libraries()?.iter().filter(|row| row["state"] == "active") {
+                ensure!(!self.records(library["_id"].as_str().unwrap())?.iter().any(|record| record["state"] == "active" && record["id"] != id && record["trigger"] == entry.trigger), "Duplicate trigger");
+            }
+        }
         let base = old.as_ref().and_then(|record| record["revision"].as_i64());
         let value = entry.as_ref().map(|entry| entry.value());
         let mut record = old.clone().unwrap_or(json!({"id":id,"position":records.iter().filter_map(|entry|entry["position"].as_i64()).max().unwrap_or(-1)+1}));
@@ -269,7 +274,8 @@ impl Database {
         }
         library["revision"] = json!(library["revision"].as_i64().unwrap_or(1) + 1);
         self.put_library(&library, &file.name, self.synced(&file.id)?)?;
-        self.validate_transaction()?;
+        // Existing downloaded collisions stay paused instead of blocking unrelated edits.
+        self.validated_snapshot()?;
         if let Some(transaction) = transaction { transaction.commit()?; }
         self.editor(&file.name)
     }
@@ -901,6 +907,30 @@ mod tests {
         db.personal_edit("first","first-snippet",Some("mine"),0,None).unwrap();
         assert_eq!(db.snapshot().unwrap().len(),2);
         assert_eq!(db.records("first").unwrap()[0]["trigger"],"same");
+    }
+    #[test]
+    fn unrelated_edits_survive_downloaded_collisions_without_adding_duplicates() {
+        let fixture = Fixture::new(); let db = fixture.db();
+        let library = |id: &str, name: &str| json!({"_id":id,"name":name,"shared":true,"state":"active","revision":1,"permissions":{"read":true,"edit":true},"records":[{"id":format!("{id}-snippet"),"trigger":"same","title":name,"content":{"version":1,"type":"plain_text","text":name},"revision":1,"state":"active","position":0}]});
+        db.apply(&json!({"libraries":[library("first","First"),library("second","Second")]}), None).unwrap();
+        let original_first = db.records("first").unwrap()[0].clone(); let original_second = db.records("second").unwrap()[0].clone();
+        let file = db.editor("First").unwrap();
+        let mut edited = file.entries[0].clone(); edited.replace = "Edited body".into();
+        let file = db.edit(&file, Some(0), Some(edited)).unwrap();
+        assert_eq!(db.records("first").unwrap()[0]["id"], original_first["id"]); assert_eq!(db.records("first").unwrap()[0]["content"]["text"], "Edited body");
+        let original_first = db.records("first").unwrap()[0].clone();
+        let file = db.edit(&file, None, Some(Fixture::entry("", "Local draft"))).unwrap();
+        let file = db.edit(&file, None, Some(Fixture::entry("", "Another copy"))).unwrap();
+        assert_eq!(file.entries.len(), 3); assert_eq!(file.entries.iter().filter(|entry| entry.trigger.is_empty()).count(), 2);
+        assert_eq!(db.records("first").unwrap()[0], original_first); assert_eq!(db.records("second").unwrap()[0], original_second);
+        assert!(db.snapshot().unwrap().is_empty());
+        let file = db.edit(&file, None, Some(Fixture::entry("unique", "New abbreviation"))).unwrap();
+        assert_eq!(db.snapshot().unwrap().len(), 1);
+        assert!(db.edit(&file, Some(3), Some(Fixture::entry("same", "Changed duplicate"))).is_err());
+        let file = db.edit(&file, Some(3), None).unwrap();
+        assert_eq!(file.entries.len(), 3); assert!(db.snapshot().unwrap().is_empty());
+        assert!(db.edit(&file, None, Some(Fixture::entry("same", "Duplicate"))).is_err());
+        assert_eq!(db.editor("First").unwrap().entries, file.entries);
     }
     struct Fixture { _temp: tempfile::TempDir, directory: PathBuf }
     impl Fixture {
