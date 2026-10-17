@@ -162,6 +162,17 @@ impl Database {
         }
         Ok(snapshot)
     }
+    fn validate_new_abbreviations<'a>(&self, entries: impl IntoIterator<Item = (&'a str, &'a str)>) -> Result<()> {
+        let mut candidates = std::collections::BTreeMap::new();
+        for (trigger, id) in entries.into_iter().filter(|(trigger, _)| !trigger.is_empty()) { ensure!(candidates.insert(trigger, id).is_none(), "Duplicate trigger"); }
+        if candidates.is_empty() { return Ok(()); }
+        for library in self.libraries()?.iter().filter(|row| row["state"] == "active") {
+            for record in self.records(library["_id"].as_str().unwrap())?.iter().filter(|record| record["state"] == "active") {
+                if let Some(id) = candidates.get(record["trigger"].as_str().unwrap_or_default()) { ensure!(record["id"] == *id, "Duplicate trigger"); }
+            }
+        }
+        Ok(())
+    }
     fn validate_transaction(&self) -> Result<()> {
         let mut entries = Vec::new();
         for library in self.libraries()?.iter().filter(|row|row["state"]=="active") { entries.extend(Self::entries(&self.records(library["_id"].as_str().unwrap())?)?); }
@@ -257,11 +268,7 @@ impl Database {
         let id = index.map(|index| file.ids[index].clone()).unwrap_or_else(|| Uuid::new_v4().to_string());
         let records = self.records(&file.id)?;
         let old = records.iter().find(|record| record["id"] == id).cloned();
-        if let Some(entry) = &entry && !entry.trigger.is_empty() && old.as_ref().is_none_or(|old| old["trigger"] != entry.trigger) {
-            for library in self.libraries()?.iter().filter(|row| row["state"] == "active") {
-                ensure!(!self.records(library["_id"].as_str().unwrap())?.iter().any(|record| record["state"] == "active" && record["id"] != id && record["trigger"] == entry.trigger), "Duplicate trigger");
-            }
-        }
+        if let Some(entry) = &entry && old.as_ref().is_none_or(|old| old["trigger"] != entry.trigger) { self.validate_new_abbreviations([(entry.trigger.as_str(), id.as_str())])?; }
         let base = old.as_ref().and_then(|record| record["revision"].as_i64());
         let value = entry.as_ref().map(|entry| entry.value());
         let mut record = old.clone().unwrap_or(json!({"id":id,"position":records.iter().filter_map(|entry|entry["position"].as_i64()).max().unwrap_or(-1)+1}));
@@ -408,7 +415,11 @@ impl Database {
     pub fn trash_action(&self, target: &Value, action: &str) -> Result<()> {
         let transaction = self.connection.unchecked_transaction()?;
         self.trash_action_inner(target, action)?;
-        self.validate_transaction()?;
+        if action == "restore" {
+            let records = self.records(target["library"].as_str().unwrap())?;
+            self.validate_new_abbreviations(records.iter().filter(|record| record["state"] == "active" && (target["type"] == "library" || record["id"] == target["id"])).map(|record| (record["trigger"].as_str().unwrap_or_default(), record["id"].as_str().unwrap())))?;
+        }
+        self.validated_snapshot()?;
         transaction.commit()?;
         Ok(())
     }
@@ -927,10 +938,34 @@ mod tests {
         let file = db.edit(&file, None, Some(Fixture::entry("unique", "New abbreviation"))).unwrap();
         assert_eq!(db.snapshot().unwrap().len(), 1);
         assert!(db.edit(&file, Some(3), Some(Fixture::entry("same", "Changed duplicate"))).is_err());
-        let file = db.edit(&file, Some(3), None).unwrap();
+        let unique_id = file.ids[3].clone();
+        db.edit(&file, Some(3), None).unwrap();
+        let target = db.trash().unwrap().into_iter().find(|target| target["id"] == unique_id).unwrap();
+        db.trash_action(&target, "restore").unwrap(); assert_eq!(db.snapshot().unwrap().len(), 1);
+        let restored = db.editor("First").unwrap(); db.edit(&restored, Some(3), None).unwrap();
+        let file = db.editor("First").unwrap();
         assert_eq!(file.entries.len(), 3); assert!(db.snapshot().unwrap().is_empty());
         assert!(db.edit(&file, None, Some(Fixture::entry("same", "Duplicate"))).is_err());
         assert_eq!(db.editor("First").unwrap().entries, file.entries);
+    }
+    #[test]
+    fn library_restore_ignores_unrelated_collisions_but_rolls_back_a_new_collision() {
+        let fixture = Fixture::new(); let db = fixture.db();
+        let library = |id: &str, trigger: &str| {
+            let mut library = json!({"_id":id,"name":id,"shared":true,"state":"active","revision":1,"permissions":{"read":true,"edit":true,"manage":true},"records":[{"id":format!("{id}-snippet"),"trigger":trigger,"content":{"version":1,"type":"plain_text","text":id},"revision":1,"state":"active","position":0}]});
+            if id == "restored" { library["records"].as_array_mut().unwrap().push(json!({"id":"restored-other","trigger":"second-unique","content":{"version":1,"type":"plain_text","text":"Second restored child"},"revision":1,"state":"active","position":1})); }
+            library
+        };
+        db.apply(&json!({"libraries":[library("first","same"),library("second","same"),library("restored","unique")]}), None).unwrap();
+        let target = |revision| json!({"type":"library","id":"restored","library":"restored","revision":revision});
+        db.trash_action(&target(1), "trash").unwrap();
+        let trashed = db.trash().unwrap().into_iter().find(|target| target["id"] == "restored").unwrap();
+        db.trash_action(&trashed, "restore").unwrap(); assert_eq!(db.snapshot().unwrap().len(), 2);
+        db.trash_action(&target(3), "trash").unwrap();
+        db.apply(&json!({"libraries":[library("collision","unique")]}), None).unwrap();
+        let before = db.library("restored").unwrap(); let records = db.records("restored").unwrap(); let pending = db.pending().unwrap();
+        assert!(db.trash_action(&target(4), "restore").is_err());
+        assert_eq!(db.library("restored").unwrap(), before); assert_eq!(db.records("restored").unwrap(), records); assert_eq!(db.pending().unwrap(), pending);
     }
     struct Fixture { _temp: tempfile::TempDir, directory: PathBuf }
     impl Fixture {
