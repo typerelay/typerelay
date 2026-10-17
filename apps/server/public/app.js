@@ -579,6 +579,11 @@ class TypeRelay {
 		if (card && !window.getSelection()?.toString()) return this.open(card.dataset.id);
 		const button = event.target.closest('button');
 		if (!button) return;
+		if (button.dataset.exportLibrary) {
+			button.disabled = true;
+			try { const response = await fetch('/api/v2/libraries/' + button.dataset.exportLibrary + '/export-bundle', { headers: { 'X-Account-Id': this.account } }); if (!response.ok) throw new Error((await response.json()).error || 'Export failed'); const url = URL.createObjectURL(await response.blob()); const link = document.createElement('a'); link.href = url; link.download = response.headers.get('Content-Disposition')?.match(/filename="([^"]+)"/)?.[1] || 'snippets.typerelay.zip'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); } finally { button.disabled = false; }
+			return;
+		}
 		if (button.dataset.settingsOpen) { bootstrap.Modal.getOrCreateInstance(document.querySelector('#settings')).show(); this.settingsTab(button.dataset.settingsOpen); return; }
 		if (button.hasAttribute('data-start-trial')) { button.disabled = true; try { this.applyBilling(await this.request('billing/trial', 'POST', {})); this.toast('Pro trial started'); } finally { button.disabled = false; } return; }
 		if (button.dataset.checkoutPlan) { for (const form of document.querySelectorAll('[data-billing-checkout]')) form.hidden = form.dataset.plan !== button.dataset.checkoutPlan; document.querySelector(`#checkout-${button.dataset.checkoutPlan}-seats`).focus(); return; }

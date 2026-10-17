@@ -90,3 +90,26 @@ test('active snippets sort by update timestamp, retaining legacy order without t
 		assert.deepEqual(result.records.map(snippet => snippet.id), entries.map(snippet => snippet.id));
 	} finally { Snippet.find = original; }
 });
+
+
+test('library export sends its account, downloads the named bundle and preserves the editor on failure', async () => {
+	const library = { _id: 'library', name: 'Library', permissions: { edit: true, manage: true }, snippets: [] };
+	const dom = new JSDOM(pug.renderFile('./views/ajax/editor.pug', { library }), { runScripts: 'outside-only' });
+	try {
+		const source = (await readFile('./public/app.js', 'utf8')).replace(/^import .*;$/gm, '').replace('const client = new TypeRelay();', '').replace('export { client };', 'window.TypeRelay = TypeRelay;');
+		dom.window.eval(source);
+		const client = Object.create(dom.window.TypeRelay.prototype); client.account = 'account';
+		const { document } = dom.window; const editor = document.querySelector('[data-editor]'); const button = document.querySelector('[data-export-library]');
+		let downloaded = 0; let failed = false; const blob = new dom.window.Blob(['PK']); const revoked = [];
+		dom.window.fetch = async (path, options) => { assert.equal(path, '/api/v2/libraries/library/export-bundle'); assert.equal(options.headers['X-Account-Id'], 'account'); assert.equal(button.disabled, true); return { ok: !failed, headers: new Map([['Content-Disposition', 'attachment; filename="Library.typerelay.zip"']]), blob: async () => blob, json: async () => ({ error: 'Export denied' }) }; };
+		dom.window.URL.createObjectURL = value => { assert.equal(value, blob); return 'blob:bundle'; };
+		dom.window.URL.revokeObjectURL = value => revoked.push(value);
+		dom.window.setTimeout = callback => { callback(); };
+		dom.window.HTMLAnchorElement.prototype.click = function () { assert.equal(this.download, 'Library.typerelay.zip'); assert.equal(this.href, 'blob:bundle'); downloaded++; };
+		await client.onClick({ target: button });
+		assert.equal(downloaded, 1); assert.deepEqual(revoked, ['blob:bundle']); assert.equal(button.disabled, false);
+		failed = true;
+		await assert.rejects(client.onClick({ target: button }), /Export denied/);
+		assert.equal(downloaded, 1); assert.equal(button.disabled, false); assert.equal(document.querySelector('[data-editor]'), editor);
+	} finally { dom.window.close(); }
+});
