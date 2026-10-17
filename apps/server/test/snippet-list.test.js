@@ -50,7 +50,7 @@ test('snippet edits and creates reorder individual rows without reloading or los
 		const sibling = document.querySelector('[data-snippet="old"]');
 		document.querySelector('[data-edit-snippet="new"]').focus();
 		const updated = { ...library, revision: 2, snippets: [{ ...snippets[1], revision: 2, replace: 'Edited' }, snippets[0]] };
-		const result = { library: updated, html: '<div data-id="one"></div>', fragments: updated.snippets.map(snippet => ({ id: snippet.id, revision: snippet.revision, html: pug.renderFile('./views/ajax/snippet.pug', { library, snippet }) })) };
+		const result = { library: updated, html: pug.renderFile('./views/ajax/library.pug', { library: updated }), fragments: updated.snippets.map(snippet => ({ id: snippet.id, revision: snippet.revision, html: pug.renderFile('./views/ajax/snippet.pug', { library, snippet }) })) };
 		await client.apply(result);
 		await client.apply(result);
 		await client.apply({ ...result, library });
@@ -61,6 +61,13 @@ test('snippet edits and creates reorder individual rows without reloading or los
 		assert.equal(document.activeElement.dataset.editSnippet, 'new');
 		assert.equal(document.querySelector('[data-select-snippet="old"]').checked, true);
 		assert.equal(document.querySelector('[data-snippet="new"] pre').textContent, 'Edited');
+		assert.equal(document.querySelector('[data-id="one"]').classList.contains('active-library'), true);
+		assert.equal(document.querySelector('[data-id="one"]').getAttribute('aria-pressed'), 'true');
+		const other = { ...library, _id: 'two' };
+		await client.apply({ library: other, html: pug.renderFile('./views/ajax/library.pug', { library: other }) });
+		assert.equal(document.querySelector('[data-id="two"]').getAttribute('aria-pressed'), 'false');
+		assert.equal(document.querySelector('[data-id="two"]').classList.contains('active-library'), false);
+		assert.equal(document.querySelector('[data-id="one"]').getAttribute('aria-pressed'), 'true');
 		client.request = async (path, method, body) => {
 			assert.equal(path, 'libraries/one/snippets');
 			assert.equal(method, 'POST');

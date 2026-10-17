@@ -204,7 +204,9 @@ class TypeRelay {
 				before = document.querySelector('[data-snippet="' + fragment.id + '"]');
 			}
 		}
-		document.querySelector('[data-id="' + library._id + '"]')?.classList.toggle('active-library', this.selected === library._id);
+		const node = document.querySelector('[data-id="' + library._id + '"]');
+		node?.classList.toggle('active-library', this.selected === library._id);
+		node?.setAttribute('aria-pressed', String(this.selected === library._id));
 		this.syncSelection();
 		this.updateScrollTop();
 		if (document.querySelector('#search-modal')?.classList.contains('show')) await this.filter();
