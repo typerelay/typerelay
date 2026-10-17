@@ -189,18 +189,24 @@ test('SQLite two-device edits, conflict recovery and generated YAML isolation', 
 	await writeFile(exportPath, 'matches: [{trigger: alpha, replace: Tampered}]');
 	await Fixture.cli(Fixture.two, 'sync');
 	assert.equal((await Fixture.state(Fixture.two)).libraries.find(row => row._id === library._id).records.find(row => row.trigger === 'alpha').content.text, 'Winner');
-	// Remote collision is staged and does not replace the last working local snapshot.
+	// Collisions preserve both snippets while suspending their automatic abbreviation matching.
 	const source = join(Fixture.two.root, 'collision.yml');
 	await writeFile(source, 'matches: [{trigger: collision, replace: Local}]');
 	await Fixture.cli(Fixture.two, 'import', 'yaml', source, '--name', 'Local collision');
 	await Fixture.json('libraries', 'POST', { name: 'Remote collision', snippets: [{ trigger: 'collision', content: { version: 1, type: 'plain_text', text: 'Remote' } }] });
-	await assert.rejects(Fixture.cli(Fixture.two, 'sync'), /[Dd]uplicate/);
+	await Fixture.cli(Fixture.two, 'sync');
 	two = await Fixture.state(Fixture.two);
-	assert.ok(two.staged);
-	assert.ok(!two.libraries.some(row => row.name === 'Remote collision'));
+	assert.equal(two.staged, null);
+	for (const [name, text] of [['Local collision', 'Local'], ['Remote collision', 'Remote']]) {
+		const record = two.libraries.find(row => row.name === name).records.find(row => row.trigger === 'collision');
+		assert.equal(record.content.text, text); assert.equal(record.state, 'active');
+	}
+	const before = (await Fixture.cli(Fixture.two, 'validate', '--dir', Fixture.two.snippets)).stdout;
 	await Fixture.edit(Fixture.two, 'Local collision', 'collision', null);
 	await Fixture.cli(Fixture.two, 'sync');
 	assert.ok((await Fixture.state(Fixture.two)).libraries.some(row => row.name === 'Remote collision'));
+	const after = (await Fixture.cli(Fixture.two, 'validate', '--dir', Fixture.two.snippets)).stdout;
+	assert.equal(Number(after.match(/Valid: (\d+)/)[1]), Number(before.match(/Valid: (\d+)/)[1]) + 1);
 });
 test('offline SQLite outbox and lost-response replay create a library only once', async () => {
 	const device = await Fixture.device('offline');
@@ -354,7 +360,7 @@ test('web AJAX updates only affected snippets; preserves panel, filter and multi
 	assert.equal(opened.length, 2);
 	client.editSnippet = editSnippet;
 	client.confirm = confirm;
-	assert.ok(dom.window.document.querySelector('aside .library-controls #account-switch'));
+	assert.equal(dom.window.document.querySelector('aside .library-controls #account-switch'), null, 'A single account needs no switcher');
 	assert.ok(dom.window.document.querySelector('aside .library-controls #new-library'));
 	const actions = dom.window.document.querySelector('.editor-actions');
 	assert.ok(actions.querySelector('[data-add-snippet]') && actions.querySelector('[data-library-settings]'));
@@ -546,7 +552,7 @@ test('web AJAX updates only affected snippets; preserves panel, filter and multi
 	assert.equal(dom.window.document.querySelector('#editor'), panel);
 	const list = dom.window.document.querySelector('#libraries');
 	assert.ok(list.compareDocumentPosition(dom.window.document.querySelector('#import-menu')) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING);
-	assert.equal(dom.window.document.querySelectorAll('[data-import-format]').length, 7);
+	assert.deepEqual([...dom.window.document.querySelectorAll('[data-import-format]')].map(button => button.dataset.importFormat), Object.keys(Libraries.importFormats));
 	await client.onClick({ target: dom.window.document.querySelector('[data-import-format="textexpander"]') });
 	const importFile = dom.window.document.querySelector('#import-file');
 	assert.equal(importFile.accept, '.csv');
@@ -682,6 +688,19 @@ test('code imports sync to two desktops, preserve metadata offline and reject pr
 	assert.equal(rejected.status, 426);
 });
 
+test('multiple accounts expose the switcher and retain the current selection', async () => {
+	const account = await Account.create({ name: 'Another account' });
+	await Member.create({ user: Fixture.actor.user, account: account._id, role: 'owner' });
+	try {
+		const dom = new JSDOM(await (await Fixture.request('/')).text());
+		try {
+			const select = dom.window.document.querySelector('aside .library-controls #account-switch');
+			assert.equal(select.value, Fixture.account);
+			assert.ok([...select.options].some(option => option.value === String(account._id)));
+		} finally { dom.window.close(); }
+	} finally { await Member.deleteOne({ user: Fixture.actor.user, account: account._id }); await Account.deleteOne({ _id: account._id }); }
+});
+
 test('all Bootstrap modals resist Escape and background clicks but explicit close works', async () => {
 	const html = await (await Fixture.request('/')).text();
 	const dom = new JSDOM(html, { url: Fixture.origin, runScripts: 'outside-only', pretendToBeVisual: true });
@@ -689,7 +708,7 @@ test('all Bootstrap modals resist Escape and background clicks but explicit clos
 	try {
 		assert.ok(dom.window.document.querySelector('#beta-notice-trigger').hidden);
 		for (const modal of dom.window.document.querySelectorAll('.modal')) {
-			assert.equal(modal.dataset.bsBackdrop, 'static'); assert.equal(modal.dataset.bsKeyboard, 'false');
+			assert.equal(modal.dataset.bsBackdrop, 'static', modal.id); assert.equal(modal.dataset.bsKeyboard, 'false', modal.id);
 			modal.classList.remove('fade');
 			const instance = new dom.window.bootstrap.Modal(modal);
 			instance.show();

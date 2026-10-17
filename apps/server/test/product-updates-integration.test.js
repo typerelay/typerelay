@@ -75,7 +75,8 @@ test('real authenticated routes enforce CSRF, persist monotonic seen state and r
 	assert.equal((await Fixture.request('/auth/callback?token=' + token)).status, 302);
 	const page = await Fixture.request('/news?account=' + Fixture.account._id);
 	assert.equal(page.status, 200);
-	assert.match(page.headers.get('content-security-policy'), /img-src 'self' data: https: http:/);
+	const imageSources = page.headers.get('content-security-policy').split(';').find(directive => directive.trim().startsWith('img-src ')).trim().split(/\s+/).slice(1);
+	assert.deepEqual(new Set(imageSources), new Set(["'self'", 'data:', 'https://ava.helpmonks.com', 'https:', 'http:']));
 	const pageHtml = await page.text();
 	const dom = new JSDOM(pageHtml);
 	Fixture.csrf = dom.window.document.querySelector('meta[name=csrf-token]').content;

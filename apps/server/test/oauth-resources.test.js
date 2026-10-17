@@ -6,12 +6,13 @@ import { Auth } from '../services/auth.js';
 import { PublicApi } from '../api/public.js';
 import { Support } from '../services/support.js';
 import { Billing } from '../services/billing.js';
-import { mongoose, Integration, IntegrationToken, Ticket, OAuthClient } from '../model/index.js';
+import { mongoose, Integration, IntegrationToken, Ticket, OAuthClient, User } from '../model/index.js';
 
-class ResourceFixture { static server; static url; static tokens = []; static grants = []; static ticket; static secret = process.env.JWT_SECRET; static verifier = 'v'.repeat(43); static pat = 'tr_pat_synthetic-resource-fixture'; }
+class ResourceFixture { static server; static url; static tokens = []; static grants = []; static ticket; static secret = process.env.JWT_SECRET; static verifier = 'v'.repeat(43); static pat = 'tr_pat_synthetic-resource-fixture'; static deleting = false; }
 before(async () => {
 	process.env.JWT_SECRET = 'synthetic-resource-secret';
 	mock.method(Support, 'context', async () => ({ user: 'synthetic-user', account: 'synthetic-account' })); mock.method(Billing, 'assertApi', () => {});
+	mock.method(User, 'exists', async query => { assert.deepEqual(query, { _id: 'synthetic-user', 'deletion.requested_at': null }); return ResourceFixture.deleting ? null : { _id: query._id }; });
 	mock.method(Billing, 'account', async () => ({ _id: 'synthetic-account' }));
 	mock.method(mongoose.connection, 'transaction', async callback => callback({}));
 	mock.method(OAuthClient, 'findOne', () => { const result = { lean: async () => ({ client_id: 'synthetic-client', redirects: ['https://synthetic.test/callback'], token_endpoint_auth_method: 'none' }), select: () => result }; return result; });
@@ -54,4 +55,16 @@ test('real delegation route verifies its secret, selected audience and legacy de
 		assert.equal((await send({ resource }, process.env.JWT_SECRET, 'Token ' + ResourceFixture.pat)).status, resource === Auth.mcpResource() ? 200 : 401);
 	}
 	assert.ok((await Auth.integration('Token ' + ResourceFixture.pat)).credential);
+});
+
+test('delegation and token exchange reject users requesting account deletion', async () => {
+	ResourceFixture.deleting = true;
+	try {
+		await assert.rejects(Auth.integration('Token ' + ResourceFixture.pat), /Account deletion requested/);
+		const grant = ResourceFixture.grants.find(row => row.kind === 'oauth');
+		const token = 'synthetic-deleting-user';
+		ResourceFixture.tokens.push({ hash: Support.hash(token), resource: grant.resource, grant: grant._id });
+		await assert.rejects(Auth.integration('Bearer ' + token, grant.resource), /Account deletion requested/);
+		await assert.rejects(Auth.exchangeIntegration({ grant_type: 'authorization_code', client_id: 'synthetic-client', redirect_uri: 'https://synthetic.test/callback', code: 'synthetic-code', code_verifier: ResourceFixture.verifier, resource: ResourceFixture.ticket.data.resource }), /Account deletion requested/);
+	} finally { ResourceFixture.deleting = false; }
 });

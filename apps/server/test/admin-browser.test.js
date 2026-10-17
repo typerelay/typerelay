@@ -8,9 +8,11 @@ class Fixture {
 	static async browser(page = 'accounts', locals = {}, hash = '') {
 		const dom = new JSDOM(pug.renderFile('./views/admin/' + page + '.pug', { csrf: 'csrf', adminEmail: 'admin@example.test', accounts: [], total: 0, page: 1, pages: 1, query: {}, ...locals }), { url: 'https://app.example.test/admin' + hash, runScripts: 'outside-only' });
 		dom.window.setInterval = () => 0; dom.window.Swal = { fire: async () => ({ isConfirmed: false }) }; dom.window.bootstrap = { Modal: { getOrCreateInstance: () => ({ hide() {}, show() {} }) } };
+		dom.window.fetch = async () => ({ ok: true, json: async () => ({ html: '' }) });
+		const ai = (await readFile('./public/ai.js', 'utf8')).replace('export class AiClient', 'class AiClient');
 		const password = (await readFile('./public/password-field.js', 'utf8')).replace('export class PasswordField', 'class PasswordField');
 		const source = (await readFile('./public/admin.js', 'utf8')).replace(/^import .*;$/gm, '').replace('export class AdminUI', 'class AdminUI');
-		dom.window.eval(password + '\n' + source + '\nwindow.AdminUI = AdminUI;'); return dom;
+		dom.window.eval(ai + '\n' + password + '\n' + source + '\nwindow.AdminUI = AdminUI;'); await Promise.resolve(); return dom;
 	}
 	static result(id, revision, name = 'Account', status = 'active') {
 		const account = { id, revision, name, status, plan: 'free', effective_plan: 'free', billing_status: 'incomplete', owner: { email: 'owner@example.test' }, usage: { users: 1, snippets: 2, libraries: 1, devices: 1 } };
@@ -45,6 +47,8 @@ test('settings left navigation preserves drafts and supports deep links and keyb
 		managani.elements.base_url.value = 'https://unsaved.example.test';
 		assert.equal(custom.closest('[role="tabpanel"]').hidden, true);
 		document.getElementById('settings-nav-managani').dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+		assert.equal(document.activeElement.id, 'settings-nav-ai');
+		document.activeElement.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
 		assert.equal(document.activeElement.id, 'settings-nav-custom-code'); assert.equal(custom.elements.js.value, 'unsaved custom code');
 		await AdminUI.click({ target: document.getElementById('settings-nav-managani') }); assert.equal(managani.elements.base_url.value, 'https://unsaved.example.test');
 		assert.equal(document.querySelector('[data-admin-settings="custom-code"]'), custom); assert.equal(document.querySelectorAll('[role="tab"][aria-selected="true"]').length, 1);
