@@ -64,7 +64,7 @@ async function notice(message) {
 	} catch { /* The page can still use its unchanged field when a notice cannot load. */ }
 }
 
-async function promptFields(fields, variables) {
+async function promptFields(fields, variables, editor) {
 	const host = document.createElement('div');
 	host.style.position = 'fixed';
 	host.style.zIndex = '2147483647';
@@ -79,7 +79,7 @@ async function promptFields(fields, variables) {
 	const panel = document.createElement('div');
 	panel.innerHTML = html;
 	shadow.append(panel);
-	document.documentElement.append(host);
+	(editor.closest('dialog, [role="dialog"], [aria-modal="true"]') || document.documentElement).append(host);
 	try {
 		const { promptFields } = await import(chrome.runtime.getURL('prompt.js'));
 		return await promptFields(shadow, fields, variables);
@@ -117,8 +117,8 @@ async function expand(editor, saved, id, expected = '', erase = 0) {
 	if (preview.rendered.enter_actions) { notice('This snippet uses an Enter key action, which Chrome cannot perform safely. The field was left unchanged.'); return; }
 	if (expected && (document.activeElement !== editor || !document.hasFocus())) throw new Error('The original field lost focus; abbreviation left unchanged');
 	const fields = preview.rendered.fields || [];
-	const values = fields.length ? await promptFields(fields, preview.rendered.variables) : {};
-	if (values === null) return;
+	const values = fields.length ? await promptFields(fields, preview.rendered.variables, editor) : {};
+	if (values === null) { if (editor.isConnected && saved) restore(editor, saved); return; }
 	const result = await send({ type: 'prepare', id, values, preview: false });
 	if (result.rendered.enter_actions) { notice('This snippet uses an Enter key action, which Chrome cannot perform safely. The field was left unchanged.'); return; }
 	if (expected && !fields.length && (document.activeElement !== editor || !document.hasFocus())) throw new Error('The original field lost focus; abbreviation left unchanged');
