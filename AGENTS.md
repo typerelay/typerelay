@@ -1,6 +1,7 @@
 # Team Agent Instructions
 
 ## Working agreements
+- Keep shared agent instructions in `AGENTS.md` as the source of truth for every agent. Agent-specific instruction files should reference it instead of duplicating rules.
 - Be extremely concise. Prefer the simplest solution; follow explicit requirements and verify uncertain facts.
 - Use fish-compatible commands. Reuse existing code; do not duplicate code, extend services, or add global functions.
 - Keep ordinary documentation out of the repository root; agent instruction files are exceptions.
@@ -32,7 +33,9 @@
 - Whole-view rendering is limited to initial navigation, explicit refresh, or a documented unrecoverable reconciliation case. Add relevant regression coverage for immediate item updates without page/section reloads.
 
 ## Development and testing
-- For browser work, use the `t3-browser` skill when T3 Code's `preview_*` tools are available. Otherwise, follow the project's browser automation instructions.
+- For browser testing, launch your own isolated Chrome instance with a separate temporary profile; control it with Playwright when needed. Never reuse the user's browser session or profile.
+- When the task ends, close the Chrome instance you created and remove its temporary profile, including after failures. Do not close unrelated browser instances.
+- For DBH testing, always sign in using the application's magic-link option. Retrieve the login email from Mailpit at `mail.n.lan` and open the link in your isolated Chrome instance.
 - Development uses Docker Compose (`compose.yml`); Avoid new environment variables; if required, update production Swarm files under `/Users/nitai/repos/helpmonks-install-script/docker/` and the relevant development secrets.
 - On `NadaMini`, projects are under `/Users/nitai/repos` and `/Users/nitai/repos-denise` use remote Docker through `dbh-run`; never local Docker or hand-written SSH sync. Other development hosts use local Docker per project instructions. Non-Docker unit tests stay on `NadaMini`.
 - Use `dbh-run compose -- <args>`, `dbh-run test`, and `dbh-run exec -- <command>`. Use `status` and `logs` for diagnosis. Run `dbh-run urls` before starting/testing a stack; repository metadata and its named URLs are authoritative.
