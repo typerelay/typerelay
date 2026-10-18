@@ -1,3 +1,4 @@
+import { Assets } from './assets.js';
 import { AccountAccess } from './account_access.js';
 import { parse as parseCsv } from 'csv-parse/sync';
 import { parseDocument } from 'htmlparser2';
@@ -72,7 +73,7 @@ export class Libraries {
 		return { trigger: Abbreviation.normalize(entry?.trigger) || null, title: entry?.title || '', content: Libraries.content(entry) };
 	}
 	static async prepared(ctx,entry,session=null){if(entry?.content?.type==='rich_text')return{...entry,content:await RichText.prepare(ctx,entry.content,session)};if(entry?.type==='rich_text')return{...entry,content:await RichText.prepare(ctx,{version:2,type:'rich_text',markdown:entry.replace,variables:entry.variables||{}},session)};return entry;}
-	static yaml(entry) { const value = Libraries.value(entry); return { trigger: value.trigger, title: value.title, replace: value.content.text, type: value.content.type === 'rich_text' ? 'plain_text' : value.content.type, language: value.content.language || 'plain_text', variables: value.content.type === 'rich_text' ? {} : (value.content.variables || {}) }; }
+	static yaml(entry) { const value = Libraries.value(entry); return { trigger: value.trigger, title: value.title, replace: value.content.type === 'rich_text' ? value.content.markdown : value.content.text, type: value.content.type, language: value.content.language || 'plain_text', variables: value.content.variables || {} }; }
 	static exportEntry(entry){const value=Libraries.value(entry);if(value.content.type==='rich_text'){Support.assert(!value.content.assets.length,'Export rich text with images as a TypeRelay bundle',409);return{trigger:value.trigger,title:value.title,replace:value.content.markdown,type:'rich_text',variables:value.content.variables};}return Libraries.yaml(value);}
 	static entry(snippet) { if(snippet.content?.type==='rich_text'){const assets=Object.fromEntries((snippet.content.assets||[]).map(id=>[id,`/snippet-assets/${snippet.account}/${id}`]));return{...snippet,replace:snippet.content.markdown,rich_html:RichText.render({...snippet.content,assets}).html};}return { ...snippet, replace: snippet.content?.text }; }
 	static view(ctx, library) { return { ...library, _id: String(library._id), deleted: library.state !== 'active', permissions: Support.access(ctx, library) }; }
@@ -91,17 +92,19 @@ export class Libraries {
 	}
 	static async validate(entries, ctx = null, session = null) {
 		const values = entries.map(Libraries.value);
-		await Yaml.validate(values.map(Libraries.yaml));
-		if (!ctx) return;
+		const { matches } = await Yaml.validate(values.map(Libraries.yaml));
+		if (!ctx) return matches;
 		const ids = [...new Set(values.flatMap(value => value.content.type === 'rich_text' ? value.content.assets : []))];
-		if (!ids.length) return;
+		if (!ids.length) return matches;
+		Support.assert((await Assets.visible(ctx, ids, session)).length === ids.length, 'Rich text references an inaccessible image asset', 422);
 		const assets = await SnippetAsset.find({ account: ctx.account, id: { $in: ids } }).select('id size').session(session || null).lean();
 		Support.assert(assets.length === ids.length, 'Rich text references a missing image asset', 422);
 		const sizes = new Map(assets.map(asset => [asset.id, asset.size]));
 		for (const value of values.filter(value => value.content.type === 'rich_text')) {
 			Support.assert(value.content.assets.reduce((total, id) => total + sizes.get(id), 0) <= 8 * 1048576, 'Rich-text images exceed 8 MiB', 422);
 		}
-		await SnippetAsset.updateMany({ account: ctx.account, id: { $in: ids } }, { $set: { last_referenced_at: new Date() } }, { session: session || null });
+		await SnippetAsset.updateMany({ account: ctx.account, id: { $in: ids } }, { $set: { last_referenced_at: new Date() }, $pull: { staged_by: ctx.user } }, { session: session || null });
+		return matches;
 	}
 	static importFormats = {
 		typerelay: { name: 'TypeRelay bundle', accept: '.typerelay.zip,.zip', instructions: 'Choose a TypeRelay bundle containing snippets.yml and its deduplicated image assets.', beta: false },
@@ -335,7 +338,7 @@ export class Libraries {
 			used.add(name);
 			libraries.push(await Libraries.create(ctx, { name, snippets: group.snippets }, session));
 		}
-		await Libraries.validateVisible(ctx, session);
+		await Libraries.validateVisible(ctx, session, libraries.flatMap(library => library.snippets.map(entry => entry.id)));
 		return { libraries, import_summary: { imported: body.selected.length, skipped: preview.warnings || [], renamed } };
 	}
 	static async create(ctx, body, session) {
@@ -422,6 +425,8 @@ export class Libraries {
 			const server = await Snippet.findOne({ account: ctx.account, id: change.id }).session(session).lean();
 			Support.assert(!server || Support.equal(server.library, library._id), 'Snippet moved to another library; review your changes', 409);
 			Support.assert(server?.state !== 'purged', 'Snippet was permanently purged; it cannot be restored', 410);
+			const baseAssets = change.base?.content?.assets || [];
+			Support.assert(Array.isArray(baseAssets) && (!baseAssets.length || (await Assets.visible(ctx, baseAssets, session)).length === baseAssets.length), 'Conflict base references an inaccessible image asset', 422);
 			const local = change.value === null ? null : Libraries.value(await Libraries.prepared(ctx,change.value,session), server?.content);
 			if (local) await Libraries.validate([local], ctx, session);
 			if (server?.state === 'active' && library.state === 'active' && Libraries.same(server, local)) continue;
@@ -474,12 +479,13 @@ export class Libraries {
 			for (const record of selected) {
 				const item = body.items.find(item => item.id === record.id);
 				const change = item.value === undefined ? {} : Libraries.value(await Libraries.prepared(ctx,item.value,session), record.content);
+				if (item.value !== undefined) await Libraries.validate([change], ctx, session);
 				await Snippet.updateOne({ _id: record._id }, { $set: { library: destination._id, position: position++, ...change }, $inc: { revision: 1 } }, { session, timestamps: item.value !== undefined });
 				await Conflict.updateMany({ account: ctx.account, library: source._id, snippet: record.id }, { $set: { library: destination._id } }, { session });
 			}
 			const entries = await Snippet.find({ library: destination._id, state: 'active' }).session(session).lean();
-			await Libraries.validate(entries, ctx, session);
-			Support.assert(Buffer.byteLength(JSON.stringify(entries)) <= 1048576, 'Destination exceeds the library size limit');
+			const matches = await Libraries.validate(entries, ctx, session);
+			Support.assert(Buffer.byteLength(JSON.stringify(matches)) <= 1048576, 'Destination exceeds the library size limit');
 			for (const library of [source, destination]) {
 				await Library.updateOne({ _id: library._id }, { $inc: { revision: 1 } }, { session });
 				const sequence = await Support.change(ctx.account, library._id, 'move', session);
@@ -502,13 +508,21 @@ export class Libraries {
 		}
 		return rows;
 	}
-	static async validateVisible(ctx, session) {
+	static async validateVisible(ctx, session, restoredIds = null) {
 		const libraries = await Libraries.list(ctx, session);
 		Support.assert(libraries.length <= 256, 'Active libraries exceed the engine limit', 409);
 		const entries = libraries.flatMap(library => library.snippets);
-		await Libraries.validate(entries, ctx, session);
-		Support.assert(Buffer.byteLength(JSON.stringify(entries)) <= 8 * 1048576, 'Active snippets exceed the engine limit', 409);
-		for (const library of libraries) Support.assert(Buffer.byteLength(JSON.stringify(library.snippets)) <= 1048576, 'Library exceeds the engine limit', 409);
+		let matches;
+		if (restoredIds) {
+			const restored = new Set(restoredIds);
+			const occupied = new Set(entries.filter(entry => !restored.has(entry.id) && entry.trigger).map(entry => entry.trigger));
+			Support.assert(!entries.some(entry => restored.has(entry.id) && entry.trigger && occupied.has(entry.trigger)), 'Duplicate trigger', 422);
+			matches = await Libraries.validate(entries.map(entry => restored.has(entry.id) ? entry : { ...entry, trigger: null }), ctx, session);
+			for (const [index, entry] of entries.entries()) matches[index].trigger = Abbreviation.normalize(entry.trigger) || '';
+		} else matches = await Libraries.validate(entries, ctx, session);
+		let offset = 0; let total = 0;
+		for (const library of libraries) { const size = Buffer.byteLength(JSON.stringify(matches.slice(offset, offset + library.snippets.length))); Support.assert(size <= 1048576, 'Library exceeds the engine limit', 409); total += size; offset += library.snippets.length; }
+		Support.assert(total <= 8 * 1048576, 'Active snippets exceed the engine limit', 409);
 	}
 	static async purge(library, entry, session) {
 		const filter = entry ? { library: library._id, id: entry.id } : { library: library._id };
@@ -518,7 +532,8 @@ export class Libraries {
 		await Conflict.deleteMany({ library: library._id, ...(entry ? { snippet: { $in: ids } } : {}) }, { session });
 		if (!entry) {
 			const readers = [];
-			for (const member of await Member.find({ account: library.account }).session(session).lean()) if (Support.access(await Support.context(String(member.user), String(library.account), session), library).read) readers.push(member.user);
+			const groups = await Group.find({ account: library.account }).session(session).lean();
+			for (const member of await Member.find({ account: library.account }).session(session).lean()) if (Support.access({ account: String(library.account), user: String(member.user), role: member.role, groups: groups.filter(group => group.users.some(user => Support.equal(user, member.user))).map(group => String(group._id)) }, library).read) readers.push(member.user);
 			await Library.updateOne({ _id: library._id }, { $set: { state: 'purged', purge_readers: readers }, $unset: { name: 1, members: 1, groups: 1, shared: 1, editable: 1, creator: 1, trashed_at: 1, trashed_by: 1, expires_at: 1 } }, { session });
 		}
 		await Library.updateOne({ _id: library._id }, { $inc: { revision: 1 } }, { session });
@@ -545,7 +560,7 @@ export class Libraries {
 			const now = new Date();
 			await model.updateOne({ _id: record._id }, { $set: { state: action === 'trash' ? 'trashed' : 'active', ...(action === 'trash' ? { trashed_at: now, expires_at: new Date(+now + Libraries.retention), trashed_by: ctx.user } : {}) }, ...(action === 'restore' ? { $unset: { trashed_at: 1, expires_at: 1, trashed_by: 1 } } : {}), $inc: { revision: 1 } }, { session });
 			if (target.type === 'snippet') await Library.updateOne({ _id: library._id }, { $inc: { revision: 1 } }, { session });
-			if (action === 'restore') await Libraries.validateVisible(ctx, session);
+			if (action === 'restore') await Libraries.validateVisible(ctx, session, target.type === 'library' ? library.snippets.map(entry => entry.id) : [record.id]);
 			await Support.change(ctx.account, library._id, action, session);
 		}
 		const current = await Library.findById(library._id).session(session).lean();
@@ -560,28 +575,39 @@ export class Libraries {
 		}
 		return { affected };
 	}
+	static assetReferences(values) {
+		const referenced = new Set(); const collect = value => { if (!value || typeof value !== 'object') return; if (value.type === 'rich_text' && Array.isArray(value.assets)) for (const id of value.assets) referenced.add(id); for (const item of Object.values(value)) collect(item); };
+		collect(values); return [...referenced];
+	}
+	static async cleanupAssets(account, session, filter) {
+		const snippets = await Snippet.find({ account, state: { $ne: 'purged' } }).select('content').session(session).lean();
+		const conflicts = await Conflict.find({ account }).select('local base server').session(session).lean();
+		await SnippetAsset.deleteMany({ account, $and: [filter, { id: { $nin: Libraries.assetReferences([snippets, conflicts]) } }] }, { session });
+	}
 	static async cleanup() {
-		const summary = { libraries: 0, snippets: 0 };
+		const summary = { libraries: 0, snippets: 0, failed: 0 };
 		for (const account of await Account.find(AccountAccess.available).select('_id').lean()) {
-			const purged = await mongoose.connection.transaction(async session => {
-				const locked = await Account.updateOne({ _id: account._id, ...AccountAccess.available }, { $inc: { sequence: 1 } }, { session });
-				if (!locked.matchedCount) return { libraries: 0, snippets: 0 };
-				const now = new Date();
-				const libraries = await Library.find({ account: account._id, state: 'trashed', expires_at: { $lte: now } }).session(session).lean();
-				for (const library of libraries) await Libraries.purge(library, null, session);
-				let snippets = 0;
-				for (const entry of await Snippet.find({ account: account._id, state: 'trashed', expires_at: { $lte: now } }).session(session).lean()) {
-					const library = await Library.findById(entry.library).session(session).lean();
-					if (library && library.state !== 'purged') {
-						await Libraries.purge(library, entry, session);
-						snippets++;
+			try {
+				const purged = await mongoose.connection.transaction(async session => {
+					const locked = await Account.updateOne({ _id: account._id, ...AccountAccess.available }, { $inc: { sequence: 1 } }, { session });
+					if (!locked.matchedCount) return { libraries: 0, snippets: 0 };
+					const now = new Date();
+					const libraries = await Library.find({ account: account._id, state: 'trashed', expires_at: { $lte: now } }).session(session).lean();
+					for (const library of libraries) await Libraries.purge(library, null, session);
+					let snippets = 0;
+					for (const entry of await Snippet.find({ account: account._id, state: 'trashed', expires_at: { $lte: now } }).session(session).lean()) {
+						const library = await Library.findById(entry.library).session(session).lean();
+						if (library && library.state !== 'purged') {
+							await Libraries.purge(library, entry, session);
+							snippets++;
+						}
 					}
-				}
-				const referenced=new Set();const collect=value=>{if(!value||typeof value!=='object')return;if(Array.isArray(value)){for(const item of value)collect(item);return;}if(value.type==='rich_text'&&Array.isArray(value.assets))for(const id of value.assets)referenced.add(id);for(const item of Object.values(value))collect(item);};for(const record of await Snippet.find({account:account._id,state:{$ne:'purged'}}).select('content').session(session).lean())collect(record.content);for(const conflict of await Conflict.find({account:account._id,resolved:false}).select('local base server').session(session).lean())collect(conflict);await SnippetAsset.deleteMany({account:account._id,id:{$nin:[...referenced]},updatedAt:{$lte:new Date(+now-Libraries.retention)}}).session(session);
-				return { libraries: libraries.length, snippets };
-			});
-			summary.libraries += purged.libraries;
-			summary.snippets += purged.snippets;
+					await Libraries.cleanupAssets(account._id, session, { updatedAt: { $lte: new Date(+now - Libraries.retention) } });
+					return { libraries: libraries.length, snippets };
+				});
+				summary.libraries += purged.libraries;
+				summary.snippets += purged.snippets;
+			} catch (error) { console.error('Trash cleanup failed for account ' + account._id + ': ' + error.message); summary.failed++; }
 		}
 		return summary;
 	}

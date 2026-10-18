@@ -1,3 +1,4 @@
+import { TestDatabase } from './database.js';
 import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -19,7 +20,7 @@ class Fixture {
 
 before(async () => {
 	process.env.NODE_ENV = 'test'; process.env.PORT = '3183'; process.env.APP_VERSION = 'news-drawer-test'; process.env.TYPERELAY_HOSTED_EDITION = 'true'; process.env.TYPERELAY_GHOST_CONTENT_API_KEY = 'fixture-key'; process.env.BILLING_ENABLED = 'false'; process.env.WHITE_LABEL_ENABLED = 'false';
-	process.env.MONGO_URI = process.env.MONGO_URI.replace(/\/[^/?]+(?=\?|$)/, '/typerelay_product_updates_test');
+	process.env.MONGO_URI = TestDatabase.uri(process.env.MONGO_URI, 'typerelay_product_updates_test');
 	process.env.SESSION_SECRET = Support.token(); process.env.JWT_SECRET = Support.token();
 	Auth.origin = Fixture.origin;
 	await mongoose.connect(process.env.MONGO_URI);
@@ -35,7 +36,7 @@ before(async () => {
 
 after(async () => {
 	if (Fixture.server) await new Promise(resolve => Fixture.server.close(resolve));
-	if (mongoose.connection.readyState) { await mongoose.connection.dropDatabase(); await mongoose.disconnect(); }
+	if (mongoose.connection.readyState) { await TestDatabase.drop(mongoose.connection, 'typerelay_product_updates_test'); await mongoose.disconnect(); }
 });
 
 test('asset URLs change with module contents even when the release number is reused', async () => {
@@ -74,7 +75,8 @@ test('real authenticated routes enforce CSRF, persist monotonic seen state and r
 	assert.equal((await Fixture.request('/auth/callback?token=' + token)).status, 302);
 	const page = await Fixture.request('/news?account=' + Fixture.account._id);
 	assert.equal(page.status, 200);
-	assert.match(page.headers.get('content-security-policy'), /img-src 'self' data: https: http:/);
+	const imageSources = page.headers.get('content-security-policy').split(';').find(directive => directive.trim().startsWith('img-src ')).trim().split(/\s+/).slice(1);
+	assert.deepEqual(new Set(imageSources), new Set(["'self'", 'data:', 'https://ava.helpmonks.com', 'https:', 'http:']));
 	const pageHtml = await page.text();
 	const dom = new JSDOM(pageHtml);
 	Fixture.csrf = dom.window.document.querySelector('meta[name=csrf-token]').content;

@@ -1,3 +1,4 @@
+import { TestDatabase } from './database.js';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
@@ -25,10 +26,9 @@ class Fixture {
 before(async () => {
 	for (const key of ['TYPERELAY_HOSTED_EDITION', 'BILLING_ENABLED', 'STRIPE_SECRET_KEY', 'STRIPE_FREE_PRICE_ID', 'STRIPE_PRO_PRICE_ID', 'STRIPE_TEAM_PRICE_ID', 'STRIPE_PORTAL_CONFIG_ID', 'WHITE_LABEL_ENABLED', 'WHITE_LABEL_CNAME_TARGET', 'WHITE_LABEL_ASSETS_DIR', 'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ZONE_ID', 'HELPMONKS_API_URL', 'HELPMONKS_SIGNUP_API_URL', 'HELPMONKS_SIGNUP_HOST_ID', 'HELPMONKS_SIGNUP_SEQUENCE_ID']) Fixture.environment[key] = process.env[key];
 	Object.assign(process.env, { TYPERELAY_HOSTED_EDITION: 'true', BILLING_ENABLED: 'true', STRIPE_SECRET_KEY: 'sk_test_fixture', STRIPE_FREE_PRICE_ID: 'price_free', STRIPE_PRO_PRICE_ID: 'price_pro', STRIPE_TEAM_PRICE_ID: 'price_team', STRIPE_PORTAL_CONFIG_ID: 'portal_account', WHITE_LABEL_ENABLED: 'true', WHITE_LABEL_CNAME_TARGET: 'custom.typerelay.com', CLOUDFLARE_API_TOKEN: 'cloudflare-fixture', CLOUDFLARE_ZONE_ID: 'zone-fixture', HELPMONKS_API_URL: 'http://helpmonks-general.test', HELPMONKS_SIGNUP_API_URL: 'http://helpmonks-signup.test', HELPMONKS_SIGNUP_HOST_ID: '53837271b7b1cbce6da6ce06', HELPMONKS_SIGNUP_SEQUENCE_ID: '6a8694a0e4e1989c9dafdbf2' });
-	const uri = new URL(process.env.MONGO_URI);
-	uri.pathname = '/typerelay_billing_test';
-	await mongoose.connect(uri.href);
-	await mongoose.connection.dropDatabase();
+	const uri = TestDatabase.uri(process.env.MONGO_URI, 'typerelay_billing_test');
+	await mongoose.connect(uri);
+	await TestDatabase.drop(mongoose.connection, 'typerelay_billing_test');
 	await Promise.all(Object.values(mongoose.models).map(model => model.init()));
 	Fixture.owner = await User.create({ email: `${randomUUID()}@example.test`, name: 'Billing owner' });
 	Fixture.account = await Account.create({ name: 'Billing account' });
@@ -37,7 +37,7 @@ before(async () => {
 });
 
 after(async () => {
-	await mongoose.connection.dropDatabase();
+	await TestDatabase.drop(mongoose.connection, 'typerelay_billing_test');
 	await mongoose.disconnect();
 	for (const [key, value] of Object.entries(Fixture.environment)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
 });

@@ -1,3 +1,4 @@
+import { TestDatabase } from './database.js';
 // Disposable browser fixture. Never uses the application's database or sends mail.
 import { writeFileSync, copyFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -8,7 +9,7 @@ import { Libraries } from '../services/libraries.js';
 import '../scripts/build-editor.js';
 process.env.NODE_ENV = 'test';
 process.env.PORT = '3142';
-process.env.MONGO_URI = 'mongodb://mongo:27017/typerelay_template_browser?replicaSet=typerelay';
+process.env.MONGO_URI = TestDatabase.uri(process.env.MONGO_URI, 'typerelay_template_browser_test');
 process.env.SESSION_SECRET = Support.token();
 process.env.JWT_SECRET = Support.token();
 Auth.origin = 'http://template-server:3142';
@@ -24,4 +25,4 @@ await Libraries.mutate(ctx, randomUUID(), body, async (fresh, session) => ({ lib
 const token = Support.token(); await Ticket.create({ hash: Support.hash(token), kind: 'login', email: user.email, expires: new Date(Date.now() + 600000) });
 writeFileSync('/fixtures/login.json', JSON.stringify({ url: Auth.origin + '/auth/callback?token=' + token }));
 server.listeners('request')[0].get('/fixture-ready', (req, res) => res.json({ ready: true }));
-process.on('SIGTERM', async () => { server.close(); await mongoose.connection.dropDatabase(); await mongoose.disconnect(); process.exit(0); });
+process.on('SIGTERM', async () => { server.close(); await TestDatabase.drop(mongoose.connection, 'typerelay_template_browser_test'); await mongoose.disconnect(); process.exit(0); });

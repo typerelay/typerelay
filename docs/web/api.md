@@ -84,7 +84,7 @@ The top-right initials avatar opens Settings, Help and Sign out. Profile saves p
 
 Settings follows Streamient/Mailtwine's left navigation and right content layout: Profile, Security, My team and Connected devices. Switching sections retains the existing forms and unsaved field values.
 
-The navbar search trigger opens a modal with `/`, Ctrl+K or Cmd+K. Slash is ignored in editable fields; shortcuts do not interrupt another open modal. Arrow keys navigate results, Enter opens them and Escape closes search. Results match library names, abbreviations and expansion text.
+The navbar search trigger opens a modal with `/`, Ctrl+K or Cmd+K. Slash is ignored in editable fields; shortcuts do not interrupt another open modal. Arrow keys navigate results, Enter opens them and Close dismisses search. Results match library names, abbreviations and expansion text.
 
 `GET /api/v2/search?q=...` returns permission-filtered Pug search results (up to 60). Stale responses cannot replace a newer query. Selecting a snippet search result opens its edit modal directly; read-only snippets open locked. Library-name results open the library. Library cards also open from any card area or Enter/Space, not only the title.
 

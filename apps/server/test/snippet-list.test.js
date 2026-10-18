@@ -50,7 +50,7 @@ test('snippet edits and creates reorder individual rows without reloading or los
 		const sibling = document.querySelector('[data-snippet="old"]');
 		document.querySelector('[data-edit-snippet="new"]').focus();
 		const updated = { ...library, revision: 2, snippets: [{ ...snippets[1], revision: 2, replace: 'Edited' }, snippets[0]] };
-		const result = { library: updated, html: '<div data-id="one"></div>', fragments: updated.snippets.map(snippet => ({ id: snippet.id, revision: snippet.revision, html: pug.renderFile('./views/ajax/snippet.pug', { library, snippet }) })) };
+		const result = { library: updated, html: pug.renderFile('./views/ajax/library.pug', { library: updated }), fragments: updated.snippets.map(snippet => ({ id: snippet.id, revision: snippet.revision, html: pug.renderFile('./views/ajax/snippet.pug', { library, snippet }) })) };
 		await client.apply(result);
 		await client.apply(result);
 		await client.apply({ ...result, library });
@@ -61,6 +61,13 @@ test('snippet edits and creates reorder individual rows without reloading or los
 		assert.equal(document.activeElement.dataset.editSnippet, 'new');
 		assert.equal(document.querySelector('[data-select-snippet="old"]').checked, true);
 		assert.equal(document.querySelector('[data-snippet="new"] pre').textContent, 'Edited');
+		assert.equal(document.querySelector('[data-id="one"]').classList.contains('active-library'), true);
+		assert.equal(document.querySelector('[data-id="one"]').getAttribute('aria-pressed'), 'true');
+		const other = { ...library, _id: 'two' };
+		await client.apply({ library: other, html: pug.renderFile('./views/ajax/library.pug', { library: other }) });
+		assert.equal(document.querySelector('[data-id="two"]').getAttribute('aria-pressed'), 'false');
+		assert.equal(document.querySelector('[data-id="two"]').classList.contains('active-library'), false);
+		assert.equal(document.querySelector('[data-id="one"]').getAttribute('aria-pressed'), 'true');
 		client.request = async (path, method, body) => {
 			assert.equal(path, 'libraries/one/snippets');
 			assert.equal(method, 'POST');
@@ -89,4 +96,43 @@ test('active snippets sort by update timestamp, retaining legacy order without t
 		assert.deepEqual(result.snippets.map(snippet => snippet.id), ['latest', 'older', 'legacy', 'legacy2']);
 		assert.deepEqual(result.records.map(snippet => snippet.id), entries.map(snippet => snippet.id));
 	} finally { Snippet.find = original; }
+});
+
+
+test('library export sends its account, downloads the named bundle and preserves the editor on failure', async () => {
+	const library = { _id: 'library', name: 'Library', permissions: { edit: true, manage: true }, snippets: [] };
+	const dom = new JSDOM(pug.renderFile('./views/ajax/editor.pug', { library }), { runScripts: 'outside-only' });
+	try {
+		const source = (await readFile('./public/app.js', 'utf8')).replace(/^import .*;$/gm, '').replace('const client = new TypeRelay();', '').replace('export { client };', 'window.TypeRelay = TypeRelay;');
+		dom.window.eval(source);
+		const client = Object.create(dom.window.TypeRelay.prototype); client.account = 'account';
+		const { document } = dom.window; const editor = document.querySelector('[data-editor]'); const button = document.querySelector('[data-export-library]');
+		let downloaded = 0; let failed = false; const blob = new dom.window.Blob(['PK']); const revoked = [];
+		dom.window.fetch = async (path, options) => { assert.equal(path, '/api/v2/libraries/library/export-bundle'); assert.equal(options.headers['X-Account-Id'], 'account'); assert.equal(button.disabled, true); return { ok: !failed, headers: new Map([['Content-Disposition', 'attachment; filename="Library.typerelay.zip"']]), blob: async () => blob, json: async () => ({ error: 'Export denied' }) }; };
+		dom.window.URL.createObjectURL = value => { assert.equal(value, blob); return 'blob:bundle'; };
+		dom.window.URL.revokeObjectURL = value => revoked.push(value);
+		dom.window.setTimeout = callback => { callback(); };
+		dom.window.HTMLAnchorElement.prototype.click = function () { assert.equal(this.download, 'Library.typerelay.zip'); assert.equal(this.href, 'blob:bundle'); downloaded++; };
+		await client.onClick({ target: button });
+		assert.equal(downloaded, 1); assert.deepEqual(revoked, ['blob:bundle']); assert.equal(button.disabled, false);
+		failed = true;
+		await assert.rejects(client.onClick({ target: button }), /Export denied/);
+		assert.equal(downloaded, 1); assert.equal(button.disabled, false); assert.equal(document.querySelector('[data-editor]'), editor);
+	} finally { dom.window.close(); }
+});
+
+
+test('failed saves restore the submitter focus without stealing moved focus or reopening a closed form', async () => {
+ const dom = new JSDOM('<div id="form-modal" class="modal show"><form id="record-form"><textarea name="replace">Unsaved edit</textarea><button type="submit">Save</button></form></div><input id="other">', { runScripts: 'outside-only' });
+ try {
+  const source = (await readFile('./public/app.js', 'utf8')).replace(/^import .*;$/gm, '').replace('const client = new TypeRelay();', '').replace('export { client };', 'window.TypeRelay = TypeRelay;');
+  dom.window.eval(source);
+  const client = Object.create(dom.window.TypeRelay.prototype); const errors = []; client.toast = message => errors.push(message);
+  const { document } = dom.window; const form = document.querySelector('form'); const button = form.querySelector('button'); const other = document.querySelector('#other');
+  const submit = async during => { button.focus(); client.submit = async () => { assert.equal(button.disabled, true); document.body.tabIndex = -1; document.body.focus(); during?.(); throw new Error('Save unavailable'); }; await client.onSubmit({ target: form, submitter: button, preventDefault() {} }); assert.equal(button.disabled, false); assert.equal(form.elements.replace.value, 'Unsaved edit'); assert.equal(document.querySelector('form'), form); };
+  await submit(); assert.equal(document.activeElement, button);
+  await submit(() => other.focus()); assert.equal(document.activeElement, other);
+  await submit(() => document.querySelector('#form-modal').classList.remove('show')); assert.equal(document.activeElement, document.body);
+  assert.deepEqual(errors, ['Save unavailable', 'Save unavailable', 'Save unavailable']);
+ } finally { dom.window.close(); }
 });

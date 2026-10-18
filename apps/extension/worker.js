@@ -9,6 +9,17 @@ const callbackPath = '/oauth/browser-callback';
 const assetPath = id => `/api/v2/assets/${id}`;
 let refreshJob;
 let completionJob;
+let syncJob;
+// Serialize cache/storage writes with sign-out; network work must still belong to this connection.
+const connection = {
+	version: 0, writes: Promise.resolve(),
+	assert(version) { if (version !== this.version) throw new Error('Connection changed; retry from the current account'); },
+	write(version, action) {
+		const result = this.writes.then(() => { this.assert(version); return action(); });
+		this.writes = result.catch(() => undefined);
+		return result;
+	},
+};
 let bridge;
 let bridgeVerified = false;
 let bridgeSequence = 0;
@@ -17,28 +28,40 @@ const bridgeReplies = new Map();
 const base64 = bytes => btoa(String.fromCharCode(...bytes)).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
 
 async function clear() {
-	await chrome.storage.local.remove(['tokens', 'items', 'cursor', 'account', 'lastSync', 'statisticsIdentity']);
-	await caches.delete('typerelay-assets-v1');
+	const version = ++connection.version;
+	refreshJob = null; syncJob = null;
+	await connection.write(version, async () => {
+		await chrome.storage.local.remove(['tokens', 'items', 'cursor', 'account', 'lastSync', 'statisticsIdentity']);
+		await caches.delete('typerelay-assets-v1');
+	});
+	return version;
 }
 
 async function token(force = false) {
+	const version = connection.version;
 	const { tokens } = await chrome.storage.local.get('tokens');
+	connection.assert(version);
 	if (!tokens) throw new Error('Sign in to TypeRelay');
 	if (!force && Date.now() < tokens.obtained_at + (tokens.expires_in - 60) * 1000) return tokens.access_token;
 	refreshJob ||= (async () => {
 		const response = await fetch(`${origin}/oauth/token`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ grant_type: 'refresh_token', client_id: client, refresh_token: tokens.refresh_token }), redirect: 'error' });
+		connection.assert(version);
 		if (!response.ok) { if (response.status === 401) await clear(); throw new Error((await response.json().catch(() => ({}))).error || 'Sign-in expired'); }
 		const renewed = { ...await response.json(), obtained_at: Date.now() };
-		await chrome.storage.local.set({ tokens: renewed });
+		await connection.write(version, () => chrome.storage.local.set({ tokens: renewed }));
 		return renewed.access_token;
-	})().finally(() => { refreshJob = null; });
+	})().finally(() => { if (connection.version === version) refreshJob = null; });
 	return refreshJob;
 }
 
 async function request(path, options = {}) {
-	const send = async force => fetch(`${origin}${path}`, { ...options, headers: { ...options.headers, Authorization: `Bearer ${await token(force)}`, 'X-TypeRelay-Sync-Protocol': '6', 'X-TypeRelay-Personal-Abbreviations': '1' }, redirect: 'error' });
+	const version = connection.version;
+	const server = origin;
+	const send = async force => { const access = await token(force); connection.assert(version); return fetch(`${server}${path}`, { ...options, headers: { ...options.headers, Authorization: `Bearer ${access}`, 'X-TypeRelay-Sync-Protocol': '6', 'X-TypeRelay-Personal-Abbreviations': '1' }, redirect: 'error' }); };
 	let response = await send(false);
+	connection.assert(version);
 	if (response.status === 401) response = await send(true);
+	connection.assert(version);
 	if (!response.ok) { if (response.status === 401 || (response.status === 403 && !path.startsWith("/api/v2/ai/"))) await clear(); throw new Error((await response.json().catch(() => ({}))).error || `TypeRelay request failed (${response.status})`); }
 	return response;
 }
@@ -70,48 +93,56 @@ async function connect(selectedOrigin) {
 
 async function finishConnect(tabId, url) {
 	await originReady;
+	let version = connection.version;
 	const { browserAuth } = await chrome.storage.session.get('browserAuth');
 	if (!browserAuth || browserAuth.startedAt <= Date.now() - 900000) return;
 	const callback = new URL(url);
 	if (callback.origin !== origin || callback.pathname !== callbackPath || callback.searchParams.getAll('state').length !== 1 || callback.searchParams.get('state') !== browserAuth.state) return;
-	await chrome.storage.session.remove('browserAuth');
+	await connection.write(version, () => chrome.storage.session.remove('browserAuth'));
 	try {
 		if (callback.searchParams.getAll('code').length !== 1) throw new Error('Invalid Type Relay sign-in response');
 		const response = await fetch(`${origin}/oauth/token`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ grant_type: 'authorization_code', client_id: client, redirect_uri: browserAuth.redirect, code_verifier: browserAuth.verifier, code: callback.searchParams.get('code') }), redirect: 'error' });
 		if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || 'Sign-in failed');
 		const tokens = { ...await response.json(), obtained_at: Date.now() };
-		await clear();
-		await chrome.storage.local.set({ tokens, account: tokens.account });
+		connection.assert(version);
+		version = await clear();
+		await connection.write(version, () => chrome.storage.local.set({ tokens, account: tokens.account }));
 		await chrome.tabs.remove(tabId).catch(() => undefined);
 		await sync();
-	} catch (error) { await chrome.storage.session.set({ browserAuthError: error.message || String(error) }); }
+	} catch (error) { if (version === connection.version) await connection.write(version, () => chrome.storage.session.set({ browserAuthError: error.message || String(error) })); }
 }
 
 function finishPending(tabId, url) {
-	completionJob ||= finishConnect(tabId, url).catch(error => chrome.storage.session.set({ browserAuthError: error.message || String(error) })).finally(() => { completionJob = null; });
+	const version = connection.version;
+	completionJob ||= finishConnect(tabId, url).catch(error => { if (version === connection.version) return connection.write(version, () => chrome.storage.session.set({ browserAuthError: error.message || String(error) })); }).finally(() => { completionJob = null; });
 	return completionJob;
 }
 
 async function sync() {
-	const response = await request('/api/v2/sync?cursor=0');
-	const snapshot = await response.json();
-	if (snapshot.protocol !== 6) throw new Error('TypeRelay sync protocol mismatch');
-	const cache = await caches.open('typerelay-assets-v1');
-	const ids = new Set(snapshot.libraries.filter(library => library.state === 'active').flatMap(library => library.snippets.flatMap(snippet => snippet.content?.assets || [])));
-	for (const id of ids) {
-		if (!/^[a-f0-9]{64}$/.test(id)) throw new Error('Invalid asset ID');
-		const key = `${origin}${assetPath(id)}`;
-		if (!await cache.match(key)) await cache.put(key, await request(assetPath(id)));
-	}
-	const overrides = new Map((snapshot.personal_abbreviations || []).map(row => [row.snippet, row.trigger]));
-	const items = snapshot.libraries.filter(library => library.state === 'active').flatMap(library => library.snippets.filter(snippet => snippet.state === 'active').map(snippet => ({ id: snippet.id, trigger: library.shared ? (overrides.get(snippet.id) ?? snippet.trigger) : snippet.trigger, title: snippet.title, library: library.name, library_id: library._id, shared: library.shared === true, content: snippet.content })));
-	const counts = new Map(); for (const item of items) if (item.trigger) counts.set(item.trigger, (counts.get(item.trigger) || 0) + 1);
-	for (const item of items) item.abbreviation_collision = (counts.get(item.trigger) || 0) > 1;
-	await chrome.storage.local.set({ items, cursor: snapshot.cursor, lastSync: Date.now(), statisticsIdentity: snapshot.statistics_identity ? { server: origin, account: snapshot.statistics_identity.account, user: snapshot.statistics_identity.user } : null });
-	await usage.flush().catch(() => undefined);
-	for (const key of await cache.keys()) if (!ids.has(key.url.split('/').at(-1))) await cache.delete(key);
-	await chrome.storage.session.remove('browserAuthError');
-	return { count: items.length, cursor: snapshot.cursor };
+	if (syncJob) return syncJob;
+	const version = connection.version;
+	syncJob = (async () => {
+		const response = await request('/api/v2/sync?cursor=0');
+		const snapshot = await response.json();
+		if (snapshot.protocol !== 6) throw new Error('TypeRelay sync protocol mismatch');
+		const cache = await connection.write(version, () => caches.open('typerelay-assets-v1'));
+		const ids = new Set(snapshot.libraries.filter(library => library.state === 'active').flatMap(library => library.snippets.flatMap(snippet => snippet.content?.assets || [])));
+		for (const id of ids) {
+			if (!/^[a-f0-9]{64}$/.test(id)) throw new Error('Invalid asset ID');
+			const key = `${origin}${assetPath(id)}`;
+			if (!await cache.match(key)) { connection.assert(version); const image = await request(assetPath(id)); await connection.write(version, () => cache.put(key, image)); }
+		}
+		const overrides = new Map((snapshot.personal_abbreviations || []).map(row => [row.snippet, row.trigger]));
+		const items = snapshot.libraries.filter(library => library.state === 'active').flatMap(library => library.snippets.filter(snippet => snippet.state === 'active').map(snippet => ({ id: snippet.id, trigger: library.shared ? (overrides.get(snippet.id) ?? snippet.trigger) : snippet.trigger, title: snippet.title, library: library.name, library_id: library._id, shared: library.shared === true, content: snippet.content })));
+		const counts = new Map(); for (const item of items) if (item.trigger) counts.set(item.trigger, (counts.get(item.trigger) || 0) + 1);
+		for (const item of items) item.abbreviation_collision = (counts.get(item.trigger) || 0) > 1;
+		await connection.write(version, () => chrome.storage.local.set({ items, cursor: snapshot.cursor, lastSync: Date.now(), statisticsIdentity: snapshot.statistics_identity ? { server: origin, account: snapshot.statistics_identity.account, user: snapshot.statistics_identity.user } : null }));
+		await usage.flush().catch(() => undefined);
+		for (const key of await cache.keys()) if (!ids.has(key.url.split('/').at(-1))) await connection.write(version, () => cache.delete(key));
+		await connection.write(version, () => chrome.storage.session.remove('browserAuthError'));
+		return { count: items.length, cursor: snapshot.cursor };
+	})().finally(() => { if (version === connection.version) syncJob = null; });
+	return syncJob;
 }
 
 async function assetUrl(id) {
@@ -168,7 +199,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
 				return response.json();
 			}
 			case 'connect': { if (sender.url && new URL(sender.url).protocol !== 'chrome-extension:') throw new Error('Open extension settings to sign in.'); return connect(message.origin); }
-			case 'disconnect': { await request('/api/v2/connection', { method: 'DELETE' }).catch(() => undefined); await clear(); await chrome.storage.session.remove(['browserAuth', 'browserAuthError']); return { disconnected: true }; }
+			case 'disconnect': { connection.version++; refreshJob = null; syncJob = null; await request('/api/v2/connection', { method: 'DELETE' }).catch(() => undefined); await clear(); await chrome.storage.session.remove(['browserAuth', 'browserAuthError']); return { disconnected: true }; }
 			case 'sync': return sync();
 			case 'status': {
 				let auth = await chrome.storage.session.get(['browserAuth', 'browserAuthError']);
@@ -181,7 +212,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
 				const platform = await chrome.runtime.getPlatformInfo();
 				return { connected: !!data.tokens, count: data.items?.length || 0, lastSync: data.lastSync, bridgeVerified: platform.os === 'cros' || await claim(false), prefix: data.prefix || ';', origin, platform: platform.os, authPending: auth.browserAuth?.startedAt > Date.now() - 900000, authError: auth.browserAuthError };
 			}
-			case 'cancel-connect': { await chrome.storage.session.remove(['browserAuth', 'browserAuthError']); return { cancelled: true }; }
+			case 'cancel-connect': { if (completionJob) await clear(); else { connection.version++; refreshJob = null; syncJob = null; } await chrome.storage.session.remove(['browserAuth', 'browserAuthError']); return { cancelled: true }; }
 			case 'snapshot': { const data = await chrome.storage.local.get(['items', 'prefix']); return { items: data.items || [], prefix: data.prefix || ';' }; }
 			case 'focus': { if (sender.tab?.id == null || sender.frameId == null) return {}; await chrome.storage.session.set({ [`frame-${sender.tab.id}`]: sender.frameId }); return {}; }
 			case 'insert': {

@@ -436,7 +436,16 @@ impl Session {
                 if let Some(remaining)=state.cursor_remaining {
                     if state.cancelled||state.generation!=*input_generation||Self::target()?!=state.target {insertion.clear();if let Some(reply)=state.reply.take(){let _=reply.send(Err("Text inserted; cursor positioning interrupted. Nothing retried".into()));}paste=None;continue;}
                     if remaining==0{if let Some(wait)=&mut template_wait{wait.deadline=Instant::now()+Duration::from_secs(5);}if let Some(reply)=state.reply.take(){let _=reply.send(Ok(state.generation));}paste=None;continue;}
-                    if last_stroke.elapsed()>=Duration::from_millis(2){for event in Self::stroke(KeyCode::KEY_LEFT,false){output.emit(&[event])?;}state.cursor_remaining=Some(remaining-1);last_stroke=Instant::now();last_input=Instant::now();}
+                    // Keep each burst below the minimum evdev queue size (64 events),
+                    // then yield to the compositor. Recheck focus before every stroke.
+                    // One SYN_REPORT per stroke preserves every press/release without
+                    // the old per-character delay that made long snippets scroll slowly.
+                    let mut count=0;
+                    while count<remaining.min(16) {
+                        if Self::target()?!=state.target||context.changed(state.target.as_deref())? {*input_generation=input_generation.wrapping_add(1);state.cancelled=true;break;}
+                        output.emit(&Self::stroke(KeyCode::KEY_LEFT,false))?;count+=1;
+                    }
+                    state.cursor_remaining=Some(remaining-count);last_stroke=Instant::now();last_input=Instant::now();
                     thread::sleep(Duration::from_millis(1));continue;
                 } else {
                 match state.job.progress.try_recv() {

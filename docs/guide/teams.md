@@ -57,9 +57,9 @@ Moving a snippet into a shared library shares it under the destination’s rules
 
 ## Personal abbreviations
 
-Editors can choose **My abbreviation** on a shared snippet in the web app or desktop search results. Your abbreviation replaces the shared default only for you; the expansion stays shared. Choose **Use shared default** and save to reset it.
+An existing personal abbreviation replaces a shared snippet’s default only for its owner; the expansion stays shared. The web and desktop interfaces do not currently expose controls for managing these overrides.
 
-Personal abbreviations sync to your devices, browser extension, and mobile keyboard. Desktop changes work offline and show **waiting to sync** until accepted. If two devices change the same abbreviation, open **My abbreviation** to keep the current value or select the pending value and save. Rejected changes remain available for review.
+Personal abbreviations sync to your devices, browser extension, and mobile keyboard. Concurrent changes are retained as personal conflicts rather than changing the shared abbreviation.
 
 You cannot assign an abbreviation already used by another active snippet. If a later shared update introduces a duplicate, automatic expansion pauses for that abbreviation. Both snippets remain available through search and manual insertion.
 

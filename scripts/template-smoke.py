@@ -28,9 +28,10 @@ spec.loader.exec_module(desktop)
 
 
 class TemplateSmoke(desktop.Smoke):
-    def __init__(self, binary_dir=None):
+    def __init__(self, binary_dir=None, cursor_accessibility='auto'):
         super().__init__()
         self.binary_dir = binary_dir or self.root / 'target/templates/release'
+        self.cursor_accessibility = cursor_accessibility
 
     def wait(self, check, seconds=8):
         deadline = time.monotonic() + seconds
@@ -130,10 +131,15 @@ class TemplateSmoke(desktop.Smoke):
                     server = http.server.HTTPServer(('127.0.0.1', 0), desktop.BrowserFixture)
                     threading.Thread(target=server.serve_forever, daemon=True).start()
                     for trigger, before, after in cursor_cases:
+                        if trigger == 'cancel':
+                            desktop.BrowserFixture.interruption_arrows = 0
+                            interruption = self.start('chromium', '--user-data-dir=' + str(root / 'browser-interruption'), '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--disable-sync', '--ozone-platform=wayland', '--app=http://127.0.0.1:' + str(server.server_port) + '/interrupt', stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            interruption_window = self.panel_window(interruption.pid)
                         browser_output.write_text('')
                         desktop.BrowserFixture.arrows = 0
                         direct_before = (root / 'engine.log').read_text().count('Cursor positioned directly')
-                        browser = self.start('chromium', '--user-data-dir=' + str(root / ('browser-' + trigger)), '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--disable-sync', *(['--disable-renderer-accessibility'] if trigger == 'cancel' else ['--force-renderer-accessibility']), '--ozone-platform=wayland', '--app=http://127.0.0.1:' + str(server.server_port), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        accessibility = ['--disable-renderer-accessibility'] if trigger == 'cancel' or self.cursor_accessibility == 'disabled' else ['--force-renderer-accessibility'] if self.cursor_accessibility == 'forced' else []
+                        browser = self.start('chromium', '--user-data-dir=' + str(root / ('browser-' + trigger)), '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--disable-sync', *accessibility, '--ozone-platform=wayland', '--app=http://127.0.0.1:' + str(server.server_port), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                         self.focus('TypeRelay Browser Test'); target = self.active()
                         self.keys('z' * (len(trigger) + 2), target)
                         with sqlite3.connect(snippets / 'typerelay.sqlite') as db:
@@ -143,24 +149,33 @@ class TemplateSmoke(desktop.Smoke):
                         with socket.socket(socket.AF_UNIX) as connection:
                             connection.settimeout(180)
                             connection.connect(os.environ['XDG_RUNTIME_DIR'] + '/typerelay-panel/engine.sock')
+                            started = time.monotonic()
                             connection.sendall(struct.pack('<I', len(request)) + request)
                             if trigger == 'cancel':
-                                self.wait(lambda: self.record(browser_output) == before + after)
-                                interruption = self.start('chromium', '--user-data-dir=' + str(root / 'browser-interruption'), '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--disable-sync', '--ozone-platform=wayland', '--app=http://127.0.0.1:' + str(server.server_port), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                                window = self.panel_window(interruption.pid)
-                                self.command('hyprctl', 'eval', 'hl.dispatch(hl.dsp.focus({window=' + json.dumps('address:' + window['address']) + '}))')
+                                self.wait(lambda: self.record(browser_output) == before + after and desktop.BrowserFixture.arrows > 0)
+                                self.command('hyprctl', 'eval', 'hl.dispatch(hl.dsp.focus({window=' + json.dumps('address:' + interruption_window['address']) + '}))')
                             reply = b''
                             while chunk := connection.recv(4096): reply += chunk
                         if trigger == 'cancel':
                             assert 'Err' in json.loads(reply), reply
                             assert engine.poll() is None
                             assert self.record(browser_output) == before + after
+                            time.sleep(.1)
+                            # A global key already in flight can cross a focus change even
+                            # in the original one-key loop. Do not allow a burst to follow it.
+                            delivered = desktop.BrowserFixture.interruption_arrows
+                            assert delivered <= 1, f'{delivered} cursor keys leaked into the newly focused window'
+                            time.sleep(.1)
+                            assert desktop.BrowserFixture.interruption_arrows == delivered, 'Cursor movement continued after cancellation'
                             interruption.terminate(); interruption.wait(timeout=5)
                             browser.terminate(); browser.wait(timeout=5)
                             print('PASS: focus change cancels long cursor movement; service remains running', flush=True)
                             continue
                         assert json.loads(reply) == {'Ok': None}, reply
-                        assert (root / 'engine.log').read_text().count('Cursor positioned directly') == direct_before + 1, (root / 'engine.log').read_text()
+                        elapsed = time.monotonic() - started
+                        direct = (root / 'engine.log').read_text().count('Cursor positioned directly') == direct_before + 1
+                        if self.cursor_accessibility == 'forced': assert direct, (root / 'engine.log').read_text()
+                        if self.cursor_accessibility == 'disabled': assert not direct, 'Fallback test unexpectedly used accessibility'
                         expected = before + 'x' + after
                         assert self.record(browser_output) == before + after, 'Browser altered pasted text'
                         self.keys('x', target)
@@ -170,8 +185,10 @@ class TemplateSmoke(desktop.Smoke):
                             actual = self.record(browser_output)
                             print('Cursor output lengths:', len(actual), len(expected), 'differences:', [op for op in difflib.SequenceMatcher(None, expected, actual, autojunk=False).get_opcodes() if op[0] != 'equal'], flush=True)
                             raise
-                        assert desktop.BrowserFixture.arrows == 0, 'Direct cursor positioning emitted arrow keys'
-                        print('PASS: direct cursor ' + trigger + ', suffix ' + str(len(after)) + ' code points, native insertion and typing at marker', flush=True)
+                        if direct: assert desktop.BrowserFixture.arrows == 0, 'Direct cursor positioning emitted arrow keys'
+                        elif after: assert desktop.BrowserFixture.arrows > 0, 'Fallback did not emit cursor keys'
+                        print(f'PASS: {"direct" if direct else "fallback"} cursor {trigger}, suffix {len(after)} code points, {elapsed:.3f}s, native insertion and typing at marker', flush=True)
+                        assert elapsed < 2 + len(after) / 1000, 'Cursor fallback still walks backward at per-character speed'
                         browser.terminate(); browser.wait(timeout=5)
                     return
                 output = root / 'gtk.txt'
@@ -252,9 +269,9 @@ class TemplateSmoke(desktop.Smoke):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(); parser.add_argument('--live', action='store_true'); parser.add_argument('--terminal', type=pathlib.Path); parser.add_argument('--cursor-only', action='store_true'); parser.add_argument('--binary-dir', type=pathlib.Path); parser.add_argument('--contenteditable', action='store_true'); parser.add_argument('--change-title', action='store_true'); args = parser.parse_args()
+    parser = argparse.ArgumentParser(); parser.add_argument('--live', action='store_true'); parser.add_argument('--terminal', type=pathlib.Path); parser.add_argument('--cursor-only', action='store_true'); parser.add_argument('--binary-dir', type=pathlib.Path); parser.add_argument('--contenteditable', action='store_true'); parser.add_argument('--change-title', action='store_true'); parser.add_argument('--cursor-accessibility', choices=['auto', 'forced', 'disabled'], default='auto'); args = parser.parse_args()
     desktop.BrowserFixture.contenteditable = args.contenteditable
     desktop.BrowserFixture.change_title = args.change_title
     if args.terminal: TemplateSmoke().terminal(args.terminal)
-    elif args.live: TemplateSmoke(args.binary_dir).run_live(cursor_only=args.cursor_only)
+    elif args.live: TemplateSmoke(args.binary_dir, args.cursor_accessibility).run_live(cursor_only=args.cursor_only)
     else: parser.error('Live testing requires explicit user authorization and --live')

@@ -15,7 +15,7 @@ export class Statistics {
 		window.addEventListener('online', () => void this.flush()); void this.flush();
 		if (location.hash === '#statistics') queueMicrotask(() => bootstrap.Modal.getOrCreateInstance(this.modal).show());
 	}
-	query() { const query = new URLSearchParams(new FormData(this.filters)); query.set('timezone', Intl.DateTimeFormat().resolvedOptions().timeZone); return query; }
+	query() { const query = new URLSearchParams(new FormData(this.filters)); query.set('scope', this.filters.elements.scope.value); query.set('timezone', Intl.DateTimeFormat().resolvedOptions().timeZone); return query; }
 	async submit(form, button) {
 		if (button) button.disabled = true;
 		try {

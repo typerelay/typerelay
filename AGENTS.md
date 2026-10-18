@@ -1,13 +1,18 @@
 # Team Agent Instructions
 
 ## Working agreements
+- Keep shared agent instructions in `AGENTS.md` as the source of truth for every agent. Agent-specific instruction files should reference it instead of duplicating rules.
 - Be extremely concise. Prefer the simplest solution; follow explicit requirements and verify uncertain facts.
 - Use fish-compatible commands. Reuse existing code; do not duplicate code, extend services, or add global functions.
 - Keep ordinary documentation out of the repository root; agent instruction files are exceptions.
 - Respect the task's planning and approval gate. Planning is read-only; wait for explicit approval before implementation.
 - Keep model selection and subagent configuration in the task prompt. Give agents bounded ownership, the absolute worktree path, and the expected branch. Report missing tools or access as blockers.
+- Report in the spirit of ASD STE100. Keep sentence structures direct, limit procedural steps to single actions and avoid unnecessary synonyms.
 
 ## Git and worktrees
+- Worktrees are located at ~/.worktrees
+- Never stage or commit worktree directories or Git worktree metadata into a repository. Keep worktree directories inside a repository ignored, and inspect staged paths before committing. Intended source changes made within a worktree may still be committed normally.
+- Never push a branch whose name starts with `codex/` or `claude/` to any remote unless the user explicitly instructs you to push that branch. Permission to create a worktree, implement a task, or commit locally does not authorize pushing these branches. This restriction applies to all agents and takes precedence over general push instructions.
 - `develop` is the integration and push destination for product changes. Never substitute `main`, `master`, or a detached HEAD.
 - Read `.github/CONTRIBUTING.md` before creating a pull request. Base contribution branches on `develop`; all contribution pull requests must target `develop`.
 - Set the PR base explicitly with `gh pr create --base develop` and verify it after creation and before merging. `main` is release-only; update it only through explicitly authorized release work.
@@ -29,8 +34,11 @@
 - Whole-view rendering is limited to initial navigation, explicit refresh, or a documented unrecoverable reconciliation case. Add relevant regression coverage for immediate item updates without page/section reloads.
 
 ## Development and testing
+- For browser testing, launch your own isolated Chrome instance with a separate temporary profile; control it with Playwright when needed. Never reuse the user's browser session or profile.
+- When the task ends, close the Chrome instance you created and remove its temporary profile, including after failures. Do not close unrelated browser instances.
+- For DBH testing, always sign in using the application's magic-link option. Retrieve the login email from Mailpit at `mail.n.lan` and open the link in your isolated Chrome instance.
 - Development uses Docker Compose (`compose.yml`); Avoid new environment variables; if required, update production Swarm files under `/Users/nitai/repos/helpmonks-install-script/docker/` and the relevant development secrets.
-- On `NadaMini`, projects/worktrees under `/Users/nitai/repos` and `/Users/nitai/repos-denise` use remote Docker through `dbh-run`; never local Docker or hand-written SSH sync. Other development hosts use local Docker per project instructions. Non-Docker unit tests stay on `NadaMini`.
+- On `NadaMini`, projects are under `/Users/nitai/repos` and `/Users/nitai/repos-denise` use remote Docker through `dbh-run`; never local Docker or hand-written SSH sync. Other development hosts use local Docker per project instructions. Non-Docker unit tests stay on `NadaMini`.
 - Use `dbh-run compose -- <args>`, `dbh-run test`, and `dbh-run exec -- <command>`. Use `status` and `logs` for diagnosis. Run `dbh-run urls` before starting/testing a stack; repository metadata and its named URLs are authoritative.
 - `dbh-run` syncs the exact current worktree. Sync requires neither committing nor pushing. Verify the source worktree/revision being tested; do not assume an existing server serves the task branch.
 - After implementation changes, automatically refresh the affected dbh stack before completion/testing: `dbh-run compose -- up -d`, then `dbh-run compose -- restart <affected-services>`, including relevant workers/schedulers. `up`, sync, push, or status alone is insufficient.

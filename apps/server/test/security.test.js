@@ -1,3 +1,4 @@
+import { TestDatabase } from './database.js';
 import { BrowserSource } from './browser-source.js';
 import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -80,7 +81,7 @@ class Fixture {
 before(async () => {
 	process.env.NODE_ENV = 'test';
 	process.env.PORT = '3150';
-	process.env.MONGO_URI = process.env.MONGO_URI.replace('/typerelay?', '/typerelay_security?');
+	process.env.MONGO_URI = TestDatabase.uri(process.env.MONGO_URI, 'typerelay_security_test');
 	process.env.SESSION_SECRET = Support.token();
 	process.env.JWT_SECRET = Support.token();
 	process.env.ENABLE_SIGNUP = 'true';
@@ -91,7 +92,7 @@ before(async () => {
 });
 after(async () => {
 	await new Promise(resolve => Fixture.server.close(resolve));
-	await mongoose.connection.dropDatabase();
+	await TestDatabase.drop(mongoose.connection, 'typerelay_security_test');
 	await mongoose.disconnect();
 });
 test('SMTP_SERVERS uses the shared authenticated multi-server format', () => {
@@ -461,6 +462,16 @@ test('ENABLE_SIGNUP=false removes signup controls and blocks signup', async () =
 		assert.match(signupDom.window.document.body.textContent, /Sign up disabled/);
 		signupDom.window.close();
 		await browser.json('/auth/signup', 'POST', { name: 'Disabled', email: randomUUID() + '@example.test' }, 403);
+		const email = randomUUID() + '@example.test';
+		await Auth.login(email);
+		const link = Fixture.mailUrl(Fixture.mails.findLast(mail => mail.to === email));
+		assert.equal((await browser.call(link.pathname + link.search)).status, 403);
+		assert.equal(await User.countDocuments({ email }), 0);
+		const existing = await User.create({ email: randomUUID() + '@example.test', name: 'Existing' });
+		await Auth.login(existing.email);
+		const existingLink = Fixture.mailUrl(Fixture.mails.findLast(mail => mail.to === existing.email));
+		assert.equal(await Auth.consume(existingLink.searchParams.get('token')), String(existing._id));
+
 	} finally { process.env.ENABLE_SIGNUP = 'true'; }
 });
 

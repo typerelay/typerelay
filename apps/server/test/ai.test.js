@@ -1,3 +1,4 @@
+import { TestDatabase } from './database.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -33,10 +34,10 @@ class Fixture {
 before(async () => {
 	for (const key of ['GIT_ENCRYPTION_KEY', 'TYPERELAY_HOSTED_EDITION', 'BILLING_ENABLED']) Fixture.saved[key] = process.env[key];
 	process.env.GIT_ENCRYPTION_KEY = 'a'.repeat(64); process.env.TYPERELAY_HOSTED_EDITION = 'false'; process.env.BILLING_ENABLED = 'false';
-	const uri = new URL(process.env.MONGO_URI); uri.pathname = '/typerelay_ai_test';
-	await mongoose.connect(uri.toString()); await mongoose.connection.dropDatabase(); await Promise.all(Object.values(mongoose.models).map(model => model.init()));
+	const uri = TestDatabase.uri(process.env.MONGO_URI, 'typerelay_ai_test');
+	await mongoose.connect(uri); await TestDatabase.drop(mongoose.connection, 'typerelay_ai_test'); await Promise.all(Object.values(mongoose.models).map(model => model.init()));
 });
-after(async () => { for (const [key, value] of Object.entries(Fixture.saved)) if (value === undefined) delete process.env[key]; else process.env[key] = value; await mongoose.connection.dropDatabase(); await mongoose.disconnect(); });
+after(async () => { for (const [key, value] of Object.entries(Fixture.saved)) if (value === undefined) delete process.env[key]; else process.env[key] = value; await TestDatabase.drop(mongoose.connection, 'typerelay_ai_test'); await mongoose.disconnect(); });
 
 test('provider request shapes, endpoint selection and response validation', async () => {
 	const responses = { chat: { choices: [{ finish_reason: 'stop', message: { content: 'OK' } }] }, responses: { status: 'completed', output: [{ content: [{ type: 'output_text', text: 'OK' }] }] }, anthropic: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'OK' }] }, gemini: { candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'hidden reasoning', thought: true }, { text: 'OK' }] } }] } };

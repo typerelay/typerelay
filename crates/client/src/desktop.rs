@@ -52,7 +52,7 @@ impl Hyprland {
                             ensure!(units == utf16, "Invalid cursor boundary");
                             if end >= count {
                                 let inserted: String = field.call("GetText", &(end - count, end))?;
-                                if inserted == text { return Ok((path.clone(), end, path.clone(), end, end - count + prefix)); }
+                                if inserted == text { return Ok((path.clone(), end, path.clone(), end, end - count + prefix, vec![(path.clone(), end - count, end, text.clone())])); }
                             }
                             // Chromium editors expose plain text inside embedded paragraph/section blocks.
                             // Only use this mapping when the complete block text exactly matches the paste.
@@ -60,6 +60,7 @@ impl Hyprland {
                             ensure!(embedded.contains('\u{fffc}'), "Field does not expose a plain text offset");
                             let children: Vec<(String, OwnedObjectPath)> = accessible.call("GetChildren", &())?;
                             ensure!(!children.is_empty() && end >= embedded.chars().count() as i32 - 1, "Caret is not at the last text block");
+                            let mut checks = vec![(path.clone(), 0i32, -1i32, embedded.clone())];
                             let mut lines = Vec::new();
                             let mut representation = String::new();
                             for (owner, child) in &children {
@@ -69,6 +70,7 @@ impl Hyprland {
                                 let role: String = child_accessible.call("GetRoleName", &())?;
                                 let line: String = child_field.call("GetText", &(0i32, -1i32))?;
                                 ensure!(!line.contains('\u{fffc}'), "Unsupported nested text block");
+                                checks.push((child.clone(), 0i32, -1i32, line.clone()));
                                 let logical = if role == "paragraph" { line.strip_suffix('\n').unwrap_or(&line) } else if line == "\n" { "" } else { &line };
                                 if role == "static" && lines.is_empty() { representation.push_str(&line); } else { ensure!(role == "section" || role == "paragraph", "Unsupported inline text block"); representation.push('\u{fffc}'); }
                                 if lines.len() + 1 == children.len() { let caret: i32 = child_field.get_property("CaretOffset")?; ensure!(caret == line.chars().count() as i32 || caret == logical.chars().count() as i32, "Caret is not at the end of pasted text"); }
@@ -83,7 +85,7 @@ impl Hyprland {
                                 if offset <= length {
                                     let child_field = Proxy::new(&bus, name.as_str(), child.as_str(), "org.a11y.atspi.Text")?;
                                     let initial: i32 = child_field.get_property("CaretOffset")?;
-                                    return Ok((path.clone(), end, child.clone(), initial, offset));
+                                    return Ok((path.clone(), end, child.clone(), initial, offset, checks));
                                 }
                                 offset -= length + 1;
                             }
@@ -92,8 +94,8 @@ impl Hyprland {
                         if let Err(error) = &candidate { if std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some() { eprintln!("Cursor candidate rejected: {error:#}"); } }
                         if let Ok(candidate) = candidate { ensure!(matched.is_none(), "Ambiguous pasted text fields"); matched = Some(candidate); }
                     }
-                    let (path, end, destination_path, initial, destination) = matched.context("No matching pasted text field")?;
-                    return Ok((bus.clone(), name.clone(), path, end, destination_path, initial, destination));
+                    let (path, end, destination_path, initial, destination, checks) = matched.context("No matching pasted text field")?;
+                    return Ok((bus.clone(), name.clone(), path, end, destination_path, initial, destination, checks));
                 }
                 anyhow::bail!("Target does not expose accessible text")
             })();
@@ -105,7 +107,7 @@ impl Hyprland {
         // The worker only reads. A timed-out discovery can never move a caret later.
         let prepared = receiver.recv_timeout(Duration::from_millis(250)).ok().and_then(Result::ok);
         ensure!(current()?, "Cursor target changed during discovery");
-        let (bus, name, path, end, destination_path, initial, destination) = match prepared { Some(value) => value, None => return Ok(false) };
+        let (bus, name, path, end, destination_path, initial, destination, checks) = match prepared { Some(value) => value, None => return Ok(false) };
         ensure!(Self::query("locked")?["locked"] == false && Self::query("activewindow")?["address"] == target, "Cursor target changed");
         let accessible = Proxy::new(&bus, name.as_str(), path.as_str(), "org.a11y.atspi.Accessible")?;
         let states: Vec<u32> = accessible.call("GetState", &())?;
@@ -114,15 +116,24 @@ impl Hyprland {
         ensure!(field.get_property::<i32>("CaretOffset")? == end && field.call::<_, _, i32>("GetNSelections", &())? == 0, "Cursor changed after paste");
         let field: Proxy = zbus::blocking::proxy::Builder::new(&bus).destination(name.as_str())?.path(destination_path.as_str())?.interface("org.a11y.atspi.Text")?.cache_properties(zbus::proxy::CacheProperties::No).build()?;
         ensure!(field.get_property::<i32>("CaretOffset")? == initial, "Cursor text block changed");
+        let check_deadline=std::time::Instant::now()+Duration::from_millis(150);
+        for (path, start, end, expected) in &checks {
+            ensure!(std::time::Instant::now()<check_deadline,"Text verification timed out; cursor unchanged");
+            let check=Proxy::new(&bus,name.as_str(),path.as_str(),"org.a11y.atspi.Text")?;
+            ensure!(check.call::<_,_,String>("GetText",&(*start,*end))?==*expected,"Pasted text changed before cursor positioning");
+        }
+        let states:Vec<u32>=accessible.call("GetState",&())?;
+        ensure!(states.first().is_some_and(|state|state&(1<<12)!=0)&&field.get_property::<i32>("CaretOffset")?==initial,"Cursor field changed before positioning");
         ensure!(current()?, "Cursor target changed before positioning");
+        // Even a rejected write can be applied late by a provider. Never add arrows after this call.
         let moved: bool = field.call("SetCaretOffset", &(destination,))?;
+        ensure!(moved,"Cursor positioning was rejected; nothing retried");
         let deadline = std::time::Instant::now() + Duration::from_millis(100);
         loop {
             ensure!(current()?, "Cursor target changed after positioning");
             let actual: i32 = field.get_property("CaretOffset")?;
-            if !moved && actual == initial { return Ok(false); }
-            if moved && actual == destination { break; }
-            ensure!(moved && std::time::Instant::now() < deadline, "Could not confirm cursor positioning; nothing retried");
+            if actual == destination { ensure!(field.call::<_,_,i32>("GetNSelections",&())?==0,"Selection changed after cursor positioning");break; }
+            ensure!(std::time::Instant::now() < deadline, "Could not confirm cursor positioning; nothing retried");
             std::thread::sleep(Duration::from_millis(5));
         }
         Ok(true)

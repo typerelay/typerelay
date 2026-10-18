@@ -149,6 +149,10 @@ h1, h2, h3, p { margin: 0; }
 .auth-card { padding: 1rem; border: 0.0625rem solid var(--line); border-radius: 1rem; background: color-mix(in srgb, var(--surface-strong), transparent 3%); box-shadow: var(--shadow); }
 .preview-notice { margin-top: 0.8rem; color: var(--muted); font-size: 0.68rem; line-height: 1.45; }
 
+#login-form > .primary-button { font-size: 1.1rem; font-weight: 800; }
+.login-advanced { margin-top: 0.5rem; }
+.login-advanced > summary { width: fit-content; margin: 0 auto; padding: 0.5rem; color: var(--muted); font-size: 0.75rem; cursor: pointer; }
+.login-advanced .mobile-field { margin-top: 0.75rem; margin-bottom: 0; }
 .mobile-field { display: grid; gap: 0.38rem; margin-bottom: 0.9rem; }
 .mobile-field > span { color: var(--muted); font-size: 0.7rem; font-weight: 680; }
 .mobile-field input, .mobile-field select, .mobile-field textarea { width: 100%; min-height: 2.75rem; padding: 0.65rem 0.75rem; border: 0.0625rem solid var(--line); border-radius: 0.72rem; outline: 0; background: var(--surface-strong); color: var(--ink); }

@@ -49,9 +49,9 @@ pub fn paste(target: &Target, erase: usize, payload: Option<typerelay_client::cl
     ensure!(guarded(), "Expansion cancelled; nothing inserted");
     ensure!(target.focused()?, "Original window lost focus; nothing inserted");
     #[cfg(target_os="windows")]
-	if let Some(payload)=payload.as_ref()&&payload.html.is_none()&&payload.rtf.is_none()&&target.replace_text(erase,&payload.plain,payload.cursor.as_ref())?{return Ok(());}
+	if let Some(payload)=payload.as_ref()&&payload.cursor.is_none()&&payload.html.is_none()&&payload.rtf.is_none()&&target.replace_text(erase,&payload.plain)?{return Ok(());}
 	if payload.as_ref().is_some_and(|payload|payload.cursor.is_some()){ensure!(Target::input_ready().load(std::sync::atomic::Ordering::SeqCst),"Cursor positioning requires active keyboard monitoring. Restart TypeRelay or use Copy; nothing inserted");}
-	let mut clipboard=None;let has_text=payload.is_some();let cursor=payload.as_ref().and_then(|payload|payload.cursor.clone());
+	let mut clipboard=None;let has_text=payload.is_some();let cursor=payload.as_ref().and_then(|payload|payload.cursor.clone().map(|cursor|(cursor,payload.plain.clone())));
 	if let Some(payload)=payload {
         #[cfg(target_os="windows")]
         let preserve=!native::remote_session();
@@ -64,9 +64,11 @@ pub fn paste(target: &Target, erase: usize, payload: Option<typerelay_client::cl
         {return Err(_error);}
     }}}
     }
+    let direct=if marked{native::CursorTarget::capture(target)}else{None};
     let insertion: Result<()> = (|| {
         ensure!(guarded(), "Expansion cancelled; nothing inserted");
         ensure!(target.focused()?, "Original window lost focus; nothing inserted");
+        if let Some(direct)=&direct{ensure!(direct.focused(target)?,"Original text field lost focus; nothing inserted");}
         #[cfg(target_os="windows")]
         {native::insert(target,erase,has_text)?;std::thread::sleep(Duration::from_millis(if has_text{350}else{100}));Ok(())}
         #[cfg(target_os="macos")]
@@ -76,7 +78,7 @@ pub fn paste(target: &Target, erase: usize, payload: Option<typerelay_client::cl
     })();
     if let Some(clipboard)=&mut clipboard { clipboard.restore()?; }
     insertion?;
-    if let Some(cursor)=cursor { ensure!(guarded(), "Text inserted; cursor positioning interrupted. Nothing retried"); ensure!(target.focused()?, "Text inserted; original window lost focus. Cursor positioning cancelled; nothing retried"); target.position_cursor(cursor.backward_graphemes,&guarded)?; }
+    if let Some((cursor,text))=cursor { ensure!(guarded(), "Text inserted; cursor positioning interrupted. Nothing retried"); ensure!(target.focused()?, "Text inserted; original window lost focus. Cursor positioning cancelled; nothing retried"); let placed=match direct.as_ref(){Some(direct)=>direct.position(target,&text,&cursor,&guarded)?,None=>false};if !placed{target.position_cursor(cursor.backward_graphemes,||guarded()&&direct.as_ref().is_none_or(|direct|direct.focused(target).unwrap_or(false)))?;} }
     Ok(())
 }
 

@@ -36,7 +36,7 @@ impl Bridge {
     pub fn execute(request: Request) -> Result<Response> {
         let export = request.export || request.yaml.is_some();
         let mut matches = if let Some(yaml) = request.yaml {
-            ensure!(yaml.len() <= 1_048_576, "Snippet file exceeds 1 MiB");
+            ensure!(yaml.len() <= 16 * 1048576, "Snippet file exceeds 16 MiB");
             serde_saphyr::from_str::<Document>(&yaml)?.matches
         } else { request.matches.unwrap_or_default() };
         Self::validate(&matches)?;

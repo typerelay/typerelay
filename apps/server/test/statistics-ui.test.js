@@ -67,3 +67,18 @@ test('accepted refreshes preserve state and stale or failed responses cannot rep
 		assert.equal(statistics.preferences.elements.wpm.value, '77'); assert.equal(document.activeElement, statistics.preferences.elements.wpm); assert.equal(body.scrollTop, 123); assert.equal(statistics.sorts.snippets.direction, -1); assert.equal(document.querySelector('[data-statistics-rows="snippets"]'), parent);
 	} finally { dom.window.close(); }
 });
+
+test('scope changes retain the disabled selector value and allow settings for the accepted report', async () => {
+	const { dom, document, statistics } = await Fixture.open();
+	try {
+		const scope = statistics.filters.elements.scope; const requests = []; const report = { ...Fixture.report(), scope: 'team' };
+		statistics.client.toast = message => assert.fail(message);
+		statistics.client.request = async (path, method, body) => { requests.push({ path, method, body }); if (!method) { assert.equal(new URLSearchParams(path.split('?')[1]).get('scope'), 'team'); return report; } return {}; };
+		scope.value = 'team'; const loading = statistics.submit(statistics.filters, scope);
+		assert.equal(scope.disabled, true); await loading;
+		assert.equal(scope.disabled, false); assert.equal(statistics.report.scope, 'team'); assert.equal(document.querySelector('[data-statistics-section="members"]').hidden, false);
+		statistics.preferences.elements.wpm.value = '75';
+		await statistics.submit(statistics.preferences, statistics.preferences.querySelector('[type="submit"]'));
+		assert.equal(requests[1].method, 'PATCH'); assert.equal(requests[1].body.scope, 'team'); assert.equal(requests[1].body.wpm, '75');
+	} finally { dom.window.close(); }
+});

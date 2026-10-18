@@ -22,15 +22,17 @@ import time
 class BrowserFixture(http.server.BaseHTTPRequestHandler):
     output = None
     arrows = 0
+    interruption_arrows = 0
     contenteditable = False
     change_title = False
 
     def do_GET(self):
-        body = b'<!doctype html><title>TypeRelay Browser Test</title><textarea id="field" autofocus rows="10" cols="80"></textarea><script>field.oninput=()=>fetch("/result",{method:"POST",body:field.value});field.onkeydown=e=>{if(e.key==="ArrowLeft")fetch("/arrow",{method:"POST",body:""});};</script>'
+        body = b'<!doctype html><title>TypeRelay Browser Test</title><textarea id="field" autofocus rows="10" cols="80"></textarea><script>let arrows=0,pending=0;field.oninput=()=>fetch("/result",{method:"POST",body:field.value});field.onkeydown=e=>{if(e.key==="ArrowLeft"){arrows++;if(!pending)pending=setTimeout(()=>{fetch("/arrow",{method:"POST",body:String(arrows)});arrows=0;pending=0;},20);}};</script>'
         if self.contenteditable:
             body = body.replace(b'<textarea id="field" autofocus rows="10" cols="80"></textarea>', b'<div id="field" contenteditable="true" tabindex="0"></div>').replace(b'body:field.value', b'body:Array.from(field.childNodes,n=>n.textContent).join("\\n")').replace(b'<script>', b'<script>field.focus();')
         if self.change_title:
             body = body.replace(b'field.oninput=()=>fetch', b'field.oninput=()=>{document.title="TypeRelay Browser Test "+(field.value??field.textContent).length;return fetch').replace(b';field.onkeydown', b';};field.onkeydown')
+        if self.path == '/interrupt': body = body.replace(b'TypeRelay Browser Test', b'TypeRelay Interruption Test').replace(b'"/arrow"', b'"/interruption-arrow"')
         self.send_response(200)
         self.send_header("Content-Type", "text/html")
         self.end_headers()
@@ -38,7 +40,8 @@ class BrowserFixture(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = self.rfile.read(int(self.headers["Content-Length"]))
-        if self.path == '/arrow': type(self).arrows += 1
+        if self.path == '/interruption-arrow': type(self).interruption_arrows += int(body)
+        elif self.path == '/arrow': type(self).arrows += int(body)
         else: self.output.write_bytes(body)
         self.send_response(204)
         self.end_headers()

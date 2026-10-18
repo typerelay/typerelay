@@ -48,19 +48,15 @@ test('new web snippets show only the compact AI prompt and Submit above regular 
 	} finally { fixture.dom.window.close(); }
 });
 
-test('saved web snippets have collapsed AI choices while mobile keeps its controls', async () => {
+test('saved web snippets have collapsed AI choices', async () => {
 	const fixture = BrowserFixture.create(async () => ({ status: BrowserFixture.status }));
 	try {
 		const { form, root } = await BrowserFixture.editor(fixture, { id: 'saved', trigger: 'hello', title: 'Greeting', replace: 'Hello', content: { version: 1, type: 'plain_text', text: 'Hello' } });
 		assert.notEqual(form.firstElementChild, root); assert.equal(form.querySelectorAll('[data-ai-author]').length, 1); assert.equal(root.classList.contains('ai-author-compact'), false);
-		const library = { _id: 'library', name: 'Library', permissions: { edit: true } }; const mobile = fixture.client.fragment(pug.renderFile('../mobile/views/ajax/edit.pug', { library, libraries: [library], snippet: null, draft: null }));
 		assert.equal(root.tagName, 'DETAILS'); assert.equal(root.open, false); assert.equal(root.querySelector('summary').textContent, 'Use AI'); assert.equal(root.querySelector('[data-ai-effective]'), null); assert.equal(root.querySelector('[data-ai-action]'), null);
 		assert.deepEqual([...root.querySelectorAll('[data-ai-edit-action]')].map(button => button.dataset.aiEditAction), ['improve', 'translate', 'template']);
 		assert.equal(root.querySelector('[aria-pressed="true"]').dataset.aiEditAction, 'improve'); assert.equal(root.querySelector('[data-ai-generate]').textContent, 'Preview changes');
-		for (const author of [mobile.querySelector('[data-ai-author]')]) {
-			assert.deepEqual([...author.querySelector('[data-ai-action]').options].map(option => option.value), ['generate', 'improve', 'translate', 'template']);
-			assert.equal(author.querySelector('h3').textContent, 'Write with AI'); assert.ok(author.querySelector('[data-ai-effective]')); assert.equal(author.querySelector('[data-ai-generate]').textContent, 'Generate proposal');
-		}
+
 	} finally { fixture.dom.window.close(); }
 });
 

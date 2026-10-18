@@ -17,7 +17,7 @@ export class Scheduler {
 			running = true;
 			try {
 				const summary = await cleanup();
-				logger.log(`Trash cleanup complete: purged ${summary.libraries} libraries and ${summary.snippets} snippets`);
+				logger.log(`Trash cleanup complete: purged ${summary.libraries} libraries and ${summary.snippets} snippets; failed accounts ${summary.failed || 0}`);
 			} catch (error) {
 				recordException(error);
 				logger.error(`Trash cleanup failed: ${error.message}`);

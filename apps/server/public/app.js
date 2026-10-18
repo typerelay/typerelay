@@ -204,7 +204,9 @@ class TypeRelay {
 				before = document.querySelector('[data-snippet="' + fragment.id + '"]');
 			}
 		}
-		document.querySelector('[data-id="' + library._id + '"]')?.classList.toggle('active-library', this.selected === library._id);
+		const node = document.querySelector('[data-id="' + library._id + '"]');
+		node?.classList.toggle('active-library', this.selected === library._id);
+		node?.setAttribute('aria-pressed', String(this.selected === library._id));
 		this.syncSelection();
 		this.updateScrollTop();
 		if (document.querySelector('#search-modal')?.classList.contains('show')) await this.filter();
@@ -450,9 +452,9 @@ class TypeRelay {
 		if (form.id === 'profile-form') this.profileSaving = true;
 		const data = new FormData(form);
 		const button = event.submitter;
-		let restoreProfileFocus = form.id === 'profile-form' && button === document.activeElement;
-		const trackProfileFocus = event => { if (event.target !== button && event.target !== document.body) restoreProfileFocus = false; };
-		if (restoreProfileFocus) document.addEventListener('focusin', trackProfileFocus);
+		let restoreSubmitFocus = button === document.activeElement;
+		const trackSubmitFocus = event => { if (event.target !== button && event.target !== document.body) restoreSubmitFocus = false; };
+		if (restoreSubmitFocus) document.addEventListener('focusin', trackSubmitFocus);
 		if (button) button.disabled = true;
 		try {
 			if (billingForm) {
@@ -498,7 +500,7 @@ class TypeRelay {
 			}
 			if (form.id === 'record-form') { this.submitting = true; if (await this.submit(data) !== false) { bootstrap.Modal.getInstance(document.querySelector('#form-modal')).hide(); this.toast('Saved'); } }
 		} catch (error) { const warning = form.querySelector('#import-error'); if (warning) { warning.textContent = error.message; warning.hidden = false; warning.scrollIntoView?.({ block: 'nearest' }); } this.toast(error.message, 'error'); }
-		finally { this.submitting = false; if (form.id === 'profile-form') this.profileSaving = false; if (button) button.disabled = false; document.removeEventListener('focusin', trackProfileFocus); if (restoreProfileFocus && button.isConnected && document.activeElement === document.body && !form.closest('[hidden], [aria-hidden="true"], .modal:not(.show)')) button.focus({ preventScroll: true }); }
+		finally { this.submitting = false; if (form.id === 'profile-form') this.profileSaving = false; if (button) button.disabled = false; document.removeEventListener('focusin', trackSubmitFocus); if (restoreSubmitFocus && button.isConnected && document.activeElement === document.body && !form.closest('[hidden], [aria-hidden="true"], .modal:not(.show)')) button.focus({ preventScroll: true }); }
 	}
 	async confirm(title) { return (await Swal.fire({ title, icon: 'warning', showCancelButton: true, allowOutsideClick: false, allowEscapeKey: false, confirmButtonText: 'Confirm' })).isConfirmed; }
 	async snippet(id, value, snapshot = null) {
@@ -579,6 +581,11 @@ class TypeRelay {
 		if (card && !window.getSelection()?.toString()) return this.open(card.dataset.id);
 		const button = event.target.closest('button');
 		if (!button) return;
+		if (button.dataset.exportLibrary) {
+			button.disabled = true;
+			try { const response = await fetch('/api/v2/libraries/' + button.dataset.exportLibrary + '/export-bundle', { headers: { 'X-Account-Id': this.account } }); if (!response.ok) throw new Error((await response.json()).error || 'Export failed'); const url = URL.createObjectURL(await response.blob()); const link = document.createElement('a'); link.href = url; link.download = response.headers.get('Content-Disposition')?.match(/filename="([^"]+)"/)?.[1] || 'snippets.typerelay.zip'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); } finally { button.disabled = false; }
+			return;
+		}
 		if (button.dataset.settingsOpen) { bootstrap.Modal.getOrCreateInstance(document.querySelector('#settings')).show(); this.settingsTab(button.dataset.settingsOpen); return; }
 		if (button.hasAttribute('data-start-trial')) { button.disabled = true; try { this.applyBilling(await this.request('billing/trial', 'POST', {})); this.toast('Pro trial started'); } finally { button.disabled = false; } return; }
 		if (button.dataset.checkoutPlan) { for (const form of document.querySelectorAll('[data-billing-checkout]')) form.hidden = form.dataset.plan !== button.dataset.checkoutPlan; document.querySelector(`#checkout-${button.dataset.checkoutPlan}-seats`).focus(); return; }

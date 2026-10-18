@@ -29,6 +29,8 @@ test('preview enforces authentication, isolates account paths and keeps credenti
  assert.deepEqual(calls[0], calls[1]); assert.equal(calls[0].request.access_token, undefined); assert.equal(calls[0].request.server, undefined);
  user = 'two'; await Fixture.request({ action: 'state' }); assert.notEqual(calls[0].root, calls[2].root);
  await Fixture.request({ action: 'sync', server: 'https://evil.test' }); assert.equal(calls[3].request.server, 'http://app:3040'); assert.equal(calls[3].request.access_token, 'example');
+ const usage = { action: 'keyboard_usage', generation: 'current', library: 'library', id: 'snippet', kind: 'copy', characters: 12 };
+ assert.equal((await Fixture.request(usage)).status, 200); assert.deepEqual(calls[4].request, usage); assert.equal(calls[4].root, calls[2].root);
  globalThis.fetch = async () => new Response('', { status: 401 });
- assert.equal((await Fixture.request({ action: 'state' })).status, 401); assert.equal(calls.length, 4);
+ assert.equal((await Fixture.request({ action: 'state' })).status, 401); assert.equal(calls.length, 5);
 });

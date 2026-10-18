@@ -1,0 +1,42 @@
+Account deletion fulfillment
+
+Before enabling this release in production, assign a daily operator for
+/admin/account-deletions and confirm the published seven-day processing target.
+The scheduler must run AdminAccounts.recover. A request immediately revokes
+access; the completion email is sent only after final cleanup succeeds.
+
+Owned accounts use the existing account-purge process. Inspect failed account
+purges in /admin, correct external-service failures, and retry there. Personal
+cleanup errors also appear in /admin/account-deletions and retry automatically.
+
+Requests with current or historical non-owned account references require review.
+Older snippets do not reliably record their author. Do not infer authorship from
+library ownership, and do not mark review complete simply because a library is
+now absent or inaccessible to the requester.
+
+For each listed account, the authorized support/data operator must inspect its
+current and trashed libraries, snippet contents, conflicts, and MigrationBackup
+records. Correlate the requester ID/email with available membership, operation,
+audit, and backup records. Resolve uncertain contributions with the account's
+data owner using the normal privacy-request process; do not require the requester
+to contact support, rejoin a former team, or do cleanup themselves. Keep the
+request pending if attribution or a lawful retention obligation is unresolved.
+
+Remove identified personal contributions through the existing snippet/library
+purge service within an AccountAccess.write transaction, so revisions and sync
+notifications remain correct. Remove related conflict copies and migration
+backups, including records authored by another person that contain the deleted
+content. Use Libraries.cleanupAssets with the affected asset IDs after checking
+surviving references. Do not delete unrelated team content or shared assets still
+referenced by surviving content. Record any legally required retention and its
+basis in the organization's privacy-request record; notify the person of any
+exception or delay without requiring them to take another action.
+
+Verify the remaining current content and historical copies no longer contain the
+identified personal data. Only then use Record completed personal-data review,
+confirming the user ID. That action is audited and releases the final automated
+cleanup. Refresh the queue to verify completion or investigate a remaining error.
+A pending request is not a completed deletion and must not be reported as one.
+
+DBH captures mail in Mailpit and may disable the scheduler for safety. Tests call
+recovery explicitly; do not enable a safety-disabled scheduler just to test this.

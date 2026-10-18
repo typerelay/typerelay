@@ -162,6 +162,17 @@ impl Database {
         }
         Ok(snapshot)
     }
+    fn validate_new_abbreviations<'a>(&self, entries: impl IntoIterator<Item = (&'a str, &'a str)>) -> Result<()> {
+        let mut candidates = std::collections::BTreeMap::new();
+        for (trigger, id) in entries.into_iter().filter(|(trigger, _)| !trigger.is_empty()) { ensure!(candidates.insert(trigger, id).is_none(), "Duplicate trigger"); }
+        if candidates.is_empty() { return Ok(()); }
+        for library in self.libraries()?.iter().filter(|row| row["state"] == "active") {
+            for record in self.records(library["_id"].as_str().unwrap())?.iter().filter(|record| record["state"] == "active") {
+                if let Some(id) = candidates.get(record["trigger"].as_str().unwrap_or_default()) { ensure!(record["id"] == *id, "Duplicate trigger"); }
+            }
+        }
+        Ok(())
+    }
     fn validate_transaction(&self) -> Result<()> {
         let mut entries = Vec::new();
         for library in self.libraries()?.iter().filter(|row|row["state"]=="active") { entries.extend(Self::entries(&self.records(library["_id"].as_str().unwrap())?)?); }
@@ -243,10 +254,9 @@ impl Database {
         let mut statement = self.connection.prepare("SELECT seq,operation FROM outbox ORDER BY seq")?;
         statement.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?.map(|row| { let (seq, text) = row?; Ok((seq, serde_json::from_str(&text)?)) }).collect()
     }
-	pub fn put_asset(&self,metadata:&Value,data:&[u8],uploaded:bool)->Result<()> {let id=metadata["id"].as_str().context("Missing asset ID")?;ensure!(id.len()==64&&id.bytes().all(|byte|byte.is_ascii_hexdigit()),"Invalid asset ID");ensure!(data.len()<=2*1048576,"Asset exceeds 2 MiB");self.connection.execute("INSERT INTO assets(id,mime_type,size,width,height,animated,source_urls,data,uploaded,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(id) DO UPDATE SET mime_type=excluded.mime_type,size=excluded.size,width=excluded.width,height=excluded.height,animated=excluded.animated,source_urls=excluded.source_urls,data=excluded.data,uploaded=MAX(assets.uploaded,excluded.uploaded)",params![id,metadata["mime_type"].as_str().context("Missing asset MIME")?,data.len() as i64,metadata["width"].as_i64().unwrap_or(0),metadata["height"].as_i64().unwrap_or(0),metadata["animated"].as_bool().unwrap_or(false),metadata["source_urls"].to_string(),data,uploaded,Utc::now().timestamp()])?;Ok(())}
+	pub fn put_asset(&self,metadata:&Value,data:&[u8],uploaded:bool)->Result<()> {let id=metadata["id"].as_str().context("Missing asset ID")?;ensure!(id.len()==64&&id.bytes().all(|byte|byte.is_ascii_hexdigit()),"Invalid asset ID");ensure!(data.len()<=2*1048576,"Asset exceeds 2 MiB");self.connection.execute("INSERT INTO assets(id,mime_type,size,width,height,animated,source_urls,data,uploaded,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(id) DO UPDATE SET mime_type=excluded.mime_type,size=excluded.size,width=excluded.width,height=excluded.height,animated=excluded.animated,source_urls=(SELECT json_group_array(value) FROM (SELECT value FROM json_each(assets.source_urls) WHERE type='text' UNION ALL SELECT DISTINCT value FROM json_each(excluded.source_urls) WHERE type='text' AND value NOT IN (SELECT value FROM json_each(assets.source_urls) WHERE type='text'))),data=excluded.data,uploaded=MAX(assets.uploaded,excluded.uploaded)",params![id,metadata["mime_type"].as_str().context("Missing asset MIME")?,data.len() as i64,metadata["width"].as_i64().unwrap_or(0),metadata["height"].as_i64().unwrap_or(0),metadata["animated"].as_bool().unwrap_or(false),metadata["source_urls"].to_string(),data,uploaded,Utc::now().timestamp()])?;Ok(())}
 	pub fn asset(&self,id:&str)->Result<Option<(Value,Vec<u8>)>> {self.connection.query_row("SELECT mime_type,size,width,height,animated,source_urls,data,uploaded FROM assets WHERE id=?1",[id],|row|{let sources:String=row.get(5)?;Ok((json!({"id":id,"mime_type":row.get::<_,String>(0)?,"size":row.get::<_,i64>(1)?,"width":row.get::<_,i64>(2)?,"height":row.get::<_,i64>(3)?,"animated":row.get::<_,bool>(4)?,"source_urls":serde_json::from_str::<Value>(&sources).unwrap_or(json!([])),"uploaded":row.get::<_,bool>(7)?}),row.get(6)?))}).optional().map_err(Into::into)}
-	pub fn pending_assets(&self)->Result<Vec<(Value,Vec<u8>)>> {let mut statement=self.connection.prepare("SELECT id FROM assets WHERE uploaded=0 ORDER BY id")?;let ids=statement.query_map([],|row|row.get::<_,String>(0))?.collect::<std::result::Result<Vec<_>,_>>()?;ids.into_iter().map(|id|self.asset(&id)?.context("Asset disappeared")).collect()}
-	pub fn mark_asset_uploaded(&self,id:&str)->Result<()> {self.connection.execute("UPDATE assets SET uploaded=1 WHERE id=?1",[id])?;Ok(())}
+	pub fn pending_asset_ids(&self)->Result<Vec<String>> {let mut statement=self.connection.prepare("SELECT DISTINCT asset.value FROM outbox, json_tree(outbox.operation, '$.body') content, json_each(content.value, '$.assets') asset WHERE content.key='content' AND content.type='object' ORDER BY asset.value")?;Ok(statement.query_map([],|row|row.get(0))?.collect::<std::result::Result<Vec<_>,_>>()?)}
     pub fn edit(&self, file: &OpenFile, index: Option<usize>, entry: Option<Match>) -> Result<OpenFile> {
         let transaction = if self.connection.is_autocommit() { Some(self.connection.unchecked_transaction()?) } else { None };
         self.editable(&file.id)?;
@@ -257,6 +267,7 @@ impl Database {
         let id = index.map(|index| file.ids[index].clone()).unwrap_or_else(|| Uuid::new_v4().to_string());
         let records = self.records(&file.id)?;
         let old = records.iter().find(|record| record["id"] == id).cloned();
+        if let Some(entry) = &entry && old.as_ref().is_none_or(|old| old["trigger"] != entry.trigger) { self.validate_new_abbreviations([(entry.trigger.as_str(), id.as_str())])?; }
         let base = old.as_ref().and_then(|record| record["revision"].as_i64());
         let value = entry.as_ref().map(|entry| entry.value());
         let mut record = old.clone().unwrap_or(json!({"id":id,"position":records.iter().filter_map(|entry|entry["position"].as_i64()).max().unwrap_or(-1)+1}));
@@ -269,7 +280,8 @@ impl Database {
         }
         library["revision"] = json!(library["revision"].as_i64().unwrap_or(1) + 1);
         self.put_library(&library, &file.name, self.synced(&file.id)?)?;
-        self.validate_transaction()?;
+        // Existing downloaded collisions stay paused instead of blocking unrelated edits.
+        self.validated_snapshot()?;
         if let Some(transaction) = transaction { transaction.commit()?; }
         self.editor(&file.name)
     }
@@ -402,7 +414,11 @@ impl Database {
     pub fn trash_action(&self, target: &Value, action: &str) -> Result<()> {
         let transaction = self.connection.unchecked_transaction()?;
         self.trash_action_inner(target, action)?;
-        self.validate_transaction()?;
+        if action == "restore" {
+            let records = self.records(target["library"].as_str().unwrap())?;
+            self.validate_new_abbreviations(records.iter().filter(|record| record["state"] == "active" && (target["type"] == "library" || record["id"] == target["id"])).map(|record| (record["trigger"].as_str().unwrap_or_default(), record["id"].as_str().unwrap())))?;
+        }
+        self.validated_snapshot()?;
         transaction.commit()?;
         Ok(())
     }
@@ -454,17 +470,75 @@ impl Database {
         transaction.commit()?;
         Ok(())
     }
-	pub fn export(&self,name:&str,destination:&Path)->Result<()> {let file=self.editor(name)?;if destination.to_string_lossy().ends_with(".typerelay.zip"){let output=fs::File::create(destination)?;let mut zip=zip::ZipWriter::new(output);let options=zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);zip.start_file("bundle.json",options)?;let assets:[String;0]=[];let ids:std::collections::BTreeSet<String>=file.entries.iter().flat_map(|entry|entry.value()["content"]["assets"].as_array().cloned().unwrap_or_default()).filter_map(|id|id.as_str().map(str::to_owned)).collect();zip.write_all(serde_json::to_string(&json!({"version":1,"name":name,"assets":if ids.is_empty(){assets.to_vec()}else{ids.iter().cloned().collect()}}))?.as_bytes())?;zip.start_file("snippets.yml",options)?;zip.write_all(Bridge::export(&file.entries)?.as_bytes())?;for id in ids{let(metadata,bytes)=self.asset(&id)?.context("Bundle asset is missing")?;zip.start_file(format!("metadata/{id}.json"),options)?;zip.write_all(metadata.to_string().as_bytes())?;zip.start_file(format!("assets/{id}"),options)?;zip.write_all(&bytes)?;}zip.finish()?;Ok(())}else{Paths::atomic_write(destination,Bridge::export(&file.entries)?.as_bytes(),true)}}
-	pub fn import_bundle(&self,name:&str,source:&Path)->Result<OpenFile>{let file=fs::File::open(source)?;let mut archive=zip::ZipArchive::new(file)?;ensure!(archive.len()<=1000,"Bundle has too many files");let mut manifest=String::new();archive.by_name("snippets.yml")?.take(1048577).read_to_string(&mut manifest)?;ensure!(manifest.len()<=1048576,"Bundle manifest exceeds 1 MiB");let document:Document=serde_saphyr::from_str(&manifest)?;Bridge::validate(&document.matches)?;let ids:std::collections::BTreeSet<String>=document.matches.iter().flat_map(|entry|entry.value()["content"]["assets"].as_array().cloned().unwrap_or_default()).filter_map(|id|id.as_str().map(str::to_owned)).collect();for id in ids{let mut bytes=Vec::new();archive.by_name(&format!("assets/{id}"))?.take(2*1048576+1).read_to_end(&mut bytes)?;ensure!(bytes.len()<=2*1048576,"Bundle asset exceeds 2 MiB");let mut metadata=crate::assets::Assets::accept(self,&bytes,&id,false)?;if let Ok(file)=archive.by_name(&format!("metadata/{id}.json")){let mut value=String::new();file.take(65537).read_to_string(&mut value)?;if let Ok(saved)=serde_json::from_str::<Value>(&value){metadata["source_urls"]=saved["source_urls"].clone();self.put_asset(&metadata,&bytes,false)?;}}}self.import(name,&manifest)}
+    pub fn export(&self, name: &str, destination: &Path) -> Result<()> {
+        let file = self.editor(name)?;
+        let manifest = Bridge::export(&file.entries)?;
+        if !destination.to_string_lossy().ends_with(".typerelay.zip") { return Paths::atomic_write(destination, manifest.as_bytes(), true); }
+        let ids: std::collections::BTreeSet<String> = file.entries.iter().flat_map(|entry| entry.value()["content"]["assets"].as_array().cloned().unwrap_or_default()).filter_map(|id| id.as_str().map(str::to_owned)).collect();
+        ensure!(ids.len() <= 998 && manifest.len() <= 16 * 1048576, "Bundle exceeds import limits");
+        let mut metadata = serde_json::Map::new();
+        let mut total = manifest.len();
+        for id in &ids { let (asset, bytes) = self.asset(id)?.context("Bundle asset is missing")?; total += bytes.len(); ensure!(total <= 24 * 1048576, "Expanded bundle exceeds 24 MiB"); metadata.insert(id.clone(), asset); }
+        let metadata = serde_json::to_vec(&json!({"version":1,"name":name,"assets":ids,"asset_metadata":metadata}))?;
+        ensure!(total + metadata.len() <= 24 * 1048576, "Expanded bundle exceeds 24 MiB");
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        zip.start_file("bundle.json", options)?; zip.write_all(&metadata)?;
+        zip.start_file("snippets.yml", options)?; zip.write_all(manifest.as_bytes())?;
+        for id in ids { let (_, bytes) = self.asset(&id)?.context("Bundle asset is missing")?; zip.start_file(format!("assets/{id}"), options)?; zip.write_all(&bytes)?; }
+        let bytes = zip.finish()?.into_inner();
+        ensure!(bytes.len() <= 16 * 1048576, "Bundle exceeds 16 MiB");
+        Paths::atomic_write(destination, &bytes, true)
+    }
+    pub fn import_bundle(&self, name: &str, source: &Path) -> Result<OpenFile> {
+        let file = fs::File::open(source)?;
+        ensure!(file.metadata()?.len() <= 16 * 1048576, "Bundle exceeds 16 MiB");
+        let mut archive = zip::ZipArchive::new(file)?;
+        ensure!(archive.len() <= 1000, "Bundle has too many files");
+        let mut total = 0u64;
+        for index in 0..archive.len() { total = total.checked_add(archive.by_index(index)?.size()).context("Invalid bundle size")?; ensure!(total <= 24 * 1048576, "Expanded bundle exceeds 24 MiB"); }
+        let mut metadata = String::new();
+        archive.by_name("bundle.json")?.take(16 * 1048576 + 1).read_to_string(&mut metadata)?;
+        ensure!(metadata.len() <= 16 * 1048576, "Bundle metadata exceeds 16 MiB");
+        let mut expanded = metadata.len();
+        let metadata: Value = serde_json::from_str(&metadata)?;
+        ensure!(metadata["version"] == 1, "Unsupported bundle version");
+        let mut manifest = String::new();
+        archive.by_name("snippets.yml")?.take(16 * 1048576 + 1).read_to_string(&mut manifest)?;
+        ensure!(manifest.len() <= 16 * 1048576, "Bundle manifest exceeds 16 MiB");
+        expanded += manifest.len(); ensure!(expanded <= 24 * 1048576, "Expanded bundle exceeds 24 MiB");
+        let document: Document = serde_saphyr::from_str(&manifest)?;
+        Bridge::validate(&document.matches)?;
+        let ids: std::collections::BTreeSet<String> = document.matches.iter().flat_map(|entry| entry.value()["content"]["assets"].as_array().cloned().unwrap_or_default()).filter_map(|id| id.as_str().map(str::to_owned)).collect();
+        let transaction = self.connection.unchecked_transaction()?;
+        for id in ids {
+            let mut bytes = Vec::new();
+            archive.by_name(&format!("assets/{id}"))?.take(2 * 1048576 + 1).read_to_end(&mut bytes)?;
+            ensure!(bytes.len() <= 2 * 1048576, "Bundle asset exceeds 2 MiB");
+            expanded += bytes.len(); ensure!(expanded <= 24 * 1048576, "Expanded bundle exceeds 24 MiB");
+            let mut asset = crate::assets::Assets::accept(self, &bytes, &id, false)?;
+            let mut saved = metadata["asset_metadata"][&id].clone();
+            if saved.is_null() && let Ok(file) = archive.by_name(&format!("metadata/{id}.json")) {
+                let mut value = String::new(); file.take(65537).read_to_string(&mut value)?;
+                ensure!(value.len() <= 65536, "Bundle image metadata exceeds 64 KiB");
+                expanded += value.len(); ensure!(expanded <= 24 * 1048576, "Expanded bundle exceeds 24 MiB");
+                saved = serde_json::from_str(&value)?;
+            }
+            if let Some(sources) = saved["source_urls"].as_array() { ensure!(sources.iter().all(Value::is_string), "Invalid image sources"); asset["source_urls"] = json!(sources); self.put_asset(&asset, &bytes, false)?; }
+        }
+        let imported = self.import(name, &manifest)?;
+        transaction.commit()?;
+        Ok(imported)
+    }
     pub fn import(&self, name: &str, source: &str) -> Result<OpenFile> {
         let parsed = Bridge::execute(crate::bridge::Request { yaml: Some(source.into()), matches: None, export: false, edits: vec![] })?;
         let name = Self::name(name)?;
-        let transaction = self.connection.unchecked_transaction()?;
+        let transaction = if self.connection.is_autocommit() { Some(self.connection.unchecked_transaction()?) } else { None };
         let id = Uuid::new_v4().to_string();
         self.put_library(&json!({"_id":id,"name":name,"state":"active","revision":1,"permissions":{"read":true,"edit":true,"manage":true}}), &name, false)?;
         for (position, entry) in parsed.matches.iter().enumerate() { self.put_record(&id, &json!({"id":Uuid::new_v4().to_string(),"trigger":entry.value()["trigger"],"title":entry.title,"content":entry.value()["content"],"position":position,"revision":1,"state":"active"}))?; }
         self.validate_transaction()?;
-        transaction.commit()?;
+        if let Some(transaction) = transaction { transaction.commit()?; }
         self.editor(&name)
     }
 
@@ -901,6 +975,54 @@ mod tests {
         db.personal_edit("first","first-snippet",Some("mine"),0,None).unwrap();
         assert_eq!(db.snapshot().unwrap().len(),2);
         assert_eq!(db.records("first").unwrap()[0]["trigger"],"same");
+    }
+    #[test]
+    fn unrelated_edits_survive_downloaded_collisions_without_adding_duplicates() {
+        let fixture = Fixture::new(); let db = fixture.db();
+        let library = |id: &str, name: &str| json!({"_id":id,"name":name,"shared":true,"state":"active","revision":1,"permissions":{"read":true,"edit":true},"records":[{"id":format!("{id}-snippet"),"trigger":"same","title":name,"content":{"version":1,"type":"plain_text","text":name},"revision":1,"state":"active","position":0}]});
+        db.apply(&json!({"libraries":[library("first","First"),library("second","Second")]}), None).unwrap();
+        let original_first = db.records("first").unwrap()[0].clone(); let original_second = db.records("second").unwrap()[0].clone();
+        let file = db.editor("First").unwrap();
+        let mut edited = file.entries[0].clone(); edited.replace = "Edited body".into();
+        let file = db.edit(&file, Some(0), Some(edited)).unwrap();
+        assert_eq!(db.records("first").unwrap()[0]["id"], original_first["id"]); assert_eq!(db.records("first").unwrap()[0]["content"]["text"], "Edited body");
+        let original_first = db.records("first").unwrap()[0].clone();
+        let file = db.edit(&file, None, Some(Fixture::entry("", "Local draft"))).unwrap();
+        let file = db.edit(&file, None, Some(Fixture::entry("", "Another copy"))).unwrap();
+        assert_eq!(file.entries.len(), 3); assert_eq!(file.entries.iter().filter(|entry| entry.trigger.is_empty()).count(), 2);
+        assert_eq!(db.records("first").unwrap()[0], original_first); assert_eq!(db.records("second").unwrap()[0], original_second);
+        assert!(db.snapshot().unwrap().is_empty());
+        let file = db.edit(&file, None, Some(Fixture::entry("unique", "New abbreviation"))).unwrap();
+        assert_eq!(db.snapshot().unwrap().len(), 1);
+        assert!(db.edit(&file, Some(3), Some(Fixture::entry("same", "Changed duplicate"))).is_err());
+        let unique_id = file.ids[3].clone();
+        db.edit(&file, Some(3), None).unwrap();
+        let target = db.trash().unwrap().into_iter().find(|target| target["id"] == unique_id).unwrap();
+        db.trash_action(&target, "restore").unwrap(); assert_eq!(db.snapshot().unwrap().len(), 1);
+        let restored = db.editor("First").unwrap(); db.edit(&restored, Some(3), None).unwrap();
+        let file = db.editor("First").unwrap();
+        assert_eq!(file.entries.len(), 3); assert!(db.snapshot().unwrap().is_empty());
+        assert!(db.edit(&file, None, Some(Fixture::entry("same", "Duplicate"))).is_err());
+        assert_eq!(db.editor("First").unwrap().entries, file.entries);
+    }
+    #[test]
+    fn library_restore_ignores_unrelated_collisions_but_rolls_back_a_new_collision() {
+        let fixture = Fixture::new(); let db = fixture.db();
+        let library = |id: &str, trigger: &str| {
+            let mut library = json!({"_id":id,"name":id,"shared":true,"state":"active","revision":1,"permissions":{"read":true,"edit":true,"manage":true},"records":[{"id":format!("{id}-snippet"),"trigger":trigger,"content":{"version":1,"type":"plain_text","text":id},"revision":1,"state":"active","position":0}]});
+            if id == "restored" { library["records"].as_array_mut().unwrap().push(json!({"id":"restored-other","trigger":"second-unique","content":{"version":1,"type":"plain_text","text":"Second restored child"},"revision":1,"state":"active","position":1})); }
+            library
+        };
+        db.apply(&json!({"libraries":[library("first","same"),library("second","same"),library("restored","unique")]}), None).unwrap();
+        let target = |revision| json!({"type":"library","id":"restored","library":"restored","revision":revision});
+        db.trash_action(&target(1), "trash").unwrap();
+        let trashed = db.trash().unwrap().into_iter().find(|target| target["id"] == "restored").unwrap();
+        db.trash_action(&trashed, "restore").unwrap(); assert_eq!(db.snapshot().unwrap().len(), 2);
+        db.trash_action(&target(3), "trash").unwrap();
+        db.apply(&json!({"libraries":[library("collision","unique")]}), None).unwrap();
+        let before = db.library("restored").unwrap(); let records = db.records("restored").unwrap(); let pending = db.pending().unwrap();
+        assert!(db.trash_action(&target(4), "restore").is_err());
+        assert_eq!(db.library("restored").unwrap(), before); assert_eq!(db.records("restored").unwrap(), records); assert_eq!(db.pending().unwrap(), pending);
     }
     struct Fixture { _temp: tempfile::TempDir, directory: PathBuf }
     impl Fixture {

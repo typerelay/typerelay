@@ -60,6 +60,8 @@ export class Admin {
 		router.delete('/api/accounts/:id', async (req, res) => { const account = await AdminAccounts.requestDeletion(req.params.id, req.body.confirmation); await AdminSettings.audit(res.locals.adminEmail, 'account.delete', account.id); res.status(202).json(Admin.fragment(account)); });
 		router.get('/api/accounts/:id/deletion', async (req, res) => { const exists = await Account.exists({ _id: Support.id(req.params.id) }); res.json(exists ? Admin.fragment(await AdminAccounts.get(req.params.id)) : { deleted: req.params.id }); });
 		router.post('/api/accounts/:id/deletion/retry', async (req, res) => res.status(202).json(Admin.fragment(await AdminAccounts.retry(req.params.id))));
+		router.get('/account-deletions', async (req, res) => res.render('admin/deletions', { requests: await AdminAccounts.personalDeletions() }));
+		router.post('/api/account-deletions/:id/review', async (req, res) => { const request = await AdminAccounts.reviewUserDeletion(req.params.id, req.body.confirmation); await AdminSettings.audit(res.locals.adminEmail, 'user.deletion.review', req.params.id); res.json({ html: pug.renderFile('./views/ajax/admin-deletion.pug', { request }) }); });
 		router.get('/email-templates', async (req, res) => res.render('admin/templates', { templates: await Promise.all(Object.keys(AdminSettings.templates).map(AdminSettings.template)) }));
 		router.get('/api/email-templates/:key/form', async (req, res) => res.render('ajax/admin-template-form', { template: await AdminSettings.template(req.params.key) }));
 		router.put('/api/email-templates/:key', async (req, res) => {

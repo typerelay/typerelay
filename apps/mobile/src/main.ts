@@ -7,8 +7,6 @@ import { Browser } from '@capacitor/browser';
 import { Network } from '@capacitor/network';
 import { RichEditor } from '@server/browser/rich-editor.js';
 import { TemplateEditor } from '@server/public/template-editor.js';
-import { AiClient } from '@server/public/ai.js';
-import '@server/public/ai.css';
 import { Auth } from './auth';
 import { Native } from './native';
 import { Preview } from './preview';
@@ -27,7 +25,6 @@ import 'bootstrap/dist/css/bootstrap.min.css';
 import './style.css';
 
 export class MobileApp {
- static ai: any;
  static state: State = { generation: '', libraries: [], pending: 0, conflicts: [] };
  static listeners = new Set<() => void>();
  static syncJob: Promise<void> | null = null;
@@ -90,7 +87,6 @@ export class MobileApp {
     try { await Native.call('sync', { server: Auth.server, access_token: await Auth.access() }); }
     catch (error: any) { if (String(error.code) !== '401') throw error; await Native.call('sync', { server: Auth.server, access_token: await Auth.access(true) }); }
     await MobileApp.load();
-    await MobileApp.ai?.refresh().catch(() => MobileApp.ai?.update());
    } catch (error) { await MobileApp.load(); MobileApp.$('sync-status').textContent = `${MobileApp.state.pending} pending · Sync unavailable`; throw error; }
   })().finally(() => { MobileApp.syncJob = null; });
   return MobileApp.syncJob;
@@ -143,11 +139,6 @@ export class MobileApp {
   if (draft) { for (const [id, value] of Object.entries(draft.fields)) MobileApp.input(id).value = String(value); MobileApp.$('template-options').dataset.variables = JSON.stringify(draft.variables || {}); }
   MobileApp.template = new TemplateEditor(MobileApp);
   MobileApp.configureEditor();
-  MobileApp.ai.bindAuthor(MobileApp.$('editor-content').querySelector('[data-ai-author]'), async () => {
-   const type = MobileApp.input('snippet-type').value; const text = MobileApp.richView?.content() ?? MobileApp.input('replace').value; const variables = type === 'code' ? {} : (await MobileApp.template.content()).variables || {};
-   const content = type === 'rich_text' ? { version: 2, type, markdown: text, variables } : { version: 1, type: type === 'plain_text' && Object.keys(variables).length ? 'template' : type, text, ...(type === 'code' ? { language: MobileApp.input('language').value } : { variables }) };
-   return { library: MobileApp.input('edit-library').value, entry: { title: MobileApp.input('title').value, trigger: MobileApp.input('trigger').value, content } };
-  }, async (proposal: any) => { MobileApp.richView?.destroy(); MobileApp.richView = null; MobileApp.input('replace').value = proposal.content.markdown ?? proposal.content.text; MobileApp.input('title').value = proposal.title; MobileApp.template.variables = proposal.content.variables || {}; MobileApp.$('template-options').dataset.variables = JSON.stringify(MobileApp.template.variables); MobileApp.configureEditor(); MobileApp.input('replace').dispatchEvent(new Event('input', { bubbles: true })); MobileApp.scheduleDraft(); });
   const typeLabels: Record<string, string> = { plain_text: 'Text', code: 'Code', rich_text: 'Rich text' };
   const typeButton = MobileApp.$('snippet-type-button'); const typeMenu = MobileApp.$('snippet-type-menu');
   typeButton.onclick = () => MobileApp.toggleAnchoredMenu(MobileApp.$('type-picker'), typeMenu, typeButton);
@@ -165,6 +156,7 @@ export class MobileApp {
    if (snippet && library.permissions.edit) void MobileApp.deleteSnippet(library, snippet, true).catch(MobileApp.error);
    else if (draft) void MobileApp.discardDraft(true).catch(MobileApp.error);
   };
+  const saveAsNew = document.getElementById('save-as-new'); if (saveAsNew) saveAsNew.onclick = () => { void MobileApp.busy(saveAsNew as HTMLButtonElement, MobileApp.saveAsNew); };
   MobileApp.$('editor-form').onsubmit = event => { event.preventDefault(); void MobileApp.busy(MobileApp.$('save') as HTMLButtonElement, MobileApp.save); };
   MobileApp.enhanceEditorSelects(); MobileApp.selectObserver?.disconnect(); MobileApp.selectObserver = new MutationObserver(MobileApp.enhanceEditorSelects); MobileApp.selectObserver.observe(MobileApp.$('editor-content'), { childList: true, subtree: true });
   MobileApp.$('form-modal').classList.add('is-drawer');
@@ -189,6 +181,14 @@ export class MobileApp {
  static async hydrateImages() { for (const image of MobileApp.$('rich-editor').querySelectorAll<HTMLImageElement>('img[data-asset]')) { const id = image.dataset.asset!; if (!MobileApp.assetURLs.has(id)) { try { MobileApp.assetURLs.set(id, (await Native.call('asset', { id })).url); } catch { continue; } } if (image.isConnected) image.src = MobileApp.assetURLs.get(id)!; } }
  static scheduleDraft = () => { MobileApp.editorDirty = true; clearTimeout(MobileApp.draftTimer); MobileApp.draftTimer = setTimeout(() => { void MobileApp.persistDraft().catch(MobileApp.error); }, 250); };
  static async persistDraft() { clearTimeout(MobileApp.draftTimer); if (!MobileApp.editing || !MobileApp.editorDirty) return; MobileApp.richView?.content(); const fields = Object.fromEntries(['title','trigger','snippet-type','language','replace','edit-library'].map(id => [id, MobileApp.input(id).value])); const draft = { editing: MobileApp.editing, fields, variables: MobileApp.template?.variables || {} }; MobileApp.draftJob = MobileApp.draftJob.catch(() => undefined).then(() => Native.call('draft', { draft })); await MobileApp.draftJob; }
+ static saveAsNew = async () => {
+  const save = MobileApp.$('save') as HTMLButtonElement; if (save.disabled || !MobileApp.editing?.id) return;
+  MobileApp.editing = { library: MobileApp.editing.library, revision: MobileApp.editing.revision, operation_id: crypto.randomUUID() };
+  MobileApp.input('trigger').value = ''; MobileApp.editorDirty = true;
+  MobileApp.$('save-as-new').hidden = true; MobileApp.$('delete-editor-item').hidden = true;
+  save.disabled = true;
+  try { await MobileApp.save(); } finally { save.disabled = false; }
+ };
  static save = async () => {
   await MobileApp.persistDraft(); const selectedKind = MobileApp.input('snippet-type').value; const template = selectedKind !== 'code' ? await MobileApp.template.content() : null;
   const replace = MobileApp.richView?.content() ?? MobileApp.input('replace').value; const variables = template?.variables || {};
@@ -208,6 +208,14 @@ export class MobileApp {
   const selection = { library: library._id, id: snippet.id, generation: MobileApp.state.generation };
   const rendered = await Native.call('keyboard_render', { ...selection, preview: true });
   MobileApp.$('detail-content').replaceChildren(MobileApp.fragment(fill({ snippet, rendered, variables: rendered.variables || rendered.template?.variables || {}, canEdit: library.permissions.edit })));
+  const form = MobileApp.$('fill-form') as HTMLFormElement; let previewVersion = 0;
+  form.oninput = () => {
+   const version = ++previewVersion; const values = Object.fromEntries(new FormData(form));
+   void Native.call('keyboard_render', { ...selection, values, preview: true }).then(output => {
+    if (version !== previewVersion || !form.isConnected || !MobileApp.$('detail-modal').classList.contains('show')) return;
+    form.querySelector('#insert-preview')!.textContent = output.cursor ? output.text.slice(0, output.cursor.utf16) + '▏ [Cursor position]' + output.text.slice(output.cursor.utf16) : output.text;
+   }).catch(error => { if (version === previewVersion && form.isConnected && MobileApp.$('detail-modal').classList.contains('show')) MobileApp.error(error); });
+  };
   MobileApp.$('fill-form').onsubmit = event => { event.preventDefault(); const button = (event.target as HTMLFormElement).querySelector<HTMLButtonElement>('[type=submit]')!; void MobileApp.busy(button, async () => { const values = Object.fromEntries(new FormData(event.target as HTMLFormElement)); const output = await Native.call('keyboard_render', { ...selection, values, clipboard: true }); if (output.enter_actions) throw new Error('Desktop Enter actions are unsupported on mobile'); await Native.plugin.copy({ text: output.text, html: output.html, rtf: output.rtf }); await Native.call('keyboard_usage', { ...selection, kind: 'copy', characters: output.characters ?? [...output.text].length }).catch(() => undefined); MobileApp.toast(output.cursor ? 'Copied text. Cursor positioning was omitted.' : 'Copied'); }); };
   const edit = document.getElementById('edit-from-detail'); if (edit) edit.onclick = () => { const modal = MobileApp.$('detail-modal'); modal.addEventListener('hidden.bs.modal', () => { void MobileApp.openEditor(library, snippet).catch(MobileApp.error); }, { once: true }); Modal.getInstance(modal)?.hide(); };
   MobileApp.$('detail-modal').classList.add('is-drawer'); Modal.getOrCreateInstance(MobileApp.$('detail-modal')).show();
@@ -233,14 +241,15 @@ export class MobileApp {
   MobileApp.$('settings-pending').textContent = String(MobileApp.state.pending);
   MobileApp.$('settings-conflicts').textContent = String(MobileApp.state.conflicts.length);
   MobileApp.$('statistics-link').onclick = () => { void Browser.open({ url: Auth.server + '/?account=' + encodeURIComponent(Auth.tokens?.account || '') + '#statistics' }).catch(MobileApp.error); };
+  MobileApp.$('delete-account').onclick = () => { void MobileApp.busy(MobileApp.$('delete-account') as HTMLButtonElement, async () => { const result = await Auth.request('account-deletion', 'GET'); await Browser.open({ url: result.url }); }); };
   MobileApp.$('reconnect').onclick = () => { void Auth.begin(Auth.server).catch(MobileApp.error); };
   MobileApp.$('keyboard-settings').onclick = () => { void Native.plugin.keyboardSettings().catch(MobileApp.error); };
   MobileApp.configureSwipeSettings();
   void MobileApp.refreshTrashCount();
   MobileApp.$('logout').onclick = () => { void MobileApp.busy(MobileApp.$('logout') as HTMLButtonElement, async () => {
    const result = await Swal.fire({ title: 'Sign out?', text: 'Cached snippets, pending edits, and drafts will be removed from this device.', icon: 'warning', showCancelButton: true, confirmButtonText: 'Sign out' }); if (!result.isConfirmed) return;
-   MobileApp.active = false; await MobileApp.syncJob?.catch(() => undefined); await MobileApp.draftJob.catch(() => undefined); clearTimeout(MobileApp.draftTimer);
-   MobileApp.ai.reset(); await Native.call('reset'); await Auth.request('connection','DELETE').catch(() => undefined); await Auth.clear(); MobileApp.assetURLs.clear(); MobileApp.editing = null;
+   MobileApp.active = false; const server = Auth.server; const tokens = Auth.tokens; const cleared = Auth.clear(); await MobileApp.syncJob?.catch(() => undefined); await MobileApp.draftJob.catch(() => undefined); clearTimeout(MobileApp.draftTimer);
+   await cleared; await Native.call('reset', { access_token: tokens?.access_token }); if (tokens) await Auth.revoke(server, tokens).catch(() => undefined); MobileApp.assetURLs.clear(); MobileApp.editing = null;
    await MobileApp.load(); MobileApp.switchScreen('snippets'); MobileApp.active = true;
   }); };
  }
@@ -304,7 +313,8 @@ export class MobileApp {
  static async start() {
   (globalThis as any).Swal = Swal;
   MobileApp.$('app').replaceChildren(...new DOMParser().parseFromString(shell(), 'text/html').body.childNodes);
-  MobileApp.$('form-modal').addEventListener('hidden.bs.modal', () => { MobileApp.ai.cancel(); MobileApp.editorCloseJob = MobileApp.editorCloseJob.catch(() => undefined).then(MobileApp.finishEditorClose).catch(MobileApp.error); });
+  MobileApp.$('form-modal').addEventListener('hidden.bs.modal', () => { MobileApp.editorCloseJob = MobileApp.editorCloseJob.catch(() => undefined).then(MobileApp.finishEditorClose).catch(MobileApp.error); });
+  MobileApp.input('server').oninvalid = () => { (MobileApp.$('login-advanced') as HTMLDetailsElement).open = true; };
   MobileApp.$('login-form').onsubmit = event => { event.preventDefault(); void MobileApp.busy((event.target as HTMLFormElement).querySelector('button')!, () => Auth.begin(MobileApp.input('server').value)); };
   MobileApp.$('settings-sync').onclick = () => { void MobileApp.busy(MobileApp.$('settings-sync') as HTMLButtonElement, MobileApp.sync); };
   MobileApp.$('profile').onclick = MobileApp.showSettings;
@@ -321,8 +331,6 @@ export class MobileApp {
   MobileApp.$('settings-screen').addEventListener('click', event => { const link = (event.target as HTMLElement).closest<HTMLAnchorElement>('[data-external]'); if (!link) return; event.preventDefault(); void Browser.open({ url: link.href }); });
   MobileApp.$('snippets').onclick = event => { const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-use]'); if (!button) return; const article = button.closest<HTMLElement>('[data-record]')!; const library = MobileApp.library(article.dataset.library!); const snippet = library.records.find(snippet => snippet.id === article.dataset.record)!; void MobileApp.use(library, snippet).catch(MobileApp.error); };
   createRoot(MobileApp.$('controller')).render(createElement(Controller));
-  MobileApp.ai = new AiClient({ request: (path: string, method = 'GET', body?: any) => Auth.request('ai' + path, method, body), identity: () => Auth.server + ':' + MobileApp.ai?.status?.identity?.account + ':' + MobileApp.ai?.status?.identity?.user, notify: (message: string, icon: any) => MobileApp.toast(message, icon), manage: () => { void Browser.open({ url: Auth.server + '/?account=' + encodeURIComponent(MobileApp.ai.status?.identity?.account || '') + '#settings-ai' }); } });
-  MobileApp.ai.bindSearch(document.querySelector('[data-ai-search]'), async () => ({ libraries: MobileApp.input('library').value ? [MobileApp.input('library').value] : MobileApp.state.libraries.map(library => library._id) }), async (result: any) => { await MobileApp.load(); const library = MobileApp.library(result.library); const snippet = library.records.find(item => item.id === result.id); if (!snippet || snippet.revision !== result.revision) throw Error('This snippet changed. Sync and search again.'); await MobileApp.use(library, snippet); });
   Auth.onError = MobileApp.error;
   await Auth.initialize(async () => { await MobileApp.load(); await MobileApp.sync(); });
   if (Auth.server || Preview.enabled) MobileApp.input('server').value = Auth.server || Preview.origin;

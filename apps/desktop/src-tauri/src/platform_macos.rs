@@ -10,6 +10,16 @@ use typerelay_client::browser_lease::BrowserLease;
 use objc2_foundation::NSObjectProtocol;
 use objc2_user_notifications::UNUserNotificationCenterDelegate;
 type Ref = *const c_void;
+#[link(name="ApplicationServices",kind="framework")]
+unsafe extern "C" {
+    fn AXValueGetTypeID()->usize;
+    fn AXValueCreate(kind:i32,value:Ref)->Ref;
+    fn AXUIElementSetMessagingTimeout(element:Ref,seconds:f32)->i32;
+    fn AXUIElementIsAttributeSettable(element:Ref,name:Ref,settable:*mut u8)->i32;
+    fn AXUIElementSetAttributeValue(element:Ref,name:Ref,value:Ref)->i32;
+    fn AXUIElementCopyParameterizedAttributeValue(element:Ref,name:Ref,parameter:Ref,value:*mut Ref)->i32;
+}
+
 objc2::define_class!(
     #[unsafe(super(objc2_foundation::NSObject))]
     struct NativeNotificationDelegate;
@@ -321,6 +331,68 @@ mod expansion_tests {
     }
     #[test]
     fn return_release_does_not_accept_keypad_release_or_forward_repeats(){let directory=tempfile::tempdir().unwrap();let (sender,_)=sync_channel(1);let mut state=ExpansionState::new(&directory.path().join("snippets"),directory.path().join("settings.json"),sender).unwrap();let (release,released)=sync_channel(1);state.release=Some((36,release));let source=CGEventSource::new(CGEventSourceStateID::HIDSystemState).unwrap();let event=CGEvent::new_keyboard_event(source.clone(),36,true).unwrap();assert!(matches!(ExpansionState::input(&event,36),Input::Enter));assert!(matches!(ExpansionState::input(&event,76),Input::Enter));assert!(state.event(CGEventType::KeyDown,&event));let keypad=CGEvent::new_keyboard_event(source.clone(),76,false).unwrap();assert!(!state.event(CGEventType::KeyUp,&keypad));assert!(released.try_recv().is_err());let up=CGEvent::new_keyboard_event(source,36,false).unwrap();assert!(state.event(CGEventType::KeyUp,&up));assert!(released.try_recv().is_ok());}
+}
+
+// Capture on the expansion worker before paste, never on the keyboard event tap.
+pub struct CursorTarget { field:Window, writable:bool }
+impl CursorTarget {
+    fn value(&self,name:&str)->Result<core_foundation::base::CFType> {
+        use core_foundation::base::TCFType;
+        Ok(unsafe{core_foundation::base::CFType::wrap_under_create_rule(Target::attribute(self.field.0 as Ref,name)?)})
+    }
+    fn range(&self)->Result<[isize;2]> {
+        use core_foundation::base::TCFType;
+        let value=self.value("AXSelectedTextRange")?;let mut range=[0isize;2];
+        ensure!(value.type_of()==unsafe{AXValueGetTypeID()}&&unsafe{AXValueGetValue(value.as_CFTypeRef(),4,range.as_mut_ptr().cast())}&&range[0]>=0&&range[1]>=0,"Unreadable text selection");Ok(range)
+    }
+    fn string(value:&core_foundation::base::CFType)->Result<String> {
+        use core_foundation::{base::TCFType,string::CFString};
+        ensure!(value.type_of()==CFString::type_id(),"Text attribute is not a string");
+        let value=unsafe{CFString::wrap_under_get_rule(value.as_CFTypeRef().cast())};ensure!(value.char_len()<=1_048_576,"Accessible text is too large");Ok(value.to_string())
+    }
+    fn text(&self,range:[isize;2])->Result<String> {
+        use core_foundation::{base::{CFType,TCFType},string::CFString};
+        let parameter=unsafe{AXValueCreate(4,range.as_ptr().cast())};ensure!(!parameter.is_null(),"Cannot create text range");let parameter=unsafe{CFType::wrap_under_create_rule(parameter)};
+        let name=CFString::new("AXStringForRange");let mut result=std::ptr::null();
+        let status=unsafe{AXUIElementCopyParameterizedAttributeValue(self.field.0 as Ref,name.as_CFTypeRef(),parameter.as_CFTypeRef(),&mut result)};
+        if status==0&&!result.is_null(){return Self::string(&unsafe{CFType::wrap_under_create_rule(result)});}
+        let value=Self::string(&self.value("AXValue")?)?;let units:Vec<_>=value.encode_utf16().collect();let start=usize::try_from(range[0])?;let end=start.checked_add(usize::try_from(range[1])?).context("Text range overflow")?;
+        Ok(String::from_utf16(units.get(start..end).context("Text range changed")?)?)
+    }
+    pub fn focused(&self,target:&Target)->Result<bool> {
+        if !target.focused()?||unsafe{IsSecureEventInputEnabled()}{return Ok(false);}
+        let app=Window(unsafe{AXUIElementCreateApplication(target.pid)} as usize);unsafe{AXUIElementSetMessagingTimeout(app.0 as Ref,0.1);}
+        let field=Window(Target::attribute(app.0 as Ref,"AXFocusedUIElement")? as usize);Ok(unsafe{CFEqual(field.0 as Ref,self.field.0 as Ref)})
+    }
+    pub fn capture(target:&Target)->Option<Self> {
+        use core_foundation::{base::TCFType,string::CFString};
+        (||->Result<Self>{
+            let app=Window(unsafe{AXUIElementCreateApplication(target.pid)} as usize);unsafe{AXUIElementSetMessagingTimeout(app.0 as Ref,0.1);}
+            let field=Window(Target::attribute(app.0 as Ref,"AXFocusedUIElement")? as usize);let mut this=Self{field,writable:false};unsafe{AXUIElementSetMessagingTimeout(this.field.0 as Ref,0.1);}
+            let role=Self::string(&this.value("AXRole")?)?;ensure!(["AXTextArea","AXTextField"].contains(&role.as_str()),"Unsupported text control");
+            if let Ok(subrole)=this.value("AXSubrole"){ensure!(!Self::string(&subrole)?.contains("Secure"),"Protected text control");}
+            ensure!(this.focused(target)?,"Text control lost focus");let mut settable=0u8;let name=CFString::new("AXSelectedTextRange");
+            this.writable=unsafe{AXUIElementIsAttributeSettable(this.field.0 as Ref,name.as_CFTypeRef(),&mut settable)}==0&&settable!=0;Ok(this)
+        })().ok()
+    }
+    pub fn position(&self,target:&Target,text:&str,cursor:&typerelay_core::template::Cursor,current:impl Fn()->bool)->Result<bool> {
+        use core_foundation::{base::{CFType,TCFType},string::CFString};
+        ensure!(current()&&self.focused(target)?,"Text inserted; original text field lost focus. Cursor unchanged");
+        if !self.writable{return Ok(false);}
+        let prefix=cursor.prefix(text).context("Cursor metadata does not match pasted text")?;let length=isize::try_from(text.encode_utf16().count())?;
+        let range=match self.range(){Ok(range)=>range,Err(_)=>return Ok(false)};
+        ensure!(range[1]==0&&range[0]>=length,"Text inserted; selection changed. Cursor unchanged");let inserted=[range[0]-length,length];
+        let actual=match self.text(inserted){Ok(text)=>text,Err(_)=>return Ok(false)};ensure!(actual==text,"Pasted text differs from the snippet. Cursor unchanged");
+        let destination=[inserted[0]+isize::try_from(prefix.encode_utf16().count())?,0];
+        ensure!(self.range()?==range&&self.text(inserted)?==text&&current()&&self.focused(target)?,"Text or focus changed before cursor positioning");
+        let value=unsafe{AXValueCreate(4,destination.as_ptr().cast())};ensure!(!value.is_null(),"Cannot create cursor position");let value=unsafe{CFType::wrap_under_create_rule(value)};let name=CFString::new("AXSelectedTextRange");
+        // From this write onward every failure is terminal: an uncertain write must never add arrow movements.
+        ensure!(unsafe{AXUIElementSetAttributeValue(self.field.0 as Ref,name.as_CFTypeRef(),value.as_CFTypeRef())}==0,"Could not set cursor position; nothing retried");
+        let deadline=Instant::now()+Duration::from_millis(150);
+        loop {ensure!(current()&&self.focused(target)?,"Focus changed after cursor positioning; nothing retried");if self.range()?==destination{break;}ensure!(Instant::now()<deadline,"Could not confirm cursor position; nothing retried");std::thread::sleep(Duration::from_millis(5));}
+        ensure!(self.text(inserted)?==text,"Text changed during cursor positioning; nothing retried");
+        if std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some(){eprintln!("Cursor positioned directly (macOS)");}Ok(true)
+    }
 }
 
 impl Target { pub fn position_cursor(&self,count:usize,current:impl Fn()->bool)->Result<()> {let target=self;let source=CGEventSource::new(CGEventSourceStateID::Private).map_err(|_|anyhow::anyhow!("Cannot create keyboard event source"))?;for _ in 0..count {ensure!(current()&&target.focused()?,"Text inserted; cursor positioning interrupted. Nothing retried");for down in [true,false] {let event=CGEvent::new_keyboard_event(source.clone(),KeyCode::LEFT_ARROW,down).map_err(|_|anyhow::anyhow!("Cannot create cursor event"))?;event.set_flags(CGEventFlags::CGEventFlagNonCoalesced);event.set_location(CGPoint::new(-27469.,0.));event.post_to_pid(target.pid);}std::thread::sleep(Duration::from_millis(2));}Ok(())} }

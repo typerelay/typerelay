@@ -1,3 +1,4 @@
+import { TestDatabase } from './database.js';
 import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { request as httpRequest } from 'node:http';
@@ -32,14 +33,13 @@ class Fixture {
 
 before(async () => {
 	Object.assign(process.env, { NODE_ENV: 'test', PORT: '3195', SYSADMIN_EMAIL: 'sysadmin@example.test', SYSADMIN_PASSWORD: randomUUID(), GIT_ENCRYPTION_KEY: 'a'.repeat(64), BILLING_ENABLED: 'false', TYPERELAY_HOSTED_EDITION: 'false', WHITE_LABEL_ENABLED: 'false', APP_URL: Fixture.origin });
-	process.env.MONGO_URI = process.env.MONGO_URI.replace('/typerelay?', '/typerelay_admin_test?');
-	assert.match(process.env.MONGO_URI, /\/typerelay_admin_test\?/);
+	process.env.MONGO_URI = TestDatabase.uri(process.env.MONGO_URI, 'typerelay_admin_test');
 	Auth.origin = Fixture.origin;
 	Fixture.root = await mkdtemp(join(tmpdir(), 'type-relay-admin-')); process.env.WHITE_LABEL_ASSETS_DIR = Fixture.root;
 	Fixture.originalMail = Auth.mail.sendMail; Auth.mail.sendMail = async message => { Fixture.emails.push(message); };
 	const { Server } = await import('../app.js'); Fixture.server = await Server.start();
 });
-after(async () => { Auth.mail.sendMail = Fixture.originalMail; if (Fixture.server) await new Promise(resolve => Fixture.server.close(resolve)); await M.mongoose.connection.dropDatabase(); await M.mongoose.disconnect(); await rm(Fixture.root, { recursive: true, force: true }); });
+after(async () => { Auth.mail.sendMail = Fixture.originalMail; if (Fixture.server) await new Promise(resolve => Fixture.server.close(resolve)); await TestDatabase.drop(M.mongoose.connection, 'typerelay_admin_test'); await M.mongoose.disconnect(); await rm(Fixture.root, { recursive: true, force: true }); });
 
 test('sysadmin credentials fail closed and admin auth requires platform host, CSRF, separate session', async () => {
 	assert.equal(Admin.credentials(' SYSADMIN@EXAMPLE.TEST ', process.env.SYSADMIN_PASSWORD), true);
@@ -237,4 +237,84 @@ test('admin sign-in attempts are throttled', async () => {
 	let status;
 	for (let index = 0; index < 11; index++) status = (await Fixture.request('/admin/login', 'POST', { email: process.env.SYSADMIN_EMAIL, password: 'invalid' })).status;
 	assert.equal(status, 429);
+});
+
+test('personal deletion revokes access, waits for owned-account cleanup and erases former-team libraries and assets', async () => {
+	const user = await M.User.create({ email: 'delete-person@example.test', name: 'Delete Person' });
+	const owner = await M.User.create({ email: 'remaining-owner@example.test', name: 'Remaining Owner' });
+	const owned = await M.Account.create({ name: 'Owned deletion fixture' });
+	const other = await M.Account.create({ name: 'Former team fixture' });
+	await M.Member.create([{ account: owned._id, user: user._id, role: 'owner' }, { account: other._id, user: owner._id, role: 'owner' }]);
+	const removed = await M.Library.create({ account: other._id, creator: user._id, name: 'Shared library to erase', shared: true, state: 'active' });
+	const retained = await M.Library.create({ account: other._id, creator: owner._id, name: 'Other owner library', state: 'active' });
+	await M.MigrationBackup.create([{ key: 'deletion-snippet-backup', source_collection: 'snippets', payload: { library: removed._id, content: 'legacy private content' } }, { key: 'deletion-operation-backup', source_collection: 'operations', payload: { user: owner._id, result: { library: { _id: String(removed._id), content: 'legacy content' } } } }]);
+	await M.Snippet.create([{ account: other._id, library: removed._id, id: 'erase-me', content: { type: 'rich_text', assets: ['private-asset', 'shared-asset'] }, state: 'active' }, { account: other._id, library: retained._id, id: 'keep-me', content: { type: 'rich_text', assets: ['shared-asset'] }, state: 'active' }]);
+	await M.SnippetAsset.create(['private-asset', 'shared-asset', 'unrelated-upload'].map(id => ({ account: other._id, id, data: Buffer.from(id) })));
+	await M.PersonalAbbreviation.create({ account: other._id, user: owner._id, snippet: 'erase-me', trigger: ';erase' });
+	const device = await M.Device.create({ account: owned._id, user: user._id });
+	const body = { confirmation: user.email, confirm: true, accounts: [String(owned._id)] };
+	await assert.rejects(AdminAccounts.requestUserDeletion(user._id, { ...body, accounts: [] }), /accounts changed/);
+	await AdminAccounts.requestUserDeletion(user._id, body);
+	assert.equal((await M.Device.findById(device._id).lean()).revoked, true);
+	assert.ok((await M.Account.findById(owned._id).lean()).deletion.requested_at);
+	await M.Member.deleteMany({ account: owned._id });
+	await AdminAccounts.purgeUser(user._id);
+	assert.ok(await M.User.exists({ _id: user._id }), 'must wait even if account purge already removed membership');
+	await M.Account.deleteOne({ _id: owned._id });
+	await AdminAccounts.purgeUser(user._id);
+	assert.ok(await M.User.exists({ _id: user._id }), 'legacy shared contributions require review');
+	await assert.rejects(AdminAccounts.reviewUserDeletion(String(user._id), 'wrong'), /Confirm/);
+	await AdminAccounts.reviewUserDeletion(String(user._id), String(user._id));
+	await AdminAccounts.purgeUser(user._id);
+	assert.equal(await M.User.exists({ _id: user._id }), null);
+	assert.equal(await M.Library.exists({ _id: removed._id }), null);
+	assert.equal(await M.MigrationBackup.exists({ 'payload.library': removed._id }), null);
+	assert.equal(await M.MigrationBackup.exists({ 'payload.result.library._id': String(removed._id) }), null);
+	assert.equal(await M.Snippet.exists({ id: 'erase-me' }), null);
+	assert.equal(await M.PersonalAbbreviation.exists({ snippet: 'erase-me' }), null);
+	assert.equal(await M.SnippetAsset.exists({ account: other._id, id: 'private-asset' }), null);
+	assert.ok(await M.SnippetAsset.exists({ account: other._id, id: 'shared-asset' }));
+	assert.ok(await M.SnippetAsset.exists({ account: other._id, id: 'unrelated-upload' }));
+	assert.ok(await M.Library.exists({ _id: retained._id }));
+	assert.ok(await M.Ticket.exists({ email: user.email, kind: 'deletion-complete' }));
+	await AdminAccounts.purgeUser(user._id);
+});
+
+test('account deletion requires fresh personal login, explicit identity confirmation and CSRF', async () => {
+	Fixture.cookie = ''; Fixture.csrf = '';
+	const password = 'Deletion-fixture-only-123!';
+	const user = await M.User.create({ email: 'delete-route@example.test', password: await bcrypt.hash(password, 4) });
+	const destination = '/account/delete?user=' + user._id;
+	assert.equal(Auth.continuation(destination), destination);
+	assert.throws(() => Auth.continuation('/account/delete?user=' + user._id + '&redirect=https://example.com'));
+	await Fixture.csrfFrom(destination);
+	const login = await Fixture.json('/auth/password', 'POST', { email: user.email, password });
+	assert.equal(login.redirect, destination);
+	await Fixture.csrfFrom(destination);
+	const body = { user: String(user._id), accounts: [], confirmation: user.email, confirm: true };
+	assert.equal((await Fixture.request('/account/delete', 'POST', body, { 'X-CSRF-Token': '', Authorization: 'Bearer irrelevant' })).status, 403);
+	assert.equal((await Fixture.request('/account/delete', 'POST', body, { Origin: 'https://foreign.example' })).status, 403);
+	await Fixture.json('/account/delete', 'POST', { ...body, user: String(new M.User()._id) }, 409);
+	await Fixture.json('/account/delete', 'POST', body, 202);
+	assert.ok((await M.User.findById(user._id).lean()).deletion.requested_at);
+	await Fixture.csrfFrom('/login');
+	await Fixture.json('/auth/password', 'POST', { email: user.email, password }, 401);
+});
+
+test('historical-only team contributions require review even without a surviving library', async () => {
+	const user = await M.User.create({ email: 'historical-delete@example.test' });
+	const account = await M.Account.create({ name: 'Historical-only team' });
+	const library = new M.Library()._id;
+	await M.MigrationBackup.create([{ key: 'historical-member', source_collection: 'members', payload: { user: String(user._id), account: account._id } }, { key: 'historical-snippet', source_collection: 'snippets', payload: { account: account._id, library, content: 'Personal contribution requiring review' } }]);
+	await AdminAccounts.requestUserDeletion(user._id, { accounts: [], confirmation: user.email, confirm: true });
+	await AdminAccounts.purgeUser(user._id);
+	const pending = await M.User.findById(user._id).lean();
+	assert.deepEqual(pending.deletion.review_accounts.map(String), [String(account._id)]);
+	assert.equal(await M.Ticket.exists({ email: user.email, kind: 'deletion-complete' }), null);
+	assert.ok(await M.MigrationBackup.exists({ key: 'historical-snippet' }));
+	// An operator removes the identified historical contribution before recording review.
+	await M.MigrationBackup.deleteOne({ key: 'historical-snippet' });
+	await AdminAccounts.reviewUserDeletion(String(user._id), String(user._id));
+	await AdminAccounts.purgeUser(user._id);
+	assert.equal(await M.User.exists({ _id: user._id }), null);
 });

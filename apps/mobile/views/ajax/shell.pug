@@ -7,12 +7,13 @@ main.mobile-app#workspace
 			p Search, edit, and sync your TypeRelay libraries. Then use the TypeRelay keyboard in any app.
 		.auth-card
 			form#login-form
-				label.mobile-field(for="server")
-					span Server URL
-					input#server(type="url" required value="https://app.typerelay.com" autocomplete="url")
 				button.primary-button.wide(type="submit")
-					span Sign in with browser
-					span.material-symbols-outlined arrow_forward
+					span Sign in
+				details.login-advanced#login-advanced
+					summary Advanced
+					label.mobile-field(for="server")
+						span Server URL
+						input#server(type="url" required value="https://app.typerelay.com" autocomplete="url" autocapitalize="none" spellcheck="false")
 			p#preview-notice.preview-notice(hidden) Browser preview uses your development account. Native keyboard behavior requires the installed app.
 	section#signed-in(hidden)
 		section.mobile-screen#snippets-screen(data-screen="snippets")
@@ -28,7 +29,6 @@ main.mobile-app#workspace
 					span.material-symbols-outlined close
 			select#library.visually-hidden(aria-label="Selected snippet library")
 				option(value="") All libraries
-			include ../../../server/views/ajax/ai-search.pug
 			#library-filters.library-filters(role="group" aria-label="Filter by library")
 				button.library-filter.is-active(type="button" data-library-filter="") All
 			.notice-stack
@@ -58,7 +58,6 @@ main.mobile-app#workspace
 				div
 					span.eyebrow TypeRelay
 					h1 Settings
-			include ../../../server/views/ajax/ai-controls.pug
 			section.settings-section
 				header.settings-section-header
 					span.settings-icon
@@ -146,6 +145,11 @@ main.mobile-app#workspace
 				h2 Account
 				p.settings-description Remove credentials, cached snippets, pending edits, and drafts from this device.
 				button.danger-button.wide#logout(type="button") Sign out
+			section.settings-section(aria-label="Privacy and account deletion")
+				h2 Privacy and account
+				a.secondary-button.wide.mb-3(href="https://typerelay.com/privacy-policy/" data-external) Privacy Policy
+				button.danger-button.wide#delete-account(type="button") Delete account
+				p.settings-note Opens the secure account-deletion page. Nothing is deleted until you sign in and confirm.
 			footer.settings-family(aria-label="Other tools from our team")
 				small More tools from our team
 				ul
