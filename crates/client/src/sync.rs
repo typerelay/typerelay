@@ -100,9 +100,16 @@ impl Sync {
 	pub fn download_asset(&self, credentials: &Credentials, db: &Database, metadata: &Value) -> Result<()> {
         let id = metadata["id"].as_str().context("Missing asset ID")?;
         ensure!(id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit()), "Invalid asset ID");
-        if db.asset(id)?.is_some() { return Ok(()); }
         let size = metadata["size"].as_u64().context("Missing asset size")?;
         ensure!(size > 0 && size <= 2 * 1048576, "Invalid asset size");
+        let sources = metadata["source_urls"].as_array();
+        ensure!(metadata["source_urls"].is_null() || sources.is_some_and(|sources| sources.iter().all(Value::is_string)), "Invalid asset sources");
+        if let Some((mut cached, bytes)) = db.asset(id)? {
+            ensure!(bytes.len() == size as usize, "Asset size mismatch");
+            if sources.is_none_or(|sources| sources.iter().all(|source| cached["source_urls"].as_array().is_some_and(|values| values.contains(source)))) { return Ok(()); }
+            cached["source_urls"] = metadata["source_urls"].clone();
+            return db.put_asset(&cached, &bytes, true);
+        }
         let mut bytes = Vec::new();
         self.asset_request(credentials, reqwest::Method::GET, id, None, None)?.take(2 * 1048576 + 1).read_to_end(&mut bytes)?;
         ensure!(bytes.len() == size as usize, "Asset size mismatch");

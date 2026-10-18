@@ -3,6 +3,7 @@ import { strFromU8, strToU8, Unzip, unzipSync, zipSync } from 'fflate';
 import { Libraries } from './libraries.js';
 import { Assets } from './assets.js';
 import { Support, Yaml } from './support.js';
+import { SnippetAsset } from '../model/index.js';
 
 export class Bundles {
 	static entry(snippet) { if (snippet.content?.type === 'rich_text') return { trigger: snippet.trigger, title: snippet.title, replace: snippet.content.markdown, type: 'rich_text', variables: snippet.content.variables || {} }; return Libraries.yaml(snippet); }
@@ -12,7 +13,14 @@ export class Bundles {
 		const ids = [...new Set(library.snippets.flatMap(snippet => snippet.content?.assets || []))]; const assetMetadata = {}; const files = { 'snippets.yml': strToU8(manifest.yaml) };
 		Support.assert(ids.length <= 998, 'Bundle has too many images; export smaller libraries', 413);
 		let total = files['snippets.yml'].length;
-		for (const assetId of ids) { const asset = await Assets.get(ctx, assetId, true); total += asset.data.length; Support.assert(total <= 24 * 1048576, 'Expanded bundle is too large; export a smaller library', 413); files[`assets/${assetId}`] = new Uint8Array(asset.data); assetMetadata[assetId] = Assets.metadata(asset); }
+		if (ids.length) {
+			Support.assert((await Assets.visible(ctx, ids)).length === ids.length, 'Asset not found', 404);
+			const cursor = SnippetAsset.find({ account: ctx.account, id: { $in: ids } }).select('+data').lean().cursor({ batchSize: 16 });
+			let found = 0;
+			try { for await (const asset of cursor) { const data = Buffer.isBuffer(asset.data) ? asset.data : Buffer.from(asset.data?.buffer || asset.data || []); total += data.length; Support.assert(total <= 24 * 1048576, 'Expanded bundle is too large; export a smaller library', 413); files[`assets/${asset.id}`] = new Uint8Array(data); assetMetadata[asset.id] = Assets.metadata({ ...asset, size: data.length }); found++; } }
+			finally { await cursor.close(); }
+			Support.assert(found === ids.length, 'Asset not found', 404);
+		}
 		files['bundle.json'] = strToU8(JSON.stringify({ version: 1, name: library.name, assets: ids, asset_metadata: assetMetadata }));
 		const bytes = Buffer.from(zipSync(files, { level: 6 }));
 		Support.assert(bytes.length <= 16 * 1048576, 'Bundle exceeds 16 MiB; export a smaller library', 413);

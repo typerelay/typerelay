@@ -104,3 +104,43 @@ fn bundle_import_merges_existing_sources_and_rolls_back_all_writes_on_failure() 
         }
     }
 }
+
+
+#[test]
+fn multiline_exports_round_trip_without_relaxing_library_limits() {
+    let root = tempfile::tempdir().unwrap(); let source = Database::open(&root.path().join("source")).unwrap();
+    let text = format!("{}\n", "x".repeat(49)).repeat(1280);
+    let entries: Vec<_> = (0..16).map(|index| json!({"trigger":format!("item{index}"),"replace":text})).collect();
+    let file = source.import("Multiline", &json!({"matches":entries}).to_string()).unwrap();
+    let yaml = typerelay_client::bridge::Bridge::export(&file.entries).unwrap(); assert!(yaml.len() > 1048576);
+    let bundle = root.path().join("multiline.typerelay.zip"); source.export("Multiline", &bundle).unwrap();
+    for bundled in [false, true] {
+        let target = Database::open(&root.path().join(bundled.to_string())).unwrap();
+        let imported = if bundled { target.import_bundle("Restored", &bundle).unwrap() } else { target.import("Restored", &yaml).unwrap() };
+        assert_eq!(imported.entries.len(), 16); assert!(imported.entries.iter().all(|entry| entry.replace == text));
+        let extra = typerelay_client::config::Match { trigger:"extra".into(), replace:text.clone(), ..Default::default() };
+        assert!(target.edit(&imported, None, Some(extra)).unwrap_err().to_string().contains("Library exceeds 1 MiB"));
+        assert_eq!(target.editor("Restored").unwrap().entries.len(), 16);
+        assert!(target.import("Oversized", &" ".repeat(16 * 1048576 + 1)).unwrap_err().to_string().contains("exceeds 16 MiB"));
+    }
+}
+
+#[test]
+fn cached_image_sync_merges_sources_without_fetching_or_rewriting_unchanged_bytes() {
+    let root = tempfile::tempdir().unwrap(); let db = Database::open(&root.path().join("data")).unwrap(); let id = image(&db, 1);
+    let (mut metadata, original) = db.asset(&id).unwrap().unwrap(); metadata["source_urls"] = json!(["https://example.test/two.png", "https://example.test/new.png"]);
+    let sync = Sync::new(root.path().join("sync-root"), root.path().join("data")).unwrap();
+    let credentials = Credentials { server:"http://127.0.0.1:1".into(), access_token:"test".into(), refresh_token:String::new(), account:None, device:None };
+    sync.download_asset(&credentials, &db, &metadata).unwrap();
+    let (merged, bytes) = db.asset(&id).unwrap().unwrap(); assert_eq!(bytes, original);
+    assert_eq!(merged["source_urls"], json!(["https://example.test/one.png","https://example.test/two.png","https://example.test/new.png"]));
+    let changes = db.connection.total_changes();
+    for sources in [metadata["source_urls"].clone(), json!([]), serde_json::Value::Null] { metadata["source_urls"] = sources; sync.download_asset(&credentials, &db, &metadata).unwrap(); }
+    assert_eq!(db.connection.total_changes(), changes);
+    metadata["source_urls"] = json!([17]); assert!(sync.download_asset(&credentials, &db, &metadata).is_err());
+    metadata["source_urls"] = json!([]); metadata["size"] = json!(original.len() + 1); assert!(sync.download_asset(&credentials, &db, &metadata).is_err());
+    db.import("Images", &json!({"matches":[{"trigger":"image","type":"rich_text","replace":format!("![](typerelay-asset:{id})")}]}).to_string()).unwrap();
+    let bundle = root.path().join("merged.typerelay.zip"); db.export("Images", &bundle).unwrap();
+    let mut archive = zip::ZipArchive::new(fs::File::open(bundle).unwrap()).unwrap(); let mut text = String::new(); archive.by_name("bundle.json").unwrap().read_to_string(&mut text).unwrap();
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&text).unwrap()["asset_metadata"][&id]["source_urls"], merged["source_urls"]);
+}
