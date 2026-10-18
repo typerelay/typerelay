@@ -43,10 +43,11 @@ export class Assets {
 		Support.assert(Buffer.isBuffer(input)&&input.length>0&&input.length<=Assets.maximumStored,'Asset exceeds 2 MiB',413);const detected=await fileTypeFromBuffer(input);Support.assert(detected&&Assets.types.has(detected.mime),'Invalid image asset',415);const metadata=await sharp(input,{animated:true,limitInputPixels:4096*4096*4}).metadata();const height=metadata.pageHeight||metadata.height;Support.assert(metadata.width&&height&&metadata.width<=Assets.maximumDimension&&height<=Assets.maximumDimension,'Invalid normalized image dimensions',400);const asset={id:Assets.id(input),data:input,mime_type:detected.mime,size:input.length,width:metadata.width,height,animated:detected.mime==='image/gif'&&Number(metadata.pages||1)>1};Support.assert(!expectedId||asset.id===expectedId,'Asset hash does not match its URL',409);return Assets.save(ctx,asset,sourceUrl);
 	}
 	static async save(ctx,asset,sourceUrl='',session=null) {
-		const update = { $setOnInsert: { account: ctx.account, ...asset, last_referenced_at: new Date() }, $addToSet: { staged_by: ctx.user, ...(sourceUrl ? { source_urls: sourceUrl } : {}) } };
+		const sources = Array.isArray(sourceUrl) ? sourceUrl : sourceUrl ? [sourceUrl] : [];
+		const update = { $setOnInsert: { account: ctx.account, ...asset, last_referenced_at: new Date() }, $addToSet: { staged_by: ctx.user, ...(sources.length ? { source_urls: { $each: sources } } : {}) } };
 		if (session) await SnippetAsset.updateOne({ account: ctx.account, id: asset.id }, update, { upsert: true, session });
 		else await AccountAccess.write(ctx.account, transaction => SnippetAsset.updateOne({ account: ctx.account, id: asset.id }, update, { upsert: true, session: transaction }));
-		return Assets.metadata({ ...asset, source_urls: sourceUrl ? [sourceUrl] : [] });
+		return Assets.metadata({ ...asset, source_urls: sources });
 	}
 	static async visible(ctx, ids, session = null) {
 		Support.assert(Array.isArray(ids) && ids.every(id => typeof id === 'string' && /^[a-f0-9]{64}$/.test(id)), 'Invalid asset IDs', 400);

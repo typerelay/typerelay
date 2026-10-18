@@ -256,8 +256,7 @@ impl Database {
     }
 	pub fn put_asset(&self,metadata:&Value,data:&[u8],uploaded:bool)->Result<()> {let id=metadata["id"].as_str().context("Missing asset ID")?;ensure!(id.len()==64&&id.bytes().all(|byte|byte.is_ascii_hexdigit()),"Invalid asset ID");ensure!(data.len()<=2*1048576,"Asset exceeds 2 MiB");self.connection.execute("INSERT INTO assets(id,mime_type,size,width,height,animated,source_urls,data,uploaded,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(id) DO UPDATE SET mime_type=excluded.mime_type,size=excluded.size,width=excluded.width,height=excluded.height,animated=excluded.animated,source_urls=excluded.source_urls,data=excluded.data,uploaded=MAX(assets.uploaded,excluded.uploaded)",params![id,metadata["mime_type"].as_str().context("Missing asset MIME")?,data.len() as i64,metadata["width"].as_i64().unwrap_or(0),metadata["height"].as_i64().unwrap_or(0),metadata["animated"].as_bool().unwrap_or(false),metadata["source_urls"].to_string(),data,uploaded,Utc::now().timestamp()])?;Ok(())}
 	pub fn asset(&self,id:&str)->Result<Option<(Value,Vec<u8>)>> {self.connection.query_row("SELECT mime_type,size,width,height,animated,source_urls,data,uploaded FROM assets WHERE id=?1",[id],|row|{let sources:String=row.get(5)?;Ok((json!({"id":id,"mime_type":row.get::<_,String>(0)?,"size":row.get::<_,i64>(1)?,"width":row.get::<_,i64>(2)?,"height":row.get::<_,i64>(3)?,"animated":row.get::<_,bool>(4)?,"source_urls":serde_json::from_str::<Value>(&sources).unwrap_or(json!([])),"uploaded":row.get::<_,bool>(7)?}),row.get(6)?))}).optional().map_err(Into::into)}
-	pub fn pending_assets(&self)->Result<Vec<(Value,Vec<u8>)>> {let mut statement=self.connection.prepare("SELECT id FROM assets WHERE uploaded=0 ORDER BY id")?;let ids=statement.query_map([],|row|row.get::<_,String>(0))?.collect::<std::result::Result<Vec<_>,_>>()?;ids.into_iter().map(|id|self.asset(&id)?.context("Asset disappeared")).collect()}
-	pub fn mark_asset_uploaded(&self,id:&str)->Result<()> {self.connection.execute("UPDATE assets SET uploaded=1 WHERE id=?1",[id])?;Ok(())}
+	pub fn pending_asset_ids(&self)->Result<Vec<String>> {let mut statement=self.connection.prepare("SELECT DISTINCT asset.value FROM outbox, json_tree(outbox.operation, '$.body') content, json_each(content.value, '$.assets') asset WHERE content.key='content' AND content.type='object' ORDER BY asset.value")?;Ok(statement.query_map([],|row|row.get(0))?.collect::<std::result::Result<Vec<_>,_>>()?)}
     pub fn edit(&self, file: &OpenFile, index: Option<usize>, entry: Option<Match>) -> Result<OpenFile> {
         let transaction = if self.connection.is_autocommit() { Some(self.connection.unchecked_transaction()?) } else { None };
         self.editable(&file.id)?;
@@ -471,8 +470,63 @@ impl Database {
         transaction.commit()?;
         Ok(())
     }
-	pub fn export(&self,name:&str,destination:&Path)->Result<()> {let file=self.editor(name)?;if destination.to_string_lossy().ends_with(".typerelay.zip"){let output=fs::File::create(destination)?;let mut zip=zip::ZipWriter::new(output);let options=zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);zip.start_file("bundle.json",options)?;let assets:[String;0]=[];let ids:std::collections::BTreeSet<String>=file.entries.iter().flat_map(|entry|entry.value()["content"]["assets"].as_array().cloned().unwrap_or_default()).filter_map(|id|id.as_str().map(str::to_owned)).collect();zip.write_all(serde_json::to_string(&json!({"version":1,"name":name,"assets":if ids.is_empty(){assets.to_vec()}else{ids.iter().cloned().collect()}}))?.as_bytes())?;zip.start_file("snippets.yml",options)?;zip.write_all(Bridge::export(&file.entries)?.as_bytes())?;for id in ids{let(metadata,bytes)=self.asset(&id)?.context("Bundle asset is missing")?;zip.start_file(format!("metadata/{id}.json"),options)?;zip.write_all(metadata.to_string().as_bytes())?;zip.start_file(format!("assets/{id}"),options)?;zip.write_all(&bytes)?;}zip.finish()?;Ok(())}else{Paths::atomic_write(destination,Bridge::export(&file.entries)?.as_bytes(),true)}}
-	pub fn import_bundle(&self,name:&str,source:&Path)->Result<OpenFile>{let file=fs::File::open(source)?;let mut archive=zip::ZipArchive::new(file)?;ensure!(archive.len()<=1000,"Bundle has too many files");let mut manifest=String::new();archive.by_name("snippets.yml")?.take(1048577).read_to_string(&mut manifest)?;ensure!(manifest.len()<=1048576,"Bundle manifest exceeds 1 MiB");let document:Document=serde_saphyr::from_str(&manifest)?;Bridge::validate(&document.matches)?;let ids:std::collections::BTreeSet<String>=document.matches.iter().flat_map(|entry|entry.value()["content"]["assets"].as_array().cloned().unwrap_or_default()).filter_map(|id|id.as_str().map(str::to_owned)).collect();for id in ids{let mut bytes=Vec::new();archive.by_name(&format!("assets/{id}"))?.take(2*1048576+1).read_to_end(&mut bytes)?;ensure!(bytes.len()<=2*1048576,"Bundle asset exceeds 2 MiB");let mut metadata=crate::assets::Assets::accept(self,&bytes,&id,false)?;if let Ok(file)=archive.by_name(&format!("metadata/{id}.json")){let mut value=String::new();file.take(65537).read_to_string(&mut value)?;if let Ok(saved)=serde_json::from_str::<Value>(&value){metadata["source_urls"]=saved["source_urls"].clone();self.put_asset(&metadata,&bytes,false)?;}}}self.import(name,&manifest)}
+    pub fn export(&self, name: &str, destination: &Path) -> Result<()> {
+        let file = self.editor(name)?;
+        let manifest = Bridge::export(&file.entries)?;
+        if !destination.to_string_lossy().ends_with(".typerelay.zip") { return Paths::atomic_write(destination, manifest.as_bytes(), true); }
+        let ids: std::collections::BTreeSet<String> = file.entries.iter().flat_map(|entry| entry.value()["content"]["assets"].as_array().cloned().unwrap_or_default()).filter_map(|id| id.as_str().map(str::to_owned)).collect();
+        ensure!(ids.len() <= 998 && manifest.len() <= 16 * 1048576, "Bundle exceeds import limits");
+        let mut metadata = serde_json::Map::new();
+        let mut total = manifest.len();
+        for id in &ids { let (asset, bytes) = self.asset(id)?.context("Bundle asset is missing")?; total += bytes.len(); ensure!(total <= 24 * 1048576, "Expanded bundle exceeds 24 MiB"); metadata.insert(id.clone(), asset); }
+        let metadata = serde_json::to_vec(&json!({"version":1,"name":name,"assets":ids,"asset_metadata":metadata}))?;
+        ensure!(total + metadata.len() <= 24 * 1048576, "Expanded bundle exceeds 24 MiB");
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        zip.start_file("bundle.json", options)?; zip.write_all(&metadata)?;
+        zip.start_file("snippets.yml", options)?; zip.write_all(manifest.as_bytes())?;
+        for id in ids { let (_, bytes) = self.asset(&id)?.context("Bundle asset is missing")?; zip.start_file(format!("assets/{id}"), options)?; zip.write_all(&bytes)?; }
+        let bytes = zip.finish()?.into_inner();
+        ensure!(bytes.len() <= 16 * 1048576, "Bundle exceeds 16 MiB");
+        Paths::atomic_write(destination, &bytes, true)
+    }
+    pub fn import_bundle(&self, name: &str, source: &Path) -> Result<OpenFile> {
+        let file = fs::File::open(source)?;
+        ensure!(file.metadata()?.len() <= 16 * 1048576, "Bundle exceeds 16 MiB");
+        let mut archive = zip::ZipArchive::new(file)?;
+        ensure!(archive.len() <= 1000, "Bundle has too many files");
+        let mut total = 0u64;
+        for index in 0..archive.len() { total = total.checked_add(archive.by_index(index)?.size()).context("Invalid bundle size")?; ensure!(total <= 24 * 1048576, "Expanded bundle exceeds 24 MiB"); }
+        let mut metadata = String::new();
+        archive.by_name("bundle.json")?.take(16 * 1048576 + 1).read_to_string(&mut metadata)?;
+        ensure!(metadata.len() <= 16 * 1048576, "Bundle metadata exceeds 16 MiB");
+        let mut expanded = metadata.len();
+        let metadata: Value = serde_json::from_str(&metadata)?;
+        ensure!(metadata["version"] == 1, "Unsupported bundle version");
+        let mut manifest = String::new();
+        archive.by_name("snippets.yml")?.take(16 * 1048576 + 1).read_to_string(&mut manifest)?;
+        ensure!(manifest.len() <= 16 * 1048576, "Bundle manifest exceeds 16 MiB");
+        expanded += manifest.len(); ensure!(expanded <= 24 * 1048576, "Expanded bundle exceeds 24 MiB");
+        let document: Document = serde_saphyr::from_str(&manifest)?;
+        Bridge::validate(&document.matches)?;
+        let ids: std::collections::BTreeSet<String> = document.matches.iter().flat_map(|entry| entry.value()["content"]["assets"].as_array().cloned().unwrap_or_default()).filter_map(|id| id.as_str().map(str::to_owned)).collect();
+        for id in ids {
+            let mut bytes = Vec::new();
+            archive.by_name(&format!("assets/{id}"))?.take(2 * 1048576 + 1).read_to_end(&mut bytes)?;
+            ensure!(bytes.len() <= 2 * 1048576, "Bundle asset exceeds 2 MiB");
+            expanded += bytes.len(); ensure!(expanded <= 24 * 1048576, "Expanded bundle exceeds 24 MiB");
+            let mut asset = crate::assets::Assets::accept(self, &bytes, &id, false)?;
+            let mut saved = metadata["asset_metadata"][&id].clone();
+            if saved.is_null() && let Ok(file) = archive.by_name(&format!("metadata/{id}.json")) {
+                let mut value = String::new(); file.take(65537).read_to_string(&mut value)?;
+                ensure!(value.len() <= 65536, "Bundle image metadata exceeds 64 KiB");
+                expanded += value.len(); ensure!(expanded <= 24 * 1048576, "Expanded bundle exceeds 24 MiB");
+                saved = serde_json::from_str(&value)?;
+            }
+            if let Some(sources) = saved["source_urls"].as_array() { ensure!(sources.iter().all(Value::is_string), "Invalid image sources"); asset["source_urls"] = json!(sources); self.put_asset(&asset, &bytes, false)?; }
+        }
+        self.import(name, &manifest)
+    }
     pub fn import(&self, name: &str, source: &str) -> Result<OpenFile> {
         let parsed = Bridge::execute(crate::bridge::Request { yaml: Some(source.into()), matches: None, export: false, edits: vec![] })?;
         let name = Self::name(name)?;

@@ -11,7 +11,7 @@ export class Preview extends WebPlugin {
  async execute({ request }: { request: string }) {
   const body = JSON.parse(request);
   const tokens = await SecureStorage.get('tokens') as { access_token?: string } | null;
-  const token = body.action === 'bind' ? body.access_token : tokens?.access_token;
+  const token = ['bind', 'reset'].includes(body.action) ? body.access_token : tokens?.access_token;
   if (body.action === 'suspend') return { data: {} };
   if (!token && body.action === 'state') return { data: { generation: '', libraries: [], pending: 0, conflicts: [] } };
   if (!token) throw new Error('Sign in first');

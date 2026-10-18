@@ -111,7 +111,7 @@ impl Sync {
     }
     fn download_assets(&self, credentials: &Credentials, db: &Database, response: &Value) -> Result<()> { for metadata in response["assets"].as_array().into_iter().flatten() { self.download_asset(credentials, db, metadata)?; } Ok(()) }
 
-	fn upload_assets(&self,credentials:&Credentials,db:&Database)->Result<()> {for (metadata,bytes) in db.pending_assets()?{let id=metadata["id"].as_str().context("Missing asset ID")?;self.asset_request(credentials,reqwest::Method::PUT,id,metadata["mime_type"].as_str(),Some(bytes))?;db.mark_asset_uploaded(id)?;}Ok(())}
+	fn upload_assets(&self,credentials:&mut Credentials,db:&Database)->Result<()> {for ids in db.pending_asset_ids()?.chunks(1000){let presence=self.request(credentials,reqwest::Method::POST,"assets/presence",Some(&json!({"ids":ids})))?;let missing=presence["missing"].as_array().context("Missing asset presence result")?;for id in ids.iter().filter(|id|missing.iter().any(|value|value.as_str()==Some(id.as_str()))){let(metadata,bytes)=db.asset(id)?.context("Pending image is missing")?;self.asset_request(credentials,reqwest::Method::PUT,id,metadata["mime_type"].as_str(),Some(bytes))?;}}Ok(())}
     pub fn connect(&self, server: &str, open_browser: bool, app_callback: bool) -> Result<()> {
 		self.connect_cancellable(server,open_browser,app_callback,&AtomicBool::new(false))
 	}

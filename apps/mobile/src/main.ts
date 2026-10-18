@@ -248,8 +248,8 @@ export class MobileApp {
   void MobileApp.refreshTrashCount();
   MobileApp.$('logout').onclick = () => { void MobileApp.busy(MobileApp.$('logout') as HTMLButtonElement, async () => {
    const result = await Swal.fire({ title: 'Sign out?', text: 'Cached snippets, pending edits, and drafts will be removed from this device.', icon: 'warning', showCancelButton: true, confirmButtonText: 'Sign out' }); if (!result.isConfirmed) return;
-   MobileApp.active = false; await MobileApp.syncJob?.catch(() => undefined); await MobileApp.draftJob.catch(() => undefined); clearTimeout(MobileApp.draftTimer);
-   await Native.call('reset'); await Auth.request('connection','DELETE').catch(() => undefined); await Auth.clear(); MobileApp.assetURLs.clear(); MobileApp.editing = null;
+   MobileApp.active = false; const server = Auth.server; const tokens = Auth.tokens; const cleared = Auth.clear(); await MobileApp.syncJob?.catch(() => undefined); await MobileApp.draftJob.catch(() => undefined); clearTimeout(MobileApp.draftTimer);
+   await cleared; await Native.call('reset', { access_token: tokens?.access_token }); if (tokens) await Auth.revoke(server, tokens).catch(() => undefined); MobileApp.assetURLs.clear(); MobileApp.editing = null;
    await MobileApp.load(); MobileApp.switchScreen('snippets'); MobileApp.active = true;
   }); };
  }

@@ -61,3 +61,13 @@ test('forged expanded sizes cannot truncate an oversized deflate stream into an 
 	}
 	await assert.rejects(Bundles.import({}, bytes), error => error.status === 422);
 });
+
+for (const legacy of [false, true]) test('bundle import preserves every image source from ' + (legacy ? 'legacy native' : 'canonical') + ' metadata', async t => {
+ const data = await sharp({ create: { width: 1, height: 1, channels: 4, background: { r: 1, g: 2, b: 3, alpha: 1 } } }).png().toBuffer();
+ const id = Assets.id(data); const metadata = { source_urls: ['https://example.test/one.png', 'https://example.test/two.png'] };
+ const files = { 'bundle.json': strToU8(JSON.stringify({ version: 1, name: 'Sources', assets: [id], ...(legacy ? {} : { asset_metadata: { [id]: metadata } }) })), 'snippets.yml': strToU8('matches: []'), ['assets/' + id]: data };
+ if (legacy) files['metadata/' + id + '.json'] = strToU8(JSON.stringify(metadata));
+ const sources = []; t.mock.method(Assets, 'save', async (ctx, asset, source) => { sources.push(...source); return asset; }); t.mock.method(Yaml, 'run', async () => ({ matches: [] }));
+ await Bundles.import({}, Buffer.from(zipSync(files)));
+ assert.deepEqual(sources, metadata.source_urls); assert.equal(Assets.save.mock.callCount(), 1);
+});
