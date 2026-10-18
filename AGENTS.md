@@ -7,6 +7,7 @@
 - Keep ordinary documentation out of the repository root; agent instruction files are exceptions.
 - Respect the task's planning and approval gate. Planning is read-only; wait for explicit approval before implementation.
 - Keep model selection and subagent configuration in the task prompt. Give agents bounded ownership, the absolute worktree path, and the expected branch. Report missing tools or access as blockers.
+- Report in the spirit of ASD STE100. Keep sentence structures direct, limit procedural steps to single actions and avoid unnecessary synonyms.
 
 ## Git and worktrees
 - Worktrees are located at ~/.worktrees
