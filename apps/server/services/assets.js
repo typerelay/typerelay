@@ -80,6 +80,15 @@ export class Assets {
 		const found = new Set(assets.map(asset => asset.id));
 		return { assets: assets.map(Assets.metadata), missing: [...new Set(ids)].filter(id => !found.has(id)) };
 	}
+	static async mergeSources(ctx, id, sources) {
+		Support.assert(Array.isArray(sources) && sources.every(source => typeof source === 'string') && Buffer.byteLength(JSON.stringify(sources)) <= 65536, 'Invalid image sources', 422);
+		await AccountAccess.write(ctx.account, async session => {
+			Support.assert((await Assets.visible(ctx, [id], session)).includes(id), 'Image not found', 404);
+			const result = await SnippetAsset.updateOne({ account: ctx.account, id }, { $addToSet: { source_urls: { $each: sources } } }, { session });
+			Support.assert(result.matchedCount === 1, 'Image not found', 404);
+		});
+		return { saved: true };
+	}
 	static privateIp(address) {
 		if (isIP(address) === 4) {
 			const bytes = address.split('.').map(Number);

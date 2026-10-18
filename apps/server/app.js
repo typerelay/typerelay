@@ -217,6 +217,7 @@ export class Server {
 
 		app.post('/api/v2/assets', express.raw({ type: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'], limit: '5mb' }), async (req, res) => res.json(await Assets.put(req.ctx, req.body)));
 		app.post('/api/v2/assets/presence', async (req, res) => res.json(await Assets.presence(req.ctx, req.body.ids)));
+		app.patch('/api/v2/assets/:id/sources', async (req, res) => res.json(await Assets.mergeSources(req.ctx, req.params.id, req.body.source_urls)));
 		app.put('/api/v2/assets/:id', express.raw({ type: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'], limit: '2mb' }), async (req, res) => res.json(await Assets.accept(req.ctx, req.body, req.params.id)));
 		app.get('/api/v2/assets/:id', async (req, res) => { const asset = await Assets.get(req.ctx, req.params.id, true); res.set({ 'Content-Type': asset.mime_type, 'Content-Length': String(asset.size), ETag: `"${asset.id}"`, 'Cache-Control': 'private, max-age=31536000, immutable' }).send(asset.data); });
 		app.post('/api/v2/assets/remote', async (req, res) => res.json(await Assets.remote(req.ctx, req.body.url)));

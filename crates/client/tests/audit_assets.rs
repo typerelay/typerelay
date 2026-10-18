@@ -45,19 +45,20 @@ fn sync_only_transfers_pending_references_and_checks_each_account() {
     db.import("Selected", &json!({"matches":[{"trigger":"selected","type":"rich_text","replace":format!("![](typerelay-asset:{id})")}]}).to_string()).unwrap();
     assert!(db.pending_asset_ids().unwrap().is_empty()); db.enroll("Selected").unwrap(); assert_eq!(db.pending_asset_ids().unwrap(), vec![id.clone()]);
     // An earlier account's uploaded flag must never suppress the current account's presence check.
-    for account in ["first", "second"] {
+    for account in ["first", "second", "present", "complete"] {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap(); let server = format!("http://{}", listener.local_addr().unwrap()); let expected = id.clone();
         let worker = std::thread::spawn(move || {
             let mut paths = Vec::new();
-            for _ in 0..4 {
+            for _ in 0..if account == "complete" { 3 } else if account == "present" { 4 } else { 5 } {
                 let (mut stream, _) = listener.accept().unwrap(); let mut headers = Vec::new(); let mut byte = [0];
                 while !headers.ends_with(b"\r\n\r\n") { stream.read_exact(&mut byte).unwrap(); headers.push(byte[0]); }
                 let headers = String::from_utf8(headers).unwrap(); let path = headers.lines().next().unwrap().to_owned();
                 let length = headers.lines().find_map(|line| line.to_lowercase().strip_prefix("content-length: ").and_then(|value| value.parse::<usize>().ok())).unwrap_or(0);
                 let mut bytes = vec![0; length]; stream.read_exact(&mut bytes).unwrap();
                 let (status, body) = if path.starts_with("GET ") { ("200 OK", json!({"protocol":6,"cursor":0,"libraries":[],"assets":[],"conflicts":[]})) }
-                else if path.starts_with("POST /api/v2/assets/presence ") { assert_eq!(serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["ids"], json!([expected])); ("200 OK", json!({"missing":[expected],"assets":[]})) }
+                else if path.starts_with("POST /api/v2/assets/presence ") { assert_eq!(serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["ids"], json!([expected])); ("200 OK", if account == "present" || account == "complete" { json!({"missing":[],"assets":[{"id":expected,"source_urls":if account == "complete" { vec!["https://example.test/one.png","https://example.test/two.png"] } else { vec!["https://example.test/one.png"] }}]}) } else { json!({"missing":[expected],"assets":[]}) }) }
                 else if path.starts_with("PUT ") { assert!(path.contains(&expected)); assert_eq!(format!("{:x}",Sha256::digest(&bytes)), expected); ("200 OK",json!({})) }
+                else if path.starts_with("PATCH ") { assert_eq!(path,format!("PATCH /api/v2/assets/{expected}/sources HTTP/1.1")); assert_eq!(serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["source_urls"],if account == "present" {json!(["https://example.test/two.png"])} else {json!(["https://example.test/one.png","https://example.test/two.png"])}); ("200 OK",json!({"saved":true})) }
                 else { assert!(path.starts_with("POST /api/v2/libraries ")); ("503 Service Unavailable",json!({"error":"retry"})) };
                 paths.push(path); let body = body.to_string(); write!(stream,"HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
             }
@@ -65,7 +66,7 @@ fn sync_only_transfers_pending_references_and_checks_each_account() {
         });
         let sync = Sync::new(root.path().join("sync-root"), directory.clone()).unwrap();
         assert!(sync.cycle_authenticated(&mut Credentials { server, access_token:"test".into(), refresh_token:String::new(), account:Some(account.into()), device:None }).is_err());
-        let paths = worker.join().unwrap(); assert!(paths[1].contains("assets/presence")); assert!(paths[2].starts_with("PUT ")); assert!(!paths.iter().any(|path| path.contains(&private_id)));
+        let paths = worker.join().unwrap(); assert!(paths[1].contains("assets/presence")); assert_eq!(paths.iter().any(|path| path.starts_with("PUT ")), account == "first" || account == "second"); assert_eq!(paths.iter().any(|path| path.starts_with("PATCH ")), account != "complete"); assert!(!paths.iter().any(|path| path.contains(&private_id)));
     }
 }
 
@@ -143,4 +144,21 @@ fn cached_image_sync_merges_sources_without_fetching_or_rewriting_unchanged_byte
     let bundle = root.path().join("merged.typerelay.zip"); db.export("Images", &bundle).unwrap();
     let mut archive = zip::ZipArchive::new(fs::File::open(bundle).unwrap()).unwrap(); let mut text = String::new(); archive.by_name("bundle.json").unwrap().read_to_string(&mut text).unwrap();
     assert_eq!(serde_json::from_str::<serde_json::Value>(&text).unwrap()["asset_metadata"][&id]["source_urls"], merged["source_urls"]);
+}
+
+#[test]
+fn native_library_size_matches_canonical_validation_at_the_exact_limit() {
+    use typerelay_client::config::Match;
+    let root = tempfile::tempdir().unwrap(); let db = Database::open(root.path()).unwrap();
+    let mut matches: Vec<_> = (0..16).map(|i| Match { trigger: format!("s{i}"), replace: "x".repeat(64000), ..Default::default() }).collect();
+    matches.push(Match { trigger: "last".into(), replace: "x".into(), ..Default::default() });
+    let remaining = 1048576 - serde_json::to_vec(&matches).unwrap().len(); matches.last_mut().unwrap().replace.push_str(&"x".repeat(remaining));
+    assert_eq!(serde_json::to_vec(&matches).unwrap().len(), 1048576);
+    assert_eq!(db.import("Limit", &json!({"matches":matches}).to_string()).unwrap().entries.len(), 17);
+    matches.last_mut().unwrap().replace.push('x');
+    let rejected = Database::open(&root.path().join("rejected")).unwrap();
+    let error = rejected.import("Over limit", &json!({"matches":matches}).to_string()).unwrap_err();
+    assert!(error.to_string().contains("Library exceeds 1 MiB"), "{error}");
+    assert!(rejected.libraries().unwrap().is_empty());
+    assert_eq!(db.libraries().unwrap().len(), 1);
 }

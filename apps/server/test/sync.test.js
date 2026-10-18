@@ -731,3 +731,41 @@ test('downgraded retained members do not block purge; cleanup continues after an
 		assert.equal((await Library.findById(first.library._id).lean()).state, 'trashed');
 	} finally { replacement.mock.restore(); }
 });
+
+test('near-limit libraries survive web import, restore and a move without counting display copies', async () => {
+	const ctx = await Fixture.user('owner', (await Account.create({ name: 'Size boundary' }))._id);
+	await Fixture.create(ctx);
+	await Fixture.create(ctx);
+	const source = { matches: Array.from({ length: 16 }, (_, i) => ({ trigger: `limit${i}`, replace: 'x'.repeat(64000) })) };
+	const body = { source: JSON.stringify(source) };
+	const preview = await Libraries.previewImport('yaml', body);
+	body.selected = preview.entries.map(entry => ({ key: entry.key }));
+	const imported = await Libraries.mutate(ctx, randomUUID(), body, (fresh, session) => Libraries.commitImport(fresh, 'yaml', body, session));
+	let library = imported.libraries[0];
+	assert.equal(library.snippets.length, 16);
+	await Libraries.mutate(ctx, randomUUID(), {}, (fresh, session) => Libraries.trashAction(fresh, { type: 'library', id: library._id, library: library._id, revision: library.revision }, 'trash', session));
+	library = Libraries.view(ctx, await Libraries.get(ctx, library._id, null, true));
+	await Libraries.mutate(ctx, randomUUID(), {}, (fresh, session) => Libraries.trashAction(fresh, { type: 'library', id: library._id, library: library._id, revision: library.revision }, 'restore', session));
+	const { library: extra } = await Fixture.create(ctx, 'matches:\n- trigger: extra\n  replace: extra\n');
+	const move = { action: 'move', source_library: extra._id, destination_library: library._id, items: [{ id: extra.snippets[0].id, base_revision: extra.snippets[0].revision }] };
+	await Libraries.mutate(ctx, randomUUID(), move, (fresh, session) => Libraries.batch(fresh, move, session));
+	assert.equal((await Libraries.get(ctx, library._id)).snippets.length, 17);
+});
+
+test('native image source merges are idempotent, visible in sync and isolated by account', async () => {
+	const ctx = await Fixture.user('owner', (await Account.create({ name: 'Source boundary' }))._id);
+	const sharp = (await import('sharp')).default;
+	const bytes = await sharp({ create: { width: 1, height: 1, channels: 3, background: '#123456' } }).png().toBuffer();
+	const image = await Assets.accept(ctx, bytes);
+	const sources = ['https://example.test/one.png', 'https://example.test/two.png'];
+	await Assets.mergeSources(ctx, image.id, [sources[0]]);
+	await Assets.mergeSources(ctx, image.id, sources);
+	await Assets.mergeSources(ctx, image.id, sources);
+	const body = { name: 'Sources', snippets: [{ trigger: 'image', content: { version: 2, type: 'rich_text', markdown: `![](typerelay-asset:${image.id})`, variables: {} } }] };
+	await Libraries.mutate(ctx, randomUUID(), body, async (fresh, session) => ({ library: await Libraries.create(fresh, body, session) }));
+	assert.deepEqual((await Assets.presence(ctx, [image.id])).assets[0].source_urls, sources);
+	assert.deepEqual((await Libraries.download(ctx, 0)).assets.find(asset => asset.id === image.id).source_urls, sources);
+	assert.deepEqual((await Assets.get(ctx, image.id)).source_urls, sources);
+	await assert.rejects(Assets.mergeSources(Fixture.outsider, image.id, ['https://other.test/']), error => error.status === 404);
+	assert.deepEqual((await Assets.get(ctx, image.id)).source_urls, sources);
+});

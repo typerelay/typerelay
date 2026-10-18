@@ -73,7 +73,7 @@ export class Libraries {
 		return { trigger: Abbreviation.normalize(entry?.trigger) || null, title: entry?.title || '', content: Libraries.content(entry) };
 	}
 	static async prepared(ctx,entry,session=null){if(entry?.content?.type==='rich_text')return{...entry,content:await RichText.prepare(ctx,entry.content,session)};if(entry?.type==='rich_text')return{...entry,content:await RichText.prepare(ctx,{version:2,type:'rich_text',markdown:entry.replace,variables:entry.variables||{}},session)};return entry;}
-	static yaml(entry) { const value = Libraries.value(entry); return { trigger: value.trigger, title: value.title, replace: value.content.text, type: value.content.type === 'rich_text' ? 'plain_text' : value.content.type, language: value.content.language || 'plain_text', variables: value.content.type === 'rich_text' ? {} : (value.content.variables || {}) }; }
+	static yaml(entry) { const value = Libraries.value(entry); return { trigger: value.trigger, title: value.title, replace: value.content.type === 'rich_text' ? value.content.markdown : value.content.text, type: value.content.type, language: value.content.language || 'plain_text', variables: value.content.variables || {} }; }
 	static exportEntry(entry){const value=Libraries.value(entry);if(value.content.type==='rich_text'){Support.assert(!value.content.assets.length,'Export rich text with images as a TypeRelay bundle',409);return{trigger:value.trigger,title:value.title,replace:value.content.markdown,type:'rich_text',variables:value.content.variables};}return Libraries.yaml(value);}
 	static entry(snippet) { if(snippet.content?.type==='rich_text'){const assets=Object.fromEntries((snippet.content.assets||[]).map(id=>[id,`/snippet-assets/${snippet.account}/${id}`]));return{...snippet,replace:snippet.content.markdown,rich_html:RichText.render({...snippet.content,assets}).html};}return { ...snippet, replace: snippet.content?.text }; }
 	static view(ctx, library) { return { ...library, _id: String(library._id), deleted: library.state !== 'active', permissions: Support.access(ctx, library) }; }
@@ -92,10 +92,10 @@ export class Libraries {
 	}
 	static async validate(entries, ctx = null, session = null) {
 		const values = entries.map(Libraries.value);
-		await Yaml.validate(values.map(Libraries.yaml));
-		if (!ctx) return;
+		const { matches } = await Yaml.validate(values.map(Libraries.yaml));
+		if (!ctx) return matches;
 		const ids = [...new Set(values.flatMap(value => value.content.type === 'rich_text' ? value.content.assets : []))];
-		if (!ids.length) return;
+		if (!ids.length) return matches;
 		Support.assert((await Assets.visible(ctx, ids, session)).length === ids.length, 'Rich text references an inaccessible image asset', 422);
 		const assets = await SnippetAsset.find({ account: ctx.account, id: { $in: ids } }).select('id size').session(session || null).lean();
 		Support.assert(assets.length === ids.length, 'Rich text references a missing image asset', 422);
@@ -104,6 +104,7 @@ export class Libraries {
 			Support.assert(value.content.assets.reduce((total, id) => total + sizes.get(id), 0) <= 8 * 1048576, 'Rich-text images exceed 8 MiB', 422);
 		}
 		await SnippetAsset.updateMany({ account: ctx.account, id: { $in: ids } }, { $set: { last_referenced_at: new Date() }, $pull: { staged_by: ctx.user } }, { session: session || null });
+		return matches;
 	}
 	static importFormats = {
 		typerelay: { name: 'TypeRelay bundle', accept: '.typerelay.zip,.zip', instructions: 'Choose a TypeRelay bundle containing snippets.yml and its deduplicated image assets.', beta: false },
@@ -337,7 +338,7 @@ export class Libraries {
 			used.add(name);
 			libraries.push(await Libraries.create(ctx, { name, snippets: group.snippets }, session));
 		}
-		await Libraries.validateVisible(ctx, session);
+		await Libraries.validateVisible(ctx, session, libraries.flatMap(library => library.snippets.map(entry => entry.id)));
 		return { libraries, import_summary: { imported: body.selected.length, skipped: preview.warnings || [], renamed } };
 	}
 	static async create(ctx, body, session) {
@@ -483,8 +484,8 @@ export class Libraries {
 				await Conflict.updateMany({ account: ctx.account, library: source._id, snippet: record.id }, { $set: { library: destination._id } }, { session });
 			}
 			const entries = await Snippet.find({ library: destination._id, state: 'active' }).session(session).lean();
-			await Libraries.validate(entries, ctx, session);
-			Support.assert(Buffer.byteLength(JSON.stringify(entries)) <= 1048576, 'Destination exceeds the library size limit');
+			const matches = await Libraries.validate(entries, ctx, session);
+			Support.assert(Buffer.byteLength(JSON.stringify(matches)) <= 1048576, 'Destination exceeds the library size limit');
 			for (const library of [source, destination]) {
 				await Library.updateOne({ _id: library._id }, { $inc: { revision: 1 } }, { session });
 				const sequence = await Support.change(ctx.account, library._id, 'move', session);
@@ -511,14 +512,17 @@ export class Libraries {
 		const libraries = await Libraries.list(ctx, session);
 		Support.assert(libraries.length <= 256, 'Active libraries exceed the engine limit', 409);
 		const entries = libraries.flatMap(library => library.snippets);
+		let matches;
 		if (restoredIds) {
 			const restored = new Set(restoredIds);
 			const occupied = new Set(entries.filter(entry => !restored.has(entry.id) && entry.trigger).map(entry => entry.trigger));
 			Support.assert(!entries.some(entry => restored.has(entry.id) && entry.trigger && occupied.has(entry.trigger)), 'Duplicate trigger', 422);
-			await Libraries.validate(entries.map(entry => restored.has(entry.id) ? entry : { ...entry, trigger: null }), ctx, session);
-		} else await Libraries.validate(entries, ctx, session);
-		Support.assert(Buffer.byteLength(JSON.stringify(entries)) <= 8 * 1048576, 'Active snippets exceed the engine limit', 409);
-		for (const library of libraries) Support.assert(Buffer.byteLength(JSON.stringify(library.snippets)) <= 1048576, 'Library exceeds the engine limit', 409);
+			matches = await Libraries.validate(entries.map(entry => restored.has(entry.id) ? entry : { ...entry, trigger: null }), ctx, session);
+			for (const [index, entry] of entries.entries()) matches[index].trigger = Abbreviation.normalize(entry.trigger) || '';
+		} else matches = await Libraries.validate(entries, ctx, session);
+		let offset = 0; let total = 0;
+		for (const library of libraries) { const size = Buffer.byteLength(JSON.stringify(matches.slice(offset, offset + library.snippets.length))); Support.assert(size <= 1048576, 'Library exceeds the engine limit', 409); total += size; offset += library.snippets.length; }
+		Support.assert(total <= 8 * 1048576, 'Active snippets exceed the engine limit', 409);
 	}
 	static async purge(library, entry, session) {
 		const filter = entry ? { library: library._id, id: entry.id } : { library: library._id };
