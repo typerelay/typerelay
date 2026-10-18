@@ -80,3 +80,27 @@ fn oversized_bundles_are_rejected_before_import() {
     assert!(db.import_bundle("Large", &path).unwrap_err().to_string().contains("Bundle exceeds 16 MiB"));
     assert!(db.libraries().unwrap().is_empty());
 }
+
+
+#[test]
+fn bundle_import_merges_existing_sources_and_rolls_back_all_writes_on_failure() {
+    let root=tempfile::tempdir().unwrap(); let source=Database::open(&root.path().join("source")).unwrap(); let id=image(&source,1); let other=image(&source,2);
+    source.import("Images",&json!({"matches":[{"trigger":"images","type":"rich_text","replace":format!("![](typerelay-asset:{id}) ![](typerelay-asset:{other})")}]}).to_string()).unwrap();
+    let bundle=root.path().join("sources.typerelay.zip"); source.export("Images",&bundle).unwrap();
+    for mode in ["failure","merged","null","empty"] {
+        let target=Database::open(&root.path().join(mode)).unwrap(); let(mut metadata,bytes)=source.asset(&id).unwrap().unwrap(); metadata["source_urls"]=json!(["https://existing.test/original.png","https://example.test/one.png"]); if mode=="null" { metadata["source_urls"]=serde_json::Value::Null; } target.put_asset(&metadata,&bytes,false).unwrap();
+        if mode=="empty" { source.connection.execute("UPDATE assets SET source_urls='[]'",[]).unwrap(); fs::remove_file(&bundle).unwrap(); source.export("Images",&bundle).unwrap(); }
+        if mode=="failure" {
+            assert!(target.import_bundle("invalid/name",&bundle).is_err());
+            assert_eq!(target.asset(&id).unwrap().unwrap().0["source_urls"],metadata["source_urls"]);
+            assert!(target.asset(&other).unwrap().is_none()); assert!(target.libraries().unwrap().is_empty());
+        } else {
+            target.import_bundle("Imported",&bundle).unwrap();
+            let expected=if mode=="empty" { metadata["source_urls"].clone() } else if mode=="null" { json!(["https://example.test/one.png","https://example.test/two.png"]) } else { json!(["https://existing.test/original.png","https://example.test/one.png","https://example.test/two.png"]) };
+            assert_eq!(target.asset(&id).unwrap().unwrap().0["source_urls"],expected);
+            let exported=root.path().join(format!("{mode}.typerelay.zip")); target.export("Imported",&exported).unwrap();
+            let mut zip=zip::ZipArchive::new(fs::File::open(exported).unwrap()).unwrap(); let mut text=String::new(); zip.by_name("bundle.json").unwrap().read_to_string(&mut text).unwrap();
+            assert_eq!(serde_json::from_str::<serde_json::Value>(&text).unwrap()["asset_metadata"][&id]["source_urls"],expected);
+        }
+    }
+}

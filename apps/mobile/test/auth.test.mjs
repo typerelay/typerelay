@@ -11,7 +11,7 @@ function fixture() {
  const requests = []; const actions = [];
  const context = { Preview: { enabled: false }, SecureStorage: { get: async key => storage.get(key), set: async (key, value) => storage.set(key, value), remove: async key => storage.delete(key) }, Native: { call: async action => { actions.push(action); } }, Browser: { close: async () => {} }, CapacitorHttp: { post: () => new Promise(resolve => requests.push(resolve)), delete: async () => ({ status: 200 }) }, URL, Date, console };
  vm.createContext(context); vm.runInContext(source, context);
- return { ...context, storage, requests, actions };
+ return Object.assign(context, { storage, requests, actions });
 }
 const tokens = { access_token: 'access', refresh_token: 'refresh', account: 'old', expires_in: 900, obtained_at: 0 };
 const callback = 'com.typerelay.mobile://oauth/callback?state=expected&code=code';
@@ -52,4 +52,38 @@ test('preview reset uses the captured credential after storage is cleared', asyn
  vm.createContext(context); vm.runInContext(code, context);
  await new context.Preview().execute({ request: JSON.stringify({ action: 'reset', access_token: 'captured' }) });
  assert.equal(requests[0].headers.Authorization, 'Bearer captured');
+});
+
+for (const status of [200, 401]) test('same-account reconnect rejects an earlier refresh ' + status, async () => {
+ const f = fixture(); f.Auth.tokens = tokens; f.Auth.server = 'https://old.test';
+ const old = assert.rejects(f.Auth.access(), /Connection changed/); await tick();
+ const login = f.Auth.complete(callback); await tick();
+ f.requests[1]({ status: 200, data: { ...tokens, access_token: 'new-access' } }); await login;
+ f.requests[0]({ status, data: tokens }); await old;
+ assert.equal(f.Auth.tokens.access_token, 'new-access'); assert.equal(f.storage.get('tokens').access_token, 'new-access'); assert.deepEqual(f.actions, ['bind']);
+});
+
+test('reconnect waits for an earlier credential write and prevents it replacing the new login', async () => {
+ const f = fixture(); f.Auth.tokens = tokens; let release; const paused = new Promise(resolve => { release = resolve; }); const set = f.SecureStorage.set;
+ f.SecureStorage.set = async (key, value) => { if (key === 'tokens' && value.access_token === 'access') await paused; return set(key, value); };
+ const old = f.Auth.access(); await tick(); f.requests[0]({ status: 200, data: tokens }); await tick();
+ const login = f.Auth.complete(callback); await tick(); f.requests[1]({ status: 200, data: { ...tokens, access_token: 'new-access' } }); await tick();
+ assert.deepEqual(f.actions, []); release(); await old; await login;
+ assert.equal(f.storage.get('tokens').access_token, 'new-access'); assert.equal(f.Auth.tokens.access_token, 'new-access');
+});
+
+test('successful callback invokes onLogin and releases the completion job after generation changes', async () => {
+ const f = fixture(); let handle; let logins = 0;
+ f.App = { addListener: async (event, listener) => { handle = listener; }, getLaunchUrl: async () => null }; f.SecureStorage.setKeyPrefix = async () => {};
+ await f.Auth.initialize(async () => { logins++; }); handle({ url: callback }); await tick(); f.requests[0]({ status: 200, data: tokens }); await f.Auth.completing;
+ assert.equal(logins, 1); assert.equal(f.Auth.completing, null); assert.equal(f.Auth.completed.has(callback), true);
+});
+
+for (const boundary of ['server', 'tokens']) for (const status of [200, 401]) test('refresh started during reconnect ' + boundary + ' write cannot change the new session: ' + status, async () => {
+ const f = fixture(); f.Auth.tokens = tokens; f.Auth.server = 'https://old.test'; let release; const paused = new Promise(resolve => { release = resolve; }); const set = f.SecureStorage.set;
+ f.SecureStorage.set = async (key, value) => { if (key === boundary) await paused; return set(key, value); };
+ const login = f.Auth.complete(callback); await tick(); f.requests[0]({ status: 200, data: { ...tokens, access_token: 'new-access' } }); await tick();
+ const old = assert.rejects(f.Auth.access(), /Connection changed/); await tick(); release(); await login;
+ f.requests[1]({ status, data: tokens }); await old;
+ assert.equal(f.Auth.tokens.access_token, 'new-access'); assert.equal(f.storage.get('tokens').access_token, 'new-access'); assert.deepEqual(f.actions, ['bind']);
 });

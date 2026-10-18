@@ -254,7 +254,7 @@ impl Database {
         let mut statement = self.connection.prepare("SELECT seq,operation FROM outbox ORDER BY seq")?;
         statement.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?.map(|row| { let (seq, text) = row?; Ok((seq, serde_json::from_str(&text)?)) }).collect()
     }
-	pub fn put_asset(&self,metadata:&Value,data:&[u8],uploaded:bool)->Result<()> {let id=metadata["id"].as_str().context("Missing asset ID")?;ensure!(id.len()==64&&id.bytes().all(|byte|byte.is_ascii_hexdigit()),"Invalid asset ID");ensure!(data.len()<=2*1048576,"Asset exceeds 2 MiB");self.connection.execute("INSERT INTO assets(id,mime_type,size,width,height,animated,source_urls,data,uploaded,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(id) DO UPDATE SET mime_type=excluded.mime_type,size=excluded.size,width=excluded.width,height=excluded.height,animated=excluded.animated,source_urls=excluded.source_urls,data=excluded.data,uploaded=MAX(assets.uploaded,excluded.uploaded)",params![id,metadata["mime_type"].as_str().context("Missing asset MIME")?,data.len() as i64,metadata["width"].as_i64().unwrap_or(0),metadata["height"].as_i64().unwrap_or(0),metadata["animated"].as_bool().unwrap_or(false),metadata["source_urls"].to_string(),data,uploaded,Utc::now().timestamp()])?;Ok(())}
+	pub fn put_asset(&self,metadata:&Value,data:&[u8],uploaded:bool)->Result<()> {let id=metadata["id"].as_str().context("Missing asset ID")?;ensure!(id.len()==64&&id.bytes().all(|byte|byte.is_ascii_hexdigit()),"Invalid asset ID");ensure!(data.len()<=2*1048576,"Asset exceeds 2 MiB");self.connection.execute("INSERT INTO assets(id,mime_type,size,width,height,animated,source_urls,data,uploaded,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(id) DO UPDATE SET mime_type=excluded.mime_type,size=excluded.size,width=excluded.width,height=excluded.height,animated=excluded.animated,source_urls=(SELECT json_group_array(value) FROM (SELECT value FROM json_each(assets.source_urls) WHERE type='text' UNION ALL SELECT DISTINCT value FROM json_each(excluded.source_urls) WHERE type='text' AND value NOT IN (SELECT value FROM json_each(assets.source_urls) WHERE type='text'))),data=excluded.data,uploaded=MAX(assets.uploaded,excluded.uploaded)",params![id,metadata["mime_type"].as_str().context("Missing asset MIME")?,data.len() as i64,metadata["width"].as_i64().unwrap_or(0),metadata["height"].as_i64().unwrap_or(0),metadata["animated"].as_bool().unwrap_or(false),metadata["source_urls"].to_string(),data,uploaded,Utc::now().timestamp()])?;Ok(())}
 	pub fn asset(&self,id:&str)->Result<Option<(Value,Vec<u8>)>> {self.connection.query_row("SELECT mime_type,size,width,height,animated,source_urls,data,uploaded FROM assets WHERE id=?1",[id],|row|{let sources:String=row.get(5)?;Ok((json!({"id":id,"mime_type":row.get::<_,String>(0)?,"size":row.get::<_,i64>(1)?,"width":row.get::<_,i64>(2)?,"height":row.get::<_,i64>(3)?,"animated":row.get::<_,bool>(4)?,"source_urls":serde_json::from_str::<Value>(&sources).unwrap_or(json!([])),"uploaded":row.get::<_,bool>(7)?}),row.get(6)?))}).optional().map_err(Into::into)}
 	pub fn pending_asset_ids(&self)->Result<Vec<String>> {let mut statement=self.connection.prepare("SELECT DISTINCT asset.value FROM outbox, json_tree(outbox.operation, '$.body') content, json_each(content.value, '$.assets') asset WHERE content.key='content' AND content.type='object' ORDER BY asset.value")?;Ok(statement.query_map([],|row|row.get(0))?.collect::<std::result::Result<Vec<_>,_>>()?)}
     pub fn edit(&self, file: &OpenFile, index: Option<usize>, entry: Option<Match>) -> Result<OpenFile> {
@@ -510,6 +510,7 @@ impl Database {
         let document: Document = serde_saphyr::from_str(&manifest)?;
         Bridge::validate(&document.matches)?;
         let ids: std::collections::BTreeSet<String> = document.matches.iter().flat_map(|entry| entry.value()["content"]["assets"].as_array().cloned().unwrap_or_default()).filter_map(|id| id.as_str().map(str::to_owned)).collect();
+        let transaction = self.connection.unchecked_transaction()?;
         for id in ids {
             let mut bytes = Vec::new();
             archive.by_name(&format!("assets/{id}"))?.take(2 * 1048576 + 1).read_to_end(&mut bytes)?;
@@ -525,17 +526,19 @@ impl Database {
             }
             if let Some(sources) = saved["source_urls"].as_array() { ensure!(sources.iter().all(Value::is_string), "Invalid image sources"); asset["source_urls"] = json!(sources); self.put_asset(&asset, &bytes, false)?; }
         }
-        self.import(name, &manifest)
+        let imported = self.import(name, &manifest)?;
+        transaction.commit()?;
+        Ok(imported)
     }
     pub fn import(&self, name: &str, source: &str) -> Result<OpenFile> {
         let parsed = Bridge::execute(crate::bridge::Request { yaml: Some(source.into()), matches: None, export: false, edits: vec![] })?;
         let name = Self::name(name)?;
-        let transaction = self.connection.unchecked_transaction()?;
+        let transaction = if self.connection.is_autocommit() { Some(self.connection.unchecked_transaction()?) } else { None };
         let id = Uuid::new_v4().to_string();
         self.put_library(&json!({"_id":id,"name":name,"state":"active","revision":1,"permissions":{"read":true,"edit":true,"manage":true}}), &name, false)?;
         for (position, entry) in parsed.matches.iter().enumerate() { self.put_record(&id, &json!({"id":Uuid::new_v4().to_string(),"trigger":entry.value()["trigger"],"title":entry.title,"content":entry.value()["content"],"position":position,"revision":1,"state":"active"}))?; }
         self.validate_transaction()?;
-        transaction.commit()?;
+        if let Some(transaction) = transaction { transaction.commit()?; }
         self.editor(&name)
     }
 

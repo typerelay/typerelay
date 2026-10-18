@@ -22,7 +22,7 @@ export class Auth {
   await SecureStorage.setKeyPrefix('typerelay_mobile_');
   Auth.server = await SecureStorage.get('server') as string || '';
   Auth.tokens = await SecureStorage.get('tokens') as Tokens | null;
-  const handle = async (url: string) => { if (!Auth.isCallback(url) || Auth.completed.has(url)) return; if (!Auth.completing) { const version = Auth.version; Auth.completing = Auth.complete(url).then(async () => { Auth.assert(version); Auth.completed.add(url); await onLogin(); }).finally(() => { if (version === Auth.version) Auth.completing = null; }); } return Auth.completing; };
+  const handle = async (url: string) => { if (!Auth.isCallback(url) || Auth.completed.has(url)) return; if (!Auth.completing) { const completion = Auth.complete(url).then(async version => { Auth.assert(version); Auth.completed.add(url); await onLogin(); }).finally(() => { if (Auth.completing === completion) Auth.completing = null; }); Auth.completing = completion; } return Auth.completing; };
   if (Preview.enabled) { if (Auth.tokens) await Auth.access().catch(async error => { Auth.onError(error); await Auth.clear(); }); if (Auth.isCallback(location.href)) { await handle(location.href).catch(Auth.onError); history.replaceState(null, '', import.meta.env.BASE_URL); } return; }
   await App.addListener('appUrlOpen', event => { void handle(event.url).catch(Auth.onError); });
   const launch = await App.getLaunchUrl();
@@ -48,13 +48,15 @@ export class Auth {
   if (url.searchParams.has('error')) throw new Error('Sign-in was cancelled.');
   if (url.searchParams.getAll('code').length !== 1) throw new Error('Missing sign-in code');
   const tokens = await Auth.tokenRequest(pending.server, { grant_type: 'authorization_code', client_id: Auth.client, redirect_uri: Auth.callback, code_verifier: pending.verifier, code: url.searchParams.get('code')! }, version);
-  try { await Auth.write(version, async () => {
+  let connectedVersion: number;
+  try { connectedVersion = await Auth.write(version, async () => {
    await Native.call('bind', { server: pending.server, account: tokens.account, ...(Preview.enabled ? { access_token: tokens.access_token } : {}) });
    Auth.assert(version); await SecureStorage.set('server', pending.server); Auth.assert(version);
-   await SecureStorage.set('tokens', tokens as any); Auth.assert(version); Auth.tokens = tokens; Auth.server = pending.server;
-   await SecureStorage.remove('pending');
+   await SecureStorage.set('tokens', tokens as any); Auth.assert(version);
+   await SecureStorage.remove('pending'); Auth.assert(version);
+   Auth.tokens = tokens; Auth.server = pending.server; Auth.refresh = null; return ++Auth.version;
   }); } catch (error) { await Auth.revoke(pending.server, tokens).catch(() => undefined); throw error; }
-  Auth.assert(version); await Browser.close().catch(() => undefined);
+  Auth.assert(connectedVersion); await Browser.close().catch(() => undefined); return connectedVersion;
  }
  static async tokenRequest(server: string, body: Record<string,string>, version = Auth.version) { const result = await (Preview.enabled ? Preview.request('/oauth/token', 'POST', body) : CapacitorHttp.post({ url: `${server}/oauth/token`, headers: { 'Content-Type': 'application/json' }, data: body, disableRedirects: true })); Auth.assert(version); if (result.status !== 200) { if (result.status === 401 && body.grant_type === 'refresh_token') await Auth.write(version, () => Native.call('suspend')); throw new Error(result.data?.error || 'Sign-in failed'); } return { ...result.data, obtained_at: Date.now() } as Tokens; }
  static async save(tokens: Tokens, version = Auth.version) { await Auth.write(version, async () => { await SecureStorage.set('tokens', tokens as any); Auth.assert(version); Auth.tokens = tokens; }); }
