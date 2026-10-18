@@ -22,10 +22,10 @@ export class Assets {
 		Support.assert(detected && Assets.types.has(detected.mime), 'Upload a PNG, JPG, WebP, or GIF image', 415);
 		const image = sharp(input, { animated: true, limitInputPixels: 4096 * 4096 * 4 });
 		const metadata = await image.metadata();
-		Support.assert(metadata.width && metadata.height && metadata.width <= 16384 && metadata.height <= 16384, 'Invalid image dimensions', 400);
+		Support.assert(metadata.width && metadata.height && metadata.width <= 16384 && (metadata.pageHeight || metadata.height) <= 16384, 'Invalid image dimensions', 400);
 		const animated = detected.mime === 'image/gif' && Number(metadata.pages || 1) > 1;
 		let data; let mimeType;
-		if (animated) { data = input; mimeType = 'image/gif'; }
+		if (animated) { Support.assert(metadata.width <= Assets.maximumDimension && (metadata.pageHeight || metadata.height) <= Assets.maximumDimension, 'Animated image dimensions exceed 2048', 400); data = input; mimeType = 'image/gif'; }
 		else {
 			const pipeline = sharp(input, { limitInputPixels: 4096 * 4096 * 4 }).rotate().resize({ width: Assets.maximumDimension, height: Assets.maximumDimension, fit: 'inside', withoutEnlargement: true });
 			if (metadata.hasAlpha) { data = await pipeline.png({ compressionLevel: 9 }).toBuffer(); mimeType = 'image/png'; }
@@ -33,14 +33,14 @@ export class Assets {
 		}
 		Support.assert(data.length <= Assets.maximumStored, 'Normalized image exceeds 2 MiB', 413);
 		const normalized = await sharp(data, { animated }).metadata();
-		return { id: Assets.id(data), data, mime_type: mimeType, size: data.length, width: normalized.width, height: normalized.height, animated };
+		return { id: Assets.id(data), data, mime_type: mimeType, size: data.length, width: normalized.width, height: normalized.pageHeight || normalized.height, animated };
 	}
 	static async put(ctx, input, sourceUrl = '', session = null) {
 		const asset = await Assets.normalize(input);
 		return Assets.save(ctx, asset, sourceUrl, session);
 	}
 	static async accept(ctx,input,expectedId='',sourceUrl='') {
-		Support.assert(Buffer.isBuffer(input)&&input.length>0&&input.length<=Assets.maximumStored,'Asset exceeds 2 MiB',413);const detected=await fileTypeFromBuffer(input);Support.assert(detected&&Assets.types.has(detected.mime),'Invalid image asset',415);const metadata=await sharp(input,{animated:true,limitInputPixels:4096*4096*4}).metadata();Support.assert(metadata.width&&metadata.height&&metadata.width<=Assets.maximumDimension&&metadata.height<=Assets.maximumDimension,'Invalid normalized image dimensions',400);const asset={id:Assets.id(input),data:input,mime_type:detected.mime,size:input.length,width:metadata.width,height:metadata.height,animated:detected.mime==='image/gif'&&Number(metadata.pages||1)>1};Support.assert(!expectedId||asset.id===expectedId,'Asset hash does not match its URL',409);return Assets.save(ctx,asset,sourceUrl);
+		Support.assert(Buffer.isBuffer(input)&&input.length>0&&input.length<=Assets.maximumStored,'Asset exceeds 2 MiB',413);const detected=await fileTypeFromBuffer(input);Support.assert(detected&&Assets.types.has(detected.mime),'Invalid image asset',415);const metadata=await sharp(input,{animated:true,limitInputPixels:4096*4096*4}).metadata();const height=metadata.pageHeight||metadata.height;Support.assert(metadata.width&&height&&metadata.width<=Assets.maximumDimension&&height<=Assets.maximumDimension,'Invalid normalized image dimensions',400);const asset={id:Assets.id(input),data:input,mime_type:detected.mime,size:input.length,width:metadata.width,height,animated:detected.mime==='image/gif'&&Number(metadata.pages||1)>1};Support.assert(!expectedId||asset.id===expectedId,'Asset hash does not match its URL',409);return Assets.save(ctx,asset,sourceUrl);
 	}
 	static async save(ctx,asset,sourceUrl='',session=null) {
 		const update = { $setOnInsert: { account: ctx.account, ...asset, last_referenced_at: new Date() }, $addToSet: { staged_by: ctx.user, ...(sourceUrl ? { source_urls: sourceUrl } : {}) } };

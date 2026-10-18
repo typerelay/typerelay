@@ -32,7 +32,7 @@ export class PublicApi {
 	static page(rows, query) {
 		const limit = Number(query.limit || 50);
 		Support.assert(Number.isInteger(limit) && limit >= 1 && limit <= 100, 'Limit must be 1–100');
-		const sorted = rows.map(PublicApi.clean).sort((a, b) => String(a.id).localeCompare(String(b.id)));
+		const sorted = rows.map(PublicApi.clean).sort((a, b) => String(a.id) < String(b.id) ? -1 : String(a.id) > String(b.id) ? 1 : 0);
 		const rest = sorted.filter(row => !query.cursor || String(row.id) > String(query.cursor));
 		return { items: rest.slice(0, limit), next_cursor: rest.length > limit ? String(rest[limit - 1].id) : null };
 	}
