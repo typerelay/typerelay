@@ -9,6 +9,11 @@
 - Keep model selection and subagent configuration in the task prompt. Give agents bounded ownership, the absolute worktree path, and the expected branch. Report missing tools or access as blockers.
 - Report in the spirit of ASD STE100. Keep sentence structures direct, limit procedural steps to single actions and avoid unnecessary synonyms.
 
+## Documentation and writing
+- When adding or updating a feature, add or update its documentation in the same task. Give each documentation page a clear title and SEO-compliant metadata using the documentation site's conventions.
+- If the product has no documentation site, create one and document the feature there.
+- For all writing, including documentation, blog posts, emails, pages, and other copy, retrieve and follow the relevant writing guidelines stored in Streamient before drafting or editing.
+
 ## Git and worktrees
 - Worktrees are located at ~/.worktrees
 - Never stage or commit worktree directories or Git worktree metadata into a repository. Keep worktree directories inside a repository ignored, and inspect staged paths before committing. Intended source changes made within a worktree may still be committed normally.
