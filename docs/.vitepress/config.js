@@ -9,7 +9,11 @@ const sections = {"guide": ["Guide", [["index", "Introduction"], ["getting-start
 export default defineConfig({ title: 'TypeRelay Docs', description: 'TypeRelay snippets, desktop clients, API and MCP', base, cleanUrls: true,
  srcExclude: ['api/usage/**', 'mcp/tools-list.md', 'README.md', 'VERIFICATION.md', 'AGENTS.md', 'development/**', 'web/**', 'mobile/**', 'desktop/delivery.md', 'desktop/code-snippets.md'],
  head: [['link', { rel: 'icon', href: base + 'favicon.ico' }]],
- transformPageData(page) { if (page.params?.pageTitle) { page.title = page.params.pageTitle; page.titleTemplate = false; page.description = page.params.pageDescription; } },
+ transformPageData(page) {
+  const canonical = new URL(page.relativePath.replace(/(^|\/)index\.md$/, '$1').replace(/\.md$/, ''), 'https://docs.typerelay.com/').href;
+  page.frontmatter.head = [...(page.frontmatter.head || []), ['link', { rel: 'canonical', href: canonical }]];
+  if (page.params?.pageTitle) { page.title = page.params.pageTitle; page.titleTemplate = false; page.description = page.params.pageDescription; }
+ },
  markdown: { config(md) { md.use(tabsMarkdownPlugin); } },
  themeConfig: { nav: Object.entries(sections).map(([key, section]) => ({ text: section[0], link: '/' + key + '/' })),
  sidebar: Object.fromEntries(Object.entries(sections).map(([key, section]) => ['/' + key + '/', [{ text: section[0], items: section[1].map(([slug, text]) => ({ text, link: '/' + key + '/' + (slug === 'index' ? '' : slug) })) }, ...(key === 'api' ? [{ text: 'OpenAPI', items: openapi.generateSidebarGroups().slice().sort((a,b) => a.text.localeCompare(b.text)).map(group => ({ ...group, collapsed: true })) }] : [])]])),
