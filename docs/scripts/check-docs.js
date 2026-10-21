@@ -17,6 +17,9 @@ for (const path of htmlFiles) {
  const html = readFileSync(resolve(distRoot, path), 'utf8');
  const titleMatches = [...html.matchAll(/<title>([^<]*)<\/title>/g)];
  const descriptionMatches = [...html.matchAll(/<meta name="description" content="([^"]*)"/g)];
+ const canonicals = [...html.matchAll(/<link\b[^>]*\brel="canonical"[^>]*>/g)];
+ const expectedCanonical = new URL(path.replace(/(^|\/)index\.html$/, '$1').replace(/\.html$/, ''), 'https://docs.typerelay.com/').href;
+ if (canonicals.length !== 1 || !canonicals[0][0].includes(`href="${expectedCanonical}"`)) metadataErrors.push(`${path}: expected one canonical pointing to ${expectedCanonical}`);
  if (titleMatches.length !== 1 || !titleMatches[0]?.[1].trim()) metadataErrors.push(`${path}: expected one non-empty title`);
  else { const title = titleMatches[0][1].trim(); titles.set(title, [...(titles.get(title) || []), path]); }
  if (descriptionMatches.length !== 1 || !descriptionMatches[0]?.[1].trim()) metadataErrors.push(`${path}: expected one non-empty meta description`);
