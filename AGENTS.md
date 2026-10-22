@@ -18,14 +18,15 @@
 - Worktrees are located at ~/.worktrees
 - Never stage or commit worktree directories or Git worktree metadata into a repository. Keep worktree directories inside a repository ignored, and inspect staged paths before committing. Intended source changes made within a worktree may still be committed normally.
 - Never push a branch whose name starts with `codex/` or `claude/` to any remote unless the user explicitly instructs you to push that branch. Permission to create a worktree, implement a task, or commit locally does not authorize pushing these branches. This restriction applies to all agents and takes precedence over general push instructions.
-- `develop` is the integration and push destination for product changes. Never substitute `main`, `master`, or a detached HEAD.
+- `develop` is the integration and push destination for product changes. Never substitute `main` or `master`.
 - Read `.github/CONTRIBUTING.md` before creating a pull request. Base contribution branches on `develop`; all contribution pull requests must target `develop`.
 - Set the PR base explicitly with `gh pr create --base develop` and verify it after creation and before merging. `main` is release-only; update it only through explicitly authorized release work.
-- After plan approval, fetch the latest changes, update `develop` without discarding existing work, and create a uniquely named task branch and worktree from it. Plan approval authorizes this branch/worktree and its completion lifecycle. Respect an explicitly supplied approved feature branch.
-- Implement, review, and test in the task worktree. Verify the path and branch before edits or Git mutations; include both in every subagent brief.
-- Commit completed code. If `develop` advances, incorporate it into the task branch, resolve conflicts, and repeat affected checks and review.
-- Once independent review and validation pass, merge into `develop`, verify the integrated result, and push to its configured remote. Serialize merges; preserve unrelated work.
-- After successful integration, verification, and push, remove the task worktree with Git and delete the completed branch. Retain them if blocked; never force cleanup that loses work.
+- The base is `develop`. The base is another branch only when the user names that branch or the session starts in a checkout on a branch other than `develop`. A branch that an app created automatically for the session (for example `claude/`, `codex/`, or an Orca workspace name) is not a base; use `develop`.
+- Start every task with `git fetch origin`, then create your own detached worktree at the latest base: `git worktree add --detach ~/.worktrees/<repo>/<task> origin/<base>`. Do not create a task branch. One worktree per agent lets several agents work on the same base in parallel. If the session already starts in an app-created worktree, use it and do not create a second one.
+- Implement, review, and test in the task worktree. Verify the path and base before edits or Git mutations; include both in every subagent brief.
+- Commit completed code in the worktree. Before pushing, run `git fetch origin` and `git rebase origin/<base>`, resolve conflicts, and repeat affected checks.
+- Push with `git push origin HEAD:<base>`. If the push is rejected because the base moved, fetch, rebase, check, and push again. Never force-push.
+- After the push is verified, remove the task worktree with `git worktree remove` (never `--force`). Delete only branches that the task itself created. Keep the worktree if blocked or if work is not pushed.
 
 ## Code and UI conventions
 - Use `pnpm`. Keep log statements and variable declarations on single lines; collapse unnecessarily wrapped calls and conditions.
@@ -45,7 +46,7 @@
 - Development uses Docker Compose (`compose.yml`); Avoid new environment variables; if required, update production Swarm files under `/Users/nitai/repos/helpmonks-install-script/docker/` and the relevant development secrets.
 - On `NadaMini`, projects are under `/Users/nitai/repos` and `/Users/nitai/repos-denise` use remote Docker through `dbh-run`; never local Docker or hand-written SSH sync. Other development hosts use local Docker per project instructions. Non-Docker unit tests stay on `NadaMini`.
 - Use `dbh-run compose -- <args>`, `dbh-run test`, and `dbh-run exec -- <command>`. Use `status` and `logs` for diagnosis. Run `dbh-run urls` before starting/testing a stack; repository metadata and its named URLs are authoritative.
-- `dbh-run` syncs the exact current worktree. Sync requires neither committing nor pushing. Verify the source worktree/revision being tested; do not assume an existing server serves the task branch.
+- `dbh-run` syncs the exact current worktree. Sync requires neither committing nor pushing. Verify the source worktree/revision being tested; do not assume an existing server serves the task worktree.
 - After implementation changes, automatically refresh the affected dbh stack before completion/testing: `dbh-run compose -- up -d`, then `dbh-run compose -- restart <affected-services>`, including relevant workers/schedulers. `up`, sync, push, or status alone is insufficient.
 - For dependency/image/Compose changes, use `dbh-run compose -- up -d --build --force-recreate <affected-services>` and required development asset builds through `dbh-run`. Run `dbh-run secrets` when Compose-referenced environment variables change.
 - Verify status and the named URL/health endpoint; inspect logs on failure. Preserve volumes/test data and leave the stack running. No routine `down -v` or `down --volumes`. Respect an explicit request to defer refresh; read-only/planning/instruction-only tasks need none.
