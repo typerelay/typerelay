@@ -39,7 +39,9 @@ Audit Logs combines API audit records and admin actions. Filter by account, acto
 
 Deletion requires typing the exact account ID. It immediately closes account access and queues durable cleanup. The scheduler checks queued deletions every minute. The app and scheduler must share the same `WHITE_LABEL_ASSETS_DIR` filesystem; the supplied Compose files share `/data`.
 
-Cleanup drains active requests/jobs, cancels subscriptions and schedules, expires open Checkout sessions, removes the Cloudflare hostname and branding directory, and hard-deletes account-owned records. This includes trash/tombstones, snippet assets, credentials and indirect OAuth tokens, sync receipts, conflicts, tickets, audit records, and historical migration payloads. Users with no remaining account membership are removed with their passkeys, security tickets, and sessions. Shared users, other accounts, global OAuth registrations, and migration completion markers remain.
+Cleanup drains active writes/jobs, cancels subscriptions and schedules, expires open Checkout sessions, removes the verified Cloudflare hostname and branding directory, and hard-deletes account-owned records. This includes trash/tombstones, snippet assets, credentials and indirect OAuth tokens, sync receipts, conflicts, tickets, audit records, and historical migration payloads. Users with no remaining account membership are removed with their passkeys and security tickets. Their browser sessions stop authenticating immediately and expire under normal session retention. Shared users, other accounts, global OAuth registrations, and migration completion markers remain.
+
+Pending hostname entries do not authorize external domain deletion. Cleanup leaves unverified Cloudflare resources untouched so it cannot remove another account's domain.
 
 Cleanup uses a renewable database lease. Crashed request/worker leases expire after five minutes; a restarted scheduler resumes unfinished work. Failures stay inaccessible and appear in Accounts with a Retry purge action. The account record is removed only after database/file verification. Repeated cleanup tolerates already-missing external resources.
 
