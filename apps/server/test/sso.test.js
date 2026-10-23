@@ -204,6 +204,18 @@ test('provisioning is opt-in, creates members only and respects available seats'
 	await Account.updateOne({ _id: fixture.account._id }, { $set: { 'admin_override.limits.people': 2 } });
 	assert.equal((await Fixture.complete(new Browser(), fixture.account, 'full-' + randomUUID() + '@example.test')).finish.status, 409);
 });
+test('provisioning never claims an existing TypeRelay user without an invitation', async () => {
+	const fixture = await Fixture.account(); await Fixture.configure(fixture);
+	await Fixture.complete(fixture.browser, fixture.account, fixture.user.email, '?test=true');
+	await fixture.browser.json('/api/v2/sso', 'PUT', Fixture.config(1, { provision: true }));
+	const existing = await User.create({ name: 'Existing elsewhere', email: 'existing-' + randomUUID() + '@example.test' });
+	assert.equal((await Fixture.complete(new Browser(), fixture.account, existing.email)).finish.status, 403);
+	assert.equal(await Member.exists({ account: fixture.account._id, user: existing._id }), null);
+	assert.ok(await SsoLog.exists({ account: fixture.account._id, event: 'invite_required' }));
+	await Ticket.create({ hash: Support.hash(randomUUID()), kind: 'invite', email: existing.email, account: fixture.account._id, expires: new Date(Date.now() + 86400000) });
+	assert.equal((await Fixture.complete(new Browser(), fixture.account, existing.email)).finish.status, 302);
+	assert.ok(await Member.exists({ account: fixture.account._id, user: existing._id }));
+});
 test('SSO retains local two-factor authentication and account binding through the second factor', async () => {
 	const fixture = await Fixture.account(); await Fixture.configure(fixture);
 	const secret = generateSecret(); await User.updateOne({ _id: fixture.user._id }, { $set: { totp_enabled: true, totp_secret: secret } });

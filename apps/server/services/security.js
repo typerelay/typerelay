@@ -343,6 +343,8 @@ export class Security {
 			Support.assert(user || !await User.exists({ email: data.email }).session(session), 'Account deletion is in progress', 403);
 			if (!user || !await Member.exists({ account: account._id, user: user._id }).session(session)) {
 				Support.assert(current.sso.provision, 'Ask an administrator to add you to this account', 403);
+				// Existing TypeRelay users join only through an invitation; the IdP alone cannot claim them.
+				if (user && !await Ticket.exists({ account: account._id, kind: 'invite', email: data.email, expires: { $gt: new Date() } }).session(session)) throw new Fault(403, 'This email already has a TypeRelay account. Ask an administrator to invite it to this account.', 'sso_invite_required');
 				const ctx = { account: String(account._id), entitlements: Billing.entitlements(current) };
 				await Ticket.deleteMany({ account: account._id, kind: 'invite', email: data.email }, { session });
 				await Billing.assertSeatCapacity(ctx, 1, session);
@@ -351,7 +353,7 @@ export class Security {
 				await Support.change(account._id, null, 'membership', session);
 			}
 			return user;
-		});
+		}).catch(async error => { if (error.code === 'sso_invite_required') await Security.ssoLog(account._id, 'invite_required'); throw error; });
 		await Security.ssoLog(account._id, 'login_success', user._id);
 		req.session.return_to = data.destination;
 		const result = await Security.establish(req, user._id, false, { account: String(account._id), revision: data.revision });
