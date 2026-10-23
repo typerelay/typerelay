@@ -328,19 +328,23 @@ export class Libraries {
 	}
 	static importPreview = Symbol('prepared import');
 	static conflictValue = Symbol('prepared conflict');
+	static importSelection(preview, body) {
+		Support.assert(Array.isArray(body.selected) && body.selected.length > 0 && new Set(body.selected.map(item => item?.key)).size === body.selected.length, 'Select valid fragments first');
+		const selected = new Map(body.selected.map(item => [item?.key, item]));
+		Support.assert(body.selected.every(item => item && preview.entries.some(entry => entry.key === item.key && !entry.error)), 'Selected fragment is invalid');
+		for (const entry of preview.entries.filter(entry => selected.has(entry.key) && !entry.review)) { const trigger = Abbreviation.normalize(selected.get(entry.key).trigger === undefined ? entry.trigger : selected.get(entry.key).trigger); if (trigger) Support.assert(/^[a-z0-9-]{1,63}$/.test(trigger), 'Invalid abbreviation'); }
+		return selected;
+	}
 	static async commitImport(ctx, format, body, session) {
 		const preview = body[Libraries.importPreview] || await Libraries.previewImport(format, body);
-		Support.assert(Array.isArray(body.selected) && body.selected.length > 0 && new Set(body.selected.map(item => item.key)).size === body.selected.length, 'Select valid fragments first');
+		const selectedByKey = Libraries.importSelection(preview, body);
 		const groups = new Map();
 		const occupied = new Set((await Libraries.list(ctx, session)).flatMap(library => library.snippets.flatMap(snippet => [snippet.trigger, snippet.effective_trigger])).filter(Boolean));
-		const selectedByKey = new Map(body.selected.map(item => [item.key, item]));
-		Support.assert(body.selected.every(item => preview.entries.some(entry => entry.key === item.key && !entry.error)), 'Selected fragment is invalid');
 		const reserved = new Set(preview.entries.filter(entry => selectedByKey.has(entry.key) && !entry.review).map(entry => Abbreviation.normalize(selectedByKey.get(entry.key).trigger === undefined ? entry.trigger : selectedByKey.get(entry.key).trigger)).filter(Boolean));
 		const renamed = [];
 		for (const entry of preview.entries.filter(entry => selectedByKey.has(entry.key))) {
 			const selected = selectedByKey.get(entry.key);
 			const original = entry.review ? null : Abbreviation.normalize(selected.trigger === undefined ? entry.trigger : selected.trigger) || null;
-			if (original) Support.assert(/^[a-z0-9-]{1,63}$/.test(original), 'Invalid abbreviation');
 			let trigger = original; let suffix = 2;
 			if (trigger && occupied.has(trigger)) { do { const ending = '-' + suffix++; trigger = original.slice(0, 63 - ending.length) + ending; } while (occupied.has(trigger) || reserved.has(trigger)); }
 			if (trigger) occupied.add(trigger);
@@ -405,7 +409,7 @@ export class Libraries {
 			const format = body?.operation === 'commit_import' ? body.params.format : options.format;
 			if (format) {
 				const preview = await Libraries.previewImport(format, input);
-				const selected = new Set((input.selected || []).map(item => item.key));
+				const selected = Libraries.importSelection(preview, input);
 				for (const [index, entry] of preview.entries.entries()) if (selected.has(entry.key) && !entry.error) preview.entries[index] = await Libraries.prepared(ctx, entry);
 				input[Libraries.importPreview] = preview;
 			}

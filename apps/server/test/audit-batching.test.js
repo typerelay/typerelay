@@ -66,6 +66,13 @@ test('local conflict images prepare before the transaction', async t => {
 	await Libraries.mutate(Fixture.ctx, randomUUID(), { operation: 'resolve_conflict', params: { id: Fixture.library._id }, body: input }, async () => { assert.match(input[Libraries.conflictValue].content.markdown, /typerelay-asset:/); return {}; });
 	assert.equal(Assets.remote.mock.callCount(), 1);
 });
+test('invalid import selection is rejected before staging any images', async t => {
+	Fixture.transaction(t);
+	t.mock.method(Libraries, 'previewImport', async () => ({ entries: [{ key: 'one', ...Fixture.image() }, { key: 'two', trigger: 'valid' }] }));
+	t.mock.method(Assets, 'remote', async () => assert.fail('image staged'));
+	const body = { selected: [{ key: 'one' }, { key: 'two', trigger: '#' }] };
+	await assert.rejects(Libraries.mutate(Fixture.ctx, randomUUID(), body, () => assert.fail('action ran'), { format: 'yaml' }), /Invalid abbreviation/);
+});
 test('missed preflight cannot fetch images while holding a transaction', async t => {
 	t.mock.method(Assets, 'remote', async () => assert.fail('remote fetched')); t.mock.method(Assets, 'put', async () => assert.fail('embedded image prepared'));
 	for (const markdown of ['![](https://example.test/a)', '![](data:image/png;base64,AAAA)']) await assert.rejects(RichText.prepare(Fixture.ctx, { version: 2, type: 'rich_text', markdown }, {}), /before starting/);

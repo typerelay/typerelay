@@ -799,7 +799,7 @@ test('expired incremental cursors receive full deletion state and cannot restore
 	target = { ...target, revision: trashed.library.records.find(row => row.id === record.id).revision }; body = { target, action: 'purge' };
 	await Libraries.mutate(ctx, randomUUID(), body, (fresh, session) => Libraries.trashAction(fresh, target, 'purge', session));
 	const deleted = await Libraries.download(ctx, old); assert.ok(deleted.tombstones.some(row => row.id === record.id));
-	t.mock.property(Support, 'changeHistory', 2);
+	const history = Support.changeHistory; Support.changeHistory = 2; t.after(() => { Support.changeHistory = history; });
 	for (let index = 0; index < 3; index++) await mongoose.connection.transaction(session => Support.change(ctx.account, library._id, 'snippets', session));
 	assert.ok(await Change.countDocuments({ account: ctx.account }) <= 2);
 	const snapshot = await Libraries.download(ctx, old); assert.equal(snapshot.resync, true); assert.ok(snapshot.libraries.some(row => row._id === library._id)); assert.ok(snapshot.tombstones.some(row => row.id === record.id));
