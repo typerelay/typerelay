@@ -101,6 +101,8 @@ typerelay disconnect
 
 Local disconnect revokes the current device, removes its credentials, marks synchronized libraries as local and preserves snippets and their last server baselines. Pending changes are moved to recovery. When the same account reconnects, independent local and server edits are merged by stable snippet ID and same-snippet changes become reviewable conflicts. Libraries from another server or account remain independent local libraries. Changing only the server URL never redirects existing credentials.
 
+Disconnect discards usage statistics that have not uploaded yet. Connecting to another account or server also removes usage queued for the previous identity. This applies to native clients and the browser extension.
+
 ## Compatibility
 
 Desktop and server must both support sync protocol 6. A mismatch stops sync with an upgrade message before content is exchanged. Upgrade the engine, TUI and panel together on Omarchy. Rich-text image manifests sync with library records; authenticated binary transfers are deduplicated and completed before a changed snapshot becomes active.
