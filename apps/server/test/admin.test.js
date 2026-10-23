@@ -181,7 +181,7 @@ test('settings encrypt and mask secrets; custom code only enters authenticated a
 
 test('purge drains in-flight operations, retries external failure, removes every owned record and keeps shared users', async () => {
 	const shared = await M.User.create({ email: randomUUID() + '@example.test', name: 'Shared' }); const orphan = await M.User.create({ email: randomUUID() + '@example.test', name: 'Orphan' });
-	const account = await M.Account.create({ name: 'Purge everything', white_label: { hostname: 'purge.example.test', dns_verified_at: new Date(), cloudflare_hostname_id: 'hostname' } }); const survivor = await M.Account.create({ name: 'Keep me' }); const id = String(account._id);
+	const account = await M.Account.create({ name: 'Purge everything', white_label: { hostname: 'purge.example.test', claim_token: 'purge-claim', dns_verified_at: new Date(), cloudflare_hostname_id: 'hostname' } }); const survivor = await M.Account.create({ name: 'Keep me' }); const id = String(account._id);
 	await M.Member.create([{ account: account._id, user: shared._id, role: 'owner' }, { account: account._id, user: orphan._id, role: 'member' }, { account: survivor._id, user: shared._id, role: 'owner' }]);
 	await M.Passkey.create([{ user: orphan._id, credential_id: 'orphan-key' }, { user: shared._id, credential_id: 'shared-key' }]);
 	for (const name of AdminAccounts.owned.filter(name => name !== 'Member')) await M[name].create({ account: account._id, user: orphan._id, id: name, name, snippet: name, operation: randomUUID(), hash: randomUUID(), ...(name === 'UsageEvent' ? { event_id: randomUUID(), library: new M.mongoose.Types.ObjectId(), snippet: 'deleted', action: 'copy', occurred_at: new Date(), characters: 10 } : {}), ...(name === "AiUsage" ? { day: "2026-09-30" } : {}), ...(name === 'SignupNotification' ? { email: orphan.email, message_id: '<purge@typerelay.test>' } : {}) });
@@ -197,7 +197,7 @@ test('purge drains in-flight operations, retries external failure, removes every
 	release(); await inflight;
 	await assert.rejects(AdminAccounts.purge(id, { cancelBilling: async () => { throw new Error('External down'); } }), /External down/); assert.equal((await AdminAccounts.get(id)).status, 'failed'); assert.ok(await M.Snippet.exists({ account: account._id }));
 	await AdminAccounts.retry(id); let hostname;
-	const purged = await AdminAccounts.purge(id, { cancelBilling: async () => {}, listHostnames: async () => [], deleteHostname: async value => { hostname = value; } }); assert.equal(purged.deleted, id); assert.equal(hostname, 'hostname');
+	const purged = await AdminAccounts.purge(id, { cancelBilling: async () => {}, getHostname: async id => ({ id, hostname: account.white_label.hostname, custom_metadata: { catalog: Billing.catalogName, account: String(account._id), claim_token: 'purge-claim' } }), deleteHostname: async value => { hostname = value; } }); assert.equal(purged.deleted, id); assert.equal(hostname, 'hostname');
 	for (const name of AdminAccounts.owned) assert.equal(await M[name].countDocuments({ account: account._id }), 0, name);
 	assert.equal(await M.IntegrationToken.countDocuments({ grant: grant._id }), 0); assert.equal(await M.MigrationBackup.countDocuments(AdminAccounts.backups(account)), 0);
 	assert.equal(await M.User.exists({ _id: orphan._id }), null); assert.ok(await M.User.exists({ _id: shared._id })); assert.ok(await M.Passkey.exists({ user: shared._id })); assert.equal(await M.Passkey.exists({ user: orphan._id }), null);
@@ -217,10 +217,10 @@ test('Stripe purge expires sessions and cancels schedules and all subscriptions 
 });
 
 test('purge resumes an expired worker lease and finds a domain whose ID was never persisted', async () => {
-	const account = await M.Account.create({ name: 'Restart cleanup', is_active: false, deletion: { requested_at: new Date(), stage: 'database', lease: 'crashed-worker', lease_until: new Date(Date.now() - 1000) }, white_label: { hostname: 'old.example.test', dns_verified_at: new Date() } });
+	const account = await M.Account.create({ name: 'Restart cleanup', is_active: false, deletion: { requested_at: new Date(), stage: 'database', lease: 'crashed-worker', lease_until: new Date(Date.now() - 1000) }, white_label: { hostname: 'old.example.test', claim_token: 'recover-claim', provider_action: 'creating', dns_verified_at: new Date() } });
 	await M.AccountLease.create({ account: account._id, token: randomUUID(), expires: new Date(Date.now() - 1000) });
 	const removed = [];
-	await AdminAccounts.purge(account._id, { cancelBilling: async () => {}, listHostnames: async hostname => [{ id: 'orphan-domain', hostname, custom_metadata: { catalog: Billing.catalogName } }, { id: 'unrelated', hostname, custom_metadata: { catalog: 'other-product' } }], deleteHostname: async id => removed.push(id) });
+	await AdminAccounts.purge(account._id, { cancelBilling: async () => {}, listHostnames: async hostname => [{ id: 'orphan-domain', hostname, custom_metadata: { catalog: Billing.catalogName, account: String(account._id), claim_token: 'recover-claim' } }], getHostname: async id => ({ id, hostname: account.white_label.hostname, custom_metadata: { catalog: Billing.catalogName, account: String(account._id), claim_token: 'recover-claim' } }), deleteHostname: async id => removed.push(id) });
 	assert.deepEqual(removed, ['orphan-domain']); assert.equal(await M.Account.exists({ _id: account._id }), null); assert.equal(await M.AccountLease.exists({ account: account._id }), null);
 	await AdminSettings.audit('sysadmin', 'late-failed-request', account._id, 409); assert.equal(await M.AdminAudit.exists({ account: account._id }), null);
 });

@@ -223,7 +223,7 @@ test('white-label validation and Cloudflare readiness follow the Team contract',
 test('Team custom hostname verifies DNS, Cloudflare status and request binding', async () => {
 	const account = await Account.create({ name: 'Branded Team', plan: 'team', billing: { status: 'active', seat_quantity: 5 } });
 	await WhiteLabel.configure(account._id, 'portal.customer.test');
-	const fetch = async (url, input) => ({ ok: true, status: 200, json: async () => ({ success: true, result: { id: 'cf-host', hostname: 'portal.customer.test', status: 'active', ssl: { status: 'active' } } }) });
+	const fetch = async (url, input) => ({ ok: true, status: 200, json: async () => ({ success: true, result: { custom_metadata: JSON.parse(input.body).custom_metadata, id: 'cf-host', hostname: 'portal.customer.test', status: 'active', ssl: { status: 'active' } } }) });
 	const settings = await WhiteLabel.verify(account._id, { resolveCname: async () => ['custom.typerelay.com.'], fetch });
 	assert.equal(settings.state, 'active');
 	let continued = false;
@@ -245,7 +245,7 @@ test('only a DNS-verified custom hostname blocks other accounts', async () => {
 	await WhiteLabel.configure(owner._id, 'claimed.customer.test');
 	await WhiteLabel.configure(other._id, 'claimed.customer.test');
 	assert.equal(await WhiteLabel.claimed(other._id, 'claimed.customer.test'), null);
-	const fetch = async () => ({ ok: true, status: 200, json: async () => ({ success: true, result: { id: 'cf-claimed', hostname: 'claimed.customer.test', status: 'active', ssl: { status: 'active' } } }) });
+	const fetch = async (url, input) => ({ ok: true, status: 200, json: async () => ({ success: true, result: { custom_metadata: JSON.parse(input.body).custom_metadata, id: 'cf-claimed', hostname: 'claimed.customer.test', status: 'active', ssl: { status: 'active' } } }) });
 	await WhiteLabel.verify(owner._id, { resolveCname: async () => ['custom.typerelay.com.'], fetch });
 	assert.ok(await WhiteLabel.claimed(other._id, 'claimed.customer.test'));
 	await assert.rejects(WhiteLabel.verify(other._id, { resolveCname: async () => ['custom.typerelay.com.'], fetch }), error => error.status === 409 && error.code === 'hostname_conflict');
@@ -258,7 +258,7 @@ test('concurrent hostname verification reserves one owner before Cloudflare crea
 	for (const account of accounts) await WhiteLabel.configure(account._id, 'concurrent.customer.test');
 	t.mock.method(WhiteLabel, 'claimed', async () => null);
 	let calls = 0;
-	const options = { resolveCname: async () => ['custom.typerelay.com.'], fetch: async () => { calls++; return { ok: true, status: 200, json: async () => ({ success: true, result: { id: 'cf-concurrent', status: 'active', ssl: { status: 'active' } } }) }; } };
+	const options = { resolveCname: async () => ['custom.typerelay.com.'], fetch: async (url, input) => { calls++; return { ok: true, status: 200, json: async () => ({ success: true, result: { ...JSON.parse(input.body), id: 'cf-concurrent', status: 'active', ssl: { status: 'active' } } }) }; } };
 	const results = await Promise.allSettled(accounts.map(account => WhiteLabel.verify(account._id, options)));
 	assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
 	assert.equal(calls, 1);
@@ -270,13 +270,14 @@ test('concurrent hostname verification reserves one owner before Cloudflare crea
 test('a failed DNS recheck retains ownership while external deletion is pending', async () => {
 	const accounts = await Account.create([{ name: 'Removing domain owner', plan: 'team', billing: { status: 'active' } }, { name: 'Next domain owner', plan: 'team', billing: { status: 'active' } }]);
 	for (const account of accounts) await WhiteLabel.configure(account._id, 'deleting.customer.test');
-	const options = { resolveCname: async () => ['custom.typerelay.com.'], fetch: async () => ({ ok: true, status: 200, json: async () => ({ success: true, result: { id: 'cf-deleting', status: 'active', ssl: { status: 'active' } } }) }) };
+	let record;
+	const options = { resolveCname: async () => ['custom.typerelay.com.'], fetch: async (url, input) => { if (input.method === 'POST') record = { ...JSON.parse(input.body), id: 'cf-deleting', status: 'active', ssl: { status: 'active' } }; return { ok: true, status: 200, json: async () => ({ success: true, result: record }) }; } };
 	await WhiteLabel.verify(accounts[0]._id, options);
 	let started; const ready = new Promise(resolve => { started = resolve; }); let release; const gate = new Promise(resolve => { release = resolve; });
-	const removal = WhiteLabel.remove(accounts[0]._id, { fetch: async () => { started(); await gate; return { ok: true, status: 200, json: async () => ({ success: true, result: {} }) }; } });
+	const removal = WhiteLabel.remove(accounts[0]._id, { getHostname: async () => record, fetch: async () => { started(); await gate; return { ok: true, status: 200, json: async () => ({ success: true, result: {} }) }; } });
 	await ready;
 	try {
-		await assert.rejects(WhiteLabel.verify(accounts[0]._id, { resolveCname: async () => [] }), error => error.code === 'cname_not_verified');
+		await assert.rejects(WhiteLabel.verify(accounts[0]._id, { resolveCname: async () => [] }), error => error.code === 'domain_busy');
 		assert.ok(await WhiteLabel.claimed(accounts[1]._id, 'deleting.customer.test'));
 		await assert.rejects(WhiteLabel.verify(accounts[1]._id, options), error => error.status === 409 && error.code === 'hostname_conflict');
 	} finally { release(); await removal; }

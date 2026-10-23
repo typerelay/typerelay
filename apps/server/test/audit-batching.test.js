@@ -26,7 +26,9 @@ class Fixture {
 }
 test('pending domain cleanup cannot discover a domain verified during provider lookup', async t => {
 	let verified = false;
-	t.mock.method(WhiteLabel, 'claimed', async () => verified);
+	const account = { _id: Fixture.ctx.account, white_label: { hostname: 'pending.example.test' } };
+	t.mock.method(WhiteLabel, 'mutation', async (id, action, team, purge) => { assert.equal(id, account._id); assert.equal(team, false); assert.equal(purge, true); return action(account); });
+	t.mock.method(WhiteLabel, 'saveState', async (current, state) => ({ ...current, white_label: { ...current.white_label, ...state } }));
 	const options = { listHostnames: async hostname => { verified = true; return [{ id: 'new-owner', hostname, custom_metadata: { catalog: 'typerelay' } }]; }, deleteHostname: async () => assert.fail('new owner domain deleted') };
 	await AdminAccounts.removeDomain({ _id: Fixture.ctx.account, white_label: { hostname: 'pending.example.test' } }, options);
 	assert.equal(verified, false, 'pending accounts must never discover provider resources');

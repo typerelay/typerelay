@@ -230,18 +230,7 @@ export class AdminAccounts {
 		for (const id of schedules) { try { const schedule = await stripe.subscriptionSchedules.retrieve(id); if (['active', 'not_started'].includes(schedule.status)) await stripe.subscriptionSchedules.cancel(id, { invoice_now: false, prorate: false }); } catch (error) { if (error.code !== 'resource_missing') throw error; } }
 		for (const id of subscriptions) { try { const subscription = await stripe.subscriptions.retrieve(id); if (!['canceled', 'incomplete_expired'].includes(subscription.status)) await stripe.subscriptions.cancel(id, { invoice_now: false, prorate: false }); } catch (error) { if (error.code !== 'resource_missing') throw error; } }
 	}
-	static async removeDomain(account, options = {}) {
-		// Only a verified claim holds the unique reservation throughout external cleanup.
-		if (!account.white_label?.dns_verified_at || await WhiteLabel.claimed(account._id, account.white_label.hostname)) return;
-		const ids = new Set([account.white_label?.cloudflare_hostname_id].filter(Boolean));
-		// Recover a hostname whose creation succeeded before its ID was persisted.
-		let records = [];
-		if (account.white_label?.hostname) { try { records = await (options.listHostnames || WhiteLabel.listHostnames)(account.white_label.hostname); } catch (error) { if (error.status !== 404) throw error; } }
-		for (const record of records) {
-			if (record.hostname === account.white_label.hostname && record.custom_metadata?.catalog === Billing.catalogName) ids.add(record.id);
-		}
-		for (const id of ids) await (options.deleteHostname || WhiteLabel.deleteHostname)(id);
-	}
+	static removeDomain(account, options = {}) { return WhiteLabel.cleanup(account._id, options); }
 	static tickets(account) { return { $or: [{ account: account._id }, { 'data.account': { $in: [account._id, String(account._id)] } }, { 'data.grant': { $in: [...(account.deletion.grants || []), ...(account.deletion.grants || []).map(String)] } }] }; }
 	static backups(account) { return { $or: [{ 'payload.account': { $in: [account._id, String(account._id)] } }, { source_collection: 'accounts', 'payload._id': { $in: [account._id, String(account._id)] } }] }; }
 	static async purge(id, options = {}) {
