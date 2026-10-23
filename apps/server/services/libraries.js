@@ -405,7 +405,7 @@ export class Libraries {
 		const replay = await Operation.findOne({ account: ctx.account, user: ctx.user, operation }).select('fingerprint').lean();
 		if (replay) Support.assert(replay.fingerprint === fingerprint, 'Operation ID already used with different content', 409);
 		if (!replay) {
-			const input = body?.body ?? body;
+			const input = options.input ?? body?.body ?? body;
 			const format = body?.operation === 'commit_import' ? body.params.format : options.format;
 			if (format) {
 				const preview = await Libraries.previewImport(format, input);

@@ -25,6 +25,7 @@ describe('API rate limits', () => {
 		assert.equal(RateLimitSupport.clientIp({ ip: '::ffff:173.245.48.1', headers }), '203.0.113.9');
 		assert.equal(RateLimitSupport.clientIp({ ip: '2606:4700::1', headers }), '203.0.113.9');
 		assert.equal(RateLimitSupport.clientIp({ ip: '173.245.48.1', headers: { 'cf-connecting-ip': 'invalid' } }), '173.245.48.1');
+		assert.equal(RateLimitSupport.clientIp({ ip: '2001:db8:abcd:1200::1' }), RateLimitSupport.clientIp({ ip: '2001:db8:abcd:1200::2' }));
 	});
 	it('requires and validates the Compose environment contract', () => {
 		assert.throws(() => ApiRateLimit.getConfig(), /missing required env 'API_RATE_LIMIT_ENABLED'/);

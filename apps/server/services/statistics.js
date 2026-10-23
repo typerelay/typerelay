@@ -23,7 +23,7 @@ export class Statistics {
 		return { ...Statistics.defaults, ...await StatisticsPreference.findOne(filter).select('wpm hourly_rate currency -_id').lean() };
 	}
 	static event(value) {
-		Support.assert(value && /^[a-zA-Z0-9-]{16,80}$/.test(value.event_id || ''), 'Invalid usage event ID');
+		Support.assert(value && typeof value.event_id === 'string' && /^[a-zA-Z0-9-]{16,80}$/.test(value.event_id), 'Invalid usage event ID');
 		Support.assert(['copy', 'insert'].includes(value.action), 'Invalid usage action');
 		Support.assert(['web', 'desktop', 'terminal', 'extension', 'ios', 'android', 'mobile'].includes(value.client), 'Invalid usage client');
 		Support.assert(typeof value.snippet === 'string' && value.snippet.length <= 100 && value.snippet.length > 0, 'Invalid snippet ID');

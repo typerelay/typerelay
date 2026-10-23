@@ -52,6 +52,13 @@ test('YAML creation prepares parsed images before the action', async t => {
 	await Libraries.mutate(Fixture.ctx, randomUUID(), body, async (ctx, session) => { assert.match((await Libraries.prepared(ctx, body[Libraries.preparedYaml][0], session)).content.markdown, /typerelay-asset:/); return {}; });
 	assert.equal(body.yaml, 'source'); assert.equal(Assets.remote.mock.callCount(), 1);
 });
+test('bundle import stages parsed snippets while retaining the archive fingerprint', async t => {
+	Fixture.transaction(t); const value = Fixture.image(); const bundle = { snippets: [value] }; const body = { bundle: 'archive-hash' };
+	t.mock.method(Assets, 'remote', async (ctx, url, session) => { assert.equal(session, null); return { id: 'a'.repeat(64) }; });
+	t.mock.method(Operation, 'create', async ([operation]) => { assert.equal(operation.fingerprint, Support.hash(JSON.stringify(body))); });
+	await Libraries.mutate(Fixture.ctx, randomUUID(), body, async (ctx, session) => { assert.match((await Libraries.prepared(ctx, value, session)).content.markdown, /typerelay-asset:/); return {}; }, { input: bundle });
+	assert.equal(Assets.remote.mock.callCount(), 1);
+});
 for (const wrapped of [false, true]) test(`import stages selected images for ${wrapped ? 'API' : 'web'} callers`, async t => {
 	Fixture.transaction(t); const input = { selected: [{ key: 'one' }] }; const body = wrapped ? { operation: 'commit_import', params: { format: 'yaml' }, body: input } : input;
 	t.mock.method(Libraries, 'previewImport', async () => ({ entries: [{ key: 'one', ...Fixture.image() }, { key: 'two', ...Fixture.image() }] }));
@@ -80,10 +87,11 @@ test('missed preflight cannot fetch images while holding a transaction', async t
 test('usage batches discard invalid IDs/dates, deduplicate, and insert once per transaction attempt', async t => {
 	const valid = { event_id: randomUUID(), library: Fixture.library._id, snippet: 'snippet-one', occurred_at: new Date().toISOString(), action: 'copy', client: 'web', characters: 5 };
 	const invalid = [{ ...valid, event_id: randomUUID(), library: 'bad' }, ...[null, false, {}, 'invalid', '9999-01-01'].map(occurred_at => ({ ...valid, event_id: randomUUID(), occurred_at }))];
+	const invalidIds = [null, false, {}, ['abcdefghijklmnop'], 1234567890123456].map(event_id => ({ ...valid, event_id }));
 	t.mock.method(Library, 'find', () => Fixture.query([Fixture.library])); t.mock.method(Snippet, 'find', () => Fixture.query([{ id: valid.snippet, library: valid.library }])); t.mock.method(UsageEvent, 'find', () => Fixture.query([]));
 	t.mock.method(UsageEvent, 'insertMany', async rows => { assert.equal(rows.length, 1); assert.equal(rows[0].account, Fixture.ctx.account); });
 	t.mock.method(AccountAccess, 'write', async (id, action) => { await action({}); return action({}); });
-	assert.deepEqual(await Statistics.ingest(Fixture.ctx, { events: [...invalid, valid, valid] }), { accepted: [valid.event_id, valid.event_id], discarded: invalid.map(event => event.event_id) });
+	assert.deepEqual(await Statistics.ingest(Fixture.ctx, { events: [...invalid, ...invalidIds, valid, valid] }), { accepted: [valid.event_id, valid.event_id], discarded: invalid.map(event => event.event_id) });
 	assert.equal(UsageEvent.insertMany.mock.callCount(), 2); assert.equal(Library.find.mock.callCount(), 2); assert.equal(Snippet.find.mock.callCount(), 2);
 });
 test('resolved conflicts no longer retain image binaries', async t => {

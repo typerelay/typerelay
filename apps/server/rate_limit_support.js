@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { BlockList, isIP } from 'node:net';
+import { ipKeyGenerator } from 'express-rate-limit';
 
 export class RateLimitSupport {
 	static cloudflare = new BlockList();
@@ -33,7 +34,7 @@ export class RateLimitSupport {
 		if (/^\d+\.\d+\.\d+\.\d+:\d+$/.test(ip)) ip = ip.slice(0, ip.lastIndexOf(':'));
 		const cloudflareIp = RateLimitSupport.firstHeader(headers['cf-connecting-ip']);
 		if (isIP(ip) && RateLimitSupport.cloudflare.check(ip, isIP(ip) === 6 ? 'ipv6' : 'ipv4') && isIP(cloudflareIp)) ip = cloudflareIp;
-		return ip || '127.0.0.1';
+		return ipKeyGenerator(ip || '127.0.0.1');
 	}
 	static firstHeader(value) {
 		if (Array.isArray(value)) return value[0] || '';
