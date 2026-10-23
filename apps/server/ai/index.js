@@ -4,6 +4,7 @@ import http from 'node:http';
 import https from 'node:https';
 import { Router } from 'express';
 import { rateLimit } from 'express-rate-limit';
+import { ApiRateLimit } from '../rate_limit.js';
 import pug from 'pug';
 import { AiSetting, AiUsage, AiRequest, Device } from '../model/index.js';
 import { AdminSettings } from '../services/admin_settings.js';
@@ -356,7 +357,7 @@ export class Ai {
 		router.get('/form', async (req, res) => res.type('html').send(pug.renderFile('./views/ajax/ai-settings.pug', { canManageTeam: Support.admin(req.ctx) })));
 		router.post('/connections', async (req, res) => res.json(await Ai.connection(req.ctx, req.body.scope || 'personal', req.body)));
 		router.delete('/connections/:id', async (req, res) => res.json(await Ai.connection(req.ctx, req.body.scope || 'personal', { id: req.params.id, revision: req.body.revision }, false, true)));
-		router.use(rateLimit({ windowMs: 60000, limit: 20, standardHeaders: 'draft-7', legacyHeaders: false, keyGenerator: req => req.ctx.account + ':' + req.ctx.user, message: { error: 'Too many AI requests; try again shortly' } }));
+		router.use(rateLimit({ windowMs: 60000, limit: 20, standardHeaders: 'draft-7', legacyHeaders: false, keyGenerator: req => req.ctx.account + ':' + req.ctx.user, store: ApiRateLimit.getStore('ai', 60000), passOnStoreError: true, message: { error: 'Too many AI requests; try again shortly' } }));
 		router.post('/models', async (req, res) => { const selected = await Ai.selected(req.ctx, req.body); res.json({ models: await AiProvider.models(selected.connection, selected.installation) }); });
 		router.post('/verify', async (req, res) => res.json(await Ai.verify(req.ctx, req.body)));
 		for (const workflow of ['author', 'search']) router.post('/' + workflow, async (req, res) => {

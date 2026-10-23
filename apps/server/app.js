@@ -10,6 +10,8 @@ import session from 'express-session';
 import MongoStore from 'connect-mongo';
 import helmet from 'helmet';
 import { rateLimit } from 'express-rate-limit';
+import { ApiRateLimit } from './rate_limit.js';
+import { RateLimitSupport } from './rate_limit_support.js';
 import { mkdir, readdir, readFile, rm } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import formidable from 'formidable';
@@ -113,7 +115,7 @@ export class Server {
 		});
 		Admin.mount(app);
 		app.use(AdminSettings.middleware);
-		const authLimit = rateLimit({ windowMs: 900000, limit: 30, message: { error: 'Too many sign-in attempts; try again later.' } });
+		const authLimit = rateLimit({ windowMs: 900000, limit: 30, keyGenerator: req => RateLimitSupport.clientIp(req), store: ApiRateLimit.getStore('auth', 900000), passOnStoreError: true, message: { error: 'Too many sign-in attempts; try again later.' } });
 		Security.mount(app, authLimit);
 		await PublicApi.mount(app, authLimit);
 		app.post('/auth/login', authLimit, async (req, res) => { await Auth.login(req.body.email, null, { origin: req.boundAccount ? Server.requestOrigin(req) : Auth.origin, account: req.boundAccount, return_to: req.session.return_to && (req.session.return_to.startsWith('/oauth/authorize?') || req.session.return_to.startsWith('/account/delete')) ? req.session.return_to : undefined }); res.json({ message: 'Check your email for a sign-in link.' }); });
@@ -225,7 +227,7 @@ export class Server {
 		app.post('/api/v2/assets/:id/refresh', async (req, res) => { const asset = await Assets.get(req.ctx, req.params.id); Support.assert(asset.source_urls?.length, 'Asset has no remote source', 409); res.json(await Assets.remote(req.ctx, asset.source_urls.at(-1))); });
 		app.get('/api/v2/libraries/:id/export-bundle', async (req, res) => { const bundle = await Bundles.export(req.ctx, req.params.id); res.set({ 'Content-Type': 'application/zip', 'Content-Disposition': `attachment; filename="${bundle.name}"`, 'Content-Length': String(bundle.bytes.length) }).send(bundle.bytes); });
 		app.post('/api/v2/import/bundle', express.raw({ type: ['application/zip', 'application/octet-stream'], limit: '16mb' }), async (req, res) => { const bundle = await Bundles.import(req.ctx, req.body); const result = await Libraries.mutate(req.ctx, String(req.headers['x-operation-id'] || ''), { bundle: Support.hash(req.body) }, async (ctx, session) => ({ library: await Libraries.create(ctx, bundle, session) })); await Server.result(res, req.ctx, result); });
-		Security.mountPrivate(app, rateLimit({ windowMs: 900000, limit: 60, message: { error: 'Too many security requests; try again later.' } }));
+		Security.mountPrivate(app, rateLimit({ windowMs: 900000, limit: 60, keyGenerator: req => RateLimitSupport.clientIp(req), store: ApiRateLimit.getStore('security', 900000), passOnStoreError: true, message: { error: 'Too many security requests; try again later.' } }));
 		app.post('/api/v2/billing/trial', async (req, res) => {
 			Support.assert(Support.admin(req.ctx), 'Admin required', 403);
 			await Billing.startTrial(req.ctx.account);

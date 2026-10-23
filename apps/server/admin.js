@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { timingSafeEqual, createHash } from 'node:crypto';
 import { rateLimit } from 'express-rate-limit';
+import { ApiRateLimit } from './rate_limit.js';
+import { RateLimitSupport } from './rate_limit_support.js';
 import pug from 'pug';
 import { AdminAccounts } from './services/admin_accounts.js';
 import { AdminSettings } from './services/admin_settings.js';
@@ -29,7 +31,7 @@ export class Admin {
 			next();
 		});
 		router.get('/login', (req, res) => res.render('admin/login'));
-		router.post('/login', rateLimit({ windowMs: 900000, limit: 10, message: { error: 'Too many admin sign-in attempts; try again later.' } }), async (req, res) => {
+		router.post('/login', rateLimit({ windowMs: 900000, limit: 10, keyGenerator: req => RateLimitSupport.clientIp(req), store: ApiRateLimit.getStore('admin-login', 900000), passOnStoreError: true, message: { error: 'Too many admin sign-in attempts; try again later.' } }), async (req, res) => {
 			const valid = Admin.credentials(req.body.email, req.body.password);
 			await AdminSettings.audit('system-admin', 'admin.login', null, valid ? 200 : 401);
 			Support.assert(valid, 'Invalid credentials', 401);
