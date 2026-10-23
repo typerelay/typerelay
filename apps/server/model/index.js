@@ -27,6 +27,7 @@ const accountSchema = new mongoose.Schema({
 		recovery_hash: { type: String, select: false }, recovery_ready: { type: Boolean, default: false },
 	},
 	billing: {
+		revision: { type: Number, default: 0 },
 		stripe_customer_id: { type: String, select: false },
 		stripe_subscription_id: { type: String, select: false },
 		stripe_free_subscription_id: { type: String, select: false },

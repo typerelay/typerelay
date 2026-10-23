@@ -382,6 +382,31 @@ test('an applied renewal change releases its Stripe schedule and clears local pe
 	assert.equal((await Billing.account(account._id)).billing.scheduled_change, null);
 });
 
+for (const delayed of ['update', 'cancellation']) test(`delayed subscription ${delayed} cannot overwrite a newer billing write`, async t => {
+	const account = await Account.create({ name: 'Concurrent billing', plan: 'pro', billing: { stripe_customer_id: 'cus_race', stripe_subscription_id: 'sub_race', status: 'active' } });
+	if (delayed === 'update') await Account.updateOne({ _id: account._id }, { $unset: { 'billing.revision': '' } });
+	const snapshot = await Billing.account(account._id, null, true);
+	const subscription = { id: 'sub_race', customer: 'cus_race', status: 'active', metadata: Billing.metadata(account, 'pro'), items: { data: [{ id: 'si_race', price: { id: 'price_pro' }, quantity: 1 }] } };
+	const updated = { type: 'customer.subscription.updated', data: { object: subscription } };
+	const canceled = { type: 'customer.subscription.deleted', data: { object: { ...subscription, status: 'canceled' } } };
+	let release; let entered;
+	const paused = new Promise(resolve => { entered = resolve; }); const gate = new Promise(resolve => { release = resolve; });
+	const updateOne = Account.updateOne.bind(Account); let first = true;
+	t.mock.method(Account, 'updateOne', async (...args) => { if (args[0]['billing.revision'] !== undefined && first) { first = false; entered(); await gate; } return updateOne(...args); });
+	t.mock.method(WhiteLabel, 'disable', async () => {}); t.mock.method(Billing, 'ensureFreeSubscription', async () => null);
+	let current = subscription; const stripe = { subscriptions: { retrieve: async () => structuredClone(current) } };
+	const pending = Billing.processWebhook({ ...snapshot, billing: { ...snapshot.billing } }, delayed === 'update' ? updated : canceled, stripe);
+	const rejected = assert.rejects(pending, error => error.code === 'billing_changed');
+	await paused;
+	try { await Billing.processWebhook({ ...snapshot, billing: { ...snapshot.billing } }, delayed === 'update' ? canceled : updated, stripe); } finally { release(); }
+	await rejected;
+	assert.equal((await Billing.account(account._id)).billing.status, delayed === 'update' ? 'canceled' : 'active');
+	// Retried deliveries reload both account and provider state, instead of replaying stale data.
+	current = { ...subscription, status: 'canceled' };
+	await Billing.processWebhook(await Billing.account(account._id, null, true), delayed === 'update' ? updated : canceled, stripe);
+	assert.equal((await Billing.account(account._id)).plan, 'free');
+});
+
 test('delayed renewal reconciliation cannot release a newer scheduled change', async () => {
 	const account = await Account.create({ name: 'Newer schedule', plan: 'pro', billing: { stripe_customer_id: 'cus_newer', stripe_subscription_id: 'sub_newer', status: 'active', seat_quantity: 2, scheduled_change: { plan: 'pro', seat_quantity: 2, schedule_id: 'sched_old' } } });
 	const stale = await Billing.account(account._id, null, true);

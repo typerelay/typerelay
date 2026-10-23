@@ -37,7 +37,14 @@ impl Database {
         if !self.connection.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='search_state')",[],|row|row.get::<_,bool>(0))? {
             let transaction=rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?;
             self.connection.execute_batch("CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(id UNINDEXED, library UNINDEXED, revision UNINDEXED, library_name UNINDEXED, abbreviation, title, body, tokenize='unicode61 remove_diacritics 2', prefix='2 3 4'); CREATE VIRTUAL TABLE IF NOT EXISTS search_vocab USING fts5vocab(search_fts, 'row'); CREATE TABLE IF NOT EXISTS search_state(id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL, built INTEGER NOT NULL); INSERT OR IGNORE INTO search_state VALUES(1,1,0);")?;
-            for table in ["snippets","libraries","meta","outbox"] { for operation in ["INSERT","UPDATE","DELETE"] { self.connection.execute_batch(&format!("CREATE TRIGGER IF NOT EXISTS search_dirty_{table}_{operation} AFTER {operation} ON {table} BEGIN UPDATE search_state SET version=version+1 WHERE id=1; END;"))?; } }
+            for table in ["snippets","libraries","outbox"] { for operation in ["INSERT","UPDATE","DELETE"] { self.connection.execute_batch(&format!("CREATE TRIGGER IF NOT EXISTS search_dirty_{table}_{operation} AFTER {operation} ON {table} BEGIN UPDATE search_state SET version=version+1 WHERE id=1; END;"))?; } }
+            transaction.commit()?;
+        }
+        if !self.connection.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='search_dirty_personal_UPDATE')",[],|row|row.get::<_,bool>(0))? {
+            let transaction=rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?;
+            for operation in ["INSERT","UPDATE","DELETE"] {
+                self.connection.execute_batch(&format!("DROP TRIGGER IF EXISTS search_dirty_meta_{operation}; CREATE TRIGGER IF NOT EXISTS search_dirty_personal_{operation} AFTER {operation} ON meta WHEN {} BEGIN UPDATE search_state SET version=version+1 WHERE id=1; END;",match operation {"INSERT"=>"NEW.key='personal_abbreviations'","DELETE"=>"OLD.key='personal_abbreviations'",_=>"(OLD.key='personal_abbreviations' OR NEW.key='personal_abbreviations') AND (OLD.key<>NEW.key OR OLD.value<>NEW.value)"}))?;
+            }
             transaction.commit()?;
         }
         if !self.connection.query_row("SELECT version!=built FROM search_state WHERE id=1",[],|row|row.get::<_,bool>(0))? {return Ok(());}
@@ -58,7 +65,7 @@ impl Database {
     pub fn meta(&self, key: &str) -> Result<Option<Value>> {
         self.connection.query_row("SELECT value FROM meta WHERE key=?1", [key], |row| row.get::<_, String>(0)).optional()?.map(|text| serde_json::from_str(&text).map_err(Into::into)).transpose()
     }
-    pub fn set_meta(&self, key: &str, value: &Value) -> Result<()> { self.connection.execute("INSERT INTO meta(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![key, value.to_string()])?; Ok(()) }
+    pub fn set_meta(&self, key: &str, value: &Value) -> Result<()> { self.connection.execute("INSERT INTO meta(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value<>excluded.value", params![key, value.to_string()])?; Ok(()) }
     pub fn usage(&self, library: &str, snippet: &str, action: &str, client: &str, characters: usize) -> Result<()> {
         if !self.synced(library)? { return Ok(()); }
         let Some(identity) = self.meta("statistics_identity")?.filter(|value| value["user"].is_string()) else { return Ok(()); };
@@ -921,6 +928,24 @@ impl DatabaseSnapshot {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn idle_sync_keeps_search_index_and_migrates_legacy_metadata_triggers() {
+        let directory=tempfile::tempdir().unwrap();let db=super::Database::open(directory.path()).unwrap();
+        db.import("Library","matches: [{trigger: abc, replace: Searchable}]").unwrap();
+        db.set_meta("personal_abbreviations",&serde_json::json!([])).unwrap();db.search_index().unwrap();
+        db.connection.execute_batch("DROP TRIGGER search_dirty_personal_INSERT; DROP TRIGGER search_dirty_personal_UPDATE; DROP TRIGGER search_dirty_personal_DELETE; CREATE TRIGGER search_dirty_meta_UPDATE AFTER UPDATE ON meta BEGIN UPDATE search_state SET version=version+1 WHERE id=1; END;").unwrap();
+        db.search_index().unwrap();
+        let version=||db.connection.query_row("SELECT version FROM search_state",[],|row|row.get::<_,i64>(0)).unwrap();let before=version();
+        for cursor in [1,1,2] {
+            db.set_meta("statistics_identity",&serde_json::json!({"account":"one","user":"two"})).unwrap();db.set_meta("sync_protocol",&serde_json::json!(6)).unwrap();
+            db.apply(&serde_json::json!({"libraries":[],"personal_abbreviations":[],"conflicts":[],"cursor":cursor,"capabilities":{"personal_abbreviations":1}}),None).unwrap();
+            db.search_index().unwrap();assert_eq!(version(),before);
+        }
+        let personal=serde_json::json!([{"snippet":"one","trigger":"mine","revision":1}]);
+        db.set_meta("personal_abbreviations",&personal).unwrap();assert!(version()>before);db.search_index().unwrap();let before=version();
+        db.set_meta("personal_abbreviations",&personal).unwrap();assert_eq!(version(),before);
+        db.connection.execute("DELETE FROM meta WHERE key='personal_abbreviations'",[]).unwrap();assert!(version()>before);
+    }
     use super::*;
     #[test]
     fn personal_abbreviations_are_offline_overlays_with_independent_revisions() {

@@ -7,6 +7,8 @@ description: "Understand TypeRelay Cloud plans, trials, billing, seat limits, ca
 
 Hosted TypeRelay accounts start on Free. Account owners and admins can open **Settings → Subscription** to start the one-time seven-day Pro trial, buy Pro or Team, change purchased seat capacity, update payment details, view invoices, or cancel at the end of the billing period.
 
+If a billing action reports that billing changed, refresh Subscription and retry. An older confirmation cannot overwrite a newer subscription update or cancellation.
+
 Free includes one person, 250 active snippets, one active library, and one connected machine. API and MCP access require Pro or Team. Pro costs $4 per user per month for 1–5 users, including the owner. Team costs $8 per user per month with no plan user cap. Both paid plans include sharing, team management, team statistics and private web AI; local AI is available on all plans. Brand assets and custom domains require Team. Trashed content does not count until restored; existing data is retained after a downgrade.
 
 Both paid plans start at one purchased seat. Pending invitations reserve seats. Purchase enough seats in Subscription before inviting or adding people. An active Pro trial allows up to five users. Seat reductions and Team-to-Pro changes take effect at renewal after current members and invitations fit the target.

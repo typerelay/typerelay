@@ -125,8 +125,8 @@ impl ClipboardLease {
     pub fn restore(&mut self)->Result<()> {
         use clipboard_win::{Clipboard,raw};
         if !self.active{return Ok(());}
-        let owned=(||{let _lock=Clipboard::new_attempts(10).map_err(|e|anyhow::anyhow!("Cannot inspect busy clipboard: {e}"))?;let mut marker=Vec::new();Ok::<_,anyhow::Error>(raw::get_vec(self.marker_format,&mut marker).is_ok()&&marker==self.marker)})();
-        let result=owned.and_then(|owned|if owned{let _lock=Clipboard::new_attempts(10).map_err(|e|anyhow::anyhow!("Cannot restore busy clipboard: {e}"))?;raw::empty().map_err(|e|anyhow::anyhow!("Cannot clear TypeRelay clipboard: {e}"))?;Self::write(&self.saved)}else{Ok(())});self.active=false;result
+        let _lock=Clipboard::new_attempts(10).map_err(|e|anyhow::anyhow!("Cannot restore busy clipboard: {e}"))?;let mut marker=Vec::new();
+        let result=if raw::get_vec(self.marker_format,&mut marker).is_ok()&&marker==self.marker{raw::empty().map_err(|e|anyhow::anyhow!("Cannot clear TypeRelay clipboard: {e}"))?;Self::write(&self.saved)}else{Ok(())};self.active=false;result
     }
 }
 impl Drop for ClipboardLease {fn drop(&mut self){let _=self.restore();}}

@@ -57,12 +57,7 @@ pub fn paste(target: &Target, erase: usize, payload: Option<typerelay_client::cl
         let preserve=!native::remote_session();
         #[cfg(target_os="macos")]
         let preserve=true;
-		if !preserve{copy_payload(payload.clone())?;}else{match native::ClipboardLease::publish(payload.clone()){Ok(lease)=>clipboard=Some(lease),Err(_error)=>{
-        #[cfg(target_os="windows")]
-		{copy_payload(payload)?;}
-        #[cfg(not(target_os="windows"))]
-        {return Err(_error);}
-    }}}
+		if !preserve{copy_payload(payload)?;}else{clipboard=Some(native::ClipboardLease::publish(payload)?);}
     }
     let direct=if marked{native::CursorTarget::capture(target)}else{None};
     let insertion: Result<()> = (|| {

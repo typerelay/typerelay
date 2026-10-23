@@ -26,6 +26,8 @@ TypeRelay inserts only after restoring and rechecking the original window. A clo
 
 On macOS, confirm Accessibility for focus restoration/insertion; Input Monitoring is also needed for continuous expansion. On Windows, TypeRelay cannot insert from a normal process into an elevated/protected application. On Remote Desktop, prior clipboard content may not be restorable.
 
+On local Windows, insertion stops if TypeRelay cannot preserve the clipboard, including unsupported bitmap formats or content over 16 MiB. Use **Copy** only when you want to replace the clipboard. A newer copy takes priority over clipboard restoration.
+
 ## Sync fails
 
 Check the server origin, network connection, selected account, plan/device limit and current library permission. The URL must be an HTTPS origin without a path, except loopback HTTP for development.

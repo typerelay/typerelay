@@ -13,6 +13,8 @@ Right-click the T icon for **Sync now**, **Settings**, **Check for updates** and
 
 Closing the panel hides it. On Omarchy, quitting the panel leaves the separate expansion service running. Search works offline. Read-only snippets and entries without abbreviations remain searchable.
 
+Background sync keeps the search index when searchable content and personal abbreviations are unchanged.
+
 The default shortcut can be changed to Ctrl, Shift, Alt or Super plus another key. If registration fails because the operating system or another application already owns it, choose a different shortcut. **Start at login** manages the platform’s user startup entry.
 
 The resident app also performs prefix + abbreviation + Space or Enter expansion on macOS and Windows. Enter expands and then sends one Enter after successful insertion; Space only expands. Templates already ending in an explicit Enter action receive no extra Enter. Omarchy uses the separate expansion service. See [Operating system notes](./platforms) for permissions, remote-session and clipboard behavior.

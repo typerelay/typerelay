@@ -31,6 +31,8 @@ The Chrome Web Store assigns the final extension ID when the package is uploaded
 
 ## Release gate
 
+Template prompts preserve every valid field name, including `__proto__`, `constructor`, and `toString`.
+
 Google Docs uses the popup copy-and-manual-paste workflow. Automatic abbreviation expansion in Docs remains unsupported. Before Chrome Web Store submission, manually verify Enter and click copying, popup closure, paste at the original cursor/selection, multiline text, Unicode, variable submission/cancellation, formatting, links, and images in Docs and another rich editor. Also verify plain-text destinations, copying without the desktop bridge or a focused editor, and unchanged abbreviation expansion on supported sites. Formatting and image acceptance depend on the destination. Keep the listing staged until these checks pass; packaging alone does not clear this gate.
 
 The extension requests clipboardWrite to copy snippets; it does not request clipboardRead. The Web Store listing must disclose clipboard modification, broad site access, local snippet and image caching, sign-in tokens, and native messaging. Package only the `dist` directory. Keep all executable code in the package.

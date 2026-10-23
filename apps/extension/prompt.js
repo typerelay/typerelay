@@ -1,7 +1,7 @@
 export function promptFields(root, fields, variables, submitLabel = 'Insert') {
 	const form = root.querySelector('form');
 	const container = root.querySelector('[data-fields]');
-	const answers = {};
+	const answers = Object.create(null);
 	for (const [index, name] of fields.entries()) {
 		const variable = variables?.[name] || {};
 		const template = root.querySelector(variable.multiline ? '[data-multiline]' : '[data-single]');
