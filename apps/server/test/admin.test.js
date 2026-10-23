@@ -3,6 +3,7 @@ import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { request as httpRequest } from 'node:http';
 import { randomUUID } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import { mkdtemp, mkdir, writeFile, rm, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -315,4 +316,17 @@ test('historical-only team contributions require review even without a surviving
 	await AdminAccounts.reviewUserDeletion(String(user._id), String(user._id));
 	await AdminAccounts.purgeUser(user._id);
 	assert.equal(await M.User.exists({ _id: user._id }), null);
+});
+test('read requests skip the account lease while writes stay fenced against deletion', async () => {
+	const account = await M.Account.create({ name: 'Lease scope' }); const user = await M.User.create({ email: randomUUID() + '@example.test', name: 'Lease' }); await M.Member.create({ account: account._id, user: user._id, role: 'owner' });
+	const id = String(account._id);
+	const context = method => new Promise((resolve, reject) => AccountAccess.middleware({ method }, new EventEmitter(), () => Support.context(String(user._id), id).then(resolve, reject)));
+	await context('GET');
+	assert.equal((await M.Account.findById(id).lean()).activity_sequence, 0); assert.equal(await M.AccountLease.exists({ account: account._id }), null);
+	await context('POST');
+	assert.equal((await M.Account.findById(id).lean()).activity_sequence, 1); assert.ok(await M.AccountLease.exists({ account: account._id }));
+	await AdminAccounts.requestDeletion(id, id);
+	assert.deepEqual(await AdminAccounts.purge(id), { pending: true });
+	await assert.rejects(context('GET'), /unavailable/); await assert.rejects(context('POST'), /unavailable/);
+	await M.AccountLease.deleteMany({ account: account._id });
 });

@@ -39,6 +39,8 @@ export class AccountAccess {
 	}
 	static middleware(req, res, next) {
 		const scope = AccountAccess.scope();
+		// Safe methods only read; Support.context then skips the lease and fence. Writes still lease.
+		scope.read = ['GET', 'HEAD', 'OPTIONS'].includes(req.method);
 		// Do not release on connection close: the handler can still be writing.
 		res.once('finish', () => { setImmediate(() => AccountAccess.release(scope).catch(() => console.error('Account lease release failed'))); });
 		res.once('close', () => { if (!res.writableFinished) clearInterval(scope.timer); });

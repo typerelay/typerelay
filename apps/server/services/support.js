@@ -18,8 +18,8 @@ export class Support {
 		Support.id(String(account));
 		const member = await Member.findOne({ user, account }).session(session || null).lean();
 		Support.assert(member, 'Account access denied', 403);
-		if (!session) await AccountAccess.acquire(account);
-		else await AccountAccess.fence(account, session);
+		// Reads only need the availability check below; deletion drains leases held by writes.
+		if (!AccountAccess.storage.getStore()?.read) await (session ? AccountAccess.fence(account, session) : AccountAccess.acquire(account));
 		const record = await Account.findById(account).session(session || null).lean();
 		Support.assert(record, 'Account missing', 404);
 		AccountAccess.assert(record);
