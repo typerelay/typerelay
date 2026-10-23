@@ -14,6 +14,7 @@ import { Helpmonks } from '../services/helpmonks.js';
 import { Team } from '../services/team.js';
 import { Statistics } from '../services/statistics.js';
 import { AdminSettings } from '../services/admin_settings.js';
+import { StorageMigration } from '../services/storage_migration.js';
 
 class Fixture {
 	static environment = {};
@@ -235,14 +236,20 @@ test('Team custom hostname verifies DNS, Cloudflare status and request binding',
 });
 
 test('only a DNS-verified custom hostname blocks other accounts', async () => {
+	await Account.collection.dropIndex('white_label.hostname_1');
+	await Account.collection.createIndex({ 'white_label.hostname': 1 }, { unique: true, partialFilterExpression: { 'white_label.hostname': { $type: 'string', $gt: '' } } });
+	await StorageMigration.hostnames();
+	await StorageMigration.hostnames();
 	const owner = await Account.create({ name: 'Verified owner', plan: 'team', billing: { status: 'active', seat_quantity: 5 } });
 	const other = await Account.create({ name: 'Late claimant', plan: 'team', billing: { status: 'active', seat_quantity: 5 } });
 	await WhiteLabel.configure(owner._id, 'claimed.customer.test');
+	await WhiteLabel.configure(other._id, 'claimed.customer.test');
 	assert.equal(await WhiteLabel.claimed(other._id, 'claimed.customer.test'), null);
 	const fetch = async () => ({ ok: true, status: 200, json: async () => ({ success: true, result: { id: 'cf-claimed', hostname: 'claimed.customer.test', status: 'active', ssl: { status: 'active' } } }) });
 	await WhiteLabel.verify(owner._id, { resolveCname: async () => ['custom.typerelay.com.'], fetch });
 	assert.ok(await WhiteLabel.claimed(other._id, 'claimed.customer.test'));
-	await assert.rejects(WhiteLabel.configure(other._id, 'claimed.customer.test'), error => error.status === 409 && error.code === 'hostname_conflict');
+	await assert.rejects(WhiteLabel.verify(other._id, { resolveCname: async () => ['custom.typerelay.com.'], fetch }), error => error.status === 409 && error.code === 'hostname_conflict');
+	await assert.rejects(Account.updateOne({ _id: other._id }, { $set: { 'white_label.dns_verified_at': new Date() } }), error => error.code === 11000);
 });
 
 test('Team branding validates and normalizes image assets', async () => {

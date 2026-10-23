@@ -1,8 +1,15 @@
-import { mongoose, Library, Snippet, Migration, MigrationBackup, Operation, Integration } from '../model/index.js';
+import { mongoose, Account, Library, Snippet, Migration, MigrationBackup, Operation, Integration } from '../model/index.js';
 import { scopes } from '../api/catalog.js';
 import { Yaml } from './support.js';
 export class StorageMigration {
+	static async hostnames() {
+		const indexes = await Account.collection.indexes().catch(error => { if (error.code === 26) return []; throw error; });
+		const old = indexes.find(index => index.name === 'white_label.hostname_1');
+		if (old && !old.partialFilterExpression?.['white_label.dns_verified_at']) await Account.collection.dropIndex(old.name).catch(error => { if (error.code !== 27) throw error; });
+		await Account.createIndexes();
+	}
 	static async code() {
+		await StorageMigration.hostnames();
 		if ((await Migration.findOne({ key: 'code-v4' }).lean())?.completed) return;
 		for (const name of ['libraries', 'snippets', 'operations', 'conflicts', 'accounts', 'changes']) {
 			for await (const record of mongoose.connection.collection(name).find({})) await MigrationBackup.updateOne({ key: 'code-v4:' + name + ':' + record._id }, { $setOnInsert: { source_collection: name, payload: record } }, { upsert: true });
