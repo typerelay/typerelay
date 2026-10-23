@@ -80,6 +80,7 @@ accountSchema.index({ 'deletion.requested_at': 1, 'deletion.stage': 1 });
 const Account = mongoose.model('Account', accountSchema);
 const membership = new mongoose.Schema({ account: objectid, user: objectid, role: { type: String, enum: ['owner', 'admin', 'member'] } });
 membership.index({ account: 1, user: 1 }, { unique: true });
+membership.index({ user: 1 });
 const Member = mongoose.model('Member', membership);
 const Group = mongoose.model('Group', secondaryReads(new mongoose.Schema({ account: objectid, name: String, users: [objectid] })));
 const Ticket = mongoose.model('Ticket', new mongoose.Schema({ hash: { type: String, unique: true }, kind: String, email: String, account: objectid, data: mixed, expires: Date }));
@@ -125,6 +126,7 @@ export const SystemSetting = mongoose.model('SystemSetting', secondaryReads(new 
 export const AdminAudit = mongoose.model('AdminAudit', secondaryReads(new mongoose.Schema({ account: objectid, actor: String, operation: String, status: Number }, { timestamps: true })));
 export const AccountLease = mongoose.model('AccountLease', new mongoose.Schema({ account: { type: objectid, index: true }, token: { type: String, unique: true }, expires: { type: Date, expires: 0 } }));
 for (const model of [Group, Ticket, Library, Device, Conflict, ApiAudit, AdminAudit]) model.schema.index({ account: 1 });
+for (const field of ['access', 'refresh']) Device.schema.index({ [field]: 1 }, { sparse: true });
 IntegrationToken.schema.index({ expires: 1 }, { expireAfterSeconds: 0 });
 Ticket.schema.index({ expires: 1 }, { expireAfterSeconds: 0 });
 Integration.schema.index({ hash: 1 }, { unique: true, sparse: true });
