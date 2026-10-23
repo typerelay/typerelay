@@ -234,6 +234,17 @@ test('Team custom hostname verifies DNS, Cloudflare status and request binding',
 	assert.equal(res.locals.whiteLabel.active, true);
 });
 
+test('only a DNS-verified custom hostname blocks other accounts', async () => {
+	const owner = await Account.create({ name: 'Verified owner', plan: 'team', billing: { status: 'active', seat_quantity: 5 } });
+	const other = await Account.create({ name: 'Late claimant', plan: 'team', billing: { status: 'active', seat_quantity: 5 } });
+	await WhiteLabel.configure(owner._id, 'claimed.customer.test');
+	assert.equal(await WhiteLabel.claimed(other._id, 'claimed.customer.test'), null);
+	const fetch = async () => ({ ok: true, status: 200, json: async () => ({ success: true, result: { id: 'cf-claimed', hostname: 'claimed.customer.test', status: 'active', ssl: { status: 'active' } } }) });
+	await WhiteLabel.verify(owner._id, { resolveCname: async () => ['custom.typerelay.com.'], fetch });
+	assert.ok(await WhiteLabel.claimed(other._id, 'claimed.customer.test'));
+	await assert.rejects(WhiteLabel.configure(other._id, 'claimed.customer.test'), error => error.status === 409 && error.code === 'hostname_conflict');
+});
+
 test('Team branding validates and normalizes image assets', async () => {
 	const directory = await mkdtemp('/tmp/typerelay-white-label-');
 	process.env.WHITE_LABEL_ASSETS_DIR = directory;

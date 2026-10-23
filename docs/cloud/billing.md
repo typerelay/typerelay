@@ -23,7 +23,7 @@ Stripe Tax is enabled for Checkout. Keep the live account's registrations active
 
 ## White-label domains
 
-Team owners and admins can upload a navigation logo, login logo, and favicon in **Settings → White-label**. For a custom hostname, create a DNS-only CNAME to `custom.typerelay.com`, save the hostname, and select **Verify**. TypeRelay shows the domain as active only after Cloudflare reports both hostname and SSL status active.
+Team owners and admins can upload a navigation logo, login logo, and favicon in **Settings → White-label**. For a custom hostname, create a DNS-only CNAME to `custom.typerelay.com`, save the hostname, and select **Verify**. TypeRelay shows the domain as active only after Cloudflare reports both hostname and SSL status active. A saved hostname that is not verified does not reserve the domain. After an account verifies the CNAME, other accounts cannot connect the same hostname.
 
 Brand assets accept PNG, JPG, WebP, AVIF, GIF or ICO images up to 5 MB and are normalized to PNG storage. Removing an asset returns that location to the TypeRelay default. The hostname field accepts only a hostname on your own domain, not a URL, path, TypeRelay-owned name or hostname already connected to another account.
 

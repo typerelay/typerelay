@@ -99,13 +99,14 @@ export class WhiteLabel {
 		WhiteLabel.assertTeam(account);
 		hostname = WhiteLabel.normalizeHostname(hostname);
 		if (hostname === account.white_label?.hostname) return WhiteLabel.serialize(account);
-		const duplicate = await Account.exists({ _id: { $ne: account._id }, 'white_label.hostname': hostname });
-		if (duplicate) throw WhiteLabel.error(409, 'This hostname is already connected', 'hostname_conflict');
+		if (hostname && await WhiteLabel.claimed(account._id, hostname)) throw WhiteLabel.error(409, 'This hostname is already connected', 'hostname_conflict');
 		if (account.white_label?.cloudflare_hostname_id) await WhiteLabel.deleteHostname(account.white_label.cloudflare_hostname_id, options);
 		const state = { hostname, state: hostname ? 'pending_dns' : 'unconfigured', cloudflare_hostname_id: '', cloudflare_hostname_status: '', cloudflare_ssl_status: '', dns_verified_at: null, cloudflare_checked_at: null, next_check_at: hostname ? new Date() : null, disabled_at: null, last_error: '' };
-		const updated = await Account.findByIdAndUpdate(account._id, { $set: { white_label: { ...account.white_label, ...state } } }, { returnDocument: 'after' }).lean();
+		const updated = await Account.findByIdAndUpdate(account._id, { $set: { white_label: { ...account.white_label, ...state } } }, { returnDocument: 'after' }).lean().catch(error => { throw error.code === 11000 ? WhiteLabel.error(409, 'This hostname is already connected', 'hostname_conflict') : error; });
 		return WhiteLabel.serialize(updated);
 	}
+	// Only DNS-verified hostnames are claimed; pending entries must not block the domain owner.
+	static claimed(accountId, hostname) { return Account.exists({ _id: { $ne: accountId }, 'white_label.hostname': hostname, 'white_label.dns_verified_at': { $type: 'date' } }); }
 
 	static cloudflareState(record) {
 		const hostnameStatus = String(record?.status || '');
@@ -128,6 +129,10 @@ export class WhiteLabel {
 		if (!matches) {
 			account = await WhiteLabel.saveState(accountId, { state: 'pending_dns', dns_verified_at: null, next_check_at: new Date(Date.now() + WhiteLabel.pendingDelay), last_error: `CNAME must point to ${WhiteLabel.cnameTarget()}` });
 			throw Object.assign(WhiteLabel.error(400, `CNAME must point to ${WhiteLabel.cnameTarget()}`, 'cname_not_verified', { records }), { settings: WhiteLabel.serialize(account) });
+		}
+		if (await WhiteLabel.claimed(account._id, hostname)) {
+			account = await WhiteLabel.saveState(accountId, { state: 'pending_dns', dns_verified_at: null, next_check_at: new Date(Date.now() + WhiteLabel.pendingDelay), last_error: 'This hostname is already connected to another account' });
+			throw Object.assign(WhiteLabel.error(409, 'This hostname is already connected to another account', 'hostname_conflict'), { settings: WhiteLabel.serialize(account) });
 		}
 		let record;
 		try {
