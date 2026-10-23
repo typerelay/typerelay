@@ -8,6 +8,8 @@ import { Assets } from '../services/assets.js';
 import { RichText } from '../services/rich_text.js';
 import { Support, Yaml } from '../services/support.js';
 import { AccountAccess } from '../services/account_access.js';
+import { AdminAccounts } from '../services/admin_accounts.js';
+import { WhiteLabel } from '../services/white_label.js';
 
 class Fixture {
 	static ctx = { account: '0123456789abcdef01234567', user: '1123456789abcdef01234567', role: 'owner', groups: [] };
@@ -22,6 +24,13 @@ class Fixture {
 		t.mock.method(Operation, 'create', async () => []);
 	}
 }
+test('pending domain cleanup cannot discover a domain verified during provider lookup', async t => {
+	let verified = false;
+	t.mock.method(WhiteLabel, 'claimed', async () => verified);
+	const options = { listHostnames: async hostname => { verified = true; return [{ id: 'new-owner', hostname, custom_metadata: { catalog: 'typerelay' } }]; }, deleteHostname: async () => assert.fail('new owner domain deleted') };
+	await AdminAccounts.removeDomain({ _id: Fixture.ctx.account, white_label: { hostname: 'pending.example.test' } }, options);
+	assert.equal(verified, false, 'pending accounts must never discover provider resources');
+});
 
 test('device token and member lookup indexes match authentication queries', () => {
 	for (const key of ['access', 'refresh']) assert.ok(Device.schema.indexes().some(([fields, options]) => fields[key] === 1 && options.sparse));

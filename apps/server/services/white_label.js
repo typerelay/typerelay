@@ -94,7 +94,7 @@ export class WhiteLabel {
 	static listHostnames(hostname, options = {}) { return WhiteLabel.cloudflare(`/custom_hostnames?${new URLSearchParams({ 'hostname[exact]': hostname, per_page: '50' })}`, options); }
 	static async deleteHostname(id, options = {}) { try { await WhiteLabel.cloudflare(`/custom_hostnames/${encodeURIComponent(id)}`, { ...options, method: 'DELETE' }); } catch (error) { if (error.status !== 404) throw error; } }
 	static async releaseHostname(account, options = {}) {
-		if (account.white_label?.cloudflare_hostname_id && !await WhiteLabel.claimed(account._id, account.white_label.hostname)) await WhiteLabel.deleteHostname(account.white_label.cloudflare_hostname_id, options);
+		if (account.white_label?.dns_verified_at && account.white_label.cloudflare_hostname_id && !await WhiteLabel.claimed(account._id, account.white_label.hostname)) await WhiteLabel.deleteHostname(account.white_label.cloudflare_hostname_id, options);
 	}
 
 	static async configure(accountId, hostname, options = {}) {
