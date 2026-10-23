@@ -38,6 +38,7 @@ export class RichText {
 		let markdown = String(content.markdown || '');
 		const matches = [...markdown.matchAll(/!\[[^\]]*\]\((https?:\/\/[^\s)]+)|<img\b[^>]*\bsrc=["'](https?:\/\/[^"']+)["'][^>]*>/gi)];
 		const urls = [...new Set(matches.map(match => match[1] || match[2]))];
+		Support.assert(!session || (!urls.length && !/data:image\/(?:png|jpeg|webp|gif);base64,/.test(markdown)), 'Prepare snippet images before starting the transaction', 422);
 		Support.assert(urls.length <= 16, 'Rich text supports at most 16 remote images', 422);
 		for (const url of urls) { const asset = await Assets.remote(ctx, url, session); markdown = markdown.split(url).join(`typerelay-asset:${asset.id}`); }
 		for (const match of [...markdown.matchAll(/data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/=]+)/g)]) { const bytes = Buffer.from(match[2], 'base64'); Support.assert(bytes.length <= Assets.maximumInput, 'Embedded image exceeds 5 MiB', 413); const asset = await Assets.put(ctx, bytes, '', session); markdown = markdown.split(match[0]).join(`typerelay-asset:${asset.id}`); }

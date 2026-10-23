@@ -27,6 +27,7 @@ export class Statistics {
 		Support.assert(['copy', 'insert'].includes(value.action), 'Invalid usage action');
 		Support.assert(['web', 'desktop', 'terminal', 'extension', 'ios', 'android', 'mobile'].includes(value.client), 'Invalid usage client');
 		Support.assert(typeof value.snippet === 'string' && value.snippet.length <= 100 && value.snippet.length > 0, 'Invalid snippet ID');
+		Support.assert(typeof value.occurred_at === 'string' || typeof value.occurred_at === 'number', 'Invalid usage date');
 		const occurred_at = new Date(value.occurred_at);
 		Support.assert(Number.isFinite(occurred_at.getTime()) && occurred_at.getTime() >= 0 && occurred_at.getTime() <= Date.now() + 300000, 'Invalid usage date');
 		Support.assert(Number.isSafeInteger(value.characters) && value.characters >= 0 && value.characters <= 10000000, 'Invalid character count');
@@ -39,17 +40,22 @@ export class Statistics {
 		// Discard malformed events individually so one bad event cannot block the client's queue.
 		for (const value of body.events) { try { events.push(Statistics.event(value)); } catch { if (typeof value?.event_id === 'string') discarded.push(value.event_id); } }
 		if (!events.length) return { accepted, discarded };
+		const malformed = [...discarded];
 		await AccountAccess.write(ctx.account, async session => {
+			accepted.length = 0; discarded.splice(0, discarded.length, ...malformed);
 			const libraries = new Map((await Library.find({ account: ctx.account, _id: { $in: events.map(event => event.library) } }).session(session).lean()).map(row => [String(row._id), row]));
 			const snippets = new Set((await Snippet.find({ account: ctx.account, id: { $in: events.map(event => event.snippet) } }).select('id library').session(session).lean()).map(row => row.id + ':' + row.library));
 			const previous = new Set((await UsageEvent.find({ account: ctx.account, user: ctx.user, event_id: { $in: events.map(event => event.event_id) } }).select('event_id').session(session).lean()).map(row => row.event_id));
+			const inserts = [];
 			for (const event of events) {
 				if (previous.has(event.event_id)) { accepted.push(event.event_id); continue; }
 				const library = libraries.get(event.library);
 				if (!library || !Support.access(ctx, library).read || !snippets.has(event.snippet + ':' + event.library)) { discarded.push(event.event_id); continue; }
-				await UsageEvent.updateOne({ account: ctx.account, user: ctx.user, event_id: event.event_id }, { $setOnInsert: { ...event, shared: event.shared && library.shared === true } }, { upsert: true, session });
+				inserts.push({ ...event, account: ctx.account, user: ctx.user, shared: event.shared && library.shared === true });
+				previous.add(event.event_id);
 				accepted.push(event.event_id);
 			}
+			if (inserts.length) await UsageEvent.insertMany(inserts, { session });
 		});
 		return { accepted, discarded };
 	}

@@ -317,7 +317,7 @@ export class Server {
 		app.get('/api/v2/libraries', async (req, res) => res.json(await Libraries.list(req.ctx)));
 		app.post('/api/v2/import/:format/preview', async (req, res) => { const preview = await Libraries.previewImport(req.params.format, req.body); res.json({ ...preview, html: pug.renderFile('./views/ajax/snippetslab.pug', preview) }); });
 		app.post('/api/v2/import/preview', async (req, res) => res.json(await Yaml.run(req.body.yaml)));
-		app.post('/api/v2/import/:format', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.commitImport(ctx, req.params.format, req.body, session))));
+		app.post('/api/v2/import/:format', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.commitImport(ctx, req.params.format, req.body, session), { format: req.params.format })));
 		app.post('/api/v2/libraries', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, async (ctx, session) => ({ library: await Libraries.create(ctx, req.body, session) }))));
 		app.patch('/api/v2/libraries/:id', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.settings(ctx, req.params.id, req.body, session))));
 		app.post('/api/v2/libraries/:id/snippets', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.upload(ctx, req.params.id, req.body, session))));
@@ -327,7 +327,7 @@ export class Server {
 			res.json({ ...result, ...await Server.personalPresentation(req.ctx) });
 		});
 		app.get('/api/v2/sync', async (req, res) => res.json({ ...await Libraries.download(req.ctx, Number(req.query.cursor || 0), req.headers['x-typerelay-personal-abbreviations'] === '1'), statistics_identity: { account: req.ctx.account, user: req.ctx.user, device: req.ctx.device || null } }));
-		app.post('/api/v2/conflicts/:id', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.resolve(ctx, req.params.id, req.body, session))));
+		app.post('/api/v2/conflicts/:id', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.resolve(ctx, req.params.id, req.body, session), { conflict: req.params.id })));
 		app.get('/api/v2/team', async (req, res) => res.json(await Team.list(req.ctx)));
 		app.post('/api/v2/team/members', async (req, res) => { const result = await Team.add(req.ctx, req.body); res.json({ ...result, html: pug.renderFile('./views/ajax/member.pug', { member: result.member, ctx: req.ctx, viewerAvatarStyle: (await User.findById(req.ctx.user).select('avatar_style').lean()).avatar_style }) }); });
 		app.post('/api/v2/team/invitations', async (req, res) => res.json(await Team.invite(req.ctx, req.body.email)));

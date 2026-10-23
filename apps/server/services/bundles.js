@@ -6,10 +6,9 @@ import { Support, Yaml } from './support.js';
 import { SnippetAsset } from '../model/index.js';
 
 export class Bundles {
-	static entry(snippet) { if (snippet.content?.type === 'rich_text') return { trigger: snippet.trigger, title: snippet.title, replace: snippet.content.markdown, type: 'rich_text', variables: snippet.content.variables || {} }; return Libraries.yaml(snippet); }
 	static async export(ctx, id) {
 		const library = await Libraries.get(ctx, id);
-		const manifest = await Yaml.export(library.snippets.map(Bundles.entry));
+		const manifest = await Yaml.export(library.snippets.map(snippet => Libraries.exportEntry(snippet, true)));
 		const ids = [...new Set(library.snippets.flatMap(snippet => snippet.content?.assets || []))]; const assetMetadata = {}; const files = { 'snippets.yml': strToU8(manifest.yaml) };
 		Support.assert(ids.length <= 998, 'Bundle has too many images; export smaller libraries', 413);
 		let total = files['snippets.yml'].length;

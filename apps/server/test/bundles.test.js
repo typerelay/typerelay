@@ -22,7 +22,7 @@ test('a library exported with 65 distinct images imports with every image intact
 		const data = await sharp({ create: { width: 1, height: 1, channels: 4, background: { r: index, g: 0, b: 0, alpha: 0.5 } } }).png().toBuffer();
 		const asset = await Assets.normalize(data); assets.set(asset.id, asset);
 	}
-	const snippets = [...assets.keys()].map(id => ({ trigger: null, title: '', content: { type: 'rich_text', markdown: `![](typerelay-asset:${id})`, assets: [id] } }));
+	const snippets = [...assets.keys()].map(id => ({ trigger: null, title: '', content: { version: 2, type: 'rich_text', markdown: `![](typerelay-asset:${id})`, variables: {}, assets: [id] } }));
 	t.mock.method(Libraries, 'get', async () => ({ name: 'Images', snippets }));
 	const calls = assetQueries(t, assets);
 	// Exercise the real ZIP and image paths without requiring the separate YAML executable.
@@ -34,14 +34,14 @@ test('a library exported with 65 distinct images imports with every image intact
 	assert.equal(calls.queries, 5); assert.equal(calls.streamed, 65); assert.equal(calls.closed, 1);
 	const imported = await Bundles.import({}, exported.bytes);
 	assert.equal(imported.name, 'Images');
-	assert.deepEqual(imported.snippets, snippets.map(Bundles.entry));
+	assert.deepEqual(imported.snippets, snippets.map(snippet => Libraries.exportEntry(snippet, true)));
 	assert.equal(saved.size, 65);
 	for (const [id, asset] of assets) assert.deepEqual(saved.get(id).data, asset.data);
 });
 
 test('export refuses archives exceeding the import entry or expanded-byte limits', async t => {
 	t.mock.method(Yaml, 'export', async () => ({ yaml: 'matches: []' }));
-	t.mock.method(Libraries, 'get', async () => ({ name: 'Large', snippets: [{ content: { type: 'rich_text', markdown: '', assets: Array.from({ length: 999 }, (_, index) => String(index)) } }] }));
+	t.mock.method(Libraries, 'get', async () => ({ name: 'Large', snippets: [{ content: { version: 2, type: 'rich_text', markdown: 'Image', assets: Array.from({ length: 999 }, (_, index) => String(index)) } }] }));
 	await assert.rejects(Bundles.export({}, 'library'), error => error.status === 413);
 	t.mock.method(Libraries, 'get', async () => ({ name: 'Large', snippets: [] }));
 	t.mock.method(Yaml, 'export', async () => ({ yaml: ' '.repeat(24 * 1048576) }));
@@ -87,7 +87,7 @@ for (const failure of ['inaccessible', 'missing', 'oversized']) test(`batched bu
  const ids = Array.from({ length: 65 }, (_, index) => index.toString(16).padStart(64, '0'));
  const assets = new Map(ids.map(id => [id, { id, data: Buffer.alloc(failure === 'oversized' ? 2 * 1048576 : 1), mime_type: 'image/png', size: 1 }]));
  const calls = assetQueries(t, assets);
- t.mock.method(Libraries, 'get', async () => ({ name: 'Images', snippets: [{ content: { type: 'rich_text', markdown: '', assets: [...ids, ids[0]] } }] }));
+ t.mock.method(Libraries, 'get', async () => ({ name: 'Images', snippets: [{ content: { version: 2, type: 'rich_text', markdown: 'Image', assets: [...ids, ids[0]] } }] }));
  t.mock.method(Yaml, 'export', async () => ({ yaml: 'matches: []' }));
  t.mock.method(Assets, 'visible', async (ctx, requested) => { assert.deepEqual(requested, ids); return failure === 'inaccessible' ? ids.slice(1) : ids; });
  if (failure === 'missing') assets.delete(ids[0]);

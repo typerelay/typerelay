@@ -17,6 +17,8 @@ const accountSchema = new mongoose.Schema({
 	admin_override: { plan: { type: String, enum: ['free', 'pro', 'team', null], default: null }, limits: { people: { type: Number, default: null }, snippets: { type: Number, default: null }, libraries: { type: Number, default: null }, machines: { type: Number, default: null } } },
 	deletion: { requested_at: Date, stage: String, error: String, users: [objectid], grants: [objectid], lease: String, lease_until: Date },
 	sequence: { type: Number, default: 0 },
+	sync_history_version: Number,
+	sync_floor: Number,
 	plan: { type: String, enum: ['free', 'pro', 'team'], default: 'free' },
 	sso: {
 		enabled: { type: Boolean, default: false }, enforce: { type: Boolean, default: false }, provision: { type: Boolean, default: false },
@@ -87,12 +89,16 @@ const Ticket = mongoose.model('Ticket', new mongoose.Schema({ hash: { type: Stri
 const signupNotificationSchema = new mongoose.Schema({ account: { type: objectid, required: true, unique: true, index: true }, user: { type: objectid, required: true, index: true }, email: { type: String, required: true }, name: { type: String, default: '' }, status: { type: String, enum: ['pending', 'sent', 'failed'], default: 'pending', index: true }, attempts: { type: Number, default: 0 }, next_attempt_at: { type: Date, default: null }, last_attempt_at: { type: Date, default: null }, sent_at: { type: Date, default: null }, failed_at: { type: Date, default: null }, last_error: { type: String, default: '' }, message_id: { type: String, required: true } }, { timestamps: true });
 signupNotificationSchema.index({ status: 1, next_attempt_at: 1 });
 const SignupNotification = mongoose.model('SignupNotification', signupNotificationSchema);
-const lifecycle = { state: { type: String, enum: ['active', 'trashed', 'purged'], default: 'active' }, trashed_at: Date, trashed_by: String, expires_at: Date };
+const lifecycle = { state: { type: String, enum: ['active', 'trashed', 'purged'], default: 'active' }, trashed_at: Date, trashed_by: String, expires_at: Date, purge_sequence: Number };
 const Library = mongoose.model('Library', new mongoose.Schema({ account: objectid, creator: objectid, name: String, shared: Boolean, editable: Boolean, members: [objectid], groups: [objectid], purge_readers: [objectid], revision: Number, ...lifecycle }));
 const snippetSchema = new mongoose.Schema({ account: objectid, library: objectid, id: String, title: String, trigger: String, content: mixed, position: Number, revision: Number, ...lifecycle }, { timestamps: true });
 snippetSchema.index({ library: 1, id: 1 }, { unique: true });
 snippetSchema.index({ account: 1, id: 1 }, { unique: true });
 snippetSchema.index({ library: 1, trigger: 1 }, { unique: true, partialFilterExpression: { state: 'active', trigger: { $type: 'string', $gt: '' } } });
+snippetSchema.index({ state: 1, expires_at: 1, account: 1 });
+snippetSchema.index({ account: 1, state: 1, purge_sequence: 1 });
+Library.schema.index({ state: 1, expires_at: 1, account: 1 });
+Library.schema.index({ account: 1, state: 1, purge_sequence: 1 });
 const Snippet = mongoose.model('Snippet', snippetSchema);
 const personalAbbreviationSchema = new mongoose.Schema({ account: { type: objectid, required: true }, user: { type: objectid, required: true }, snippet: { type: String, required: true }, trigger: { type: String, default: null }, revision: { type: Number, default: 0 }, conflicts: { type: [mixed], default: [] } }, { timestamps: true });
 personalAbbreviationSchema.index({ account: 1, user: 1, snippet: 1 }, { unique: true });
@@ -100,6 +106,7 @@ export const PersonalAbbreviation = mongoose.model('PersonalAbbreviation', perso
 const snippetAssetSchema = new mongoose.Schema({ account: objectid, id: String, data: { type: Buffer, select: false }, mime_type: String, size: Number, width: Number, height: Number, animated: Boolean, source_urls: [String], staged_by: [objectid], last_referenced_at: Date }, { timestamps: true });
 snippetAssetSchema.index({ account: 1, id: 1 }, { unique: true });
 snippetAssetSchema.index({ account: 1, last_referenced_at: 1 });
+snippetAssetSchema.index({ updatedAt: 1, account: 1 });
 const SnippetAsset = mongoose.model('SnippetAsset', snippetAssetSchema);
 const Migration = mongoose.model('Migration', new mongoose.Schema({ key: { type: String, unique: true }, completed: Boolean }));
 const MigrationBackup = mongoose.model('MigrationBackup', new mongoose.Schema({ key: { type: String, unique: true }, source_collection: String, payload: mixed }));

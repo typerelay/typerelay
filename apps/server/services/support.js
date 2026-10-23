@@ -37,10 +37,14 @@ export class Support {
 		const assigned = library.shared && (library.members.some(id => Support.equal(id, ctx.user)) || library.groups.some(id => ctx.groups.includes(String(id))));
 		return { read: !!(creator || admin || assigned), edit: !!(creator || admin || (assigned && library.editable)), manage: !!(creator || admin) };
 	}
+	static changeHistory = 10000;
 	static async change(account, library, kind, session) {
 		const result = await Account.findOneAndUpdate({ _id: account, ...AccountAccess.available }, { $inc: { sequence: 1 } }, { returnDocument: 'after', session }).lean();
 		Support.assert(result, 'Account missing', 404);
 		await Change.create([{ account, sequence: result.sequence, library, kind }], { session });
+		// The first versioned change expires legacy cursors whose tombstones lack a sequence.
+		await Account.updateOne({ _id: account }, { $set: { sync_history_version: 1 }, $max: { sync_floor: result.sync_history_version === 1 ? Math.max(0, result.sequence - Support.changeHistory) : result.sequence } }, { session });
+		if (result.sequence > Support.changeHistory) await Change.deleteMany({ account, sequence: { $lte: result.sequence - Support.changeHistory } }, { session });
 		return result.sequence;
 	}
 }

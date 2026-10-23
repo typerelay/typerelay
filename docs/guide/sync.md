@@ -44,6 +44,8 @@ Server libraries you are allowed to read download automatically. This includes y
 
 The resident desktop worker checks every 30 seconds. Pending local changes trigger a faster retry after about two seconds. **Sync now** requests an immediate cycle; it does not replace or reload the current view.
 
+The server retains an incremental window of 10,000 sequence steps. An older cursor receives a full snapshot automatically, including the current access manifest and deletion records. Pending local edits still follow the normal conflict and recovery rules. Compact deletion records remain on the server to prevent old uploads from restoring permanently removed snippets.
+
 Manual sync reports start, success, failure or changes needing attention through desktop notifications and the panel status. Automatic background sync stays quiet. Notifications still depend on operating-system notification settings.
 
 The CLI equivalent is:
