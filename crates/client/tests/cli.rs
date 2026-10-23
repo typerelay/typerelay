@@ -46,3 +46,12 @@ fn mutations_report_results_and_sync_errors_do_not_claim_success() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("Connect first"));
     assert!(!String::from_utf8_lossy(&output.stdout).contains("Synced"));
 }
+
+#[test]
+fn recovery_command_lists_and_dismisses_preserved_content() {
+    let temp=tempfile::tempdir().unwrap();let db=typerelay_client::database::Database::open(&temp.path().join("typerelay/snippets")).unwrap();
+    db.recover("library",Some("snippet"),&serde_json::json!({"content":{"text":"Keep this edit"}}),"Server 410").unwrap();let id=db.recovery().unwrap()[0]["id"].as_str().unwrap().to_owned();
+    let run=|args:&[&str]|Command::new(env!("CARGO_BIN_EXE_typerelay")).env("XDG_CONFIG_HOME",temp.path()).args(args).output().unwrap();
+    let output=run(&["recovery"]);assert!(output.status.success());let rows:serde_json::Value=serde_json::from_slice(&output.stdout).unwrap();assert_eq!(rows[0]["reason"],"Server 410");assert_eq!(rows[0]["data"]["content"]["text"],"Keep this edit");
+    assert!(run(&["recovery","--dismiss",&id]).status.success());assert!(db.recovery().unwrap().is_empty());assert!(!run(&["recovery","--dismiss",&id]).status.success());
+}

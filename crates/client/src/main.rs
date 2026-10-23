@@ -63,6 +63,8 @@ enum Commands {
     DatabaseReplay { operation: String },
     #[command(hide = true)]
     DatabaseBatch { source: String, #[arg(long)] destination: Option<String>, #[arg(long, num_args=1..)] triggers: Vec<String> },
+    /// List edits the server rejected, or dismiss one after copying its content.
+    Recovery { #[arg(long)] dismiss: Option<String> },
     /// List, restore, or permanently empty trashed items.
     Trash { #[arg(long)] restore: Option<String>, #[arg(long)] empty: bool, #[arg(long)] yes: bool },
     #[cfg(target_os = "linux")]
@@ -129,7 +131,8 @@ impl Cli {
                 db.batch(&file.id, destination.as_deref(), &db.batch_items(&file, &ids)?)?;
             },
             Commands::DatabaseReplay { operation } => { typerelay_client::database::Database::open(&root.join("snippets"))?.queue(&serde_json::from_str(&operation)?)?; },
-            Commands::Inspect => { let db = typerelay_client::database::Database::open(&root.join("snippets"))?; let libraries: Vec<_> = db.libraries()?.into_iter().map(|mut library| { library["records"] = serde_json::json!(db.records(library["_id"].as_str().unwrap()).unwrap()); library }).collect(); println!("{}", serde_json::json!({"libraries":libraries,"pending":db.pending()?,"conflicts":db.meta("conflicts")?,"staged":db.meta("staged")?,"recovery":db.connection.query_row("SELECT count(*) FROM recovery", [], |row|row.get::<_, i64>(0))?})); },
+            Commands::Inspect => { let db = typerelay_client::database::Database::open(&root.join("snippets"))?; let libraries: Vec<_> = db.libraries()?.into_iter().map(|mut library| { library["records"] = serde_json::json!(db.records(library["_id"].as_str().unwrap()).unwrap()); library }).collect(); println!("{}", serde_json::json!({"libraries":libraries,"pending":db.pending()?,"conflicts":db.meta("conflicts")?,"recovery":db.connection.query_row("SELECT count(*) FROM recovery", [], |row|row.get::<_, i64>(0))?})); },
+            Commands::Recovery { dismiss } => { let db = typerelay_client::database::Database::open(&root.join("snippets"))?; if let Some(id) = dismiss { anyhow::ensure!(db.recovery()?.iter().any(|row| row["id"] == id), "Recovery item not found"); db.dismiss_recovery(&id)?; println!("Dismissed recovery item {id}."); } else { println!("{}", serde_json::to_string_pretty(&db.recovery()?)?); } },
             Commands::Trash { restore, empty, yes } => { let db = typerelay_client::database::Database::open(&root.join("snippets"))?; let rows = db.trash()?; if let Some(id) = restore { let target = rows.iter().find(|row| row["id"] == id).ok_or_else(||anyhow::anyhow!("Trash item not found"))?; db.trash_action(target, "restore")?; println!("Restored trash item {id}."); } else if empty { anyhow::ensure!(yes, "Pass --yes to permanently empty eligible Trash"); db.empty(&rows.into_iter().filter(|row| row["can_purge"] == true).collect::<Vec<_>>())?; println!("Emptied eligible trash items."); } else { println!("{}", serde_json::to_string_pretty(&rows)?); } },
             Commands::Disconnect => { typerelay_client::sync::Sync::new(root.clone(), root.join("snippets"))?.disconnect()?; println!("Disconnected. Local libraries retained."); },
             Commands::Validate { source } => {

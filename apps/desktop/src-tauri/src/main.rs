@@ -456,6 +456,10 @@ async fn merge_library(app:tauri::AppHandle,source:String,destination:String)->s
 #[tauri::command]
 async fn conflicts(app:tauri::AppHandle)->std::result::Result<Value,String>{let directory=app.state::<Runtime>().root.join("snippets");tauri::async_runtime::spawn_blocking(move||Panel::conflicts(&directory).map_err(|error|error.to_string())).await.map_err(|error|error.to_string())?}
 #[tauri::command]
+async fn recovery(app:tauri::AppHandle)->std::result::Result<Value,String>{let directory=app.state::<Runtime>().root.join("snippets");tauri::async_runtime::spawn_blocking(move||Database::open(&directory).and_then(|db|db.recovery()).map(Value::from).map_err(|error|error.to_string())).await.map_err(|error|error.to_string())?}
+#[tauri::command]
+async fn dismiss_recovery(app:tauri::AppHandle,id:String)->std::result::Result<(),String>{let directory=app.state::<Runtime>().root.join("snippets");tauri::async_runtime::spawn_blocking(move||Database::open(&directory).and_then(|db|db.dismiss_recovery(&id)).map_err(|error|error.to_string())).await.map_err(|error|error.to_string())?}
+#[tauri::command]
 async fn resolve_conflict(app:tauri::AppHandle,id:String,choice:String,value:Option<Value>)->std::result::Result<(),String>{let root=app.state::<Runtime>().root.clone();tauri::async_runtime::spawn_blocking(move||Sync::new(root.clone(),root.join("snippets")).and_then(|sync|sync.resolve_conflict(&id,&choice,value)).map_err(|error|error.to_string())).await.map_err(|error|error.to_string())?}
 #[tauri::command]
 async fn enroll(app:tauri::AppHandle,names:Vec<String>)->std::result::Result<(),String>{let root=app.state::<Runtime>().root.clone();tauri::async_runtime::spawn_blocking(move||->Result<()>{let sync=Sync::new(root.clone(),root.join("snippets"))?;for name in names{sync.enroll(&name)?;}Ok(())}).await.map_err(|e|e.to_string())?.map_err(|e|e.to_string())}
@@ -586,7 +590,7 @@ fn main() {
     }).on_window_event(|window,event|match event {
         tauri::WindowEvent::CloseRequested{api,..}=>{api.prevent_close();set_prompt_view(window.app_handle().clone(),false);Runtime::hide(window.app_handle());},
         tauri::WindowEvent::Focused(false)if Runtime::hide_on_focus_loss() && !window.app_handle().state::<Runtime>().busy.load(Ordering::SeqCst) && !window.app_handle().state::<Runtime>().settings.load(Ordering::SeqCst) && !window.app_handle().state::<Runtime>().prompting.load(Ordering::SeqCst)=> {Runtime::hide(window.app_handle());},_=>()
-    }).invoke_handler(tauri::generate_handler![suggestions,initialize,native_ai,search,personal_status,personal_abbreviation,insert,copy_snippet,prepare_template,set_prompt_view,set_settings_view,dismiss,notify,sync_now,save_settings,connect,cancel_connect,disconnect,libraries,merge_destinations,merge_library,conflicts,resolve_conflict,enroll,open_accessibility_settings,open_input_monitoring_settings,open_notification_settings,open_tui,open_web_app]).build(tauri::generate_context!());
+    }).invoke_handler(tauri::generate_handler![suggestions,initialize,native_ai,search,personal_status,personal_abbreviation,insert,copy_snippet,prepare_template,set_prompt_view,set_settings_view,dismiss,notify,sync_now,save_settings,connect,cancel_connect,disconnect,libraries,merge_destinations,merge_library,conflicts,resolve_conflict,recovery,dismiss_recovery,enroll,open_accessibility_settings,open_input_monitoring_settings,open_notification_settings,open_tui,open_web_app]).build(tauri::generate_context!());
     match result {Ok(app)=>app.run(|handle,event|{#[cfg(target_os="linux")]if matches!(event,tauri::RunEvent::Exit|tauri::RunEvent::ExitRequested{..}){handle.state::<Runtime>().stop_engine();}#[cfg(not(target_os="linux"))]let _=(handle,event);}),Err(error)=>{eprintln!("TypeRelay panel: {error}");std::process::exit(1);}}
 }
 

@@ -32,6 +32,7 @@ async function clear() {
 	refreshJob = null; syncJob = null;
 	await connection.write(version, async () => {
 		await chrome.storage.local.remove(['tokens', 'items', 'cursor', 'account', 'lastSync', 'statisticsIdentity']);
+		await usage.retain(null);
 		await caches.delete('typerelay-assets-v1');
 	});
 	return version;
@@ -62,7 +63,7 @@ async function request(path, options = {}) {
 	connection.assert(version);
 	if (response.status === 401) response = await send(true);
 	connection.assert(version);
-	if (!response.ok) { if (response.status === 401 || (response.status === 403 && !path.startsWith("/api/v2/ai/"))) await clear(); throw new Error((await response.json().catch(() => ({}))).error || `TypeRelay request failed (${response.status})`); }
+	if (!response.ok) { if (response.status === 401) await clear(); throw new Error((await response.json().catch(() => ({}))).error || `TypeRelay request failed (${response.status})`); }
 	return response;
 }
 
@@ -136,7 +137,8 @@ async function sync() {
 		const items = snapshot.libraries.filter(library => library.state === 'active').flatMap(library => library.snippets.filter(snippet => snippet.state === 'active').map(snippet => ({ id: snippet.id, trigger: library.shared ? (overrides.get(snippet.id) ?? snippet.trigger) : snippet.trigger, title: snippet.title, library: library.name, library_id: library._id, shared: library.shared === true, content: snippet.content })));
 		const counts = new Map(); for (const item of items) if (item.trigger) counts.set(item.trigger, (counts.get(item.trigger) || 0) + 1);
 		for (const item of items) item.abbreviation_collision = (counts.get(item.trigger) || 0) > 1;
-		await connection.write(version, () => chrome.storage.local.set({ items, cursor: snapshot.cursor, lastSync: Date.now(), statisticsIdentity: snapshot.statistics_identity ? { server: origin, account: snapshot.statistics_identity.account, user: snapshot.statistics_identity.user } : null }));
+		const statisticsIdentity = snapshot.statistics_identity ? { server: origin, account: snapshot.statistics_identity.account, user: snapshot.statistics_identity.user } : null;
+		await connection.write(version, async () => { await chrome.storage.local.set({ items, cursor: snapshot.cursor, lastSync: Date.now(), statisticsIdentity }); await usage.retain(statisticsIdentity); });
 		await usage.flush().catch(() => undefined);
 		for (const key of await cache.keys()) if (!ids.has(key.url.split('/').at(-1))) await connection.write(version, () => cache.delete(key));
 		await connection.write(version, () => chrome.storage.session.remove('browserAuthError'));
@@ -236,7 +238,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
 			}
 			case 'prefix': { if (!",;./'[]\\`=".includes(message.value) || message.value.length !== 1) throw new Error('Invalid prefix'); await chrome.storage.local.set({ prefix: message.value }); return { prefix: message.value }; }
 			case 'match': return Runtime.match(message.before, message.prefix, message.triggers);
-			case 'usage': return usage.record(message.event);
+			case 'usage': return connection.write(connection.version, () => usage.record(message.event));
 			case 'prepare': return prepared(message.id, message.values || {}, !!message.preview);
 			case 'claim': return { verified: sender.tab?.url && new URL(sender.tab.url).hostname === 'docs.google.com' ? false : await claim() };
 			default: throw new Error('Unknown request');

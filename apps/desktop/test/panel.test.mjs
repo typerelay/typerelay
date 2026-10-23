@@ -11,7 +11,7 @@ class Fixture {
   const style=dom.window.document.createElement('style');style.textContent=await readFile('ui/panel.css','utf8');dom.window.document.head.append(style);
   dom.window.HTMLElement.prototype.scrollIntoView=()=>{};
 	  dom.window.Swal={fire:async()=>({isConfirmed:true})};
-  dom.window.__TAURI__={core:{invoke:async(name,args)=>{calls.push({name,args});if(name==='initialize')return{config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},theme:{os:'linux'},settings:false,accessibility:false,input_monitoring:false,empty:false,version:'1.2.0'};if(name==='search')return new Promise(resolve=>pending.push({query:args.query,resolve}));if(name==='native_ai')return{model:null,models:[{id:'small',name:'Small',bytes:1000000,publisher:'test',license:'apache-2.0',recommended:true,installed:false,downloaded:0}],download:null};if(name==='libraries'||name==='conflicts')return[];if(name==='prepare_template')return{fields:[],steps:[{kind:'text',text:'Literal'}],text:'Literal',enter_actions:0,template:{text:'Literal',variables:{}}};return null;}},event:{listen:(name,callback)=>{callbacks[name]=callback;}}};
+  dom.window.__TAURI__={core:{invoke:async(name,args)=>{calls.push({name,args});if(name==='initialize')return{config:{shortcut:'Ctrl+Shift+Semicolon',launch_at_login:false},theme:{os:'linux'},settings:false,accessibility:false,input_monitoring:false,empty:false,version:'1.2.0'};if(name==='search')return new Promise(resolve=>pending.push({query:args.query,resolve}));if(name==='native_ai')return{model:null,models:[{id:'small',name:'Small',bytes:1000000,publisher:'test',license:'apache-2.0',recommended:true,installed:false,downloaded:0}],download:null};if(name==='libraries'||name==='conflicts'||name==='recovery')return[];if(name==='prepare_template')return{fields:[],steps:[{kind:'text',text:'Literal'}],text:'Literal',enter_actions:0,template:{text:'Literal',variables:{}}};return null;}},event:{listen:(name,callback)=>{callbacks[name]=callback;}}};
   dom.window.eval((await readFile('ui/suggestions.js','utf8')).replace('export class Suggestions','window.Suggestions = class Suggestions'));
   dom.window.eval((await readFile('ui/panel.js','utf8')).replace("import { Suggestions } from './suggestions.js';",'').replace("import { AiClient } from './ai.js';",'').replace('new Panel();','window.panel = new Panel();'));
   await new Promise(resolve=>setTimeout(resolve,0));
@@ -344,7 +344,7 @@ for(const os of ['macos','windows','linux'])test(`${os} native sync events updat
    f.callbacks['sync-notice']({payload:{message,running:false,visible:true}});
    assert.equal(button.disabled,false);assert.equal(button.textContent,'Sync now');
   }
-  assert.ok(f.calls.slice(before).every(call=>['libraries','conflicts'].includes(call.name)));assert.equal(server.value,'https://example.test');assert.equal(f.dom.window.document.activeElement,f.panel.query);
+  assert.ok(f.calls.slice(before).every(call=>['libraries','conflicts','recovery'].includes(call.name)));assert.equal(server.value,'https://example.test');assert.equal(f.dom.window.document.activeElement,f.panel.query);
   f.callbacks['sync-notice']({payload:{message:'Sync successful',running:false,visible:false}});
  }finally{f.dom.window.close();}
 });
@@ -359,7 +359,7 @@ test('Sync settings retain synced libraries and reconcile only changed rows afte
   const checkbox=local.querySelector('input');checkbox.checked=true;checkbox.focus();
   const before=f.calls.length;rows[0].snippets=68;
   await f.callbacks['sync-notice']({payload:{running:false}});
-  assert.equal(container.children[0],remote);assert.equal(container.children[1],local);assert.equal(remote.querySelector('.library-name').textContent,'mysnippets.yml (68)');assert.equal(checkbox.checked,true);assert.equal(f.dom.window.document.activeElement,checkbox);assert.equal(f.calls.length,before+1);assert.equal(f.calls.at(-1).name,'conflicts');
+  assert.equal(container.children[0],remote);assert.equal(container.children[1],local);assert.equal(remote.querySelector('.library-name').textContent,'mysnippets.yml (68)');assert.equal(checkbox.checked,true);assert.equal(f.dom.window.document.activeElement,checkbox);assert.equal(f.calls.length,before+2);assert.equal(f.calls.at(-1).name,'recovery');
   rows[1].synced=true;await f.panel.refreshLibraries();assert.equal(checkbox.checked,false);assert.equal(checkbox.disabled,true);assert.equal(local.querySelector('.library-sync-state').textContent,'Synced');
   const pending=[];f.panel.invoke=async()=>new Promise(resolve=>pending.push(resolve));
   const stale=f.panel.refreshLibraries();const fresh=f.panel.refreshLibraries();pending[1]([rows[1]]);await fresh;pending[0](rows);await stale;
@@ -496,6 +496,20 @@ test('desktop conflict review renders both records and submits an edited merge i
   await f.panel.refreshConflicts();const section=f.dom.window.document.querySelector('#conflict-section');assert.equal(section.hidden,false);const row=section.querySelector('[data-id="conflict-one"]');row.querySelector('.conflict-open').click();assert.match(row.querySelector('.conflict-local').textContent,/Local/);assert.match(row.querySelector('.conflict-server').textContent,/Server/);
 	  row.querySelector('.conflict-body').value='Merged';await f.panel.resolveConflict(row,row.querySelector('.conflict-form button[type="submit"]'));
   const call=f.calls.findLast(call=>call.name==='resolve_conflict');assert.equal(call.args.choice,'merged');assert.equal(call.args.value.content.text,'Merged');assert.equal(section.querySelector('[data-id="conflict-one"]'),null);assert.equal(section.hidden,true);
+ }finally{f.dom.window.close();}
+});
+
+test('desktop recovery list copies content and dismisses one item without reloading the section',async()=>{
+ const f=await Fixture.create();try{
+  const document=f.dom.window.document;let copied='';Object.defineProperty(f.dom.window.navigator,'clipboard',{value:{writeText:async text=>{copied=text;}}});
+  const rows=[{id:'one',library:'library-one',library_name:'My snippets',reason:'Server 403: Edit permission is required',data:{id:'snippet-one',value:{trigger:'hello',title:'Hello',content:{version:1,type:'plain_text',text:'Hello there'}}}},{id:'two',library:'library-one',library_name:'My snippets',reason:'',data:null}];
+  const original=f.panel.invoke;f.panel.invoke=async(name,args)=>{if(name==='recovery')return structuredClone(rows);if(name==='dismiss_recovery'){f.calls.push({name,args});return null;}return original(name,args);};
+  await f.panel.refreshRecovery();const section=document.querySelector('#recovery-section');assert.equal(section.hidden,false);
+  const one=section.querySelector('[data-id="one"]');const two=section.querySelector('[data-id="two"]');assert.equal(one.querySelector('.recovery-title').textContent,'My snippets · Hello');assert.match(one.querySelector('.recovery-reason').textContent,/403/);assert.equal(one.querySelector('.recovery-content').textContent,'Hello there');
+  await f.panel.refreshRecovery();assert.equal(section.querySelector('[data-id="one"]'),one);
+  one.querySelector('.recovery-copy').click();await new Promise(resolve=>setTimeout(resolve,0));assert.equal(copied,'Hello there');
+  one.querySelector('.recovery-dismiss').click();await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(f.calls.findLast(call=>call.name==='dismiss_recovery').args.id,'one');assert.equal(section.querySelector('[data-id="one"]'),null);assert.equal(section.querySelector('[data-id="two"]'),two);assert.match(document.querySelector('#recovery-count').textContent,/^1 rejected edit /);
  }finally{f.dom.window.close();}
 });
 

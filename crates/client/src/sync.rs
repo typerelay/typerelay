@@ -234,6 +234,7 @@ impl Sync {
         ensure!(response["protocol"] == 6, "Server upgrade required: sync protocol 6");
         let usage_identity = response.get("statistics_identity").filter(|value| value["user"].is_string() && value["account"].is_string()).map(|value| json!({"server":credentials.server,"account":value["account"],"user":value["user"]}));
         if let Some(identity) = &usage_identity { db.set_meta("statistics_identity", identity)?; } else { db.set_meta("statistics_identity", &Value::Null)?; }
+        db.retain_usage(usage_identity.as_ref())?;
 
 		db.reconcile_detached(&response,&credentials.server,credentials.account.as_deref())?;
 		self.download_assets(credentials,&db,&response)?;
@@ -247,15 +248,15 @@ impl Sync {
                 Ok(result) => db.apply(&result, Some((seq, &operation)))?,
                 Err(error) => {
                     let message = error.to_string();
-                    let status = error.downcast_ref::<ServerError>().map(|error|error.status);
                     if ServerError::rejected(&error, matches!(operation["kind"].as_str(),Some("batch"|"merge_local"|"merge_synced"|"personal"))) {
                         let transaction = db.connection.unchecked_transaction()?;
-						if status != Some(410) && !matches!(operation["kind"].as_str(),Some("merge_local"|"merge_synced")) { db.recover_operation(&operation)?; }
+						if !matches!(operation["kind"].as_str(),Some("merge_local"|"merge_synced")) { db.recover_operation(&operation, &message)?; }
                         db.connection.execute("DELETE FROM outbox WHERE seq=?1", [seq])?;
                         db.set_meta("last_failure", &json!(message))?;
                         transaction.commit()?;
                         // Full refresh rolls back rejected optimistic moves on both sides.
                         let fresh = self.request(credentials, reqwest::Method::GET, "sync?cursor=0", None)?;
+                        self.download_assets(credentials, &db, &fresh)?;
                         db.apply(&fresh, None)?;
                     } else { return Err(error); }
                 }
@@ -284,8 +285,9 @@ impl Sync {
         let transaction = db.connection.unchecked_transaction()?;
         let libraries:Vec<String>=db.libraries()?.into_iter().filter_map(|library|library["_id"].as_str().map(str::to_owned)).filter(|id|db.synced(id).unwrap_or(false)).collect();
         db.connection.execute("UPDATE libraries SET synced=0", [])?;
-        for (seq, operation) in db.pending()? { if !matches!(operation["kind"].as_str(),Some("merge_local"|"merge_synced")){db.recover_operation(&operation)?;}db.connection.execute("DELETE FROM outbox WHERE seq=?1", [seq])?; }
+        for (seq, operation) in db.pending()? { if !matches!(operation["kind"].as_str(),Some("merge_local"|"merge_synced")){db.recover_operation(&operation,"Disconnected before the change was synced")?;}db.connection.execute("DELETE FROM outbox WHERE seq=?1", [seq])?; }
         db.set_meta("statistics_identity", &Value::Null)?;
+        db.retain_usage(None)?;
         db.set_meta("cursor", &json!(0))?;
         db.set_meta("personal_abbreviations", &json!([]))?; db.set_meta("personal_capability", &Value::Null)?;
         db.connection.execute("DELETE FROM meta WHERE key LIKE 'personal_rejected:%'", [])?;
@@ -328,6 +330,29 @@ impl Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn gone_edit_is_recovered_and_fresh_assets_download_before_apply() {
+        let root=tempfile::tempdir().unwrap(); let directory=root.path().join("snippets"); let db=Database::open(&directory).unwrap();
+        let id="0123456789abcdef01234567"; let snippet="snippet-0000000001";
+        let library=json!({"_id":id,"name":"Mine","revision":1,"state":"active","permissions":{"read":true,"edit":true,"manage":true},"records":[{"id":snippet,"trigger":"one","title":"","content":{"version":1,"type":"plain_text","text":"One"},"revision":1,"state":"active","position":0}]});
+        let initial=json!({"protocol":6,"cursor":1,"libraries":[library],"accessible":[id],"assets":[],"conflicts":[]});
+        db.apply(&initial,None).unwrap(); db.queue(&json!({"kind":"edit","library":id,"body":{"operation_id":"rejected-edit","changes":[{"id":snippet,"base_revision":1,"value":{"trigger":"one","title":"","content":{"version":1,"type":"plain_text","text":"Keep this edit"}}}]}})).unwrap();
+        let mut bytes=std::io::Cursor::new(Vec::new()); image::RgbaImage::from_pixel(1,1,image::Rgba([0,0,0,255])).write_to(&mut bytes,image::ImageFormat::Png).unwrap(); let bytes=bytes.into_inner(); let asset=format!("{:x}",Sha256::digest(&bytes));
+        let mut fresh=initial.clone(); fresh["cursor"]=json!(2); fresh["assets"]=json!([{"id":asset,"mime_type":"image/png","size":bytes.len(),"width":1,"height":1,"animated":false,"source_urls":[]}]);
+        fresh["libraries"][0]["records"][0]["content"]=json!({"version":2,"type":"rich_text","markdown":format!("![](typerelay-asset:{asset})"),"assets":[asset]});
+        let listener=TcpListener::bind("127.0.0.1:0").unwrap(); let server=format!("http://{}",listener.local_addr().unwrap());
+        let worker=std::thread::spawn(move||{
+            for index in 0..5 {
+                let (mut stream,_)=listener.accept().unwrap(); stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap(); let mut headers=Vec::new(); let mut byte=[0];
+                while !headers.ends_with(b"\r\n\r\n") {stream.read_exact(&mut byte).unwrap();headers.push(byte[0]);}
+                let headers=String::from_utf8(headers).unwrap(); let length=headers.lines().find_map(|line|line.to_lowercase().strip_prefix("content-length: ").and_then(|length|length.parse::<usize>().ok())).unwrap_or(0);stream.read_exact(&mut vec![0;length]).unwrap();
+                let (status,mime,body)=match index {0=>("200 OK","application/json",initial.to_string().into_bytes()),1=>{assert!(headers.starts_with("POST /api/v2/libraries/"));("410 Gone","application/json",json!({"error":"Library is gone"}).to_string().into_bytes())},3=>{assert!(headers.starts_with("GET /api/v2/assets/"));("200 OK","image/png",bytes.clone())},_=>("200 OK","application/json",fresh.to_string().into_bytes())};
+                write!(stream,"HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",body.len()).unwrap();stream.write_all(&body).unwrap();
+            }
+        });
+        let sync=Sync::new(root.path().into(),directory.clone()).unwrap(); sync.secret(&Credentials{server,access_token:"access".into(),refresh_token:"".into(),account:None,device:None}).unwrap();
+        sync.cycle().unwrap();worker.join().unwrap();let db=Database::open(&directory).unwrap();assert!(db.pending().unwrap().is_empty());assert!(db.asset(&asset).unwrap().is_some());let rows=db.recovery().unwrap();assert_eq!(rows[0]["data"]["value"]["content"]["text"],"Keep this edit");assert!(rows[0]["reason"].as_str().unwrap().contains("410"));assert_eq!(db.meta("cursor").unwrap(),Some(json!(2)));
+    }
     #[test]
     fn personal_offline_reconnect_preserves_conflicts_and_recovers_rejected_values() {
         for rejected in [false,true] {
@@ -385,7 +410,9 @@ mod tests {
         let sync = Sync::new(root.path().into(), directory.clone()).unwrap();
         sync.secret(&Credentials { server: "http://127.0.0.1:9".into(), access_token: "offline".into(), refresh_token: "offline".into(), account:Some("account-one".into()), device:Some("device-one".into()) }).unwrap();
 		let db=Database::open(&directory).unwrap();let id="0123456789abcdef01234567";db.apply(&json!({"libraries":[{"_id":id,"name":"Mine","revision":1,"state":"active","permissions":{"read":true,"edit":true,"manage":true},"records":[{"id":"snippet-0000000001","trigger":"one","title":"","content":{"version":1,"type":"plain_text","text":"One"},"revision":1,"state":"active","position":0}]}],"accessible":[id]}),None).unwrap();db.set_meta("cursor", &json!(42)).unwrap();
+        let identity=json!({"server":"http://127.0.0.1:9","account":"account-one","user":"user"});db.queue_usage(&identity,&Database::usage_event(id,"snippet-0000000001",false,"copy","terminal",3)).unwrap();
         sync.disconnect().unwrap();
+        assert!(db.pending_usage(&identity).unwrap().is_empty());
         assert!(!root.path().join("sync/credentials.json").exists());
 		let db=Database::open(&directory).unwrap();assert_eq!(db.meta("cursor").unwrap(), Some(json!(0)));assert_eq!(db.connection.query_row("SELECT count(*) FROM base_snippets",[],|row|row.get::<_,i64>(0)).unwrap(),1);assert_eq!(db.meta("detached").unwrap().unwrap()["account"],"account-one");
         sync.disconnect().unwrap();

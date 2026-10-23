@@ -53,3 +53,7 @@ F11 opens the variable picker/settings. Ctrl+S inserts the selected variable; F4
 External database changes refresh lists without discarding an active draft. Saving a stale editor is rejected so it cannot overwrite a newer revision. On Windows, continuous expansion is paused while the TUI is focused; on Omarchy only the registered TUI terminal window is suppressed.
 
 The TUI requests enhanced keyboard reporting when supported so Ctrl+M remains distinct from Enter, and restores terminal keyboard mode on exit. F8 remains the move shortcut in terminals without that protocol.
+
+## Rejected offline edits
+
+Choose **Recovery (F12)** outside the snippet editor to read saved edits that the server rejected. Arrow keys and Page Up/Page Down scroll the records. Ctrl+C copies all recovery records as JSON. Esc returns to libraries. Use `typerelay recovery --dismiss ID` after saving the content elsewhere to remove one record.

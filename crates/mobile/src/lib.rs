@@ -165,11 +165,7 @@ impl Mobile {
                     serde_json::to_value(Panel::rich_render(directory, content, serde_json::from_value(request.get("values").cloned().unwrap_or(json!({})))?, request["preview"] == true, Templates::clock())?)?
                 } else { Self::render(content, request, BTreeMap::new())? }
             }
-            "recovery" => {
-                let mut statement = db.connection.prepare("SELECT id,library,data FROM recovery ORDER BY rowid")?;
-                let rows = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)))?;
-                json!(rows.map(|row| { let (id, library, data) = row?; Ok(json!({"id":id,"library":library,"data":serde_json::from_str::<Value>(&data)?})) }).collect::<Result<Vec<_>>>()?)
-            }
+            "recovery" => json!(db.recovery()?),
             "draft" => { db.set_meta("mobile_draft", request.get("draft").unwrap_or(&Value::Null))?; json!({}) }
             _ => anyhow::bail!("Unknown mobile action"),
         };

@@ -56,7 +56,22 @@ typerelay sync
 
 Search, expansion and editing continue without a network connection. Each change and its stable operation ID are committed to SQLite together, then retried unchanged. Temporary network and server failures leave the queue intact.
 
-When a server rejects a stale or unauthorized operation, TypeRelay keeps recoverable local content in its recovery store, removes the rejected queue item and refreshes authoritative state. The TUI sync status reports the failure. Permanently purged server content cannot be restored locally. Before a detached library is reconciled after reconnecting, TypeRelay creates a SQLite backup under the local `backups` directory.
+When a server rejects a stale or unauthorized operation, TypeRelay keeps recoverable local content in its recovery store, removes the rejected queue item and refreshes authoritative state. This includes edits rejected because a library is gone (HTTP 410). The TUI sync status reports the failure. Permanently purged server content cannot be restored locally. Before a detached library is reconciled after reconnecting, TypeRelay creates a SQLite backup under the local `backups` directory.
+
+## Recover rejected edits
+
+Open **Desktop Settings → Sync → Recovered edits** to read the saved content and rejection reason. Choose **Copy** before dismissing an item. Dismiss removes only that recovery record from this device.
+
+In the TUI, choose **Recovery (F12)** outside the editor. Use the arrow or Page Up/Page Down keys to read the records, Ctrl+C to copy all records, and Esc to return. The view is read-only.
+
+The CLI prints the same records as JSON:
+
+```fish
+typerelay recovery
+typerelay recovery --dismiss RECOVERY_ID
+```
+
+Copy or export the content before dismissing it. Recovery does not retry a rejected operation or restore server permissions.
 
 ## Conflicts
 

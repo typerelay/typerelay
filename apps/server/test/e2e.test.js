@@ -196,7 +196,7 @@ test('SQLite two-device edits, conflict recovery and generated YAML isolation', 
 	await Fixture.json('libraries', 'POST', { name: 'Remote collision', snippets: [{ trigger: 'collision', content: { version: 1, type: 'plain_text', text: 'Remote' } }] });
 	await Fixture.cli(Fixture.two, 'sync');
 	two = await Fixture.state(Fixture.two);
-	assert.equal(two.staged, null);
+	assert.equal(Object.hasOwn(two, 'staged'), false);
 	for (const [name, text] of [['Local collision', 'Local'], ['Remote collision', 'Remote']]) {
 		const record = two.libraries.find(row => row.name === name).records.find(row => row.trigger === 'collision');
 		assert.equal(record.content.text, text); assert.equal(record.state, 'active');

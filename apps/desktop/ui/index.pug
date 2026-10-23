@@ -128,6 +128,10 @@ html(lang="en")
 							h3 Needs review
 							p#conflict-count.settings-description
 							div#sync-conflicts
+						section#recovery-section.setting-section(hidden)
+							h3 Recovered edits
+							p#recovery-count.settings-description
+							div#sync-recovery
 				include suggestions.pug
 				section#settings-advanced.settings-page(hidden)
 					section#ai-settings-card.settings-list
@@ -269,6 +273,14 @@ html(lang="en")
 							button.conflict-cancel.secondary(type="button") Cancel
 							button.primary(type="submit") Resolve
 
+		template#recovery-template
+			article.sync-conflict
+				div.recovery-title
+				div.recovery-reason.settings-description
+				pre.recovery-content
+				.form-actions
+					button.recovery-dismiss.secondary.btn-sm(type="button") Dismiss
+					button.recovery-copy.primary.btn-sm(type="button") Copy
 		template#fill-field
 			div
 				label

@@ -9,7 +9,7 @@ class Fixture {
 		fixture.data = { tokens: { access_token: 'access', refresh_token: 'refresh', expires_in: 900, obtained_at: Date.now() } };
 		fixture.session = {}; fixture.cache = new Map(); fixture.requests = [];
 		fixture.snapshot = { protocol: 6, cursor: 1, libraries: [{ _id: 'library', name: 'Private', state: 'active', snippets: [{ id: 'snippet', state: 'active', title: 'Private', content: { type: 'plain_text', text: 'Private text' } }] }] };
-		const storage = data => ({ get: async keys => keys === null ? { ...data } : Object.fromEntries((typeof keys === 'string' ? [keys] : keys).map(key => [key, data[key]])), set: async values => { if (values.items) await fixture.beforeItems?.(); if (values.tokens) await fixture.beforeTokens?.(); Object.assign(data, values); }, remove: async keys => { for (const key of typeof keys === 'string' ? [keys] : keys) delete data[key]; } });
+		const storage = data => ({ get: async keys => keys === null ? { ...data } : Object.fromEntries((typeof keys === 'string' ? [keys] : keys).map(key => [key, data[key]])), set: async values => { if (values.items) await fixture.beforeItems?.(); if (values.tokens) await fixture.beforeTokens?.(); if (Object.keys(values).some(key => key.startsWith('usage-'))) await fixture.beforeUsage?.(); Object.assign(data, values); }, remove: async keys => { for (const key of typeof keys === 'string' ? [keys] : keys) delete data[key]; } });
 		globalThis.chrome = { storage: { local: storage(fixture.data), session: storage(fixture.session) }, runtime: { onMessage: { addListener: listener => { fixture.listener = listener; } }, onInstalled: { addListener() {} }, onStartup: { addListener() {} }, getPlatformInfo: async () => ({ os: 'cros' }) }, tabs: { onUpdated: { addListener: listener => { fixture.update = listener; } }, remove: async () => {}, query: async () => [] }, alarms: { onAlarm: { addListener() {} } } };
 		globalThis.caches = { delete: async () => { fixture.cache.clear(); }, open: async () => ({ match: async key => fixture.cache.get(key), put: async (key, value) => { await fixture.beforeCache?.(); fixture.cache.set(key, value); }, keys: async () => [...fixture.cache.keys()].map(url => ({ url })), delete: async key => fixture.cache.delete(key) }) };
 		globalThis.fetch = async url => {
@@ -110,4 +110,31 @@ test('an old denied sync does not clear a new connection', async () => {
 	fixture.data.tokens = { access_token: 'new-account', expires_in: 900, obtained_at: Date.now() };
 	release.resolve(); await syncing;
 	assert.equal(fixture.data.tokens.access_token, 'new-account');
+});
+
+for (const status of [401, 403]) test(`sync ${status} clears credentials only when unauthorized`, async () => {
+ const f = await Fixture.start();
+ f.data.items = [{id:'cached'}]; f.data['usage-old'] = {identity:{account:'old'}};
+ f.response = async () => Response.json({error:'Denied'}, {status});
+ assert.equal((await f.send('sync')).ok, false);
+ if (status === 401) { await f.signedOut(); assert.equal(f.data['usage-old'], undefined); }
+ else { assert.equal(f.data.tokens.access_token,'access'); assert.deepEqual(f.data.items,[{id:'cached'}]); }
+});
+
+test('sync removes usage from previous identities and disconnect removes all queued usage', async () => {
+ const f = await Fixture.start();
+ f.snapshot.statistics_identity = {account:'new',user:'user'};
+ f.data['usage-old'] = {identity:{server:'https://app.typerelay.com',account:'old',user:'user'}};
+ assert.equal((await f.send('sync')).ok,true); assert.equal(f.data['usage-old'],undefined);
+ f.data['usage-new'] = {identity:f.data.statisticsIdentity};
+ assert.equal((await f.send('disconnect')).ok,true); assert.equal(f.data['usage-new'],undefined);
+});
+
+test('disconnect drains an in-flight usage write before deleting the old queue', async () => {
+ const f=await Fixture.start(); const reached=Fixture.deferred(); const release=Fixture.deferred();
+ const identity={server:'https://app.typerelay.com',account:'old',user:'user'};f.data.statisticsIdentity=identity;
+ f.beforeUsage=async()=>{reached.resolve();await release.promise;};
+ const recording=f.send('usage',{event:{event_id:'late',identity,library:'library'}});await reached.promise;
+ const disconnecting=f.send('disconnect');await new Promise(resolve=>setImmediate(resolve));release.resolve();
+ await recording;assert.equal((await disconnecting).ok,true);assert.equal(f.data['usage-late'],undefined);
 });

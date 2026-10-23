@@ -6,9 +6,9 @@ use typerelay_core::Engine;
 use typerelay_client::{config::Match, editor::{EditorStore, OpenFile}, settings::SettingsStore};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Screen { Files, Browse, Edit, Image, NewFile, Settings, Trash, Move, Confirm }
+pub enum Screen { Files, Browse, Edit, Image, NewFile, Settings, Trash, Recovery, Move, Confirm }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Destination { Files, Browse, Settings, Trash, Quit }
+enum Destination { Files, Browse, Settings, Trash, Recovery, Quit }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct GlobalHit { library_id: String, snippet_id: String, file_index: usize, entry_index: usize }
@@ -82,6 +82,7 @@ pub struct App {
 	pending_merge:Option<(String,String,usize)>,
     bulk_buttons: Vec<Rect>,
     pending_trash: Option<(String, Vec<serde_json::Value>)>,
+    recovery_text: TextArea<'static>,
     trash_rows: Vec<serde_json::Value>,
     trash_state: ListState,
     trash_buttons: Vec<Rect>,
@@ -104,7 +105,7 @@ impl App {
         let files = Self::load_files(&store)?;
         let mut file_state = ListState::default();
         file_state.select(Some(0));
-        Ok(Self { ai_dialog:None, writing:None, writing_undo:Vec::new(), writing_buttons:Vec::new(), editor_buttons:Vec::new(), model_button:Rect::default(), selection_buttons:Vec::new(), move_buttons:Vec::new(), search_query:String::new(), search_scope:None,  search_hits:Vec::new(), search_selection:None,  search_done:true, store, settings, screen: Screen::Files, files, file_state, global_search: TextArea::default(), global_search_focused: false, global_hits: Vec::new(), global_state: ListState::default(), global_edit: false, snippets_state: ListState::default(), file: None, search: TextArea::default(), search_focused: false, trigger: TextArea::default(), title: TextArea::default(), language: "plain_text".into(), code: false, template:false, rich:false, rich_preview:false,rich_image:None,image_source:TextArea::default(),image_alt:TextArea::default(),image_title:TextArea::default(),image_width:Self::text("640"),image_focus:0, variables:Default::default(), template_dialog:None, fill_base:None, copy_identity:None, rich_fill:None, preview_x: 0, expansion: TextArea::default(), name: TextArea::default(), url: TextArea::default(), editor_focus: 0, editing: None, original_entry: None, original_url: String::new(), prefix: TextArea::default(), original_prefix: String::new(), pending: None, pending_delete: None, selected_ids: std::collections::BTreeSet::new(), selection_anchor: None, move_destination: None, move_choices: Vec::new(), move_state: ListState::default(), move_from: Screen::Browse, move_items: Vec::new(), pending_batch: None,pending_merge:None, bulk_buttons: Vec::new(), pending_trash: None, trash_rows: Vec::new(), trash_state: ListState::default(), trash_buttons: Vec::new(), confirm_from: Screen::Files, status: "Choose a file, or create a new one".into(), error: false, quit: false, toolbar: Vec::new(), list_area: Rect::default(), field_areas: Vec::new(), save_area: Rect::default(), cancel_area: Rect::default(), confirm_buttons: Vec::new(),merge_button:Rect::default() })
+        Ok(Self { ai_dialog:None, writing:None, writing_undo:Vec::new(), writing_buttons:Vec::new(), editor_buttons:Vec::new(), model_button:Rect::default(), selection_buttons:Vec::new(), move_buttons:Vec::new(), search_query:String::new(), search_scope:None,  search_hits:Vec::new(), search_selection:None,  search_done:true, store, settings, screen: Screen::Files, files, file_state, global_search: TextArea::default(), global_search_focused: false, global_hits: Vec::new(), global_state: ListState::default(), global_edit: false, snippets_state: ListState::default(), file: None, search: TextArea::default(), search_focused: false, trigger: TextArea::default(), title: TextArea::default(), language: "plain_text".into(), code: false, template:false, rich:false, rich_preview:false,rich_image:None,image_source:TextArea::default(),image_alt:TextArea::default(),image_title:TextArea::default(),image_width:Self::text("640"),image_focus:0, variables:Default::default(), template_dialog:None, fill_base:None, copy_identity:None, rich_fill:None, preview_x: 0, expansion: TextArea::default(), name: TextArea::default(), url: TextArea::default(), editor_focus: 0, editing: None, original_entry: None, original_url: String::new(), prefix: TextArea::default(), original_prefix: String::new(), pending: None, pending_delete: None, selected_ids: std::collections::BTreeSet::new(), selection_anchor: None, move_destination: None, move_choices: Vec::new(), move_state: ListState::default(), move_from: Screen::Browse, move_items: Vec::new(), pending_batch: None,pending_merge:None, bulk_buttons: Vec::new(), pending_trash: None, recovery_text: TextArea::default(), trash_rows: Vec::new(), trash_state: ListState::default(), trash_buttons: Vec::new(), confirm_from: Screen::Files, status: "Choose a file, or create a new one".into(), error: false, quit: false, toolbar: Vec::new(), list_area: Rect::default(), field_areas: Vec::new(), save_area: Rect::default(), cancel_area: Rect::default(), confirm_buttons: Vec::new(),merge_button:Rect::default() })
     }
     fn cancel_writing(&mut self) {
         if let Some((id,_,_,_))=self.writing.take(){let root=self.settings.config_dir().to_path_buf();std::thread::spawn(move||{let _=typerelay_client::native_ai::NativeAi::request(&root,serde_json::json!({"op":"cancel","id":id}));});self.message("Refinement cancelled",false);}
@@ -187,6 +188,7 @@ impl App {
         self.cancel_writing();
         self.pending = None;
         match destination {
+            Destination::Recovery => { let rows=typerelay_client::database::Database::open(&self.store.directory)?.recovery()?; self.recovery_text=Self::text(&serde_json::to_string_pretty(&rows)?); self.screen=Screen::Recovery; }
             Destination::Trash => { self.load_trash()?; self.screen = Screen::Trash; }
             Destination::Quit => self.quit = true,
             Destination::Files => { self.reload_files()?; self.file_state.select(Some(0)); self.global_edit = false; self.screen = Screen::Files; }
@@ -441,6 +443,7 @@ impl App {
         if let Some((library,snippet))=&self.copy_identity { if let Err(error)=typerelay_client::database::Database::open(&self.store.directory).and_then(|db|db.usage(library,snippet,"copy","terminal",characters)) { eprintln!("TypeRelay usage could not be queued: {error}"); } }
     }
     fn copy_current(&mut self) -> Result<()> {
+        if self.screen==Screen::Recovery { typerelay_client::clipboard::PasteJob::copy_text(Self::value(&self.recovery_text))?; self.message("Copied recovery records",false); return Ok(()); }
         self.copy_identity=match self.screen { Screen::Edit=>self.file.as_ref().and_then(|file|self.editing.and_then(|index|file.ids.get(index)).map(|id|(file.id.clone(),id.clone()))), Screen::Browse=>self.file.as_ref().and_then(|file|self.selected().and_then(|index|file.ids.get(index)).map(|id|(file.id.clone(),id.clone()))), Screen::Files=>self.selected_global().map(|hit|(hit.library_id.clone(),hit.snippet_id.clone())), _=>None };
 
         let (entry, base) = match self.screen {
@@ -488,7 +491,7 @@ impl App {
         match self.screen {
             Screen::Files => self.selected_global().is_some(),
             Screen::Browse => self.selected().is_some(),
-            Screen::Edit => true,
+            Screen::Edit | Screen::Recovery => true,
             _ => false,
         }
     }
@@ -503,6 +506,7 @@ impl App {
             5 => self.leave(Destination::Trash),
             6 if self.can_copy() => self.copy_current(),
             7 => self.leave(Destination::Quit),
+            8 => self.leave(Destination::Recovery),
             _ => Ok(()),
         }
     }
@@ -603,6 +607,7 @@ impl App {
                 KeyCode::F(5) => return self.toolbar_action(2),
                 KeyCode::F(6) => return self.toolbar_action(3),
                 KeyCode::F(8) => return self.request_move(),
+                KeyCode::F(12) if self.screen!=Screen::Edit => return self.leave(Destination::Recovery),
                 KeyCode::F(7) => return self.toolbar_action(5),
 				KeyCode::F(4) if self.screen==Screen::Edit&&self.rich=>{self.image_source=TextArea::default();self.image_alt=TextArea::default();self.image_title=TextArea::default();self.image_width=Self::text("640");self.image_focus=0;self.screen=Screen::Image;self.message("Add a local or remote image",false);return Ok(());}
                 KeyCode::F(4) if self.screen == Screen::Browse => return self.trash_request("trash"),
@@ -610,6 +615,7 @@ impl App {
                 _ => (),
             }
             match self.screen {
+                Screen::Recovery => match key.code { KeyCode::Esc=>self.apply(Destination::Files)?, KeyCode::Up|KeyCode::Down|KeyCode::Left|KeyCode::Right|KeyCode::PageUp|KeyCode::PageDown|KeyCode::Home|KeyCode::End=>{self.recovery_text.input(Event::Key(key));}, _=>() },
                 Screen::Trash => match key.code {
                     KeyCode::Esc => self.apply(Destination::Files)?,
                     KeyCode::Char('r') | KeyCode::Enter => self.trash_request("restore")?,
@@ -773,7 +779,7 @@ impl App {
         self.selection_buttons.clear();self.move_buttons.clear();self.writing_buttons.clear();self.editor_buttons.clear();self.model_button=Rect::default();self.toolbar.clear(); self.trash_buttons.clear(); self.bulk_buttons.clear(); self.field_areas.clear(); self.list_area = Rect::default(); self.save_area = Rect::default(); self.cancel_area = Rect::default(); self.merge_button = Rect::default();
         let area = frame.area();
         if let Some(dialog)=&mut self.template_dialog {dialog.draw(frame,area);return;}
-        let toolbar_labels=["Libraries (f1)","Add (f2)","Sync (f5)","Settings (f6)","Move to Trash (f3)","Trash (f7)","Copy (ctrl+c)","Quit (ctrl+q)"];
+        let toolbar_labels=["Libraries (f1)","Add (f2)","Sync (f5)","Settings (f6)","Move to Trash (f3)","Trash (f7)","Copy (ctrl+c)","Quit (ctrl+q)","Recovery (f12)"];
         let toolbar_height=Self::button_layout(Rect::new(0,0,area.width,0),&toolbar_labels).last().map(|rect|rect.bottom()).unwrap_or(3);
         let editor_labels=["Destination (f8)","Type (f9)","Variables (f11)","Preview (f12)","Image (f4)"];
         let action_labels=Self::EDITOR_ACTIONS;
@@ -788,6 +794,7 @@ impl App {
         for(index,title)in toolbar_labels.iter().enumerate(){Self::button(frame,self.toolbar[index],title,if index==6{self.can_copy()}else{!matches!(index,1|4)||(self.screen==Screen::Browse&&(index!=4||self.selected().is_some()))});}
         let body = rows[2];
         match self.effective_screen() {
+            Screen::Recovery => { self.recovery_text.set_block(Self::border("Recovered edits · arrows scroll · ctrl+c copies all · esc returns",true)); frame.render_widget(&self.recovery_text,body); }
             Screen::Trash => {
                 let parts = Layout::vertical([Constraint::Min(5), Constraint::Length(3)]).split(body);
                 self.list_area = parts[0];
@@ -911,6 +918,15 @@ impl App {
 mod tests {
     use super::*;
     use ratatui::crossterm::event::KeyEvent;
+    #[test]
+    fn recovery_view_reads_preserved_edits_without_mutating_them() {
+        let temp=tempfile::tempdir().unwrap();let mut app=Fixture::app(temp.path());let db=typerelay_client::database::Database::open(&app.store.directory).unwrap();
+        db.recover("library",Some("snippet"),&serde_json::json!({"content":{"text":"Keep this"}}),"Server 410").unwrap();
+        Fixture::key(&mut app,KeyCode::F(12),KeyModifiers::NONE);assert_eq!(app.screen,Screen::Recovery);assert!(App::value(&app.recovery_text).contains("Keep this"));
+        let before=App::value(&app.recovery_text);Fixture::key(&mut app,KeyCode::Char('x'),KeyModifiers::NONE);assert_eq!(App::value(&app.recovery_text),before);assert_eq!(db.recovery().unwrap().len(),1);
+        let mut terminal=ratatui::Terminal::new(ratatui::backend::TestBackend::new(140,40)).unwrap();terminal.draw(|frame|app.draw(frame)).unwrap();
+        Fixture::key(&mut app,KeyCode::Esc,KeyModifiers::NONE);assert_eq!(app.screen,Screen::Files);
+    }
     #[test]
     fn editor_shows_shortcuts_on_buttons_and_status_once() {
         let temp=tempfile::tempdir().unwrap();let mut app=Fixture::app(temp.path());app.screen=Screen::Edit;app.status="Text refined.".into();let mut terminal=ratatui::Terminal::new(ratatui::backend::TestBackend::new(140,40)).unwrap();terminal.draw(|frame|app.draw(frame)).unwrap();let text=terminal.backend().buffer().content().iter().map(|cell|cell.symbol()).collect::<String>();assert_eq!(text.matches("Text refined.").count(),1);assert_eq!(text.matches("Save (ctrl+s)").count(),1);assert!(text.contains("Refine with AI (ctrl+g)"));assert!(text.contains("Undo (ctrl+z)"));assert!(text.contains("Variables (f11)"));assert!(!text.contains("Ctrl+"));assert!(!text.contains("saves"));let area=app.editor_buttons[1];app.handle(Event::Mouse(ratatui::crossterm::event::MouseEvent{kind:MouseEventKind::Down(MouseButton::Left),column:area.x+1,row:area.y+1,modifiers:KeyModifiers::NONE}));assert!(app.code);

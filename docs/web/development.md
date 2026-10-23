@@ -8,7 +8,7 @@ Run docker compose up -d --build from the repository root.
 MongoDB stores library metadata/grants separately from individual snippets.
 Content uses version:1, type:plain_text and text. Unknown types/versions are rejected; dynamic replacements are deferred.
 The SQLite database is in the configured directory, normally ~/.config/typerelay/snippets/typerelay.sqlite.
-It contains libraries, individual snippets, durable operations, cursors, staged downloads and recovery drafts.
+It contains libraries, individual snippets, durable operations, cursors and recovery drafts.
 Credentials remain in the private sync/credentials.json; prefix/server settings stay in settings.yml.
 
 YAML is parsed only for import and generated only for export. Regular server editing uses structured Rust validation.
@@ -56,7 +56,7 @@ Focused unit/browser tests: `node --test test/product-updates-service.test.js te
     python3 -m unittest discover -s scripts/tests
 
 Server tests use disposable typerelay_test, typerelay_e2e and typerelay_security databases and isolated desktop directories.
-Tests cover migration, offline replay, conflicts, Trash/restore/purge, expiry, access revocation, staged collisions and incremental UI updates.
+Tests cover migration, offline replay, conflicts, Trash/restore/purge, expiry, access revocation, snapshot validation collisions and incremental UI updates.
 Do not run the retired file-based desktop smoke scripts against the database client.
 
 ## Move storage introduced in v0.8
