@@ -93,6 +93,9 @@ export class WhiteLabel {
 	static getHostname(id, options = {}) { return WhiteLabel.cloudflare(`/custom_hostnames/${encodeURIComponent(id)}`, options); }
 	static listHostnames(hostname, options = {}) { return WhiteLabel.cloudflare(`/custom_hostnames?${new URLSearchParams({ 'hostname[exact]': hostname, per_page: '50' })}`, options); }
 	static async deleteHostname(id, options = {}) { try { await WhiteLabel.cloudflare(`/custom_hostnames/${encodeURIComponent(id)}`, { ...options, method: 'DELETE' }); } catch (error) { if (error.status !== 404) throw error; } }
+	static async releaseHostname(account, options = {}) {
+		if (account.white_label?.cloudflare_hostname_id && !await WhiteLabel.claimed(account._id, account.white_label.hostname)) await WhiteLabel.deleteHostname(account.white_label.cloudflare_hostname_id, options);
+	}
 
 	static async configure(accountId, hostname, options = {}) {
 		const account = await WhiteLabel.account(accountId, true);
@@ -100,7 +103,7 @@ export class WhiteLabel {
 		hostname = WhiteLabel.normalizeHostname(hostname);
 		if (hostname === account.white_label?.hostname) return WhiteLabel.serialize(account);
 		if (hostname && await WhiteLabel.claimed(account._id, hostname)) throw WhiteLabel.error(409, 'This hostname is already connected', 'hostname_conflict');
-		if (account.white_label?.cloudflare_hostname_id) await WhiteLabel.deleteHostname(account.white_label.cloudflare_hostname_id, options);
+		await WhiteLabel.releaseHostname(account, options);
 		const state = { hostname, state: hostname ? 'pending_dns' : 'unconfigured', cloudflare_hostname_id: '', cloudflare_hostname_status: '', cloudflare_ssl_status: '', dns_verified_at: null, cloudflare_checked_at: null, next_check_at: hostname ? new Date() : null, disabled_at: null, last_error: '' };
 		const updated = await Account.findByIdAndUpdate(account._id, { $set: { white_label: { ...account.white_label, ...state } } }, { returnDocument: 'after' }).lean().catch(error => { throw error.code === 11000 ? WhiteLabel.error(409, 'This hostname is already connected', 'hostname_conflict') : error; });
 		return WhiteLabel.serialize(updated);
@@ -170,7 +173,7 @@ export class WhiteLabel {
 	static async disable(account, options = {}) {
 		if (!account?.white_label?.hostname) return false;
 		account = account.white_label.cloudflare_hostname_id !== undefined ? account : await WhiteLabel.account(account._id, true);
-		if (account.white_label.cloudflare_hostname_id) await WhiteLabel.deleteHostname(account.white_label.cloudflare_hostname_id, options).catch(() => {});
+		await WhiteLabel.releaseHostname(account, options).catch(() => {});
 		await WhiteLabel.saveState(account._id, { state: 'disabled_by_plan', disabled_at: account.white_label.disabled_at || new Date(), cloudflare_hostname_id: '', cloudflare_hostname_status: '', cloudflare_ssl_status: '', next_check_at: new Date(Date.now() + WhiteLabel.pendingDelay) });
 		return true;
 	}
@@ -178,7 +181,7 @@ export class WhiteLabel {
 	static async remove(accountId, options = {}) {
 		const account = await WhiteLabel.account(accountId, true);
 		WhiteLabel.assertTeam(account);
-		if (account.white_label?.cloudflare_hostname_id) await WhiteLabel.deleteHostname(account.white_label.cloudflare_hostname_id, options);
+		await WhiteLabel.releaseHostname(account, options);
 		await Account.updateOne({ _id: accountId }, { $set: { 'white_label.hostname': '', 'white_label.state': 'unconfigured', 'white_label.cloudflare_hostname_id': '', 'white_label.cloudflare_hostname_status': '', 'white_label.cloudflare_ssl_status': '', 'white_label.dns_verified_at': null, 'white_label.cloudflare_checked_at': null, 'white_label.next_check_at': null, 'white_label.disabled_at': null, 'white_label.last_error': '' } });
 		return WhiteLabel.settings(accountId);
 	}

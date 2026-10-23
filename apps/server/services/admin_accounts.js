@@ -231,6 +231,7 @@ export class AdminAccounts {
 		for (const id of subscriptions) { try { const subscription = await stripe.subscriptions.retrieve(id); if (!['canceled', 'incomplete_expired'].includes(subscription.status)) await stripe.subscriptions.cancel(id, { invoice_now: false, prorate: false }); } catch (error) { if (error.code !== 'resource_missing') throw error; } }
 	}
 	static async removeDomain(account, options = {}) {
+		if (account.white_label?.hostname && await WhiteLabel.claimed(account._id, account.white_label.hostname)) return;
 		const ids = new Set([account.white_label?.cloudflare_hostname_id].filter(Boolean));
 		// Recover a hostname whose creation succeeded before its ID was persisted.
 		let records = [];

@@ -225,6 +225,15 @@ test('purge resumes an expired worker lease and finds a domain whose ID was neve
 	await AdminSettings.audit('sysadmin', 'late-failed-request', account._id, 409); assert.equal(await M.AdminAudit.exists({ account: account._id }), null);
 });
 
+test('deleting a pending domain claimant preserves another account verified hostname', async () => {
+	const hostname = 'claimed-elsewhere.example.test';
+	const pending = await M.Account.create({ name: 'Pending claimant', deletion: { requested_at: new Date(), stage: 'database' }, white_label: { hostname, cloudflare_hostname_id: 'shared-hostname' } });
+	const verified = await M.Account.create({ name: 'Verified domain owner', white_label: { hostname, dns_verified_at: new Date(), cloudflare_hostname_id: 'shared-hostname' } });
+	await AdminAccounts.purge(pending._id, { cancelBilling: async () => {}, listHostnames: async () => assert.fail('another account hostname was queried'), deleteHostname: async () => assert.fail('another account hostname was deleted') });
+	assert.equal(await M.Account.exists({ _id: pending._id }), null);
+	assert.ok(await M.Account.exists({ _id: verified._id, 'white_label.dns_verified_at': { $type: 'date' } }));
+});
+
 test('audit logs query both sources and logout removes admin access', async () => {
 	const result = await Fixture.json('/admin/api/audit-logs?action=account.create'); assert.ok(result.rows.length >= 2); assert.ok(!JSON.stringify(result).includes(process.env.SYSADMIN_PASSWORD));
 	for (const path of ['/admin/settings', '/admin/email-templates', '/admin/audit-logs']) assert.equal((await Fixture.request(path)).status, 200);

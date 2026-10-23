@@ -250,6 +250,7 @@ test('only a DNS-verified custom hostname blocks other accounts', async () => {
 	assert.ok(await WhiteLabel.claimed(other._id, 'claimed.customer.test'));
 	await assert.rejects(WhiteLabel.verify(other._id, { resolveCname: async () => ['custom.typerelay.com.'], fetch }), error => error.status === 409 && error.code === 'hostname_conflict');
 	await assert.rejects(Account.updateOne({ _id: other._id }, { $set: { 'white_label.dns_verified_at': new Date() } }), error => error.code === 11000);
+	await WhiteLabel.releaseHostname({ _id: other._id, white_label: { hostname: 'claimed.customer.test', cloudflare_hostname_id: 'cf-claimed' } }, { fetch: async () => assert.fail('another account hostname was deleted') });
 });
 
 test('concurrent hostname verification reserves one owner before Cloudflare creation', async t => {
