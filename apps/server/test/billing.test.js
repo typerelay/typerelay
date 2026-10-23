@@ -236,7 +236,7 @@ test('Team custom hostname verifies DNS, Cloudflare status and request binding',
 });
 
 test('only a DNS-verified custom hostname blocks other accounts', async () => {
-	await Account.collection.dropIndex('white_label.hostname_1');
+	await Account.collection.dropIndex('white_label_verified_hostname');
 	await Account.collection.createIndex({ 'white_label.hostname': 1 }, { unique: true, partialFilterExpression: { 'white_label.hostname': { $type: 'string', $gt: '' } } });
 	await StorageMigration.hostnames();
 	await StorageMigration.hostnames();

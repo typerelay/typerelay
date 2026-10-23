@@ -5,8 +5,9 @@ export class StorageMigration {
 	static async hostnames() {
 		const indexes = await Account.collection.indexes().catch(error => { if (error.code === 26) return []; throw error; });
 		const old = indexes.find(index => index.name === 'white_label.hostname_1');
-		if (old && !old.partialFilterExpression?.['white_label.dns_verified_at']) await Account.collection.dropIndex(old.name).catch(error => { if (error.code !== 27) throw error; });
+		// Build the verified-only constraint before removing the old reservation constraint.
 		await Account.createIndexes();
+		if (old) await Account.collection.dropIndex(old.name).catch(error => { if (error.code !== 27) throw error; });
 	}
 	static async code() {
 		await StorageMigration.hostnames();

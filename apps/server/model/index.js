@@ -74,7 +74,7 @@ const accountSchema = new mongoose.Schema({
 		last_error: { type: String, default: '' },
 	},
 }, { timestamps: true });
-accountSchema.index({ 'white_label.hostname': 1 }, { unique: true, partialFilterExpression: { 'white_label.hostname': { $type: 'string', $gt: '' }, 'white_label.dns_verified_at': { $type: 'date' } } });
+accountSchema.index({ 'white_label.hostname': 1 }, { name: 'white_label_verified_hostname', unique: true, partialFilterExpression: { 'white_label.hostname': { $type: 'string', $gt: '' }, 'white_label.dns_verified_at': { $type: 'date' } } });
 accountSchema.index({ 'billing.helpmonks_sequence.status': 1, 'billing.helpmonks_sequence.next_attempt_at': 1 });
 accountSchema.index({ 'deletion.requested_at': 1, 'deletion.stage': 1 });
 const Account = mongoose.model('Account', accountSchema);
