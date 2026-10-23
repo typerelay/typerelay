@@ -1,6 +1,12 @@
 import crypto from 'node:crypto';
+import { BlockList, isIP } from 'node:net';
 
 export class RateLimitSupport {
+	static cloudflare = new BlockList();
+	static {
+		// https://www.cloudflare.com/ips/; update when Cloudflare changes its published ranges.
+		for (const cidr of ['173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22', '141.101.64.0/18', '108.162.192.0/18', '190.93.240.0/20', '188.114.96.0/20', '197.234.240.0/22', '198.41.128.0/17', '162.158.0.0/15', '104.16.0.0/13', '104.24.0.0/14', '172.64.0.0/13', '131.0.72.0/22', '2400:cb00::/32', '2606:4700::/32', '2803:f800::/32', '2405:b500::/32', '2405:8100::/32', '2a06:98c0::/29', '2c0f:f248::/32']) { const [ip, prefix] = cidr.split('/'); RateLimitSupport.cloudflare.addSubnet(ip, Number(prefix), isIP(ip) === 6 ? 'ipv6' : 'ipv4'); }
+	}
 	static boolean(name, component) {
 		const value = process.env[name];
 		if (value === undefined || value === null || value === '') throw new Error(`${component}.getConfig(), missing required env '${name}'`);
@@ -21,10 +27,12 @@ export class RateLimitSupport {
 	}
 	static clientIp(request) {
 		const headers = request.headers || {};
-		let ip = RateLimitSupport.firstHeader(headers['cf-connecting-ip'] || headers['fastly-client-ip'] || headers['true-client-ip'] || headers['x-real-ip'] || headers['x-forwarded-for'] || request.ip || request.connection?.remoteAddress || request.socket?.remoteAddress || '127.0.0.1');
+		let ip = RateLimitSupport.firstHeader(request.ip || request.connection?.remoteAddress || request.socket?.remoteAddress || '127.0.0.1');
 		if (ip.startsWith('::ffff:')) ip = ip.slice(7);
 		if (ip.startsWith('[')) ip = ip.slice(1, ip.indexOf(']') === -1 ? undefined : ip.indexOf(']'));
 		if (/^\d+\.\d+\.\d+\.\d+:\d+$/.test(ip)) ip = ip.slice(0, ip.lastIndexOf(':'));
+		const cloudflareIp = RateLimitSupport.firstHeader(headers['cf-connecting-ip']);
+		if (isIP(ip) && RateLimitSupport.cloudflare.check(ip, isIP(ip) === 6 ? 'ipv6' : 'ipv4') && isIP(cloudflareIp)) ip = cloudflareIp;
 		return ip || '127.0.0.1';
 	}
 	static firstHeader(value) {

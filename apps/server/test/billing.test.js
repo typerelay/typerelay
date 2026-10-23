@@ -252,6 +252,20 @@ test('only a DNS-verified custom hostname blocks other accounts', async () => {
 	await assert.rejects(Account.updateOne({ _id: other._id }, { $set: { 'white_label.dns_verified_at': new Date() } }), error => error.code === 11000);
 });
 
+test('concurrent hostname verification reserves one owner before Cloudflare creation', async t => {
+	const accounts = await Account.create([{ name: 'Concurrent owner', plan: 'team', billing: { status: 'active' } }, { name: 'Concurrent claimant', plan: 'team', billing: { status: 'active' } }]);
+	for (const account of accounts) await WhiteLabel.configure(account._id, 'concurrent.customer.test');
+	t.mock.method(WhiteLabel, 'claimed', async () => null);
+	let calls = 0;
+	const options = { resolveCname: async () => ['custom.typerelay.com.'], fetch: async () => { calls++; return { ok: true, status: 200, json: async () => ({ success: true, result: { id: 'cf-concurrent', status: 'active', ssl: { status: 'active' } } }) }; } };
+	const results = await Promise.allSettled(accounts.map(account => WhiteLabel.verify(account._id, options)));
+	assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
+	assert.equal(calls, 1);
+	const failure = results.find(result => result.status === 'rejected').reason;
+	assert.equal(failure.status, 409);
+	assert.equal(failure.code, 'hostname_conflict');
+});
+
 test('Team branding validates and normalizes image assets', async () => {
 	const directory = await mkdtemp('/tmp/typerelay-white-label-');
 	process.env.WHITE_LABEL_ASSETS_DIR = directory;

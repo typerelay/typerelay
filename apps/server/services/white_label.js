@@ -134,6 +134,8 @@ export class WhiteLabel {
 			account = await WhiteLabel.saveState(accountId, { state: 'pending_dns', dns_verified_at: null, next_check_at: new Date(Date.now() + WhiteLabel.pendingDelay), last_error: 'This hostname is already connected to another account' });
 			throw Object.assign(WhiteLabel.error(409, 'This hostname is already connected to another account', 'hostname_conflict'), { settings: WhiteLabel.serialize(account) });
 		}
+		// Reserve verified ownership atomically before creating an external hostname.
+		account = await WhiteLabel.saveState(accountId, { dns_verified_at: new Date() }).catch(error => { throw error.code === 11000 ? WhiteLabel.error(409, 'This hostname is already connected', 'hostname_conflict') : error; });
 		let record;
 		try {
 			if (account.white_label.cloudflare_hostname_id) record = await WhiteLabel.getHostname(account.white_label.cloudflare_hostname_id, options);
@@ -144,7 +146,7 @@ export class WhiteLabel {
 					record = existing[0];
 				}
 			}
-			account = await WhiteLabel.saveState(accountId, { dns_verified_at: new Date(), ...WhiteLabel.cloudflareState(record) });
+			account = await WhiteLabel.saveState(accountId, WhiteLabel.cloudflareState(record));
 			return WhiteLabel.serialize(account);
 		} catch (error) {
 			await WhiteLabel.saveState(accountId, { state: 'error', last_error: error.message, cloudflare_checked_at: new Date(), next_check_at: new Date(Date.now() + WhiteLabel.pendingDelay) });

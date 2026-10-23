@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import express from 'express';
 import { ApiRateLimit } from '../rate_limit.js';
+import { RateLimitSupport } from '../rate_limit_support.js';
 
 const ENV_KEYS = ['API_RATE_LIMIT_ENABLED', 'API_RATE_LIMIT_WINDOW_MS', 'API_RATE_LIMIT_GENERAL_PER_MINUTE', 'API_RATE_LIMIT_EXPENSIVE_PER_MINUTE', 'API_RATE_LIMIT_UPLOAD_PER_MINUTE'];
 const DEFAULTS = { API_RATE_LIMIT_ENABLED: 'true', API_RATE_LIMIT_WINDOW_MS: '60000', API_RATE_LIMIT_GENERAL_PER_MINUTE: '120', API_RATE_LIMIT_EXPENSIVE_PER_MINUTE: '60', API_RATE_LIMIT_UPLOAD_PER_MINUTE: '20' };
@@ -18,6 +19,13 @@ afterEach(() => {
 });
 
 describe('API rate limits', () => {
+	it('trusts Cloudflare client IP only behind a Cloudflare peer resolved by Express', () => {
+		const headers = { 'cf-connecting-ip': '203.0.113.9', 'x-forwarded-for': '198.51.100.8', 'x-real-ip': '198.51.100.7' };
+		assert.equal(RateLimitSupport.clientIp({ ip: '192.0.2.1', headers }), '192.0.2.1');
+		assert.equal(RateLimitSupport.clientIp({ ip: '::ffff:173.245.48.1', headers }), '203.0.113.9');
+		assert.equal(RateLimitSupport.clientIp({ ip: '2606:4700::1', headers }), '203.0.113.9');
+		assert.equal(RateLimitSupport.clientIp({ ip: '173.245.48.1', headers: { 'cf-connecting-ip': 'invalid' } }), '173.245.48.1');
+	});
 	it('requires and validates the Compose environment contract', () => {
 		assert.throws(() => ApiRateLimit.getConfig(), /missing required env 'API_RATE_LIMIT_ENABLED'/);
 		Object.assign(process.env, DEFAULTS);

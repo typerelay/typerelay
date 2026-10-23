@@ -204,7 +204,7 @@ test('provisioning is opt-in, creates members only and respects available seats'
 	await Account.updateOne({ _id: fixture.account._id }, { $set: { 'admin_override.limits.people': 2 } });
 	assert.equal((await Fixture.complete(new Browser(), fixture.account, 'full-' + randomUUID() + '@example.test')).finish.status, 409);
 });
-test('provisioning never claims an existing TypeRelay user without an invitation', async () => {
+test('provisioning never claims an existing TypeRelay user without an invitation', async t => {
 	const fixture = await Fixture.account(); await Fixture.configure(fixture);
 	await Fixture.complete(fixture.browser, fixture.account, fixture.user.email, '?test=true');
 	await fixture.browser.json('/api/v2/sso', 'PUT', Fixture.config(1, { provision: true }));
@@ -212,6 +212,8 @@ test('provisioning never claims an existing TypeRelay user without an invitation
 	assert.equal((await Fixture.complete(new Browser(), fixture.account, existing.email)).finish.status, 403);
 	assert.equal(await Member.exists({ account: fixture.account._id, user: existing._id }), null);
 	assert.ok(await SsoLog.exists({ account: fixture.account._id, event: 'invite_required' }));
+	const log = t.mock.method(Security, 'ssoLog', async () => { throw new Error('Synthetic log failure'); });
+	try { assert.equal((await Fixture.complete(new Browser(), fixture.account, existing.email)).finish.status, 403); } finally { log.mock.restore(); }
 	await Ticket.create({ hash: Support.hash(randomUUID()), kind: 'invite', email: existing.email, account: fixture.account._id, expires: new Date(Date.now() + 86400000) });
 	assert.equal((await Fixture.complete(new Browser(), fixture.account, existing.email)).finish.status, 302);
 	assert.ok(await Member.exists({ account: fixture.account._id, user: existing._id }));

@@ -34,7 +34,7 @@ TypeRelay does not provide a production mail catcher or silently treat an SMTP f
 
 Rate limiting is enabled by default. API settings are `API_RATE_LIMIT_ENABLED`, `API_RATE_LIMIT_WINDOW_MS`, `API_RATE_LIMIT_GENERAL_PER_MINUTE`, `API_RATE_LIMIT_EXPENSIVE_PER_MINUTE`, and `API_RATE_LIMIT_UPLOAD_PER_MINUTE`; defaults are `true`, `60000`, `120`, `60`, and `20`. MCP settings are `MCP_RATE_LIMIT_ENABLED`, `MCP_RATE_LIMIT_WINDOW_MS`, `MCP_IP_FLOOD_PER_MINUTE`, `MCP_UNAUTH_PER_MINUTE`, `MCP_AUTH_PER_MINUTE`, `MCP_HEAVY_TOOL_PER_MINUTE`, `MCP_TOOL_CONCURRENCY`, and `MCP_HEAVY_TOOL_CONCURRENCY`; defaults are `true`, `60000`, `300`, `30`, `120`, `30`, `3`, and `1`.
 
-Sign-in, admin sign-in, security and AI request limits share counters across replicas through Memcached. Configure the HTTPS proxy to replace client-IP headers and prevent direct public access to the application, so clients cannot choose the IP used for rate limits.
+Sign-in, admin sign-in, security and AI request limits share counters across replicas through Memcached. IP limits use Express's trusted-proxy address; `CF-Connecting-IP` is accepted only when that address belongs to a published Cloudflare network. Configure the HTTPS proxy to replace client-IP headers and prevent direct public access to the application, so clients cannot choose the IP used for rate limits.
 
 Self-hosted installations remain unrestricted. Do not set `TYPERELAY_HOSTED_EDITION=true` or `BILLING_ENABLED=true`; Stripe plans and hosted Cloudflare white-label provisioning are SaaS-only.
 
