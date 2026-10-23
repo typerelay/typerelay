@@ -6,7 +6,7 @@ import { DOMParser } from '@xmldom/xmldom';
 import { Abbreviation } from '../public/abbreviation.js';
 import { randomUUID } from 'node:crypto';
 import { mongoose, Library, Snippet, SnippetAsset, Operation, Conflict, Account, Change, Member, Group, PersonalAbbreviation } from '../model/index.js';
-import { Support, Yaml } from './support.js';
+import { Fault, Support, Yaml } from './support.js';
 import { Billing } from './billing.js';
 import { RichText } from './rich_text.js';
 
@@ -93,9 +93,24 @@ export class Libraries {
 	static async validate(entries, ctx = null, session = null) {
 		const values = entries.map(Libraries.value);
 		const { matches } = await Yaml.validate(values.map(Libraries.yaml));
-		if (!ctx) return matches;
+		if (ctx) await Libraries.validateAssets(values, ctx, session);
+		return matches;
+	}
+	// Validates entries independently in one helper process; returns each entry's error or null.
+	static async failures(entries) {
+		const failures = entries.map(() => null); const pending = [];
+		for (const [index, entry] of entries.entries()) { if (entry == null) continue; try { pending.push([index, Libraries.yaml(entry)]); } catch (error) { failures[index] = error; } }
+		let results = null;
+		try { results = await Yaml.each(pending.map(([, match]) => match)); } catch { console.error('Batch snippet validation failed; validating entries separately'); }
+		for (const [position, [index, match]] of pending.entries()) {
+			if (results) { if (results[position].error) failures[index] = new Fault(422, results[position].error); }
+			else { try { await Yaml.validate([match]); } catch (error) { failures[index] = error; } }
+		}
+		return failures;
+	}
+	static async validateAssets(values, ctx, session = null) {
 		const ids = [...new Set(values.flatMap(value => value.content.type === 'rich_text' ? value.content.assets : []))];
-		if (!ids.length) return matches;
+		if (!ids.length) return;
 		Support.assert((await Assets.visible(ctx, ids, session)).length === ids.length, 'Rich text references an inaccessible image asset', 422);
 		const assets = await SnippetAsset.find({ account: ctx.account, id: { $in: ids } }).select('id size').session(session || null).lean();
 		Support.assert(assets.length === ids.length, 'Rich text references a missing image asset', 422);
@@ -104,7 +119,6 @@ export class Libraries {
 			Support.assert(value.content.assets.reduce((total, id) => total + sizes.get(id), 0) <= 8 * 1048576, 'Rich-text images exceed 8 MiB', 422);
 		}
 		await SnippetAsset.updateMany({ account: ctx.account, id: { $in: ids } }, { $set: { last_referenced_at: new Date() }, $pull: { staged_by: ctx.user } }, { session: session || null });
-		return matches;
 	}
 	static importFormats = {
 		typerelay: { name: 'TypeRelay bundle', accept: '.typerelay.zip,.zip', instructions: 'Choose a TypeRelay bundle containing snippets.yml and its deduplicated image assets.', beta: false },
@@ -266,11 +280,11 @@ export class Libraries {
 				if (entry.styled && dynamic) { if (typeof record.text === 'string' && record.text && !text.includes(record.text)) text += '\nPlain-text source:\n' + record.text; entry.warnings.push('Styled content is preserved as literal text for review; formatting and images are omitted.'); }
 				delete entry.styled;
 				entry.content ||= format === 'yaml' ? Libraries.content(record) : { version: 1, type: dynamic ? 'code' : 'plain_text', text: text.replaceAll('\r\n', '\n'), ...(dynamic ? { language: 'plain_text' } : {}) };
-				try { await Libraries.validate([{ ...entry, trigger: null }]); } catch (error) { entry.error ||= error.message; }
 				if (entry.trigger && (typeof entry.trigger !== 'string' || !/^[a-z0-9-]{1,63}$/.test(entry.trigger))) entry.trigger_error = 'Correct or clear this abbreviation before importing.';
 				entries.push(entry);
 			}
 		}
+		for (const [index, failure] of (await Libraries.failures(entries.map(entry => ({ ...entry, trigger: null })))).entries()) if (failure) entries[index].error ||= failure.message;
 		Support.assert(entries.length > 0 || (format === 'keyboardmaestro' && warnings.length > 0), 'No snippets found; this export layout may not be supported');
 		return { entries, warnings };
 	}
@@ -303,13 +317,12 @@ export class Libraries {
 				const title = [snippet.title || 'Untitled', snippet.fragments.length > 1 ? fragment.title || 'Fragment ' + (fragmentIndex + 1) : null].filter(Boolean).join(' — ');
 				if (snippet.folder && !folders.has(snippet.folder)) warnings.add('Missing folder references are placed in SnippetsLab.');
 				const entry = { key: index + ':' + fragmentIndex, folder: snippet.folder || '', name: folders.get(snippet.folder) || 'SnippetsLab', title, trigger: null, content: { version: 1, type: 'code', text: fragment.content, language: fragment.language || 'plain_text' } };
-				try { await Libraries.validate([entry]); } catch (error) { entry.error = error.message; }
 				entries.push(entry);
 			}
 		}
+		for (const [index, failure] of (await Libraries.failures(entries)).entries()) if (failure) entries[index].error = failure.message;
 		return { entries, warnings: [...warnings] };
 	}
-	static async importSnippetsLab(ctx, body, session) { return Libraries.commitImport(ctx, 'snippetslab', body, session); }
 	static async commitImport(ctx, format, body, session) {
 		const preview = await Libraries.previewImport(format, body);
 		Support.assert(Array.isArray(body.selected) && body.selected.length > 0 && new Set(body.selected.map(item => item.key)).size === body.selected.length, 'Select valid fragments first');
@@ -371,9 +384,17 @@ export class Libraries {
 		}
 		return result;
 	}
+	// Fetch remote and embedded images before the transaction locks the account. Failures are left for the action to report.
+	static async stage(ctx, input) {
+		if (!input || typeof input !== 'object') return;
+		const prepare = async value => { try { return await Libraries.prepared(ctx, value); } catch { return value; } };
+		if (Array.isArray(input.snippets)) for (const [index, entry] of input.snippets.entries()) input.snippets[index] = await prepare(entry);
+		for (const row of [...(Array.isArray(input.changes) ? input.changes : []), ...(Array.isArray(input.items) ? input.items : []), input]) if (row?.value) row.value = await prepare(row.value);
+	}
 	static async mutate(ctx, operation, body, action) {
 		Support.assert(typeof operation === 'string' && /^[a-zA-Z0-9_-]{16,128}$/.test(operation), 'Stable operation ID required');
 		const fingerprint = Support.hash(JSON.stringify(body));
+		await Libraries.stage(ctx, body?.body ?? body);
 		let result;
 		await mongoose.connection.transaction(async session => {
 			await Account.updateOne({ _id: ctx.account }, { $inc: { sequence: 1 } }, { session });
@@ -419,7 +440,9 @@ export class Libraries {
 		Support.assert(Array.isArray(body.changes) && body.changes.length <= 10000, 'Invalid changes');
 		const conflicts = [];
 		const seen = new Set();
-		for (const change of body.changes) {
+		const values = []; for (const change of body.changes) values.push(change?.value === null ? null : await Libraries.prepared(ctx, change?.value, session));
+		const failures = await Libraries.failures(values);
+		for (const [index, change] of body.changes.entries()) {
 			Support.assert(typeof change.id === 'string' && /^[a-zA-Z0-9_-]{16,128}$/.test(change.id) && !seen.has(change.id), 'Invalid or repeated snippet ID');
 			seen.add(change.id);
 			const server = await Snippet.findOne({ account: ctx.account, id: change.id }).session(session).lean();
@@ -427,8 +450,9 @@ export class Libraries {
 			Support.assert(server?.state !== 'purged', 'Snippet was permanently purged; it cannot be restored', 410);
 			const baseAssets = change.base?.content?.assets || [];
 			Support.assert(Array.isArray(baseAssets) && (!baseAssets.length || (await Assets.visible(ctx, baseAssets, session)).length === baseAssets.length), 'Conflict base references an inaccessible image asset', 422);
-			const local = change.value === null ? null : Libraries.value(await Libraries.prepared(ctx,change.value,session), server?.content);
-			if (local) await Libraries.validate([local], ctx, session);
+			const local = change.value === null ? null : Libraries.value(values[index], server?.content);
+			if (local && failures[index]) throw failures[index];
+			if (local) await Libraries.validateAssets([local], ctx, session);
 			if (server?.state === 'active' && library.state === 'active' && Libraries.same(server, local)) continue;
 			if (server?.state === 'trashed' && local === null) continue;
 			if (library.state !== 'active' || server?.state === 'trashed' || (server?.revision ?? null) !== (change.base_revision ?? null)) {

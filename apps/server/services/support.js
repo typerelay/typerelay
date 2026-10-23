@@ -48,8 +48,11 @@ export class Yaml {
 	static async run(yaml, edits = []) { return Yaml.execute({ yaml, edits }); }
 	static async export(matches) { return Yaml.execute({ matches, export: true }); }
 	static async validate(matches) { return Yaml.execute({ matches }); }
-	static async execute(payload) {
-		Support.assert(Buffer.byteLength(JSON.stringify(payload)) <= 16 * 1048576, 'Validation input too large');
+	// The helper answers each input line separately: one process validates every entry on its own.
+	static async each(matches) { return matches.length ? Yaml.execute(matches.map(match => ({ matches: [match] })), true) : []; }
+	static async execute(payload, lines = false) {
+		const input = (lines ? payload : [payload]).map(item => JSON.stringify(item) + '\n').join('');
+		Support.assert(Buffer.byteLength(input) <= 16 * 1048576, 'Validation input too large');
 		return new Promise((resolve, reject) => {
 			const child = spawn(process.env.YAML_HELPER || '/usr/local/bin/typerelay-yaml', [], { stdio: ['pipe', 'pipe', 'pipe'] });
 			let output = '';
@@ -62,13 +65,14 @@ export class Yaml {
 				clearTimeout(timer);
 				try {
 					Support.assert(code === 0, error || 'YAML helper failed', 422);
+					if (lines) { const results = output.trim().split('\n').map(line => JSON.parse(line)); Support.assert(results.length === payload.length, 'YAML helper failed', 422); return resolve(results); }
 					const result = JSON.parse(output);
 					Support.assert(!result.error, result.error, 422);
 					resolve(result);
 				} catch (failure) { reject(failure); }
 			});
 			child.stdin.on('error', () => {});
-			child.stdin.end(JSON.stringify(payload) + '\n');
+			child.stdin.end(input);
 		});
 	}
 }

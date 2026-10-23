@@ -6,6 +6,7 @@ import { mongoose, User, Account, Member, Library, Group, Device, Conflict, Snip
 import { Support, Yaml } from '../services/support.js';
 import { Libraries } from '../services/libraries.js';
 import { Assets } from '../services/assets.js';
+import { RichText } from '../services/rich_text.js';
 import { Auth } from '../services/auth.js';
 import { StorageMigration } from '../services/storage_migration.js';
 import { Team } from '../services/team.js';
@@ -393,7 +394,7 @@ test('code metadata, optional abbreviations, import previews and idempotent impo
 	assert.equal(preview.warnings.length, 2);
 	const body = { source, selected: preview.entries.slice(0, 2).map(entry => ({ key: entry.key, trigger: null })) };
 	const operation = randomUUID();
-	const run = () => Libraries.mutate(owner, operation, body, (ctx, session) => Libraries.importSnippetsLab(ctx, body, session));
+	const run = () => Libraries.mutate(owner, operation, body, (ctx, session) => Libraries.commitImport(ctx, 'snippetslab', body, session));
 	const imported = await run();
 	assert.equal((await run()).libraries[0]._id, imported.libraries[0]._id);
 	const library = imported.libraries[0];
@@ -415,8 +416,27 @@ test('code metadata, optional abbreviations, import previews and idempotent impo
 	assert.equal(competing.conflicts.length, 1, 'Concurrent metadata edits must retain a conflict');
 	await Libraries.validate([{ trigger: 'literal', replace: '{{ invalid text mode }}' }]);
 	const bad = { ...body, selected: [{ key: '1:0' }] };
-	await assert.rejects(Libraries.mutate(owner, randomUUID(), bad, (ctx, session) => Libraries.importSnippetsLab(ctx, bad, session)), /invalid/);
+	await assert.rejects(Libraries.mutate(owner, randomUUID(), bad, (ctx, session) => Libraries.commitImport(ctx, 'snippetslab', bad, session)), /invalid/);
 	await assert.rejects(Libraries.snippetsLab({ contents: { snippets: [{ title: 'Missing' }] } }), /no fragments/);
+});
+
+test('import preview and upload validate entries in one helper process with per-entry errors', async t => {
+	const owner = await Fixture.user('owner', (await Account.create({ name: 'Batch validation' }))._id);
+	const execute = t.mock.method(Yaml, 'execute');
+	const preview = await Libraries.previewImport('raycast', { source: [{ name: 'One', text: 'Fine' }, { name: 'Empty', text: '' }, { name: 'Two', text: 'Also fine' }] });
+	assert.equal(execute.mock.callCount(), 1);
+	assert.deepEqual(preview.entries.map(entry => Boolean(entry.error)), [false, true, false]);
+	const { library } = await Fixture.create(owner);
+	const [hello, bye] = ['hello', 'bye'].map(trigger => library.snippets.find(snippet => snippet.trigger === trigger));
+	const expected = await Libraries.validate([{ trigger: 'bye', replace: '' }]).then(() => null, error => error.message);
+	assert.ok(expected);
+	execute.mock.resetCalls();
+	await assert.rejects(Fixture.upload(owner, library, [Fixture.change(hello, 'Hi'), Fixture.change(bye, '')]), error => error.message === expected && error.status === 422);
+	assert.equal(execute.mock.callCount(), 1);
+	const prepare = t.mock.method(RichText, 'prepare', async (ctx, content) => content);
+	const body = { name: 'Staged', snippets: [{ trigger: 'rich', title: '', content: { version: 2, type: 'rich_text', markdown: '**Bold**', variables: {} } }] };
+	await Libraries.mutate(owner, randomUUID(), body, async (ctx, session) => ({ library: await Libraries.create(ctx, body, session) }));
+	assert.equal(prepare.mock.calls[0].arguments[2], null, 'Images are prepared before the account transaction');
 });
 
 test('beta importers parse CSV, HTML JSON and XML sets with review-only commands', async () => {
