@@ -130,7 +130,7 @@ export class WhiteLabel {
 		const records = await resolveFn(hostname).catch(() => []);
 		const matches = records.map(record => String(record).toLowerCase().replace(/\.$/, '')).includes(WhiteLabel.cnameTarget());
 		if (!matches) {
-			account = await WhiteLabel.saveState(accountId, { state: 'pending_dns', dns_verified_at: null, next_check_at: new Date(Date.now() + WhiteLabel.pendingDelay), last_error: `CNAME must point to ${WhiteLabel.cnameTarget()}` });
+			account = await WhiteLabel.saveState(accountId, { state: 'pending_dns', next_check_at: new Date(Date.now() + WhiteLabel.pendingDelay), last_error: `CNAME must point to ${WhiteLabel.cnameTarget()}` });
 			throw Object.assign(WhiteLabel.error(400, `CNAME must point to ${WhiteLabel.cnameTarget()}`, 'cname_not_verified', { records }), { settings: WhiteLabel.serialize(account) });
 		}
 		if (await WhiteLabel.claimed(account._id, hostname)) {

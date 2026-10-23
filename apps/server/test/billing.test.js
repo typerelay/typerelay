@@ -267,6 +267,22 @@ test('concurrent hostname verification reserves one owner before Cloudflare crea
 	assert.equal(failure.code, 'hostname_conflict');
 });
 
+test('a failed DNS recheck retains ownership while external deletion is pending', async () => {
+	const accounts = await Account.create([{ name: 'Removing domain owner', plan: 'team', billing: { status: 'active' } }, { name: 'Next domain owner', plan: 'team', billing: { status: 'active' } }]);
+	for (const account of accounts) await WhiteLabel.configure(account._id, 'deleting.customer.test');
+	const options = { resolveCname: async () => ['custom.typerelay.com.'], fetch: async () => ({ ok: true, status: 200, json: async () => ({ success: true, result: { id: 'cf-deleting', status: 'active', ssl: { status: 'active' } } }) }) };
+	await WhiteLabel.verify(accounts[0]._id, options);
+	let started; const ready = new Promise(resolve => { started = resolve; }); let release; const gate = new Promise(resolve => { release = resolve; });
+	const removal = WhiteLabel.remove(accounts[0]._id, { fetch: async () => { started(); await gate; return { ok: true, status: 200, json: async () => ({ success: true, result: {} }) }; } });
+	await ready;
+	try {
+		await assert.rejects(WhiteLabel.verify(accounts[0]._id, { resolveCname: async () => [] }), error => error.code === 'cname_not_verified');
+		assert.ok(await WhiteLabel.claimed(accounts[1]._id, 'deleting.customer.test'));
+		await assert.rejects(WhiteLabel.verify(accounts[1]._id, options), error => error.status === 409 && error.code === 'hostname_conflict');
+	} finally { release(); await removal; }
+	assert.equal((await WhiteLabel.verify(accounts[1]._id, options)).state, 'active');
+});
+
 test('Team branding validates and normalizes image assets', async () => {
 	const directory = await mkdtemp('/tmp/typerelay-white-label-');
 	process.env.WHITE_LABEL_ASSETS_DIR = directory;
