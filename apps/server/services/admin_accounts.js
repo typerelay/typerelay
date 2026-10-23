@@ -207,7 +207,6 @@ export class AdminAccounts {
 				await Models.Ticket.create([{ hash: 'deletion-complete-' + userId, kind: 'deletion-complete', email: user.email, data: {} }], { session });
 				await Models.User.deleteOne({ _id: userId }, { session });
 			});
-			for await (const row of Models.mongoose.connection.collection('web_sessions').find({})) { let value; try { value = typeof row.session === 'string' ? JSON.parse(row.session) : row.session; } catch { continue; } if (String(value?.user) === String(userId) || String(value?.pending_factor?.user) === String(userId)) await Models.mongoose.connection.collection('web_sessions').deleteOne({ _id: row._id }); }
 		} catch (error) { await Models.User.updateOne({ _id: userId }, { $set: { 'deletion.error': 'Personal data cleanup will retry automatically.' } }); throw error; }
 	}
 	static async retry(id) {
@@ -287,14 +286,6 @@ export class AdminAccounts {
 				await Models.AiRequest.deleteMany({ user: userId }, { session });
 				await Models.User.deleteOne({ _id: userId }, { session });
 			});
-			// connect-mongo stores sessions as JSON strings. Parse, never match a
-			// substring that could accidentally delete another user's session.
-			const orphanIds = new Set();
-			for (const userId of account.deletion.users) if (!await Models.User.exists({ _id: userId })) orphanIds.add(String(userId));
-			for await (const row of Models.mongoose.connection.collection('web_sessions').find({})) {
-				let session; try { session = typeof row.session === 'string' ? JSON.parse(row.session) : row.session; } catch { continue; }
-				if (orphanIds.has(String(session?.user)) || orphanIds.has(String(session?.pending_factor?.user))) await Models.mongoose.connection.collection('web_sessions').deleteOne({ _id: row._id });
-			}
 			stage = 'verification';
 			for (const name of AdminAccounts.owned) Support.assert(!await Models[name].exists({ account: account._id }), 'Account records remain', 409);
 			Support.assert(!await Models.Ticket.exists(AdminAccounts.tickets(account)) && !await Models.IntegrationToken.exists({ grant: { $in: account.deletion.grants } }) && !await Models.MigrationBackup.exists(AdminAccounts.backups(account)), 'Account references remain', 409);

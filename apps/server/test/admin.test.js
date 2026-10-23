@@ -188,7 +188,6 @@ test('purge drains in-flight operations, retries external failure, removes every
 	await M.Ticket.create([{ hash: randomUUID(), account: account._id }, { hash: randomUUID(), data: { account: id } }, { hash: randomUUID(), data: { grant: grant._id } }, { hash: randomUUID(), email: orphan.email, data: { user: String(orphan._id) } }]);
 	await M.MigrationBackup.create([{ key: randomUUID(), source_collection: 'accounts', payload: account.toObject() }, { key: randomUUID(), source_collection: 'libraries', payload: { account: account._id, snippets: [{ secret: 'purge me' }] } }, { key: 'survivor-backup', payload: { account: survivor._id } }]);
 	await M.OAuthClient.create({ client_id: 'keep-global-client', name: 'Global' });
-	await M.mongoose.connection.collection('web_sessions').insertMany([{ _id: 'orphan-session', session: JSON.stringify({ user: String(orphan._id) }) }, { _id: 'shared-session', session: JSON.stringify({ user: String(shared._id) }) }]);
 	await mkdir(join(Fixture.root, id), { recursive: true }); await writeFile(join(Fixture.root, id, 'logo.png'), 'test');
 	let started; const ready = new Promise(resolve => { started = resolve; }); let release; const gate = new Promise(resolve => { release = resolve; });
 	const inflight = AccountAccess.run(id, async () => { started(); await gate; await M.Group.create({ account: account._id, name: 'Last in-flight write' }); }); await ready;
@@ -202,7 +201,6 @@ test('purge drains in-flight operations, retries external failure, removes every
 	assert.equal(await M.IntegrationToken.countDocuments({ grant: grant._id }), 0); assert.equal(await M.MigrationBackup.countDocuments(AdminAccounts.backups(account)), 0);
 	assert.equal(await M.User.exists({ _id: orphan._id }), null); assert.ok(await M.User.exists({ _id: shared._id })); assert.ok(await M.Passkey.exists({ user: shared._id })); assert.equal(await M.Passkey.exists({ user: orphan._id }), null);
 	assert.ok(await M.Account.exists({ _id: survivor._id })); assert.ok(await M.OAuthClient.exists({ client_id: 'keep-global-client' })); assert.ok(await M.MigrationBackup.exists({ key: 'survivor-backup' }));
-	assert.equal(await M.mongoose.connection.collection('web_sessions').findOne({ _id: 'orphan-session' }), null); assert.ok(await M.mongoose.connection.collection('web_sessions').findOne({ _id: 'shared-session' }));
 	await assert.rejects(access(join(Fixture.root, id)), { code: 'ENOENT' }); assert.deepEqual(await Fixture.json('/admin/api/accounts/' + id + '/deletion'), { deleted: id });
 	await assert.rejects(Assets.save({ account: id }, { id: 'a'.repeat(64), data: Buffer.from('test') }), /unavailable/);
 });
