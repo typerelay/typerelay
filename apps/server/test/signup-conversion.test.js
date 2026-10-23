@@ -77,6 +77,15 @@ after(async () => {
 	for (const [key, value] of Object.entries(Fixture.saved)) value === undefined ? delete process.env[key] : process.env[key] = value;
 });
 
+test('application startup rejects either missing security secret', async () => {
+	const { Server } = await import('../app.js');
+	for (const name of ['SESSION_SECRET', 'JWT_SECRET']) {
+		const saved = process.env[name];
+		try { delete process.env[name]; await assert.rejects(Server.start(), new RegExp(name + ' is required')); }
+		finally { if (saved === undefined) delete process.env[name]; else process.env[name] = saved; }
+	}
+});
+
 test('Ads are restricted to canonical hosted production and attribution is allowlisted', () => {
 	assert.equal(Auth.adsEnabled({ hostname: 'app.typerelay.com' }), true);
 	for (const req of [{ hostname: 'tenant.example' }, { hostname: 'app.typerelay.com', boundAccount: 'tenant' }]) assert.equal(Auth.adsEnabled(req), false);
