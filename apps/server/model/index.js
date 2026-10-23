@@ -3,6 +3,8 @@ import { avatarStyles } from './avatar_styles.js';
 
 const objectid = mongoose.Schema.Types.ObjectId;
 const mixed = mongoose.Schema.Types.Mixed;
+// Read-mostly models read from secondaries like Helpmonks; MongoDB requires primary inside transactions.
+const secondaryReads = schema => schema.pre(['find', 'findOne', 'countDocuments', 'distinct'], function () { if (!this.getOptions().session?.inTransaction()) this.read('secondaryPreferred'); }).pre('aggregate', function () { if (!this.options.session?.inTransaction()) this.read('secondaryPreferred'); });
 const asset = new mongoose.Schema({ url: String, storage_key: { type: String, select: false }, mime_type: String, size: Number, width: Number, height: Number, updated_at: Date }, { _id: false });
 const User = mongoose.model('User', new mongoose.Schema({ deletion: { requested_at: Date, accounts: [objectid], owned_accounts: [objectid], review_accounts: [objectid], reviewed_at: Date, next_attempt_at: Date, error: String }, email: { type: String, unique: true }, name: String, avatar_style: { type: String, enum: Object.keys(avatarStyles), default: 'initials' }, password: { type: String, select: false }, totp_secret: { type: String, select: false }, totp_enabled: { type: Boolean, default: false }, totp_step: { type: Number, select: false }, auth_version: { type: Number, default: 0 }, activity_sequence: { type: Number, default: 0 }, last_login: { type: Date, default: null }, product_updates_seen_at: { type: Date, default: Date.now, select: false } }, { timestamps: true }));
 const Passkey = mongoose.model('Passkey', new mongoose.Schema({ user: { type: objectid, index: true }, credential_id: { type: String, unique: true }, public_key: { type: String, select: false }, counter: Number, transports: [String], name: String }, { timestamps: true }));
@@ -79,7 +81,7 @@ const Account = mongoose.model('Account', accountSchema);
 const membership = new mongoose.Schema({ account: objectid, user: objectid, role: { type: String, enum: ['owner', 'admin', 'member'] } });
 membership.index({ account: 1, user: 1 }, { unique: true });
 const Member = mongoose.model('Member', membership);
-const Group = mongoose.model('Group', new mongoose.Schema({ account: objectid, name: String, users: [objectid] }));
+const Group = mongoose.model('Group', secondaryReads(new mongoose.Schema({ account: objectid, name: String, users: [objectid] })));
 const Ticket = mongoose.model('Ticket', new mongoose.Schema({ hash: { type: String, unique: true }, kind: String, email: String, account: objectid, data: mixed, expires: Date }));
 const signupNotificationSchema = new mongoose.Schema({ account: { type: objectid, required: true, unique: true, index: true }, user: { type: objectid, required: true, index: true }, email: { type: String, required: true }, name: { type: String, default: '' }, status: { type: String, enum: ['pending', 'sent', 'failed'], default: 'pending', index: true }, attempts: { type: Number, default: 0 }, next_attempt_at: { type: Date, default: null }, last_attempt_at: { type: Date, default: null }, sent_at: { type: Date, default: null }, failed_at: { type: Date, default: null }, last_error: { type: String, default: '' }, message_id: { type: String, required: true } }, { timestamps: true });
 signupNotificationSchema.index({ status: 1, next_attempt_at: 1 });
@@ -115,12 +117,12 @@ export { mongoose, User, Account, Member, Group, Ticket, SignupNotification, Lib
 // Integration credentials are independent of desktop enrollment.
 export const Integration = mongoose.model('Integration', new mongoose.Schema({ account: objectid, user: objectid, name: String, kind: { type: String, enum: ['pat', 'oauth'] }, scopes: [String], hash: { type: String, select: false }, expires: Date, revoked: { type: Boolean, default: false }, last_used: Date, client: String, resource: String, refresh: { type: String, select: false }, refresh_expires: Date }, { timestamps: true }));
 Integration.schema.add({ sso_revision: Number });
-export const SsoLog = mongoose.model('SsoLog', new mongoose.Schema({ account: { type: objectid, index: true }, user: objectid, event: String, expires: { type: Date, expires: 0 } }, { timestamps: true }));
+export const SsoLog = mongoose.model('SsoLog', secondaryReads(new mongoose.Schema({ account: { type: objectid, index: true }, user: objectid, event: String, expires: { type: Date, expires: 0 } }, { timestamps: true })));
 export const OAuthClient = mongoose.model('OAuthClient', new mongoose.Schema({ account: objectid, created_by: objectid, client_id: { type: String, unique: true }, name: String, client_uri: String, redirects: [String], registration_source: { type: String, enum: ['dynamic', 'manual'], default: 'dynamic' }, token_endpoint_auth_method: { type: String, enum: ['none', 'client_secret_post'], default: 'none' }, secret_hash: { type: String, select: false } }, { timestamps: true }));
 export const IntegrationToken = mongoose.model('IntegrationToken', new mongoose.Schema({ hash: { type: String, unique: true }, grant: objectid, resource: String, expires: Date }, { timestamps: true }));
-export const ApiAudit = mongoose.model('ApiAudit', new mongoose.Schema({ account: objectid, user: objectid, credential: objectid, operation: String, status: Number, expires: { type: Date, expires: 0 } }, { timestamps: true }));
-export const SystemSetting = mongoose.model('SystemSetting', new mongoose.Schema({ key: { type: String, unique: true }, value: mixed, revision: { type: Number, default: 0 } }, { timestamps: true }));
-export const AdminAudit = mongoose.model('AdminAudit', new mongoose.Schema({ account: objectid, actor: String, operation: String, status: Number }, { timestamps: true }));
+export const ApiAudit = mongoose.model('ApiAudit', secondaryReads(new mongoose.Schema({ account: objectid, user: objectid, credential: objectid, operation: String, status: Number, expires: { type: Date, expires: 0 } }, { timestamps: true })));
+export const SystemSetting = mongoose.model('SystemSetting', secondaryReads(new mongoose.Schema({ key: { type: String, unique: true }, value: mixed, revision: { type: Number, default: 0 } }, { timestamps: true })));
+export const AdminAudit = mongoose.model('AdminAudit', secondaryReads(new mongoose.Schema({ account: objectid, actor: String, operation: String, status: Number }, { timestamps: true })));
 export const AccountLease = mongoose.model('AccountLease', new mongoose.Schema({ account: { type: objectid, index: true }, token: { type: String, unique: true }, expires: { type: Date, expires: 0 } }));
 for (const model of [Group, Ticket, Library, Device, Conflict, ApiAudit, AdminAudit]) model.schema.index({ account: 1 });
 IntegrationToken.schema.index({ expires: 1 }, { expireAfterSeconds: 0 });
@@ -148,23 +150,23 @@ const productUpdateSchema = new mongoose.Schema(
 productUpdateSchema.index({ active: 1, published_at: -1, _id: -1 });
 productUpdateSchema.index({ active: 1, show_modal: 1, published_at: -1, _id: -1 });
 
-export const ProductUpdate = mongoose.model('ProductUpdate', productUpdateSchema);
+export const ProductUpdate = mongoose.model('ProductUpdate', secondaryReads(productUpdateSchema));
 
 const usageEventSchema = new mongoose.Schema({ account: { type: objectid, required: true }, user: { type: objectid, required: true }, event_id: { type: String, required: true }, library: { type: objectid, required: true }, snippet: { type: String, required: true }, action: { type: String, enum: ['copy', 'insert'], required: true }, client: String, occurred_at: { type: Date, required: true }, characters: { type: Number, required: true }, shared: Boolean }, { timestamps: true });
 usageEventSchema.index({ account: 1, user: 1, event_id: 1 }, { unique: true });
 usageEventSchema.index({ account: 1, user: 1, occurred_at: 1 });
 usageEventSchema.index({ account: 1, shared: 1, occurred_at: 1 });
-export const UsageEvent = mongoose.model('UsageEvent', usageEventSchema);
+export const UsageEvent = mongoose.model('UsageEvent', secondaryReads(usageEventSchema));
 const statisticsPreferenceSchema = new mongoose.Schema({ account: { type: objectid, required: true }, user: { type: objectid, default: null }, wpm: { type: Number, default: 50 }, hourly_rate: { type: Number, default: 30 }, currency: { type: String, default: 'USD' } });
 statisticsPreferenceSchema.index({ account: 1, user: 1 }, { unique: true });
-export const StatisticsPreference = mongoose.model('StatisticsPreference', statisticsPreferenceSchema);
+export const StatisticsPreference = mongoose.model('StatisticsPreference', secondaryReads(statisticsPreferenceSchema));
 
 const aiSettingSchema = new mongoose.Schema({ use_managed: { type: Boolean, default: false }, account: { type: objectid, required: true }, user: { type: objectid, default: null }, enabled: { type: Boolean, default: true }, connections: { type: [mixed], default: [], select: false }, routes: { type: mixed, default: {} }, revision: { type: Number, default: 0 } }, { timestamps: true });
 aiSettingSchema.index({ account: 1, user: 1 }, { unique: true });
-export const AiSetting = mongoose.model('AiSetting', aiSettingSchema);
+export const AiSetting = mongoose.model('AiSetting', secondaryReads(aiSettingSchema));
 const aiUsageSchema = new mongoose.Schema({ account: { type: objectid, required: true }, user: { type: objectid, required: true }, day: { type: String, required: true }, count: { type: Number, default: 0 }, expires: { type: Date, expires: 0 } });
 aiUsageSchema.index({ account: 1, user: 1, day: 1 }, { unique: true });
-export const AiUsage = mongoose.model('AiUsage', aiUsageSchema);
+export const AiUsage = mongoose.model('AiUsage', secondaryReads(aiUsageSchema));
 const aiRequestSchema = new mongoose.Schema({ account: { type: objectid, required: true }, user: { type: objectid, required: true }, id: { type: String, required: true }, workflow: String, managed: Boolean, day: String, state: String, expires: { type: Date, expires: 0 } });
 aiRequestSchema.index({ account: 1, user: 1, id: 1 }, { unique: true });
-export const AiRequest = mongoose.model('AiRequest', aiRequestSchema);
+export const AiRequest = mongoose.model('AiRequest', secondaryReads(aiRequestSchema));
