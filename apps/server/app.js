@@ -45,6 +45,7 @@ export class Server {
 			console.log(JSON.stringify({ event: 'service_started', service: process.env.OTEL_SERVICE_NAME || 'typerelay-scheduler', mode: 'scheduler', version: process.env.APP_VERSION || 'development' }));
 			return;
 		}
+		for (const name of ['SESSION_SECRET', 'JWT_SECRET']) if (!process.env[name]) throw new Error(name + ' is required');
 		await StorageMigration.code();
 		await StorageMigration.tokens();
 		await Promise.all(Object.values(mongoose.models).map(model => model.createIndexes()));
@@ -92,7 +93,7 @@ export class Server {
 		app.get('/health', (req, res) => res.json({ ok: true }));
 		// Seconds; retain non-rolling cookies and the separate admin deadline.
 		const sessionStore = MongoStore.create({ mongoUrl: process.env.MONGO_URI, collectionName: 'web_sessions', touchAfter: 60 });
-		app.use(session({ name: 'typerelay.sid', secret: process.env.SESSION_SECRET || 'change-me', store: sessionStore, resave: false, saveUninitialized: false, cookie: { httpOnly: true, sameSite: 'lax', secure: Auth.origin.startsWith('https:'), maxAge: 7 * 86400000 } }));
+		app.use(session({ name: 'typerelay.sid', secret: process.env.SESSION_SECRET, store: sessionStore, resave: false, saveUninitialized: false, cookie: { httpOnly: true, sameSite: 'lax', secure: Auth.origin.startsWith('https:'), maxAge: 7 * 86400000 } }));
 		app.use(WhiteLabel.resolveRequest);
 		app.use(async (req, res, next) => {
 			if (req.session.user) {

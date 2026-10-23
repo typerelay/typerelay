@@ -57,6 +57,22 @@ test('real delegation route verifies its secret, selected audience and legacy de
 	assert.ok((await Auth.integration('Token ' + ResourceFixture.pat)).credential);
 });
 
+test('token exchange rejects operator client_id and resource values before querying', async () => {
+	const calls = OAuthClient.findOne.mock.callCount();
+	for (const body of [{ client_id: { $gt: '' } }, { client_id: 'synthetic-client', resource: { $ne: null } }]) await assert.rejects(Auth.exchangeIntegration({ grant_type: 'refresh_token', refresh_token: 'x', ...body }), error => error.status === 400);
+	await assert.rejects(Auth.integrationRequest({ client_id: { $gt: '' } }), error => error.status === 400);
+	assert.equal(OAuthClient.findOne.mock.callCount(), calls);
+	const response = await fetch(ResourceFixture.url + '/integrations/token', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ grant_type: 'refresh_token', client_id: { $gt: '' } }) });
+	assert.equal(response.status, 400);
+});
+test('MCP delegation is not behind the shared sign-in limiter', async () => {
+	const app = express(); app.use(express.json()); await PublicApi.mount(app, (req, res) => res.status(429).json({ error: 'limited' })); app.use((error, req, res, next) => res.status(error.status || 500).json({ error: error.message }));
+	const server = app.listen(0, '127.0.0.1'); await new Promise(resolve => server.once('listening', resolve)); const url = 'http://127.0.0.1:' + server.address().port;
+	try {
+		assert.equal((await fetch(url + '/integrations/token', { method: 'POST' })).status, 429);
+		for (let index = 0; index < 40; index++) assert.equal((await fetch(url + '/integrations/delegate', { method: 'POST', headers: { Authorization: 'Token ' + ResourceFixture.pat, 'X-MCP-Secret': process.env.JWT_SECRET } })).status, 200);
+	} finally { await new Promise(resolve => server.close(resolve)); }
+});
 test('delegation and token exchange reject users requesting account deletion', async () => {
 	ResourceFixture.deleting = true;
 	try {

@@ -58,8 +58,8 @@ export class PublicApi {
 			res.render('integration-authorize', { client, scopes, request: req.query, accounts });
 		});
 		app.post('/integrations/authorize', async (req, res) => Security.authorizeWithSso(req, res, true));
-		app.post('/integrations/delegate', authLimit, async (req, res) => {
-			const expected = Buffer.from(process.env.JWT_SECRET || 'change-me');
+		app.post('/integrations/delegate', async (req, res) => {
+			const expected = Buffer.from(process.env.JWT_SECRET);
 			const supplied = Buffer.from(String(req.headers['x-mcp-secret'] || ''));
 			Support.assert(expected.length === supplied.length && timingSafeEqual(expected, supplied), 'Invalid MCP client', 401);
 			const resource = req.body?.resource ?? Auth.mcpResource();

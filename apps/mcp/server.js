@@ -104,7 +104,7 @@ export class TypeRelayMcp {
 		const query = operation.method === 'get' ? new URLSearchParams(Object.entries(body).map(([key, value]) => [key, String(value)])) : null;
 		return TypeRelayMcp.response(operation.upstream || name, await api.request('/api/v3' + path + (query?.size ? '?' + query : ''), operation.method.toUpperCase(), operation.method === 'get' ? undefined : body));
 	}
-	static app({ apiBase = process.env.API_BASE_URL || 'http://localhost:3040', resource = (process.env.MCP_BASE_URL || 'http://localhost:3041').replace(/\/$/, '') + '/mcp', issuer = process.env.APP_URL || 'http://localhost:3040', secret = () => process.env.JWT_SECRET || 'change-me', applyRateLimits = true } = {}) {
+	static app({ apiBase = process.env.API_BASE_URL || 'http://localhost:3040', resource = (process.env.MCP_BASE_URL || 'http://localhost:3041').replace(/\/$/, '') + '/mcp', issuer = process.env.APP_URL || 'http://localhost:3040', secret = () => process.env.JWT_SECRET, applyRateLimits = true } = {}) {
 		const app = express();
 		if (process.env.IS_DOCKER === 'true') app.set('trust proxy', 1);
 		app.disable('x-powered-by');
@@ -165,6 +165,7 @@ export class TypeRelayMcp {
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
 	try {
+		if (!process.env.JWT_SECRET) throw new Error('JWT_SECRET is required');
 		if (McpRateLimit.getConfig().enabled) await McpCache.connect();
 		const port = Number(process.env.PORT || 3041);
 		TypeRelayMcp.app().listen(port, '0.0.0.0', () => console.log(JSON.stringify({ event: 'service_started', service: process.env.OTEL_SERVICE_NAME || 'typerelay-mcp', mode: 'mcp', port, version: process.env.APP_VERSION || 'development' })));
