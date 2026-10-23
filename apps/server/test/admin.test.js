@@ -197,7 +197,7 @@ test('purge drains in-flight operations, retries external failure, removes every
 	release(); await inflight;
 	await assert.rejects(AdminAccounts.purge(id, { cancelBilling: async () => { throw new Error('External down'); } }), /External down/); assert.equal((await AdminAccounts.get(id)).status, 'failed'); assert.ok(await M.Snippet.exists({ account: account._id }));
 	await AdminAccounts.retry(id); let hostname;
-	const purged = await AdminAccounts.purge(id, { cancelBilling: async () => {}, deleteHostname: async value => { hostname = value; } }); assert.equal(purged.deleted, id); assert.equal(hostname, 'hostname');
+	const purged = await AdminAccounts.purge(id, { cancelBilling: async () => {}, listHostnames: async () => [], deleteHostname: async value => { hostname = value; } }); assert.equal(purged.deleted, id); assert.equal(hostname, 'hostname');
 	for (const name of AdminAccounts.owned) assert.equal(await M[name].countDocuments({ account: account._id }), 0, name);
 	assert.equal(await M.IntegrationToken.countDocuments({ grant: grant._id }), 0); assert.equal(await M.MigrationBackup.countDocuments(AdminAccounts.backups(account)), 0);
 	assert.equal(await M.User.exists({ _id: orphan._id }), null); assert.ok(await M.User.exists({ _id: shared._id })); assert.ok(await M.Passkey.exists({ user: shared._id })); assert.equal(await M.Passkey.exists({ user: orphan._id }), null);
