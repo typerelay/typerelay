@@ -261,11 +261,18 @@ export class WhiteLabel {
 		await sharp(file.filepath, { pages: 1, animated: false }).resize({ ...config, withoutEnlargement: true, background: { r: 0, g: 0, b: 0, alpha: 0 } }).png().toFile(temporary);
 		const metadata = await sharp(temporary).metadata();
 		const info = await stat(temporary);
-		await rm(directory, { recursive: true, force: true });
 		await mkdir(directory, { recursive: true });
 		await rename(temporary, join(directory, filename));
 		const asset = { url: `/white-label-assets/${accountId}/${kind}/${filename}`, storage_key: `${accountId}/${kind}/${filename}`, mime_type: 'image/png', size: info.size, width: metadata.width || 0, height: metadata.height || 0, updated_at: new Date() };
-		await Account.updateOne({ _id: accountId }, { $set: { [`white_label.${kind}`]: asset } });
+		return WhiteLabel.saveAsset(accountId, kind, asset);
+	}
+
+	static async saveAsset(accountId, kind, asset) {
+		// shortcut: ambiguous writes can leave unused files; add age-based cleanup if this becomes material.
+		const previous = await Account.findOneAndUpdate({ _id: accountId, ...AccountAccess.available }, { $set: { [`white_label.${kind}`]: asset } }, { returnDocument: 'before' }).select(`+white_label.${kind}.storage_key`).lean();
+		AccountAccess.assert(previous);
+		const key = previous.white_label?.[kind]?.storage_key;
+		if (key) await rm(join(WhiteLabel.assetsRoot(), key), { force: true }).catch(error => console.error(`Branding file cleanup failed: ${error.message}`));
 		return WhiteLabel.settings(accountId);
 	}
 
@@ -273,9 +280,7 @@ export class WhiteLabel {
 		if (!WhiteLabel.assets[kind]) throw WhiteLabel.error(404, 'Unknown branding asset', 'asset_unknown');
 		const account = await WhiteLabel.account(accountId);
 		WhiteLabel.assertTeam(account);
-		await rm(join(WhiteLabel.assetsRoot(), String(accountId), kind), { recursive: true, force: true });
-		await Account.updateOne({ _id: accountId }, { $set: { [`white_label.${kind}`]: null } });
-		return WhiteLabel.settings(accountId);
+		return WhiteLabel.saveAsset(accountId, kind, null);
 	}
 
 	static requestHostname(req) {

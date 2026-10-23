@@ -16,6 +16,8 @@ TypeRelay is local-first. The desktop reads and writes SQLite; the server is use
 
 The trigger prefix, panel shortcut and launch-at-login setting are local to each machine.
 
+Downloaded libraries receive an available local name when their server name is already in use. Existing local libraries are retained.
+
 ## Connect a machine
 
 In the desktop panel, open **Settings → Sync**, enter the server origin and choose **Authenticate**. Sign in in the browser, select an account and approve the device. The connection uses short-lived access tokens and a rotating refresh token stored in the private local sync directory.

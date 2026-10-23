@@ -609,9 +609,9 @@ impl Database {
         let id = remote["_id"].as_str().context("Missing library ID")?;
         ensure!(id.len() <= 128 && !id.is_empty(), "Invalid library ID");
         let old_name: Option<String> = self.connection.query_row("SELECT name FROM libraries WHERE id=?1", [id], |row| row.get(0)).optional()?;
-        let mut name = remote["name"].as_str().map(str::to_owned).or(old_name).unwrap_or_else(|| "Library".into());
-        let occupied: bool = self.connection.query_row("SELECT EXISTS(SELECT 1 FROM libraries WHERE name=?1 AND id<>?2)", params![name,id], |row|row.get(0))?;
-        if occupied { name = format!("{name} [{id}]"); }
+        let base = remote["name"].as_str().map(str::to_owned).or(old_name).unwrap_or_else(|| "Library".into());
+        let mut name=base.clone();let mut suffix=1;
+        while self.connection.query_row("SELECT EXISTS(SELECT 1 FROM libraries WHERE name=?1 AND id<>?2)", params![name,id], |row|row.get::<_,bool>(0))? { name=if suffix==1{format!("{base} [{id}]")}else{format!("{base} [{id}-{suffix}]")};suffix+=1; }
         let mut library = remote.clone();
         for key in ["snippets","records","yaml","deleted"] { library.as_object_mut().context("Invalid library")?.remove(key); }
         self.connection.execute("INSERT INTO base_libraries(id,data) VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET data=excluded.data", params![id,library.to_string()])?;
@@ -928,6 +928,14 @@ impl DatabaseSnapshot {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sync_names_skip_all_occupied_suffixes_and_stay_stable() {
+        let directory=tempfile::tempdir().unwrap();let db=super::Database::open(directory.path()).unwrap();let id="0123456789abcdef01234567";
+        for name in ["Team".to_owned(),format!("Team [{id}]"),format!("Team [{id}-2]")] {db.import(&name,"matches: []").unwrap();}
+        let mut remote=serde_json::json!({"_id":id,"name":"Team","revision":1,"state":"active","permissions":{"read":true,"edit":true,"manage":true},"records":[]});
+        for _ in 0..2 {db.apply(&serde_json::json!({"libraries":[remote.clone()]}),None).unwrap();let file=db.editor(&format!("Team [{id}-3]")).unwrap();assert_eq!(file.id,id);assert_eq!(db.libraries().unwrap().len(),4);}
+        remote["name"]=serde_json::json!("Renamed");db.apply(&serde_json::json!({"libraries":[remote]}),None).unwrap();assert_eq!(db.editor("Renamed").unwrap().id,id);
+    }
     #[test]
     fn idle_sync_keeps_search_index_and_migrates_legacy_metadata_triggers() {
         let directory=tempfile::tempdir().unwrap();let db=super::Database::open(directory.path()).unwrap();

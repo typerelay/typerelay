@@ -299,6 +299,36 @@ test('Team branding validates and normalizes image assets', async () => {
 	} finally { await rm(directory, { recursive: true, force: true }); delete process.env.WHITE_LABEL_ASSETS_DIR; }
 });
 
+for (const interleave of ['upload-before', 'upload-after', 'delete-before']) test(`branding ${interleave} cannot remove the final referenced image`, async t => {
+	const directory = await mkdtemp('/tmp/typerelay-brand-race-'); const previousDirectory = process.env.WHITE_LABEL_ASSETS_DIR; process.env.WHITE_LABEL_ASSETS_DIR = directory;
+	t.after(async () => { await rm(directory, { recursive: true, force: true }); if (previousDirectory === undefined) delete process.env.WHITE_LABEL_ASSETS_DIR; else process.env.WHITE_LABEL_ASSETS_DIR = previousDirectory; });
+	const account = await Account.create({ name: 'Brand race', plan: 'team', billing: { status: 'active' } }); const source = `${directory}/source.png`;
+	await writeFile(source, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')); const file = { filepath: source, size: (await stat(source)).size };
+	await WhiteLabel.upload(account._id, 'logo', file);
+	let entered; let release; const ready = new Promise(resolve => { entered = resolve; }); const gate = new Promise(resolve => { release = resolve; }); let first = true;
+	const update = Account.findOneAndUpdate.bind(Account);
+	t.mock.method(Account, 'findOneAndUpdate', (...args) => {
+		const query = update(...args); if (!first || args[1].$set?.['white_label.logo'] === undefined) return query; first = false;
+		return { select() { return this; }, async lean() { const old = interleave === 'upload-after' ? await query.select('+white_label.logo.storage_key').lean() : null; entered(); await gate; return old || query.select('+white_label.logo.storage_key').lean(); } };
+	});
+	const pending = WhiteLabel.upload(account._id, 'logo', file); await ready;
+	try { if (interleave === 'delete-before') await WhiteLabel.deleteAsset(account._id, 'logo'); else await WhiteLabel.upload(account._id, 'logo', file); } finally { release(); }
+	await pending;
+	const final = await WhiteLabel.settings(account._id); assert.ok(final.logo_url); assert.equal((await stat(`${directory}/${final.logo_url.replace('/white-label-assets/', '')}`)).isFile(), true);
+});
+
+for (const outcome of ['upload-before', 'upload-after', 'delete-before', 'delete-after']) test(`branding ${outcome} metadata error retains every possibly referenced file`, async t => {
+	const directory = await mkdtemp('/tmp/typerelay-brand-failure-'); const previousDirectory = process.env.WHITE_LABEL_ASSETS_DIR; process.env.WHITE_LABEL_ASSETS_DIR = directory;
+	t.after(async () => { await rm(directory, { recursive: true, force: true }); if (previousDirectory === undefined) delete process.env.WHITE_LABEL_ASSETS_DIR; else process.env.WHITE_LABEL_ASSETS_DIR = previousDirectory; });
+	const account = await Account.create({ name: 'Brand failure', plan: 'team', billing: { status: 'active' } }); const source = `${directory}/source.png`;
+	await writeFile(source, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')); const file = { filepath: source, size: (await stat(source)).size };
+	const original = await WhiteLabel.upload(account._id, 'logo', file); const update = Account.findOneAndUpdate.bind(Account);
+	t.mock.method(Account, 'findOneAndUpdate', (...args) => ({ select() { return this; }, async lean() { if (outcome.endsWith('after')) await update(...args).lean(); throw new Error('metadata response failed'); } }));
+	await assert.rejects(outcome.startsWith('upload') ? WhiteLabel.upload(account._id, 'logo', file) : WhiteLabel.deleteAsset(account._id, 'logo'), /metadata response failed/);
+	assert.equal((await stat(`${directory}/${original.logo_url.replace('/white-label-assets/', '')}`)).isFile(), true);
+	const final = await WhiteLabel.settings(account._id); if (final.logo_url) assert.equal((await stat(`${directory}/${final.logo_url.replace('/white-label-assets/', '')}`)).isFile(), true);
+});
+
 test('Stripe provisioner creates exact tax-exclusive price shapes', () => {
 	const product = { id: 'prod' };
 	assert.equal(StripeProvisioner.taxCode, 'txcd_10103001');

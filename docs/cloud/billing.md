@@ -29,6 +29,8 @@ Team owners and admins can upload a navigation logo, login logo, and favicon in 
 
 Brand assets accept PNG, JPG, WebP, AVIF, GIF or ICO images up to 5 MB and are normalized to PNG storage. Removing an asset returns that location to the TypeRelay default. The hostname field accepts only a hostname on your own domain, not a URL, path, TypeRelay-owned name or hostname already connected to another account.
 
+A failed branding save keeps the previously saved image file available. Reload White-label settings before retrying an upload or removal.
+
 Domain states distinguish missing DNS from pending SSL. **Refresh** rechecks the existing Cloudflare hostname; **Verify** checks the DNS CNAME and creates or recovers the Cloudflare custom hostname. A failed DNS recheck preserves an existing verified reservation. Remove or change the hostname to release it after external cleanup finishes. Removing the domain stops branded-host routing but does not remove the account or its libraries. A Team-plan loss disables the custom hostname until the entitlement returns.
 
 Domain changes run one at a time per account. A conflicting request returns 409; retry after the current operation finishes. If a provider request has an uncertain outcome, TypeRelay keeps its reservation and cleanup details. **Verify** or **Refresh** can recover a provider record only when its account and claim metadata match. A pending create is never repeated or discarded merely because time passed. If no exact record can be confirmed, an operator must reconcile the provider state before the hostname can be changed or removed.

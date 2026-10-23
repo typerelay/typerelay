@@ -30,6 +30,8 @@ Set a label, default answer, required/optional status and single-line/multiline 
 
 Answers are literal: entering `{{key:enter}}` as an answer cannot create a keypress. There are no scripts, conditions, loops or nested evaluation.
 
+In a Rich text link, URL answers stay inside that link. Spaces and Markdown punctuation are encoded so an answer cannot add another link or image.
+
 ## Cursor position
 
 In **Text**, choose **Cursor position** to insert `{{cursor:here}}` where you want to continue typing. TypeRelay inserts the complete rendered snippet, removes the marker, then moves the caret to that position. For example, `Hello {{cursor:here}}, thanks!` leaves the caret after “Hello ”. Dates, fields, emoji and newlines before or after the marker are counted after rendering.
