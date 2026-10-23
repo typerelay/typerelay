@@ -43,6 +43,10 @@ Cleanup drains active writes/jobs, cancels subscriptions and schedules, expires 
 
 Pending hostname entries do not authorize external domain deletion. Cleanup leaves unverified Cloudflare resources untouched so it cannot remove another account's domain.
 
+Domain cleanup checks the exact hostname, account and claim metadata before deleting a provider record. An unresolved create or delete retains its reservation and cleanup details; account purge keeps the account inaccessible until reconciliation succeeds. Retry purge after resolving the provider state. A timeout or empty hostname lookup alone does not prove that an earlier create failed.
+
+Legacy records with a saved provider ID but no account and claim metadata require operator reconciliation. Preserve the saved ID and reservation, confirm ownership using that exact provider record, and reconcile its metadata during a maintenance window before retrying domain changes or purge. Do not adopt records from a hostname-only search, relabel another account's record, or clear pending actions solely because they are old.
+
 Cleanup uses a renewable database lease. Crashed request/worker leases expire after five minutes; a restarted scheduler resumes unfinished work. Failures stay inaccessible and appear in Accounts with a Retry purge action. The account record is removed only after database/file verification. Repeated cleanup tolerates already-missing external resources.
 
 Historical Helpmonks/Managani data, Stripe financial records, infrastructure backups, and offline desktop copies are outside this purge. Desktop access is revoked; no remote erasure of offline copies is promised. No production deployment or destructive cleanup of existing accounts is performed during installation.
