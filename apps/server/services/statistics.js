@@ -35,15 +35,18 @@ export class Statistics {
 	static async ingest(ctx, body) {
 		if (body.identity) Support.assert(body.identity.user === String(ctx.user) && body.identity.account === String(ctx.account), 'Usage belongs to another account', 409);
 		Support.assert(Array.isArray(body.events) && body.events.length <= 100, 'Send at most 100 usage events');
-		const events = body.events.map(Statistics.event); const accepted = []; const discarded = [];
+		const events = []; const accepted = []; const discarded = [];
+		// Discard malformed events individually so one bad event cannot block the client's queue.
+		for (const value of body.events) { try { events.push(Statistics.event(value)); } catch { if (typeof value?.event_id === 'string') discarded.push(value.event_id); } }
+		if (!events.length) return { accepted, discarded };
 		await AccountAccess.write(ctx.account, async session => {
-			const libraries = await Library.find({ account: ctx.account, _id: { $in: events.map(event => event.library) } }).session(session).lean();
-			const snippets = await Snippet.find({ account: ctx.account, id: { $in: events.map(event => event.snippet) } }).select('id library').session(session).lean();
+			const libraries = new Map((await Library.find({ account: ctx.account, _id: { $in: events.map(event => event.library) } }).session(session).lean()).map(row => [String(row._id), row]));
+			const snippets = new Set((await Snippet.find({ account: ctx.account, id: { $in: events.map(event => event.snippet) } }).select('id library').session(session).lean()).map(row => row.id + ':' + row.library));
+			const previous = new Set((await UsageEvent.find({ account: ctx.account, user: ctx.user, event_id: { $in: events.map(event => event.event_id) } }).select('event_id').session(session).lean()).map(row => row.event_id));
 			for (const event of events) {
-				const previous = await UsageEvent.exists({ account: ctx.account, user: ctx.user, event_id: event.event_id }).session(session);
-				if (previous) { accepted.push(event.event_id); continue; }
-				const library = libraries.find(row => Support.equal(row._id, event.library));
-				if (!library || !Support.access(ctx, library).read || !snippets.some(row => row.id === event.snippet && Support.equal(row.library, event.library))) { discarded.push(event.event_id); continue; }
+				if (previous.has(event.event_id)) { accepted.push(event.event_id); continue; }
+				const library = libraries.get(event.library);
+				if (!library || !Support.access(ctx, library).read || !snippets.has(event.snippet + ':' + event.library)) { discarded.push(event.event_id); continue; }
 				await UsageEvent.updateOne({ account: ctx.account, user: ctx.user, event_id: event.event_id }, { $setOnInsert: { ...event, shared: event.shared && library.shared === true } }, { upsert: true, session });
 				accepted.push(event.event_id);
 			}
@@ -78,8 +81,9 @@ export class Statistics {
 		const snippets = await Snippet.find({ account: ctx.account, library: { $in: visible.map(row => row._id) }, state: 'active', id: { $in: data.snippets.map(row => row._id.snippet) } }).select('id title trigger library').lean();
 		const members = scope === 'team' ? await Member.find({ account: ctx.account }).select('user').lean() : [];
 		const users = await User.find({ _id: { $in: members.map(row => row.user) } }).select('name').lean();
-		const libraryName = id => visible.find(row => Support.equal(row._id, id))?.name || 'Deleted or unavailable library';
-		return { scope, options, settings, totals: Statistics.totals(data.totals[0], settings), days: data.days.map(row => ({ id: row._id, name: row._id, ...Statistics.totals(row, settings) })), snippets: data.snippets.map(row => { const snippet = snippets.find(item => item.id === row._id.snippet && Support.equal(item.library, row._id.library)); return { id: row._id.snippet + ':' + row._id.library, name: snippet?.title || snippet?.trigger || 'Deleted or unavailable snippet', library: libraryName(row._id.library), ...Statistics.totals(row, settings) }; }), libraries: data.libraries.map(row => ({ id: String(row._id), name: libraryName(row._id), ...Statistics.totals(row, settings) })), members: (data.members || []).map(row => ({ id: String(row._id), name: users.find(user => Support.equal(user._id, row._id))?.name || 'Former member', ...Statistics.totals(row, settings) })) };
+		const names = new Map(visible.map(row => [String(row._id), row.name])); const snippetRows = new Map(snippets.map(row => [row.id + ':' + row.library, row])); const userNames = new Map(users.map(row => [String(row._id), row.name]));
+		const libraryName = id => names.get(String(id)) || 'Deleted or unavailable library';
+		return { scope, options, settings, totals: Statistics.totals(data.totals[0], settings), days: data.days.map(row => ({ id: row._id, name: row._id, ...Statistics.totals(row, settings) })), snippets: data.snippets.map(row => { const snippet = snippetRows.get(row._id.snippet + ':' + row._id.library); return { id: row._id.snippet + ':' + row._id.library, name: snippet?.title || snippet?.trigger || 'Deleted or unavailable snippet', library: libraryName(row._id.library), ...Statistics.totals(row, settings) }; }), libraries: data.libraries.map(row => ({ id: String(row._id), name: libraryName(row._id), ...Statistics.totals(row, settings) })), members: (data.members || []).map(row => ({ id: String(row._id), name: userNames.get(String(row._id)) || 'Former member', ...Statistics.totals(row, settings) })) };
 	}
 	static csv(report) {
 		const cell = value => '"' + String(value ?? '').replace(/^[=+@\-\t\r]/, "'$&").replaceAll('"', '""') + '"';

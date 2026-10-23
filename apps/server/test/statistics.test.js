@@ -66,3 +66,9 @@ test('timezone boundaries, private transitions, deletion labels and former membe
 	await Member.deleteOne({ account: Fixture.account._id, user: Fixture.member.user });
 	const historical = await Statistics.report(Fixture.owner, { ...Fixture.query, scope: 'team' }); assert.equal(historical.totals.uses, 3); assert.equal(historical.snippets[0].name, 'Deleted or unavailable snippet'); assert(historical.members.some(row => row.name === 'Former member'));
 });
+test('invalid events are discarded individually while valid events are ingested', async () => {
+	const valid = Fixture.event(Fixture.shared); const badLibrary = Fixture.event(Fixture.shared, { library: 'not-an-id' }); const future = Fixture.event(Fixture.shared, { occurred_at: new Date(Date.now() + 86400000).toISOString() });
+	const result = await Statistics.ingest(Fixture.owner, { events: [badLibrary, valid, future, { action: 'copy' }] });
+	assert.deepEqual(result, { accepted: [valid.event_id], discarded: [badLibrary.event_id, future.event_id] });
+	assert.ok(await UsageEvent.exists({ event_id: valid.event_id })); assert.equal(await UsageEvent.exists({ event_id: { $in: [badLibrary.event_id, future.event_id] } }), null);
+});
