@@ -20,6 +20,6 @@ COPY --from=workspace-dependencies /opt/deploy/mcp ./
 COPY apps/server/api/catalog.js apps/server/api/openapi.js /repo/apps/server/api/
 COPY apps/server/rate_limit_support.js /repo/apps/server/
 COPY docs/web/Mailtwine-LICENSE docs/web/attribution.md /repo/notices/
-RUN chmod -R a+rX /repo
+RUN ln -s ../mcp/node_modules /repo/apps/server/node_modules && chmod -R a+rX /repo
 USER node
 CMD ["node", "server.js"]
