@@ -8,6 +8,11 @@ use anyhow::ensure;
 #[cfg(target_os = "windows")]
 #[path = "platform_windows.rs"] mod native;
 pub use native::Target;
+// The arrow-key cursor fallback costs two synthetic key events per grapheme; longer snippets would freeze the target app, so positioning is skipped past this cap.
+#[cfg(not(target_os="linux"))]
+const CURSOR_FALLBACK_LIMIT: usize = 512;
+#[cfg(not(target_os="linux"))]
+fn cursor_fallback_capped(count: usize) -> bool { count > CURSOR_FALLBACK_LIMIT }
 #[cfg(target_os="windows")]
 pub use native::keys_down;
 #[cfg(not(target_os="linux"))]
@@ -73,8 +78,20 @@ pub fn paste(target: &Target, erase: usize, payload: Option<typerelay_client::cl
     })();
     if let Some(clipboard)=&mut clipboard { clipboard.restore()?; }
     insertion?;
-    if let Some((cursor,text))=cursor { ensure!(guarded(), "Text inserted; cursor positioning interrupted. Nothing retried"); ensure!(target.focused()?, "Text inserted; original window lost focus. Cursor positioning cancelled; nothing retried"); let placed=match direct.as_ref(){Some(direct)=>direct.position(target,&text,&cursor,&guarded)?,None=>false};if !placed{target.position_cursor(cursor.backward_graphemes,||guarded()&&direct.as_ref().is_none_or(|direct|direct.focused(target).unwrap_or(false)))?;} }
+    if let Some((cursor,text))=cursor { ensure!(guarded(), "Text inserted; cursor positioning interrupted. Nothing retried"); ensure!(target.focused()?, "Text inserted; original window lost focus. Cursor positioning cancelled; nothing retried"); let placed=match direct.as_ref(){Some(direct)=>direct.position(target,&text,&cursor,&guarded)?,None=>false};if !placed{ensure!(!cursor_fallback_capped(cursor.backward_graphemes),"Text inserted; cursor not positioned: the arrow-key fallback skips more than {CURSOR_FALLBACK_LIMIT} graphemes. Nothing retried");target.position_cursor(cursor.backward_graphemes,||guarded()&&direct.as_ref().is_none_or(|direct|direct.focused(target).unwrap_or(false)))?;} }
     Ok(())
 }
 
 pub fn start_observation(state:std::sync::Arc<crate::observation::Observation>) {native::ObservationAdapter::start(state);}
+
+#[cfg(all(test,not(target_os="linux")))]
+mod tests {
+	use super::*;
+	#[test]
+	fn cursor_fallback_skips_positioning_beyond_512_graphemes() {
+		assert!(!cursor_fallback_capped(0));
+		assert!(!cursor_fallback_capped(512));
+		assert!(cursor_fallback_capped(513));
+		assert!(cursor_fallback_capped(30000));
+	}
+}
