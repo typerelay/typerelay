@@ -16,8 +16,10 @@ export class ApiRateLimit {
 			uploadPerMinute: RateLimitSupport.integer('API_RATE_LIMIT_UPLOAD_PER_MINUTE', 'ApiRateLimit'),
 		};
 	}
-	static getRequestPath(request) { return RateLimitSupport.requestPath(request, '/api/v3'); }
+	static getRequestPath(request) { return RateLimitSupport.requestPath(request, '/api/v[23]'); }
 	static getRateLimitKey(request) { return RateLimitSupport.credentialOrIpKey('typerelay-api', request); }
+	// Authenticated users share one bucket across browsers and devices; a NAT'd colleague is never throttled by their traffic.
+	static getUserKey(request) { return request.ctx?.user ? RateLimitSupport.key('typerelay-api', 'user', String(request.ctx.user)) : ApiRateLimit.getRateLimitKey(request); }
 	static shouldSkip(request) { return String(request.method || '').toUpperCase() === 'OPTIONS'; }
 	static isBulkLibraryCreate(request) {
 		if (String(request.method || '').toUpperCase() !== 'POST' || ApiRateLimit.getRequestPath(request) !== '/libraries') return false;
@@ -42,20 +44,20 @@ export class ApiRateLimit {
 		catch (error) { console.warn(JSON.stringify({ event: 'api_rate_limit_store_fallback', prefix, error: error.message })); return undefined; }
 	}
 	static noop() { return (request, response, next) => next(); }
-	static createLimiter(name, limit, skip) {
+	static createLimiter(name, limit, skip, key = ApiRateLimit.getRateLimitKey) {
 		const config = ApiRateLimit.getConfig();
 		if (!config.enabled) return ApiRateLimit.noop();
 		return rateLimit({
 			windowMs: config.windowMs,
 			limit,
-			keyGenerator: request => ApiRateLimit.getRateLimitKey(request),
+			keyGenerator: request => key(request),
 			store: ApiRateLimit.getStore(name, config.windowMs),
 			passOnStoreError: true,
 			standardHeaders: 'draft-7',
 			legacyHeaders: false,
 			skip,
 			handler: (request, response) => {
-				console.warn(JSON.stringify({ event: 'api_rate_limit_exceeded', key: ApiRateLimit.getRateLimitKey(request), method: request.method, path: ApiRateLimit.getRequestPath(request), bucket: name }));
+				console.warn(JSON.stringify({ event: 'api_rate_limit_exceeded', key: key(request), method: request.method, path: ApiRateLimit.getRequestPath(request), bucket: name }));
 				return response.status(429).json({ error: 'Rate limit exceeded. Please slow down and try again later.' });
 			},
 		});
@@ -63,7 +65,9 @@ export class ApiRateLimit {
 	// Every client refreshes each 15 minutes; a per-token bucket keeps refreshes off the per-IP sign-in limit.
 	static tokenLimiter(authLimit) {
 		const refresh = rateLimit({ windowMs: 900000, limit: 300, keyGenerator: request => request.body?.refresh_token ? RateLimitSupport.key('typerelay-refresh', 'token', String(request.body.refresh_token)) : RateLimitSupport.clientIp(request), store: ApiRateLimit.getStore('refresh', 900000), passOnStoreError: true, message: { error: 'Too many token refreshes; try again later.' } });
-		return (request, response, next) => (request.body?.grant_type === 'refresh_token' ? refresh : authLimit)(request, response, next);
+		// A fresh random refresh token gets a fresh bucket, so a per-IP cap bounds client-secret checks and transactions.
+		const perIp = rateLimit({ windowMs: 900000, limit: 600, keyGenerator: request => RateLimitSupport.key('typerelay-refresh', 'ip', RateLimitSupport.clientIp(request)), store: ApiRateLimit.getStore('refresh-ip', 900000), passOnStoreError: true, message: { error: 'Too many token refreshes; try again later.' } });
+		return (request, response, next) => (request.body?.grant_type === 'refresh_token' ? perIp(request, response, error => (error ? next(error) : refresh(request, response, next))) : authLimit(request, response, next));
 	}
 	static createApiLimiters() {
 		const config = ApiRateLimit.getConfig();

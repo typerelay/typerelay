@@ -93,6 +93,9 @@ test('API v2 upload and import routes use the API upload limiter', () => {
 	const limited = ['/api/v2/assets', '/api/v2/assets/remote', '/api/v2/assets/:id/refresh', '/api/v2/import/bundle', '/api/v2/import/:format/preview', '/api/v2/import/preview', '/api/v2/import/:format'];
 	for (const path of limited) assert.deepEqual(routes.find(route => route.path === path && route.methods.includes('post'))?.buckets, ['api-upload'], path);
 	assert.deepEqual(routes.find(route => route.path === '/api/v2/libraries' && route.methods.includes('get')).buckets, []);
+	assert.deepEqual(routes.find(route => route.path === '/api/v2/libraries' && route.methods.includes('post')).buckets, ['api-upload']);
+	assert.deepEqual(routes.find(route => route.path === '/api/v2/assets/:id' && route.methods.includes('put')).buckets, ['api-asset-put']);
+	for (const path of ['/api/v2/sync', '/api/v2/library-view/:id', '/api/v2/assets/presence', '/api/v2/snippets/batch', '/api/v2/libraries/:id/snippets', '/api/v2/statistics/events']) assert.deepEqual(routes.find(route => route.path === path)?.buckets, [], path);
 });
 
 test('Ads are restricted to canonical hosted production and attribution is allowlisted', () => {

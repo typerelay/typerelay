@@ -220,11 +220,15 @@ export class Server {
 		app.patch('/api/v2/statistics/preferences', async (req, res) => res.json(await Statistics.preferences(req.ctx, req.body.scope, req.body)));
 
 		// Same bucket and threshold as the /api/v3 upload limiter.
-		const uploadLimit = ApiRateLimit.createLimiter('api-upload', ApiRateLimit.getConfig().uploadPerMinute);
+		const uploadLimit = ApiRateLimit.createLimiter('api-upload', ApiRateLimit.getConfig().uploadPerMinute, undefined, ApiRateLimit.getUserKey);
+		// Only a library created with snippets or YAML can fetch images in bulk; sync, poll and plain edits stay unlimited.
+		const bulkCreateLimit = ApiRateLimit.createLimiter('api-upload', ApiRateLimit.getConfig().uploadPerMinute, request => !ApiRateLimit.isBulkLibraryCreate(request), ApiRateLimit.getUserKey);
+		// The desktop sync loop uploads every missing image with one PUT each, so it needs more headroom than the other upload routes.
+		const assetPutLimit = ApiRateLimit.createLimiter('api-asset-put', 120, undefined, ApiRateLimit.getUserKey);
 		app.post('/api/v2/assets', uploadLimit, express.raw({ type: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'], limit: '5mb' }), async (req, res) => res.json(await Assets.put(req.ctx, req.body)));
 		app.post('/api/v2/assets/presence', async (req, res) => res.json(await Assets.presence(req.ctx, req.body.ids)));
 		app.patch('/api/v2/assets/:id/sources', async (req, res) => res.json(await Assets.mergeSources(req.ctx, req.params.id, req.body.source_urls)));
-		app.put('/api/v2/assets/:id', express.raw({ type: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'], limit: '2mb' }), async (req, res) => res.json(await Assets.accept(req.ctx, req.body, req.params.id)));
+		app.put('/api/v2/assets/:id', assetPutLimit, express.raw({ type: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'], limit: '2mb' }), async (req, res) => res.json(await Assets.accept(req.ctx, req.body, req.params.id)));
 		app.get('/api/v2/assets/:id', async (req, res) => { const asset = await Assets.get(req.ctx, req.params.id, true); res.set({ 'Content-Type': asset.mime_type, 'Content-Length': String(asset.size), ETag: `"${asset.id}"`, 'Cache-Control': 'private, max-age=31536000, immutable' }).send(asset.data); });
 		app.post('/api/v2/assets/remote', uploadLimit, async (req, res) => res.json(await Assets.remote(req.ctx, req.body.url)));
 		app.post('/api/v2/assets/:id/refresh', uploadLimit, async (req, res) => { const asset = await Assets.get(req.ctx, req.params.id); Support.assert(asset.source_urls?.length, 'Asset has no remote source', 409); res.json(await Assets.remote(req.ctx, asset.source_urls.at(-1))); });
@@ -310,7 +314,7 @@ export class Server {
 		app.post('/api/v2/import/:format/preview', uploadLimit, async (req, res) => { const preview = await Libraries.previewImport(req.params.format, req.body); res.json({ ...preview, html: pug.renderFile('./views/ajax/snippetslab.pug', preview) }); });
 		app.post('/api/v2/import/preview', uploadLimit, async (req, res) => res.json(await Yaml.run(req.body.yaml)));
 		app.post('/api/v2/import/:format', uploadLimit, async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.commitImport(ctx, req.params.format, req.body, session), { format: req.params.format })));
-		app.post('/api/v2/libraries', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, async (ctx, session) => ({ library: await Libraries.create(ctx, req.body, session) }))));
+		app.post('/api/v2/libraries', bulkCreateLimit, async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, async (ctx, session) => ({ library: await Libraries.create(ctx, req.body, session) }))));
 		app.patch('/api/v2/libraries/:id', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.settings(ctx, req.params.id, req.body, session))));
 		app.post('/api/v2/libraries/:id/snippets', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.upload(ctx, req.params.id, req.body, session))));
 		app.get('/api/v2/personal-abbreviations', async (req, res) => res.json(await Server.personalPresentation(req.ctx)));
@@ -394,10 +398,8 @@ export class Server {
 		return server;
 	}
 	static requestOrigin(req) {
-		if (req.boundOrigin) return req.boundOrigin;
-		const protocol = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0].trim().toLowerCase();
-		const host = WhiteLabel.requestHost(req);
-		return host && ['http', 'https'].includes(protocol) ? `${protocol}://${host}` : Auth.origin;
+		// Only a verified custom domain may supply the origin; a forwarded Host header never does.
+		return req.boundOrigin || Auth.origin;
 	}
 	static whiteLabelResult(res, settings) { res.json({ settings, html: pug.renderFile('./views/ajax/white-label.pug', { whiteLabelSettings: settings }), brand_html: pug.renderFile('./views/ajax/brand.pug', { brandUrl: settings.logo_url }) }); }
 	static async whiteLabelAssetUpload(req, res) {

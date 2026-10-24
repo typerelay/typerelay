@@ -248,6 +248,7 @@ test('Team custom hostname verifies DNS, Cloudflare status and request binding',
 		assert.equal(injected.boundAccount, undefined);
 		assert.equal(Server.requestOrigin(injected), Auth.origin);
 	}
+	assert.equal(Server.requestOrigin({ headers: { host: 'evil.test', 'x-forwarded-host': 'evil.test', 'x-forwarded-proto': 'https' } }), Auth.origin);
 });
 
 test('only a DNS-verified custom hostname blocks other accounts', async () => {

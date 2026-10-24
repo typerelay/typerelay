@@ -94,6 +94,43 @@ describe('API rate limits', () => {
 			assert.equal((await post({ grant_type: 'authorization_code' })).status, 429);
 		} finally { await new Promise(resolve => server.close(resolve)); }
 	});
+	it('caps token refreshes per client IP even when every request carries a new refresh token', async () => {
+		const app = express();
+		app.use(express.json());
+		app.post('/oauth/token', ApiRateLimit.tokenLimiter((request, response, next) => next()), (request, response) => response.json({ ok: true }));
+		const server = app.listen(0, '127.0.0.1');
+		await new Promise(resolve => server.once('listening', resolve));
+		const post = body => fetch(`http://127.0.0.1:${server.address().port}/oauth/token`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+		try {
+			for (let index = 0; index < 600; index++) assert.equal((await post({ grant_type: 'refresh_token', refresh_token: 'random-' + index })).status, 200);
+			const limited = await post({ grant_type: 'refresh_token', refresh_token: 'random-600' });
+			assert.equal(limited.status, 429);
+			assert.deepEqual(await limited.json(), { error: 'Too many token refreshes; try again later.' });
+			assert.equal((await post({ grant_type: 'authorization_code' })).status, 200);
+		} finally { await new Promise(resolve => server.close(resolve)); }
+	});
+	it('keys the v2 upload bucket on the authenticated user, then credential, then IP', async () => {
+		Object.assign(process.env, DEFAULTS, { API_RATE_LIMIT_UPLOAD_PER_MINUTE: '1' });
+		const user = request => ApiRateLimit.getUserKey({ headers: {}, ip: '203.0.113.9', ...request });
+		assert.notEqual(user({ ctx: { user: 'one' } }), user({ ctx: { user: 'two' } }));
+		assert.equal(user({ ctx: { user: 'one' } }), user({ ctx: { user: 'one' }, ip: '198.51.100.1', headers: { authorization: 'Bearer secret' } }));
+		assert.equal(user({ headers: { authorization: 'Bearer secret' } }), ApiRateLimit.getRateLimitKey({ headers: { authorization: 'Bearer secret' } }));
+		assert.match(user({}), /^typerelay-api:ip:/);
+		const app = express();
+		app.use(express.json());
+		app.use((request, response, next) => { request.ctx = { user: request.headers['x-user'] }; next(); });
+		app.post('/api/v2/libraries', ApiRateLimit.createLimiter('api-upload', 1, request => !ApiRateLimit.isBulkLibraryCreate(request), ApiRateLimit.getUserKey), (request, response) => response.json({ ok: true }));
+		const server = app.listen(0, '127.0.0.1');
+		await new Promise(resolve => server.once('listening', resolve));
+		const post = (name, body) => fetch(`http://127.0.0.1:${server.address().port}/api/v2/libraries`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-User': name }, body: JSON.stringify(body) });
+		try {
+			const bulk = { snippets: [{ id: 'one' }] };
+			assert.equal((await post('one', bulk)).status, 200);
+			assert.equal((await post('one', bulk)).status, 429);
+			assert.equal((await post('two', bulk)).status, 200);
+			for (let index = 0; index < 3; index++) assert.equal((await post('one', { name: 'Plain' })).status, 200);
+		} finally { await new Promise(resolve => server.close(resolve)); }
+	});
 	it('disables every API bucket together', async () => {
 		Object.assign(process.env, DEFAULTS, { API_RATE_LIMIT_ENABLED: 'false', API_RATE_LIMIT_GENERAL_PER_MINUTE: '0' });
 		const app = express();
