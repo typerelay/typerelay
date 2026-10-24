@@ -116,8 +116,9 @@ export class Server {
 		Admin.mount(app);
 		app.use(AdminSettings.middleware);
 		const authLimit = rateLimit({ windowMs: 900000, limit: 30, keyGenerator: req => RateLimitSupport.clientIp(req), store: ApiRateLimit.getStore('auth', 900000), passOnStoreError: true, message: { error: 'Too many sign-in attempts; try again later.' } });
+		const tokenLimit = ApiRateLimit.tokenLimiter(authLimit);
 		Security.mount(app, authLimit);
-		await PublicApi.mount(app, authLimit);
+		await PublicApi.mount(app, authLimit, tokenLimit);
 		app.post('/auth/login', authLimit, async (req, res) => { await Auth.login(req.body.email, null, { origin: req.boundAccount ? Server.requestOrigin(req) : Auth.origin, account: req.boundAccount, return_to: req.session.return_to && (req.session.return_to.startsWith('/oauth/authorize?') || req.session.return_to.startsWith('/account/delete')) ? req.session.return_to : undefined }); res.json({ message: 'Check your email for a sign-in link.' }); });
 		app.get('/auth/callback', async (req, res) => {
 			res.set('Referrer-Policy', 'no-referrer');
@@ -167,7 +168,7 @@ export class Server {
 			res.status(202).json({ html: pug.renderFile('./views/ajax/account-deletion-receipt.pug') });
 		});
 		app.post('/auth/logout', async (req, res) => { await new Promise(resolve => req.session.destroy(resolve)); res.json({ signed_out: true }); });
-		app.post('/oauth/token', authLimit, async (req, res) => res.json(await Auth.exchange(req.body)));
+		app.post('/oauth/token', tokenLimit, async (req, res) => res.json(await Auth.exchange(req.body)));
 		app.get('/oauth/browser-callback', (req, res) => { res.setHeader('Cache-Control', 'no-store'); res.setHeader('Referrer-Policy', 'no-referrer'); res.render('browser-callback'); });
 		app.get('/oauth/authorize', async (req, res) => {
 			if (!req.session.user) { req.session.return_to = req.originalUrl; return res.render('login', { returnTo: req.originalUrl }); }

@@ -38,7 +38,7 @@ export class PublicApi {
 		const rest = sorted.filter(row => !query.cursor || String(row.id) > String(query.cursor));
 		return { items: rest.slice(0, limit), next_cursor: rest.length > limit ? String(rest[limit - 1].id) : null };
 	}
-	static async mount(app, authLimit) {
+	static async mount(app, authLimit, tokenLimit = authLimit) {
 		const validators = new Map(operations.filter(operation => operation.method !== 'get').map(operation => [operation.id, new Ajv({ strict: false }).compile(ApiSchema.body(operation))]));
 		app.use('/api/v3', (req, res, next) => {
 			const origins = [Auth.origin, 'http://localhost:5173', ...(process.env.API_ALLOWED_ORIGINS || '').split(',')];
@@ -49,7 +49,7 @@ export class PublicApi {
 		app.get('/.well-known/oauth-authorization-server', (req, res) => res.json({ issuer: Auth.origin, authorization_endpoint: Auth.origin + '/integrations/authorize', token_endpoint: Auth.origin + '/integrations/token', registration_endpoint: Auth.origin + '/integrations/register', response_types_supported: ['code'], grant_types_supported: ['authorization_code', 'refresh_token'], token_endpoint_auth_methods_supported: ['none', 'client_secret_post'], code_challenge_methods_supported: ['S256'], scopes_supported: Auth.scopes }));
 		app.get('/.well-known/oauth-protected-resource/api/v3', (req, res) => res.json({ resource: Auth.apiResource(), authorization_servers: [Auth.origin], scopes_supported: Auth.scopes, bearer_methods_supported: ['header'] }));
 		app.post('/integrations/register', authLimit, async (req, res) => res.status(201).json(await Auth.registerIntegration(req.body)));
-		app.post('/integrations/token', authLimit, async (req, res) => { res.set('Cache-Control', 'no-store'); res.json(await Auth.exchangeIntegration(req.body)); });
+		app.post('/integrations/token', tokenLimit, async (req, res) => { res.set('Cache-Control', 'no-store'); res.json(await Auth.exchangeIntegration(req.body)); });
 		app.get('/integrations/authorize', async (req, res) => {
 			const { client, scopes } = await Auth.integrationRequest(req.query);
 			if (!req.session.user) { req.session.return_to = req.originalUrl; return res.render('login', { returnTo: req.originalUrl }); }

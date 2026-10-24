@@ -74,6 +74,26 @@ describe('API rate limits', () => {
 			assert.equal((await fetch(`${base}/libraries`, { method: 'OPTIONS' })).status, 200);
 		} finally { await new Promise(resolve => server.close(resolve)); }
 	});
+	it('limits token refreshes per refresh token, separately from the sign-in limiter', async () => {
+		let signIns = 0;
+		const app = express();
+		app.use(express.json());
+		app.post('/oauth/token', ApiRateLimit.tokenLimiter((request, response, next) => ++signIns > 30 ? response.status(429).json({ error: 'limited' }) : next()), (request, response) => response.json({ ok: true }));
+		const server = app.listen(0, '127.0.0.1');
+		await new Promise(resolve => server.once('listening', resolve));
+		const post = body => fetch(`http://127.0.0.1:${server.address().port}/oauth/token`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+		try {
+			for (let index = 0; index < 40; index++) assert.equal((await post({ grant_type: 'refresh_token', refresh_token: 'token-' + index })).status, 200);
+			assert.equal(signIns, 0);
+			for (let index = 0; index < 300; index++) assert.equal((await post({ grant_type: 'refresh_token', refresh_token: 'shared' })).status, 200);
+			const limited = await post({ grant_type: 'refresh_token', refresh_token: 'shared' });
+			assert.equal(limited.status, 429);
+			assert.deepEqual(await limited.json(), { error: 'Too many token refreshes; try again later.' });
+			assert.equal((await post({ grant_type: 'refresh_token', refresh_token: 'other' })).status, 200);
+			for (let index = 0; index < 30; index++) assert.equal((await post({ grant_type: 'authorization_code' })).status, 200);
+			assert.equal((await post({ grant_type: 'authorization_code' })).status, 429);
+		} finally { await new Promise(resolve => server.close(resolve)); }
+	});
 	it('disables every API bucket together', async () => {
 		Object.assign(process.env, DEFAULTS, { API_RATE_LIMIT_ENABLED: 'false', API_RATE_LIMIT_GENERAL_PER_MINUTE: '0' });
 		const app = express();

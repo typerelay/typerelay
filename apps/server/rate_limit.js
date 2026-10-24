@@ -60,6 +60,11 @@ export class ApiRateLimit {
 			},
 		});
 	}
+	// Every client refreshes each 15 minutes; a per-token bucket keeps refreshes off the per-IP sign-in limit.
+	static tokenLimiter(authLimit) {
+		const refresh = rateLimit({ windowMs: 900000, limit: 300, keyGenerator: request => request.body?.refresh_token ? RateLimitSupport.key('typerelay-refresh', 'token', String(request.body.refresh_token)) : RateLimitSupport.clientIp(request), store: ApiRateLimit.getStore('refresh', 900000), passOnStoreError: true, message: { error: 'Too many token refreshes; try again later.' } });
+		return (request, response, next) => (request.body?.grant_type === 'refresh_token' ? refresh : authLimit)(request, response, next);
+	}
 	static createApiLimiters() {
 		const config = ApiRateLimit.getConfig();
 		return [
