@@ -103,6 +103,7 @@ snippetSchema.index({ account: 1, id: 1 }, { unique: true });
 snippetSchema.index({ library: 1, trigger: 1 }, { unique: true, partialFilterExpression: { state: 'active', trigger: { $type: 'string', $gt: '' } } });
 snippetSchema.index({ state: 1, expires_at: 1, account: 1 });
 snippetSchema.index({ account: 1, state: 1, purge_sequence: 1 });
+snippetSchema.index({ account: 1, 'content.assets': 1 });
 Library.schema.index({ state: 1, expires_at: 1, account: 1 });
 Library.schema.index({ account: 1, state: 1, purge_sequence: 1 });
 const Snippet = mongoose.model('Snippet', snippetSchema);
@@ -111,7 +112,7 @@ personalAbbreviationSchema.index({ account: 1, user: 1, snippet: 1 }, { unique: 
 export const PersonalAbbreviation = mongoose.model('PersonalAbbreviation', personalAbbreviationSchema);
 const snippetAssetSchema = new mongoose.Schema({ account: objectid, id: String, data: { type: Buffer, select: false }, mime_type: String, size: Number, width: Number, height: Number, animated: Boolean, source_urls: [String], staged_by: [objectid], last_referenced_at: Date }, { timestamps: true });
 snippetAssetSchema.index({ account: 1, id: 1 }, { unique: true });
-snippetAssetSchema.index({ account: 1, last_referenced_at: 1 });
+snippetAssetSchema.index({ account: 1, size: 1 });
 snippetAssetSchema.index({ updatedAt: 1, account: 1 });
 const SnippetAsset = mongoose.model('SnippetAsset', snippetAssetSchema);
 const Migration = mongoose.model('Migration', new mongoose.Schema({ key: { type: String, unique: true }, completed: Boolean }));
@@ -121,8 +122,9 @@ Device.schema.add({ sso_revision: Number });
 const change = new mongoose.Schema({ account: objectid, sequence: Number, library: objectid, kind: String, departures: [String] });
 change.index({ account: 1, sequence: 1 }, { unique: true });
 const Change = mongoose.model('Change', change);
-const operation = new mongoose.Schema({ account: objectid, user: objectid, operation: String, fingerprint: String, result: mixed });
+const operation = new mongoose.Schema({ account: objectid, user: objectid, operation: String, fingerprint: String, result: mixed, expires: Date });
 operation.index({ account: 1, user: 1, operation: 1 }, { unique: true });
+operation.index({ expires: 1 }, { expireAfterSeconds: 0 });
 const Operation = mongoose.model('Operation', operation);
 const Conflict = mongoose.model('Conflict', new mongoose.Schema({ account: objectid, library: objectid, user: objectid, snippet: String, local: mixed, base: mixed, server: mixed, resolved: { type: Boolean, default: false } }, { timestamps: true }));
 
@@ -138,7 +140,8 @@ export const ApiAudit = mongoose.model('ApiAudit', secondaryReads(new mongoose.S
 export const SystemSetting = mongoose.model('SystemSetting', secondaryReads(new mongoose.Schema({ key: { type: String, unique: true }, value: mixed, revision: { type: Number, default: 0 } }, { timestamps: true })));
 export const AdminAudit = mongoose.model('AdminAudit', secondaryReads(new mongoose.Schema({ account: objectid, actor: String, operation: String, status: Number }, { timestamps: true })));
 export const AccountLease = mongoose.model('AccountLease', new mongoose.Schema({ account: { type: objectid, index: true }, token: { type: String, unique: true }, expires: { type: Date, expires: 0 } }));
-for (const model of [Group, Ticket, Library, Device, Conflict, ApiAudit, AdminAudit]) model.schema.index({ account: 1 });
+for (const model of [Group, Ticket, Device, ApiAudit, AdminAudit]) model.schema.index({ account: 1 });
+Conflict.schema.index({ account: 1, library: 1 });
 for (const field of ['access', 'refresh']) Device.schema.index({ [field]: 1 }, { sparse: true });
 IntegrationToken.schema.index({ expires: 1 }, { expireAfterSeconds: 0 });
 Ticket.schema.index({ expires: 1 }, { expireAfterSeconds: 0 });

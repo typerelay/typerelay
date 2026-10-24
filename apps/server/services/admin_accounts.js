@@ -184,12 +184,12 @@ export class AdminAccounts {
 					const libraries = await Models.Library.find({ account: accountId, creator: userId }).session(session).lean();
 					const libraryIds = libraries.map(library => library._id);
 					const snippets = await Models.Snippet.find({ library: { $in: libraryIds } }).select('id content').session(session).lean();
-					const conflicts = await Models.Conflict.find({ $or: [{ library: { $in: libraryIds } }, { account: accountId, user: userId }] }).select('local base server').session(session).lean();
+					const conflicts = await Models.Conflict.find({ account: accountId, $or: [{ library: { $in: libraryIds } }, { user: userId }] }).select('local base server').session(session).lean();
 					const assetIds = Libraries.assetReferences([snippets, conflicts]);
 					await Models.PersonalAbbreviation.deleteMany({ account: accountId, snippet: { $in: snippets.map(snippet => snippet.id) } }, { session });
 					await Models.Operation.deleteMany({ account: accountId, $or: [{ 'result.library_id': { $in: libraryIds.map(String) } }, { 'result.library_ids': { $in: libraryIds.map(String) } }] }, { session });
 					await Models.Snippet.deleteMany({ library: { $in: libraryIds } }, { session });
-					await Models.Conflict.deleteMany({ $or: [{ library: { $in: libraryIds } }, { account: accountId, user: userId }] }, { session });
+					await Models.Conflict.deleteMany({ account: accountId, $or: [{ library: { $in: libraryIds } }, { user: userId }] }, { session });
 					await Models.Library.deleteMany({ _id: { $in: libraryIds } }, { session });
 					const references = [...libraryIds, ...libraryIds.map(String)];
 					await Models.MigrationBackup.deleteMany({ $or: [{ 'payload.library': { $in: references } }, { source_collection: 'libraries', 'payload._id': { $in: references } }, { 'payload.result.library._id': { $in: references } }, { 'payload.result.library_id': { $in: references } }, { 'payload.result.library_ids': { $in: references } }] }, { session });

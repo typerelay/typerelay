@@ -138,7 +138,7 @@ test('same snippet and edit/delete retain conflict; explicit resolution', async 
 	const body = { choice: 'local', base_revision: result.library.revision };
 	const resolved = await Libraries.mutate(Fixture.owner, randomUUID(), body, (ctx, session) => Libraries.resolve(ctx, String(conflict._id), body, session));
 	assert.equal(resolved.library.snippets.length, 1);
-	assert.equal((await Conflict.findById(conflict._id).lean()).resolved, true);
+	assert.equal(await Conflict.findById(conflict._id).lean(), null);
 });
 test('cursor access manifest reflects revocation and library deletion', async () => {
 	let { library } = await Fixture.create(Fixture.owner);

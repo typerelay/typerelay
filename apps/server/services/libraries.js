@@ -58,6 +58,9 @@ export class Libraries {
 		return { personal_abbreviations: await Libraries.personalState(ctx, session), personal_snippet: id, personal_library: String(library._id) };
 	}
 	static retention = 30 * 86400000;
+	static receiptRetention = 30 * 86400000;
+	// Legacy receipts have no expiry; they stay valid until the migration stamps them.
+	static live() { return { expires: { $not: { $lte: new Date() } } }; }
 	static trashFields(actor, now = new Date()) { return { state: 'trashed', trashed_at: now, expires_at: new Date(+now + Libraries.retention), trashed_by: actor }; }
 	static content(value) {
 		const content = value?.content || (value?.type === 'rich_text' ? { version: 2, type: 'rich_text', markdown: value?.replace, variables: value?.variables || {} } : { version: 1, type: value?.type || 'plain_text', language: value?.language || 'plain_text', text: value?.replace, variables: value?.variables });
@@ -74,7 +77,7 @@ export class Libraries {
 	}
 	static preparedEntry = Symbol('prepared entry');
 	static preparedYaml = Symbol('prepared YAML');
-	static async prepared(ctx,entry,session=null){if(entry?.[Libraries.preparedEntry])return entry[Libraries.preparedEntry];if(entry?.content?.type==='rich_text')return{...entry,content:await RichText.prepare(ctx,entry.content,session)};if(entry?.type==='rich_text')return{...entry,content:await RichText.prepare(ctx,{version:2,type:'rich_text',markdown:entry.replace,variables:entry.variables||{}},session)};return entry;}
+	static async prepared(ctx,entry,session=null,budget=undefined){if(entry?.[Libraries.preparedEntry])return entry[Libraries.preparedEntry];if(entry?.content?.type==='rich_text')return{...entry,content:await RichText.prepare(ctx,entry.content,session,budget)};if(entry?.type==='rich_text')return{...entry,content:await RichText.prepare(ctx,{version:2,type:'rich_text',markdown:entry.replace,variables:entry.variables||{}},session,budget)};return entry;}
 	static yaml(entry) { const value = Libraries.value(entry); return { trigger: value.trigger, title: value.title, replace: value.content.type === 'rich_text' ? value.content.markdown : value.content.text, type: value.content.type, language: value.content.language || 'plain_text', variables: value.content.variables || {} }; }
 	// Bundles carry their images; YAML exports cannot.
 	static exportEntry(entry,bundle=false){const value=Libraries.value(entry);if(value.content.type==='rich_text'){Support.assert(bundle===true||!value.content.assets.length,'Export rich text with images as a TypeRelay bundle',409);return{trigger:value.trigger,title:value.title,replace:value.content.markdown,type:'rich_text',variables:value.content.variables};}return Libraries.yaml(value);}
@@ -84,9 +87,14 @@ export class Libraries {
 		const entries = records || await Snippet.find({ library: library._id, state: { $ne: 'purged' } }).sort({ position: 1, id: 1 }).session(session || null).lean();
 		return { ...library, snippets: entries.filter(entry => entry.state === 'active').sort((a, b) => (new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0))).map(Libraries.entry), records: entries.map(Libraries.entry) };
 	}
-	static async get(ctx, id, session, includeTrash = false) {
+	static async raw(ctx, id, session) {
 		const library = await Library.findOne({ _id: Support.id(id), account: ctx.account }).session(session || null).lean();
-		Support.assert(library && Support.access(ctx, library).read && (includeTrash || library.state === 'active'), 'Library not found', 404);
+		Support.assert(library && Support.access(ctx, library).read, 'Library not found', 404);
+		return library;
+	}
+	static async get(ctx, id, session, includeTrash = false) {
+		const library = await Libraries.raw(ctx, id, session);
+		Support.assert(includeTrash || library.state === 'active', 'Library not found', 404);
 		return (await Libraries.personalize(ctx, [await Libraries.hydrate(library, session)], session))[0];
 	}
 	static async list(ctx, session) {
@@ -392,9 +400,9 @@ export class Libraries {
 		return result;
 	}
 	// Fetch remote and embedded images before the transaction locks the account.
-	static async stage(ctx, input) {
+	static async stage(ctx, input, budget = Assets.budget()) {
 		if (!input || typeof input !== 'object') return;
-		const prepare = async value => { if (value?.content?.type === 'rich_text' || value?.type === 'rich_text') { delete value[Libraries.preparedEntry]; value[Libraries.preparedEntry] = await Libraries.prepared(ctx, value); } };
+		const prepare = async value => { if (value?.content?.type === 'rich_text' || value?.type === 'rich_text') { delete value[Libraries.preparedEntry]; value[Libraries.preparedEntry] = await Libraries.prepared(ctx, value, null, budget); } };
 		if (input.yaml !== undefined) input[Libraries.preparedYaml] = (await Yaml.run(input.yaml)).matches;
 		for (const entry of input[Libraries.preparedYaml] || (Array.isArray(input.snippets) ? input.snippets : [])) await prepare(entry);
 		for (const row of [...(Array.isArray(input.changes) ? input.changes : []), ...(Array.isArray(input.items) ? input.items : []), input]) if (row?.value) await prepare(row.value);
@@ -402,15 +410,16 @@ export class Libraries {
 	static async mutate(ctx, operation, body, action, options = {}) {
 		Support.assert(typeof operation === 'string' && /^[a-zA-Z0-9_-]{16,128}$/.test(operation), 'Stable operation ID required');
 		const fingerprint = Support.hash(JSON.stringify(body));
-		const replay = await Operation.findOne({ account: ctx.account, user: ctx.user, operation }).select('fingerprint').lean();
+		const replay = await Operation.findOne({ account: ctx.account, user: ctx.user, operation, ...Libraries.live() }).select('fingerprint').lean();
 		if (replay) Support.assert(replay.fingerprint === fingerprint, 'Operation ID already used with different content', 409);
 		if (!replay) {
 			const input = options.input ?? body?.body ?? body;
+			const budget = Assets.budget();
 			const format = body?.operation === 'commit_import' ? body.params.format : options.format;
 			if (format) {
 				const preview = await Libraries.previewImport(format, input);
 				const selected = Libraries.importSelection(preview, input);
-				for (const [index, entry] of preview.entries.entries()) if (selected.has(entry.key) && !entry.error) preview.entries[index] = await Libraries.prepared(ctx, entry);
+				for (const [index, entry] of preview.entries.entries()) if (selected.has(entry.key) && !entry.error) preview.entries[index] = await Libraries.prepared(ctx, entry, null, budget);
 				input[Libraries.importPreview] = preview;
 			}
 			const conflictId = body?.operation === 'resolve_conflict' ? body.params.id : options.conflict;
@@ -424,7 +433,9 @@ export class Libraries {
 		await mongoose.connection.transaction(async session => {
 			await Account.updateOne({ _id: ctx.account }, { $inc: { sequence: 1 } }, { session });
 			ctx = await Support.context(ctx.user, ctx.account, session);
-			const prior = await Operation.findOne({ account: ctx.account, user: ctx.user, operation }).session(session).lean();
+			let prior = await Operation.findOne({ account: ctx.account, user: ctx.user, operation }).session(session).lean();
+			// An expired receipt can outlive its TTL by a minute; the same ID then starts a new operation.
+			if (prior?.expires <= new Date()) { await Operation.deleteOne({ _id: prior._id }, { session }); prior = null; }
 			if (prior) {
 				Support.assert(prior.fingerprint === fingerprint, 'Operation ID already used with different content', 409);
 				result = await Libraries.receipt(ctx, prior.result, session);
@@ -436,7 +447,7 @@ export class Libraries {
 			if (stored.libraries) { stored.library_ids = stored.libraries.map(library => library._id); delete stored.libraries; }
 			delete stored.html;
 			if (stored.affected) stored.affected = stored.affected.map(({ id, type, library, revision }) => ({ id, type, library, revision }));
-			await Operation.create([{ account: ctx.account, user: ctx.user, operation, fingerprint, result: stored }], { session });
+			await Operation.create([{ account: ctx.account, user: ctx.user, operation, fingerprint, result: stored, expires: new Date(Date.now() + Libraries.receiptRetention) }], { session });
 		});
 		return result;
 	}
@@ -514,10 +525,11 @@ export class Libraries {
 		Support.assert(body.action !== 'move' || !Support.equal(source._id, destination._id), 'Choose another library');
 		const ids = body.items.map(item => item.id);
 		Support.assert(new Set(ids).size === ids.length, 'Repeated snippet selection');
-		const selected = source.snippets.filter(entry => ids.includes(entry.id));
+		const wanted = new Set(ids); const requested = new Map(body.items.map(item => [item.id, item]));
+		const selected = source.snippets.filter(entry => wanted.has(entry.id));
 		Support.assert(selected.length === ids.length, 'Selection changed; select the snippets again', 409);
 		for (const record of selected) {
-			const item = body.items.find(item => item.id === record.id);
+			const item = requested.get(record.id);
 			Support.assert(item.base_revision === record.revision, 'A selected snippet changed; review the selection', 409);
 			Support.assert(item.value === undefined || (body.action === 'move' && selected.length === 1), 'Edits are supported only for a single-snippet move');
 		}
@@ -530,7 +542,7 @@ export class Libraries {
 			let position = (last?.position ?? -1) + 1;
 			const writes = [];
 			for (const record of selected) {
-				const item = body.items.find(item => item.id === record.id);
+				const item = requested.get(record.id);
 				const change = item.value === undefined ? {} : Libraries.value(await Libraries.prepared(ctx,item.value,session), record.content);
 				if (item.value !== undefined) await Libraries.validate([change], ctx, session);
 				writes.push({ updateOne: { filter: { _id: record._id }, update: { $set: { library: destination._id, position: position++, ...change }, $inc: { revision: 1 } }, timestamps: item.value !== undefined } });
@@ -554,13 +566,14 @@ export class Libraries {
 		const now = new Date();
 		const libraries = await Library.find({ account: ctx.account, state: { $ne: 'purged' } }).session(session || null).lean();
 		const editable = libraries.filter(library => library.state === 'active' && Support.access(ctx, library).edit);
-		const entries = await Snippet.find({ library: { $in: editable.map(library => library._id) }, state: 'trashed', expires_at: { $gt: now } }).session(session || null).lean();
+		const entries = new Map();
+		for (const entry of await Snippet.find({ account: ctx.account, library: { $in: editable.map(library => library._id) }, state: 'trashed', expires_at: { $gt: now } }).session(session || null).lean()) { const key = String(entry.library); if (!entries.has(key)) entries.set(key, []); entries.get(key).push(entry); }
 		for (const library of libraries) {
 			const access = Support.access(ctx, library);
 			if (!access.read) continue;
 			if (library.state === 'trashed' && library.expires_at > now && access.manage) rows.push({ type: 'library', id: String(library._id), library: String(library._id), name: library.name, revision: library.revision, expires_at: library.expires_at, can_restore: true, can_purge: true });
 			if (library.state !== 'active' || !access.edit) continue;
-			for (const entry of entries.filter(entry => Support.equal(entry.library, library._id))) rows.push({ type: 'snippet', id: entry.id, library: String(library._id), name: entry.title || entry.trigger || 'Untitled snippet', library_name: library.name, revision: entry.revision, expires_at: entry.expires_at, can_restore: true, can_purge: access.manage });
+			for (const entry of entries.get(String(library._id)) || []) rows.push({ type: 'snippet', id: entry.id, library: String(library._id), name: entry.title || entry.trigger || 'Untitled snippet', library_name: library.name, revision: entry.revision, expires_at: entry.expires_at, can_restore: true, can_purge: access.manage });
 		}
 		return rows;
 	}
@@ -580,24 +593,28 @@ export class Libraries {
 		for (const library of libraries) { const size = Buffer.byteLength(JSON.stringify(matches.slice(offset, offset + library.snippets.length))); Support.assert(size <= 1048576, 'Library exceeds the engine limit', 409); total += size; offset += library.snippets.length; }
 		Support.assert(total <= 8 * 1048576, 'Active snippets exceed the engine limit', 409);
 	}
-	static async purge(library, entry, session) {
+	static async directory(account, session) { return { groups: await Group.find({ account }).session(session).lean(), members: await Member.find({ account }).session(session).lean() }; }
+	// entry: one snippet, several snippets of this library, or null for the whole library. One change per call keeps tombstones retryable.
+	static async purge(library, entry, session, directory = null) {
+		const entries = entry ? [].concat(entry) : null;
 		const purge_sequence = await Support.change(library.account, library._id, 'purge', session);
-		const filter = entry ? { library: library._id, id: entry.id } : { library: library._id };
-		const ids = (await Snippet.find(filter).select('id').session(session).lean()).map(row => row.id);
+		const ids = entries ? entries.map(row => row.id) : (await Snippet.find({ library: library._id }).select('id').session(session).lean()).map(row => row.id);
+		const filter = entries ? { library: library._id, id: { $in: ids } } : { library: library._id };
 		await PersonalAbbreviation.deleteMany({ account: library.account, snippet: { $in: ids } }).session(session);
 		await Snippet.updateMany(filter, { $set: { state: 'purged', purge_sequence }, $inc: { revision: 1 }, $unset: { title: 1, trigger: 1, content: 1, position: 1, trashed_by: 1, trashed_at: 1, expires_at: 1 } }, { session });
-		await Conflict.deleteMany({ library: library._id, ...(entry ? { snippet: { $in: ids } } : {}) }, { session });
-		if (!entry) {
+		await Conflict.deleteMany({ account: library.account, library: library._id, ...(entries ? { snippet: { $in: ids } } : {}) }, { session });
+		if (!entries) {
 			const readers = [];
-			const groups = await Group.find({ account: library.account }).session(session).lean();
-			for (const member of await Member.find({ account: library.account }).session(session).lean()) if (Support.access({ account: String(library.account), user: String(member.user), role: member.role, groups: groups.filter(group => group.users.some(user => Support.equal(user, member.user))).map(group => String(group._id)) }, library).read) readers.push(member.user);
+			const { groups, members } = directory || await Libraries.directory(library.account, session);
+			for (const member of members) if (Support.access({ account: String(library.account), user: String(member.user), role: member.role, groups: groups.filter(group => group.users.some(user => Support.equal(user, member.user))).map(group => String(group._id)) }, library).read) readers.push(member.user);
 			await Library.updateOne({ _id: library._id }, { $set: { state: 'purged', purge_sequence, purge_readers: readers }, $unset: { name: 1, members: 1, groups: 1, shared: 1, editable: 1, creator: 1, trashed_at: 1, trashed_by: 1, expires_at: 1 } }, { session });
 		}
 		await Library.updateOne({ _id: library._id }, { $inc: { revision: 1 } }, { session });
 	}
 	static async trashAction(ctx, target, action, session) {
 		Support.assert(['library', 'snippet'].includes(target.type) && ['trash', 'restore', 'purge'].includes(action), 'Invalid Trash action');
-		const library = await Libraries.get(ctx, target.library, session, true);
+		// Purging needs neither the personalized account-wide view nor the snippets.
+		const library = action === 'purge' ? await Libraries.raw(ctx, target.library, session) : await Libraries.get(ctx, target.library, session, true);
 		const access = Support.access(ctx, library);
 		Support.assert((target.type === 'library' || action === 'purge') ? access.manage : access.edit, 'Not permitted to change this Trash item', 403);
 		const record = target.type === 'library' ? library : await Snippet.findOne({ library: library._id, id: target.id }).session(session).lean();
@@ -622,14 +639,30 @@ export class Libraries {
 		const current = await Library.findById(library._id).session(session).lean();
 		return { ...(current.state === 'purged' ? { purged: [String(library._id)] } : { library: Libraries.view(ctx, await Libraries.hydrate(current, session)) }), affected: [target] };
 	}
+	// Validates the whole selection against one snapshot, then purges once per library instead of once per target.
 	static async empty(ctx, targets, session) {
 		Support.assert(Array.isArray(targets) && targets.length <= 10000, 'Invalid Trash selection');
-		const affected = [];
+		const libraryIds = [...new Set(targets.map(target => Support.id(target?.library)))];
+		const libraries = new Map((await Library.find({ _id: { $in: libraryIds }, account: ctx.account }).session(session).lean()).map(library => [String(library._id), library]));
+		const records = new Map((await Snippet.find({ account: ctx.account, library: { $in: libraryIds }, id: { $in: targets.filter(target => target.type === 'snippet').map(target => String(target.id)) } }).session(session).lean()).map(row => [row.library + ':' + row.id, row]));
+		const batches = new Map(); const seen = new Set();
 		for (const target of targets) {
-			await Libraries.trashAction(ctx, target, 'purge', session);
-			affected.push(target);
+			Support.assert(['library', 'snippet'].includes(target.type), 'Invalid Trash action');
+			const library = libraries.get(target.library);
+			Support.assert(library && Support.access(ctx, library).read, 'Library not found', 404);
+			Support.assert(Support.access(ctx, library).manage, 'Not permitted to change this Trash item', 403);
+			const record = target.type === 'library' ? library : records.get(target.library + ':' + target.id);
+			Support.assert(record && record.state !== 'purged', 'Item permanently removed', 410);
+			Support.assert(record.revision === target.revision, 'Item changed; review Trash again', 409);
+			Support.assert(record.state === 'trashed' && !seen.has(String(record._id)), 'Item is no longer in the expected state', 409);
+			seen.add(String(record._id));
+			if (!batches.has(target.library)) batches.set(target.library, { library, whole: false, snippets: [] });
+			if (target.type === 'library') batches.get(target.library).whole = true; else batches.get(target.library).snippets.push(record);
 		}
-		return { affected };
+		for (const batch of batches.values()) Support.assert(!batch.whole || !batch.snippets.length, 'Item changed; review Trash again', 409);
+		const directory = [...batches.values()].some(batch => batch.whole) ? await Libraries.directory(ctx.account, session) : null;
+		for (const batch of batches.values()) await Libraries.purge(batch.library, batch.whole ? null : batch.snippets, session, directory);
+		return { affected: targets };
 	}
 	static assetReferences(values) {
 		const referenced = new Set(); const collect = value => { if (!value || typeof value !== 'object') return; if (value.type === 'rich_text' && Array.isArray(value.assets)) for (const id of value.assets) referenced.add(id); for (const item of Object.values(value)) collect(item); };
@@ -640,35 +673,57 @@ export class Libraries {
 		const conflicts = await Conflict.find({ account, resolved: false }).select('local base server').session(session).lean();
 		await SnippetAsset.deleteMany({ account, $and: [filter, { id: { $nin: Libraries.assetReferences([snippets, conflicts]) } }] }, { session });
 	}
+	// Chunks keep each transaction short; every chunk commits its own tombstones, so a retry resumes where it stopped.
+	static purgeChunk = { libraries: 20, snippets: 200 };
+	static async purgeExpired(account, summary) {
+		for (const kind of ['libraries', 'snippets']) {
+			const limit = Libraries.purgeChunk[kind]; let after = null;
+			do {
+				const step = await mongoose.connection.transaction(async session => {
+					const locked = await Account.updateOne({ _id: account, ...AccountAccess.available }, { $inc: { sequence: 1 } }, { session });
+					if (!locked.matchedCount) return { count: 0, last: null };
+					const filter = { account, state: 'trashed', expires_at: { $lte: new Date() }, ...(after ? { _id: { $gt: after } } : {}) };
+					const entries = await (kind === 'libraries' ? Library : Snippet).find(filter).sort({ _id: 1 }).limit(limit).session(session).lean();
+					let count = 0;
+					if (kind === 'libraries') {
+						const directory = entries.length ? await Libraries.directory(account, session) : null;
+						for (const library of entries) { await Libraries.purge(library, null, session, directory); count++; }
+					} else {
+						const parents = new Map((await Library.find({ _id: { $in: entries.map(entry => entry.library) } }).session(session).lean()).map(library => [String(library._id), library]));
+						const groups = new Map();
+						for (const entry of entries) { const key = String(entry.library); if (!groups.has(key)) groups.set(key, []); groups.get(key).push(entry); }
+						for (const [key, rows] of groups) if (parents.has(key) && parents.get(key).state !== 'purged') { await Libraries.purge(parents.get(key), rows, session); count += rows.length; }
+					}
+					return { count, last: entries.length === limit ? entries.at(-1)._id : null };
+				});
+				summary[kind] += step.count; after = step.last;
+			} while (after);
+		}
+	}
+	// Only accounts with unreferenced stale images need the full reference scan, and a failure must not undo purging.
+	static async sweepAssets(account, now) {
+		const stale = { updatedAt: { $lte: new Date(+now - Libraries.retention) } };
+		const old = (await SnippetAsset.find({ account, ...stale }).select('id').lean()).map(row => row.id);
+		if (!old.length) return;
+		const used = new Set(await Snippet.distinct('content.assets', { account, state: { $ne: 'purged' }, 'content.assets': { $in: old } }));
+		const unused = old.filter(id => !used.has(id));
+		if (!unused.length) return;
+		await mongoose.connection.transaction(async session => {
+			const locked = await Account.updateOne({ _id: account, ...AccountAccess.available }, { $inc: { sequence: 1 } }, { session });
+			if (locked.matchedCount) await Libraries.cleanupAssets(account, session, { ...stale, id: { $in: unused } });
+		});
+	}
 	static async cleanup() {
 		const summary = { libraries: 0, snippets: 0, failed: 0 };
 		const now = new Date();
 		const expired = { state: 'trashed', expires_at: { $lte: now } };
 		const accounts = [...new Set((await Library.distinct('account', expired)).concat(await Snippet.distinct('account', expired), await SnippetAsset.distinct('account', { updatedAt: { $lte: new Date(+now - Libraries.retention) } })).map(String))];
 		for (const account of await Account.find({ ...AccountAccess.available, _id: { $in: accounts } }).select('_id').lean()) {
-			try {
-				const purged = await mongoose.connection.transaction(async session => {
-					const locked = await Account.updateOne({ _id: account._id, ...AccountAccess.available }, { $inc: { sequence: 1 } }, { session });
-					if (!locked.matchedCount) return { libraries: 0, snippets: 0 };
-					const now = new Date();
-					const libraries = await Library.find({ account: account._id, state: 'trashed', expires_at: { $lte: now } }).session(session).lean();
-					for (const library of libraries) await Libraries.purge(library, null, session);
-					let snippets = 0;
-					const entries = await Snippet.find({ account: account._id, state: 'trashed', expires_at: { $lte: now } }).session(session).lean();
-					const parents = new Map((await Library.find({ _id: { $in: entries.map(entry => entry.library) } }).session(session).lean()).map(library => [String(library._id), library]));
-					for (const entry of entries) {
-						const library = parents.get(String(entry.library));
-						if (library && library.state !== 'purged') {
-							await Libraries.purge(library, entry, session);
-							snippets++;
-						}
-					}
-					await Libraries.cleanupAssets(account._id, session, { updatedAt: { $lte: new Date(+now - Libraries.retention) } });
-					return { libraries: libraries.length, snippets };
-				});
-				summary.libraries += purged.libraries;
-				summary.snippets += purged.snippets;
-			} catch (error) { console.error('Trash cleanup failed for account ' + account._id + ': ' + error.message); summary.failed++; }
+			let failed = false;
+			for (const [name, task] of [['Trash', () => Libraries.purgeExpired(account._id, summary)], ['Image', () => Libraries.sweepAssets(account._id, now)]]) {
+				try { await task(); } catch (error) { console.error(name + ' cleanup failed for account ' + account._id + ': ' + error.message); failed = true; }
+			}
+			if (failed) summary.failed++;
 		}
 		return summary;
 	}
@@ -689,12 +744,14 @@ export class Libraries {
 			const records = await Snippet.find({ library: { $in: selected.map(library => library._id) }, state: { $ne: 'purged' } }).sort({ position: 1, id: 1 }).session(session).lean();
 			const libraries = await Promise.all(selected.map(async library => Libraries.view(ctx, await Libraries.hydrate(library, session, records.filter(record => Support.equal(record.library, library._id))))));
 			const purges = cursor === 0 ? {} : { purge_sequence: { $gt: cursor, $lte: account.sequence } };
-			const tombstones = await Snippet.find({ account: ctx.account, library: { $in: visible.map(row => row._id) }, state: 'purged', ...purges }).select('library id revision state').session(session).lean();
+			// Every purge writes a change, so an incremental sync without changes has no tombstones to send.
+			const quiet = cursor > 0 && !changes.length;
+			const tombstones = quiet ? [] : await Snippet.find({ account: ctx.account, library: { $in: visible.map(row => row._id) }, state: 'purged', ...purges }).select('library id revision state').session(session).lean();
 			const conflicts = await Conflict.find({ account: ctx.account, resolved: false, library: { $in: visible.filter(library => Support.access(ctx, library).edit).map(library => library._id) } }).session(session).lean();
-			const purged = (await Library.find({ account: ctx.account, state: 'purged', purge_readers: ctx.user, ...purges }).select('_id').session(session).lean()).map(row => String(row._id));
+			const purged = quiet ? [] : (await Library.find({ account: ctx.account, state: 'purged', purge_readers: ctx.user, ...purges }).select('_id').session(session).lean()).map(row => String(row._id));
 			const visibleIds = new Set(visible.map(library => String(library._id)));
 			const candidates = changes.filter(change => visibleIds.has(String(change.library))).flatMap(change => (change.departures || []).map(id => ({ library: String(change.library), id })));
-			const locations = new Map((await Snippet.find({ account: ctx.account, id: { $in: [...new Set(candidates.map(item => item.id))] } }).select('id library').session(session).lean()).map(record => [record.id, String(record.library)]));
+			const locations = new Map(candidates.length ? (await Snippet.find({ account: ctx.account, id: { $in: [...new Set(candidates.map(item => item.id))] } }).select('id library').session(session).lean()).map(record => [record.id, String(record.library)]) : []);
 			const departures = [...new Map(candidates.filter(item => locations.has(item.id) && locations.get(item.id) !== item.library).map(item => [item.library + ':' + item.id, item])).values()];
 			const assetIds = [...new Set([...libraries.flatMap(library => library.records || []).flatMap(record => record.content?.type === 'rich_text' ? record.content.assets : []), ...conflicts.flatMap(conflict => [conflict.local, conflict.base, conflict.server].flatMap(value => value?.content?.type === 'rich_text' ? value.content.assets : []))])];
 			const assets = assetIds.length ? await SnippetAsset.find({ account: ctx.account, id: { $in: assetIds } }).select('id mime_type size width height animated source_urls').session(session).lean() : [];
@@ -722,7 +779,8 @@ export class Libraries {
 			const fresh = await Library.findById(library._id).session(session).lean();
 			result = await Libraries.upload(ctx, String(library._id), { base_revision: fresh.revision, changes: [{ id: conflict.snippet, base_revision: current?.revision ?? null, value }] }, session);
 		}
-		await Conflict.updateOne({ _id: conflict._id }, { $set: { resolved: true } }, { session });
+		// Resolved conflicts keep no content: drop the row once the response no longer needs it.
+		await Conflict.deleteOne({ _id: conflict._id }, { session });
 		return { ...result, resolved: id };
 	}
 }

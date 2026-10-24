@@ -1,4 +1,4 @@
-import { mongoose, Account, Library, Snippet, Migration, MigrationBackup, Operation, Integration } from '../model/index.js';
+import { mongoose, Account, Library, Snippet, SnippetAsset, Conflict, Migration, MigrationBackup, Operation, Integration } from '../model/index.js';
 import { scopes } from '../api/catalog.js';
 import { Yaml } from './support.js';
 export class StorageMigration {
@@ -9,8 +9,26 @@ export class StorageMigration {
 		await Account.createIndexes();
 		if (old) await Account.collection.dropIndex(old.name).catch(error => { if (error.code !== 27) throw error; });
 	}
+	// Redundant indexes go only after their replacements exist.
+	static async indexes() {
+		for (const [model, name] of [[Library, 'account_1'], [Conflict, 'account_1'], [SnippetAsset, 'account_1_last_referenced_at_1']]) {
+			const indexes = await model.collection.indexes().catch(error => { if (error.code === 26) return []; throw error; });
+			if (!indexes.some(index => index.name === name)) continue;
+			await model.createIndexes();
+			await model.collection.dropIndex(name).catch(error => { if (error.code !== 27) throw error; });
+		}
+	}
+	// Stamps legacy receipts for the TTL index and removes resolved conflicts, which now keep no content.
+	static async retention() {
+		if ((await Migration.findOne({ key: 'retention-v1' }).lean())?.completed) return;
+		await Operation.updateMany({ expires: { $exists: false } }, [{ $set: { expires: { $add: [{ $toDate: '$_id' }, 30 * 86400000] } } }], { updatePipeline: true });
+		await Conflict.deleteMany({ resolved: true });
+		await Migration.updateOne({ key: 'retention-v1' }, { $set: { completed: true } }, { upsert: true });
+	}
 	static async code() {
 		await StorageMigration.hostnames();
+		await StorageMigration.indexes();
+		await StorageMigration.retention();
 		if ((await Migration.findOne({ key: 'code-v4' }).lean())?.completed) return;
 		for (const name of ['libraries', 'snippets', 'operations', 'conflicts', 'accounts', 'changes']) {
 			for await (const record of mongoose.connection.collection(name).find({})) await MigrationBackup.updateOne({ key: 'code-v4:' + name + ':' + record._id }, { $setOnInsert: { source_collection: name, payload: record } }, { upsert: true });
