@@ -93,7 +93,7 @@ impl RichText {
             let replacement=if let Some(kind)=info{let indent=markdown[..range.start].rsplit('\n').next().unwrap_or("").chars().map(|c|if c=='>'||c=='\t'{c}else{' '}).collect::<String>();match kind{
                 pulldown_cmark::CodeBlockKind::Indented=>{let mut lines=text.split_inclusive('\n');let mut result=lines.next().unwrap_or("").to_string();for line in lines{result.push_str(&indent);result.push_str(line);}result},
                 pulldown_cmark::CodeBlockKind::Fenced(info)=>{let fence="~".repeat(3.max(text.split(|c|c!='~').map(str::len).max().unwrap_or(0)+1));format!("{fence}{info}\n{}{indent}{fence}\n",text.lines().map(|line|format!("{indent}{line}\n")).collect::<String>())}
-            }}else{let fence="`".repeat(1.max(text.split(|c|c!='`').map(str::len).max().unwrap_or(0)+1));let pad=if text.starts_with(['`',' '])||text.ends_with(['`',' ']){" "}else{""};format!("{fence}{pad}{text}{pad}{fence}")};edits.push((range.clone(),replacement));
+            }}else{format!("<code>{}</code>",text.chars().map(|c|if c.is_ascii_punctuation()||c=='\n'||c=='\t'{format!("&#{};",c as u32)}else{c.to_string()}).collect::<String>())};edits.push((range.clone(),replacement));
         }
         for(marker,value)in replacements{for(index,_)in markdown.match_indices(marker){if code.iter().any(|(range,_,_)|range.contains(&index)){continue;}let before=&markdown[..index];let after=&markdown[index+marker.len()..];let line=before.rsplit('\n').next().unwrap_or("");let in_tag=line.rfind('<').is_some_and(|open|line.rfind('>').is_none_or(|close|open>close));let in_url=before.rfind("](").is_some_and(|open|before.rfind(')').is_none_or(|close|open>close))&&after.contains(')');let replacement=if in_url{if !Self::safe_url(value){return Err("Template link values must use HTTP, HTTPS, mailto, tel, an anchor, or a TypeRelay asset".into());}value.trim().chars().map(|c|if c=='+'{"&#43;".into()}else if c=='&'{"&amp;".into()}else if c.is_ascii_whitespace()||c.is_ascii_control()||"\\()<>\"'".contains(c){format!("%{:02X}",c as u32)}else{c.to_string()}).collect()}else if in_tag||line.trim_start().starts_with('<'){html_escape::encode_quoted_attribute(value).into_owned()}else{Self::escape_value(value)};edits.push((index..index+marker.len(),replacement));}}
         edits.sort_by_key(|(range,_)|range.start);let mut output=String::new();let mut position=0;for(range,value)in edits{output.push_str(&markdown[position..range.start]);output.push_str(&value);position=range.end;}output.push_str(&markdown[position..]);Ok(output)
@@ -276,6 +276,11 @@ mod tests {
             let value="file_name &copy; ++abc++ ``` ~~~ <b>literal</b>";let mut request=RichRequest{markdown:markdown.into(),preview:false,..Default::default()};request.values.insert("name".into(),value.into());let result=RichText::render(request).unwrap();assert!(result.text.ends_with(value),"{markdown}: {}",result.text);assert!(result.html.contains("file_name &amp;copy; ++abc++ ``` ~~~ &lt;b&gt;literal&lt;/b&gt;"),"{markdown}: {}",result.html);assert!(!result.html.contains("<u>"));assert!(result.rtf.contains("file_name &copy; ++abc++ ``` ~~~ <b>literal</b>"));
         }
     }
+    #[test]
+    fn inline_code_answers_preserve_empty_whitespace_and_multiline_values(){
+        for value in [""," ","  "," trailing ","a\nb","`", "[x](https://example.test) <b>x</b>"]{let mut request=RichRequest{markdown:"`{{name}}` end".into(),preview:false,..Default::default()};request.variables.insert("name".into(),Variable{required:false,multiline:true,..Default::default()});request.values.insert("name".into(),value.into());let result=RichText::render(request).unwrap();assert_eq!(result.text,format!("{value} end"));assert!(!result.html.contains("<b>"));assert!(!result.html.contains("<a "));}
+    }
+
     #[test]
     fn parsed_images_return_exact_source_ranges_and_skip_code(){
         let markdown="😀 ![a](<https://example.test/a>)\n\n`![b](https://example.test/b)`\n\n![c][ref]\n\n[ref]: https://example.test/c\n\n<img src=https://example.test/d>";
