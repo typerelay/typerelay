@@ -246,11 +246,17 @@ export class WhiteLabel {
 		}, false, true);
 	}
 
+	static async assertUpload(accountId) {
+		const account = await WhiteLabel.account(accountId, true);
+		if (!account) throw WhiteLabel.error(404, 'Account missing', 'account_missing');
+		WhiteLabel.assertTeam(account);
+		return account;
+	}
+
 	static async upload(accountId, kind, file) {
 		const config = WhiteLabel.assets[kind];
 		if (!config) throw WhiteLabel.error(404, 'Unknown branding asset', 'asset_unknown');
-		const account = await WhiteLabel.account(accountId, true);
-		WhiteLabel.assertTeam(account);
+		const account = await WhiteLabel.assertUpload(accountId);
 		if (!file?.filepath || !file.size || file.size > WhiteLabel.maximumFileSize) throw WhiteLabel.error(400, 'Choose an image up to 5 MB', 'asset_invalid');
 		const detected = await fileTypeFromFile(file.filepath).catch(() => null);
 		if (!detected || !WhiteLabel.imageTypes.has(detected.mime)) throw WhiteLabel.error(400, 'Upload a PNG, JPG, WebP, AVIF, GIF, or ICO image', 'asset_invalid');

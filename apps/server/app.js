@@ -267,18 +267,7 @@ export class Server {
 		app.post('/api/v2/white-label/domain/verify', async (req, res) => { Support.assert(Support.admin(req.ctx), 'Admin required', 403); Server.whiteLabelResult(res, await WhiteLabel.verify(req.ctx.account)); });
 		app.post('/api/v2/white-label/domain/refresh', async (req, res) => { Support.assert(Support.admin(req.ctx), 'Admin required', 403); Server.whiteLabelResult(res, await WhiteLabel.refresh(req.ctx.account)); });
 		app.delete('/api/v2/white-label/domain', async (req, res) => { Support.assert(Support.admin(req.ctx), 'Admin required', 403); Server.whiteLabelResult(res, await WhiteLabel.remove(req.ctx.account)); });
-		app.post('/api/v2/white-label/assets/:kind', async (req, res) => {
-			Support.assert(Support.admin(req.ctx), 'Admin required', 403);
-			await mkdir(WhiteLabel.temporaryRoot(req.ctx.account), { recursive: true });
-			const form = formidable({ uploadDir: WhiteLabel.temporaryRoot(req.ctx.account), keepExtensions: true, maxFileSize: WhiteLabel.maximumFileSize, minFileSize: 1, allowEmptyFiles: false, multiples: false });
-			let file;
-			try {
-				const [, files] = await form.parse(req);
-				file = (Array.isArray(files.file) ? files.file : [files.file]).find(value => value?.filepath);
-				Support.assert(file, 'Choose an image', 400);
-				Server.whiteLabelResult(res, await WhiteLabel.upload(req.ctx.account, req.params.kind, file));
-			} finally { if (file?.filepath) await rm(file.filepath, { force: true }); }
-		});
+		app.post('/api/v2/white-label/assets/:kind', async (req, res) => { Support.assert(Support.admin(req.ctx), 'Admin required', 403); await Server.whiteLabelAssetUpload(req, res); });
 		app.delete('/api/v2/white-label/assets/:kind', async (req, res) => { Support.assert(Support.admin(req.ctx), 'Admin required', 403); Server.whiteLabelResult(res, await WhiteLabel.deleteAsset(req.ctx.account, req.params.kind)); });
 		app.get('/api/v2/operations/:id', async (req, res) => {
 			const receipt = await Operation.findOne({ account: req.ctx.account, user: req.ctx.user, operation: req.params.id }).lean();
@@ -407,6 +396,26 @@ export class Server {
 		return `${protocol}://${host}`;
 	}
 	static whiteLabelResult(res, settings) { res.json({ settings, html: pug.renderFile('./views/ajax/white-label.pug', { whiteLabelSettings: settings }), brand_html: pug.renderFile('./views/ajax/brand.pug', { brandUrl: settings.logo_url }) }); }
+	static async whiteLabelAssetUpload(req, res) {
+		await WhiteLabel.assertUpload(req.ctx.account);
+		await mkdir(WhiteLabel.temporaryRoot(req.ctx.account), { recursive: true });
+		const form = formidable({ uploadDir: WhiteLabel.temporaryRoot(req.ctx.account), keepExtensions: true, maxFileSize: WhiteLabel.maximumFileSize, minFileSize: 1, allowEmptyFiles: false, multiples: false });
+		const paths = new Set();
+		form.on('fileBegin', (name, file) => { if (file?.filepath) paths.add(file.filepath); });
+		form.on('file', (name, file) => { if (file?.filepath) paths.add(file.filepath); });
+		const cleanup = () => Promise.all([...paths].map(path => rm(path, { force: true })));
+		try {
+			const [, files] = await form.parse(req);
+			for (const values of Object.values(files)) for (const value of (Array.isArray(values) ? values : [values])) if (value?.filepath) paths.add(value.filepath);
+			const names = Object.keys(files);
+			Support.assert(names.length === 1 && names[0] === 'file', 'Choose an image', 400);
+			const file = (Array.isArray(files.file) ? files.file : [files.file]).find(value => value?.filepath);
+			Support.assert(file, 'Choose an image', 400);
+			const settings = await WhiteLabel.upload(req.ctx.account, req.params.kind, file);
+			await cleanup();
+			Server.whiteLabelResult(res, settings);
+		} finally { await cleanup(); }
+	}
 	static async personalPresentation(ctx) {
 		let result;
 		await mongoose.connection.transaction(async session => {
