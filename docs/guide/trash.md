@@ -5,7 +5,7 @@ description: "Restore or permanently delete TypeRelay libraries and snippets fro
 
 # Trash
 
-Moving a snippet or library to Trash removes it from normal browsing, search and expansion immediately. It can be restored for 30 days; after the deadline, cleanup permanently removes its content.
+Moving a snippet or library to Trash removes it from normal browsing, search and expansion immediately. It can be restored for 30 days; after the deadline, cleanup permanently removes its content. Permanent removal of expired items runs in small batches each night, so large Trash folders clear over time without blocking the account.
 
 Open **Trash** from the web avatar menu or press F7 in the TUI. Restore validates permissions, limits and active abbreviation uniqueness. If a restored abbreviation would collide with another active snippet, resolve the collision first; TypeRelay never replaces the active record.
 
