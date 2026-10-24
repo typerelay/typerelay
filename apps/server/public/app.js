@@ -10,7 +10,7 @@ class TypeRelay {
 	account = document.querySelector('#workspace')?.dataset.account;
 	avatarStyle = document.querySelector('#profile-avatar-style')?.value || 'initials';
 	libraries = new Map();
-	tombstones = new Set();
+	tombstones = new Map();
 	formOperation = null;
 	submitting = false;
 	selected = document.querySelector('[data-editor]')?.dataset.editor || null;
@@ -175,18 +175,20 @@ class TypeRelay {
 		if (!result.library) return;
 		const library = result.library;
 		const prior = this.libraries.get(library._id);
-		if (this.tombstones.has(library._id) && !library.deleted) return;
-		if (prior && prior.revision > library.revision && !library.deleted) return;
+		// Trash and restore both bump the revision, so order every update, deletions included, by revision.
+		if (prior && prior.revision > library.revision) return;
+		if (this.tombstones.get(library._id) >= library.revision) return;
 		this.libraries.set(library._id, library);
 		if (library.deleted) {
-			this.tombstones.add(library._id);
+			this.tombstones.set(library._id, library.revision);
 			document.querySelector('[data-id="' + library._id + '"]')?.remove();
 			this.libraries.delete(library._id);
 			if (this.selected === library._id) { document.querySelector('[data-editor]')?.remove(); this.selected = null; }
 			return;
 		}
+		this.tombstones.delete(library._id);
 		const html = result.html || await this.request('fragments/library/' + library._id, 'GET', null, true);
-		if (this.tombstones.has(library._id) || this.libraries.get(library._id)?.revision > library.revision) return;
+		if (this.tombstones.get(library._id) >= library.revision || this.libraries.get(library._id)?.revision > library.revision) return;
 		this.update('[data-id="' + library._id + '"]', '#libraries', html);
 		if (this.selected === library._id && result.fragments) {
 			document.querySelector('[data-library-title]').textContent = library.name;
@@ -602,7 +604,6 @@ class TypeRelay {
 		if (button.hasAttribute('data-restore-trash')) {
 			const target = JSON.parse(button.closest('[data-trash-id]').dataset.target);
 			const result = await this.request('trash/action', 'POST', { target, action: 'restore' });
-			if (result.library?.state === 'active') this.tombstones.delete(result.library._id);
 			await this.apply(result);
 			await this.loadTrash();
 			this.toast('Restored');
@@ -724,7 +725,6 @@ class TypeRelay {
 		const result = await this.request('sync?cursor=' + this.cursor);
 		for (const library of result.libraries) {
 			if (library.state !== "active") { await this.apply({ library }); continue; }
-			this.tombstones.delete(library._id);
 			// Reuse mutation updater; fetch per-item snippets only when the revision changes.
 			const prior = this.libraries.get(library._id);
 			if (prior && prior.revision >= library.revision) continue;
