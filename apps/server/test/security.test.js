@@ -18,6 +18,8 @@ import { Team } from '../services/team.js';
 import { Billing } from '../services/billing.js';
 import { RichText } from '../services/rich_text.js';
 import { StarterContent } from '../services/starter_content.js';
+import { ApiRateLimit } from '../rate_limit.js';
+const limiterStores = [];
 
 class Browser {
 	cookie = ''; csrf = ''; account = '';
@@ -87,6 +89,7 @@ before(async () => {
 	process.env.ENABLE_SIGNUP = 'true';
 	Auth.origin = Fixture.origin;
 	Auth.mail.sendMail = async mail => { Fixture.mails.push(mail); return { accepted: [mail.to] }; };
+	ApiRateLimit.storeFactory = prefix => { limiterStores.push(prefix); };
 	const { Server } = await import('../app.js');
 	Fixture.server = await Server.start();
 });
@@ -94,6 +97,9 @@ after(async () => {
 	await new Promise(resolve => Fixture.server.close(resolve));
 	await TestDatabase.drop(mongoose.connection, 'typerelay_security_test');
 	await mongoose.disconnect();
+});
+test('sign-in, security, admin and AI limiters use the shared rate-limit store', () => {
+	for (const prefix of ['auth', 'security', 'admin-login', 'ai']) assert.ok(limiterStores.includes(prefix), prefix);
 });
 test('SMTP_SERVERS uses the shared authenticated multi-server format', () => {
 	const servers = Auth.smtpServers({ SMTP_FROM: 'fallback@example.test', SMTP_SERVERS: JSON.stringify([{ name: 'one', host: 'smtp1.example.test', port: 587, user: 'user', pass: 'pass' }, { host: 'smtp2.example.test', port: 465, secure: true, from: 'two@example.test' }]) });

@@ -98,7 +98,8 @@ export class AdminSettings {
 	}
 	static middleware(req, res, next) {
 		res.once('finish', () => {
-			if (!req.ctx || res.statusCode >= 400 || !(req.path === '/' || /^\/api\/v[23]\//.test(req.originalUrl))) return;
+			// Track browser activity only; device sync polls and API credentials are not page views.
+			if (!req.ctx || req.ctx.device || req.ctx.credential || res.statusCode >= 400 || !(req.path === '/' || /^\/api\/v[23]\//.test(req.originalUrl))) return;
 			AdminSettings.track(req.ctx, req.method === 'GET' ? 'pageview' : 'user_action', { page: req.route?.path || '/api', method: req.method, status_code: res.statusCode }).catch(() => console.error('Managani tracking unavailable'));
 		});
 		next();

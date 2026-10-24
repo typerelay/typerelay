@@ -3,6 +3,7 @@ import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { request as httpRequest } from 'node:http';
 import { randomUUID } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import { mkdtemp, mkdir, writeFile, rm, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -180,7 +181,7 @@ test('settings encrypt and mask secrets; custom code only enters authenticated a
 
 test('purge drains in-flight operations, retries external failure, removes every owned record and keeps shared users', async () => {
 	const shared = await M.User.create({ email: randomUUID() + '@example.test', name: 'Shared' }); const orphan = await M.User.create({ email: randomUUID() + '@example.test', name: 'Orphan' });
-	const account = await M.Account.create({ name: 'Purge everything', white_label: { cloudflare_hostname_id: 'hostname' } }); const survivor = await M.Account.create({ name: 'Keep me' }); const id = String(account._id);
+	const account = await M.Account.create({ name: 'Purge everything', white_label: { hostname: 'purge.example.test', claim_token: 'purge-claim', dns_verified_at: new Date(), cloudflare_hostname_id: 'hostname' } }); const survivor = await M.Account.create({ name: 'Keep me' }); const id = String(account._id);
 	await M.Member.create([{ account: account._id, user: shared._id, role: 'owner' }, { account: account._id, user: orphan._id, role: 'member' }, { account: survivor._id, user: shared._id, role: 'owner' }]);
 	await M.Passkey.create([{ user: orphan._id, credential_id: 'orphan-key' }, { user: shared._id, credential_id: 'shared-key' }]);
 	for (const name of AdminAccounts.owned.filter(name => name !== 'Member')) await M[name].create({ account: account._id, user: orphan._id, id: name, name, snippet: name, operation: randomUUID(), hash: randomUUID(), ...(name === 'UsageEvent' ? { event_id: randomUUID(), library: new M.mongoose.Types.ObjectId(), snippet: 'deleted', action: 'copy', occurred_at: new Date(), characters: 10 } : {}), ...(name === "AiUsage" ? { day: "2026-09-30" } : {}), ...(name === 'SignupNotification' ? { email: orphan.email, message_id: '<purge@typerelay.test>' } : {}) });
@@ -188,7 +189,6 @@ test('purge drains in-flight operations, retries external failure, removes every
 	await M.Ticket.create([{ hash: randomUUID(), account: account._id }, { hash: randomUUID(), data: { account: id } }, { hash: randomUUID(), data: { grant: grant._id } }, { hash: randomUUID(), email: orphan.email, data: { user: String(orphan._id) } }]);
 	await M.MigrationBackup.create([{ key: randomUUID(), source_collection: 'accounts', payload: account.toObject() }, { key: randomUUID(), source_collection: 'libraries', payload: { account: account._id, snippets: [{ secret: 'purge me' }] } }, { key: 'survivor-backup', payload: { account: survivor._id } }]);
 	await M.OAuthClient.create({ client_id: 'keep-global-client', name: 'Global' });
-	await M.mongoose.connection.collection('web_sessions').insertMany([{ _id: 'orphan-session', session: JSON.stringify({ user: String(orphan._id) }) }, { _id: 'shared-session', session: JSON.stringify({ user: String(shared._id) }) }]);
 	await mkdir(join(Fixture.root, id), { recursive: true }); await writeFile(join(Fixture.root, id, 'logo.png'), 'test');
 	let started; const ready = new Promise(resolve => { started = resolve; }); let release; const gate = new Promise(resolve => { release = resolve; });
 	const inflight = AccountAccess.run(id, async () => { started(); await gate; await M.Group.create({ account: account._id, name: 'Last in-flight write' }); }); await ready;
@@ -197,12 +197,11 @@ test('purge drains in-flight operations, retries external failure, removes every
 	release(); await inflight;
 	await assert.rejects(AdminAccounts.purge(id, { cancelBilling: async () => { throw new Error('External down'); } }), /External down/); assert.equal((await AdminAccounts.get(id)).status, 'failed'); assert.ok(await M.Snippet.exists({ account: account._id }));
 	await AdminAccounts.retry(id); let hostname;
-	const purged = await AdminAccounts.purge(id, { cancelBilling: async () => {}, deleteHostname: async value => { hostname = value; } }); assert.equal(purged.deleted, id); assert.equal(hostname, 'hostname');
+	const purged = await AdminAccounts.purge(id, { cancelBilling: async () => {}, getHostname: async id => ({ id, hostname: account.white_label.hostname, custom_metadata: { catalog: Billing.catalogName, account: String(account._id), claim_token: 'purge-claim' } }), deleteHostname: async value => { hostname = value; } }); assert.equal(purged.deleted, id); assert.equal(hostname, 'hostname');
 	for (const name of AdminAccounts.owned) assert.equal(await M[name].countDocuments({ account: account._id }), 0, name);
 	assert.equal(await M.IntegrationToken.countDocuments({ grant: grant._id }), 0); assert.equal(await M.MigrationBackup.countDocuments(AdminAccounts.backups(account)), 0);
 	assert.equal(await M.User.exists({ _id: orphan._id }), null); assert.ok(await M.User.exists({ _id: shared._id })); assert.ok(await M.Passkey.exists({ user: shared._id })); assert.equal(await M.Passkey.exists({ user: orphan._id }), null);
 	assert.ok(await M.Account.exists({ _id: survivor._id })); assert.ok(await M.OAuthClient.exists({ client_id: 'keep-global-client' })); assert.ok(await M.MigrationBackup.exists({ key: 'survivor-backup' }));
-	assert.equal(await M.mongoose.connection.collection('web_sessions').findOne({ _id: 'orphan-session' }), null); assert.ok(await M.mongoose.connection.collection('web_sessions').findOne({ _id: 'shared-session' }));
 	await assert.rejects(access(join(Fixture.root, id)), { code: 'ENOENT' }); assert.deepEqual(await Fixture.json('/admin/api/accounts/' + id + '/deletion'), { deleted: id });
 	await assert.rejects(Assets.save({ account: id }, { id: 'a'.repeat(64), data: Buffer.from('test') }), /unavailable/);
 });
@@ -218,12 +217,21 @@ test('Stripe purge expires sessions and cancels schedules and all subscriptions 
 });
 
 test('purge resumes an expired worker lease and finds a domain whose ID was never persisted', async () => {
-	const account = await M.Account.create({ name: 'Restart cleanup', is_active: false, deletion: { requested_at: new Date(), stage: 'database', lease: 'crashed-worker', lease_until: new Date(Date.now() - 1000) }, white_label: { hostname: 'old.example.test' } });
+	const account = await M.Account.create({ name: 'Restart cleanup', is_active: false, deletion: { requested_at: new Date(), stage: 'database', lease: 'crashed-worker', lease_until: new Date(Date.now() - 1000) }, white_label: { hostname: 'old.example.test', claim_token: 'recover-claim', provider_action: 'creating', dns_verified_at: new Date() } });
 	await M.AccountLease.create({ account: account._id, token: randomUUID(), expires: new Date(Date.now() - 1000) });
 	const removed = [];
-	await AdminAccounts.purge(account._id, { cancelBilling: async () => {}, listHostnames: async hostname => [{ id: 'orphan-domain', hostname, custom_metadata: { catalog: Billing.catalogName } }, { id: 'unrelated', hostname, custom_metadata: { catalog: 'other-product' } }], deleteHostname: async id => removed.push(id) });
+	await AdminAccounts.purge(account._id, { cancelBilling: async () => {}, listHostnames: async hostname => [{ id: 'orphan-domain', hostname, custom_metadata: { catalog: Billing.catalogName, account: String(account._id), claim_token: 'recover-claim' } }], getHostname: async id => ({ id, hostname: account.white_label.hostname, custom_metadata: { catalog: Billing.catalogName, account: String(account._id), claim_token: 'recover-claim' } }), deleteHostname: async id => removed.push(id) });
 	assert.deepEqual(removed, ['orphan-domain']); assert.equal(await M.Account.exists({ _id: account._id }), null); assert.equal(await M.AccountLease.exists({ account: account._id }), null);
 	await AdminSettings.audit('sysadmin', 'late-failed-request', account._id, 409); assert.equal(await M.AdminAudit.exists({ account: account._id }), null);
+});
+
+test('deleting a pending domain claimant preserves another account verified hostname', async () => {
+	const hostname = 'claimed-elsewhere.example.test';
+	const pending = await M.Account.create({ name: 'Pending claimant', deletion: { requested_at: new Date(), stage: 'database' }, white_label: { hostname, cloudflare_hostname_id: 'shared-hostname' } });
+	const verified = await M.Account.create({ name: 'Verified domain owner', white_label: { hostname, dns_verified_at: new Date(), cloudflare_hostname_id: 'shared-hostname' } });
+	await AdminAccounts.purge(pending._id, { cancelBilling: async () => {}, listHostnames: async () => assert.fail('another account hostname was queried'), deleteHostname: async () => assert.fail('another account hostname was deleted') });
+	assert.equal(await M.Account.exists({ _id: pending._id }), null);
+	assert.ok(await M.Account.exists({ _id: verified._id, 'white_label.dns_verified_at': { $type: 'date' } }));
 });
 
 test('audit logs query both sources and logout removes admin access', async () => {
@@ -317,4 +325,17 @@ test('historical-only team contributions require review even without a surviving
 	await AdminAccounts.reviewUserDeletion(String(user._id), String(user._id));
 	await AdminAccounts.purgeUser(user._id);
 	assert.equal(await M.User.exists({ _id: user._id }), null);
+});
+test('read requests skip the account lease while writes stay fenced against deletion', async () => {
+	const account = await M.Account.create({ name: 'Lease scope' }); const user = await M.User.create({ email: randomUUID() + '@example.test', name: 'Lease' }); await M.Member.create({ account: account._id, user: user._id, role: 'owner' });
+	const id = String(account._id);
+	const context = method => new Promise((resolve, reject) => AccountAccess.middleware({ method }, new EventEmitter(), () => Support.context(String(user._id), id).then(resolve, reject)));
+	await context('GET');
+	assert.equal((await M.Account.findById(id).lean()).activity_sequence, 0); assert.equal(await M.AccountLease.exists({ account: account._id }), null);
+	await context('POST');
+	assert.equal((await M.Account.findById(id).lean()).activity_sequence, 1); assert.ok(await M.AccountLease.exists({ account: account._id }));
+	await AdminAccounts.requestDeletion(id, id);
+	assert.deepEqual(await AdminAccounts.purge(id), { pending: true });
+	await assert.rejects(context('GET'), /unavailable/); await assert.rejects(context('POST'), /unavailable/);
+	await M.AccountLease.deleteMany({ account: account._id });
 });

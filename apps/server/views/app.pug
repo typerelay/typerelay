@@ -81,8 +81,8 @@ block content
 								- settingsSections.sso = 'Single sign-on'
 							if billingEnabled
 								- settingsSections.subscription = 'Subscription'
-								if ['owner', 'admin'].includes(ctx.role)
-									- settingsSections.whiteLabel = 'White-label'
+							if whiteLabelEnabled && ['owner', 'admin'].includes(ctx.role)
+								- settingsSections.whiteLabel = 'White-label'
 							each label, key in settingsSections
 								button.list-group-item.list-group-item-action(type="button" role="tab" id='settings-tab-' + key data-settings-tab=key aria-controls='settings-pane-' + key aria-selected=(key === 'profile').toString() tabindex=key === 'profile' ? '0' : '-1' class=key === 'profile' ? 'active' : '')= label
 						.settings-content
@@ -200,9 +200,9 @@ block content
 							if billingEnabled
 								section.settings-pane(id="settings-pane-subscription" role="tabpanel" aria-labelledby="settings-tab-subscription" hidden=true)
 									include ajax/subscription
-								if ['owner', 'admin'].includes(ctx.role)
-									section.settings-pane(id="settings-pane-whiteLabel" role="tabpanel" aria-labelledby="settings-tab-whiteLabel" hidden=true)
-										include ajax/white-label
+							if whiteLabelEnabled && ['owner', 'admin'].includes(ctx.role)
+								section.settings-pane(id="settings-pane-whiteLabel" role="tabpanel" aria-labelledby="settings-tab-whiteLabel" hidden=true)
+									include ajax/white-label
 		include ajax/template-fill
 		#form-modal.modal.fade(tabindex="-1" aria-label="Edit" data-bs-backdrop="static" data-bs-keyboard="false")
 			.modal-dialog.modal-xl.modal-dialog-scrollable

@@ -21,14 +21,13 @@ test('invalid Ghost records are skipped; excerpts and links remain safe', () => 
 	assert.equal(mapped.show_modal, true);
 });
 
-test('later-page failures and malformed payloads never deactivate cached posts', async () => {
+test('later-page failures, malformed payloads and empty replies never deactivate cached posts', async () => {
 	for (const failure of [{ ok: false, status: 502 }, { ok: true, json: async () => ({ posts: null }) }]) {
 		let page = 0;
 		await assert.rejects(ProductUpdates.syncProductUpdates({ config: { contentApiKey: 'test' }, fetchImpl: async () => ++page === 1 ? { ok: true, json: async () => ({ posts: [], meta: { pagination: { pages: 2 } } }) } : failure, productUpdateModel: { bulkWrite: () => assert.fail('Unexpected write'), updateMany: () => assert.fail('Unexpected deactivation') } }));
 	}
-	let query;
-	await ProductUpdates.syncProductUpdates({ config: { contentApiKey: 'test' }, fetchImpl: async () => ({ ok: true, json: async () => ({ posts: [] }) }), productUpdateModel: { updateMany: async value => { query = value; return {}; } } });
-	assert.deepEqual(query, { active: true });
+	const result = await ProductUpdates.syncProductUpdates({ config: { contentApiKey: 'test' }, fetchImpl: async () => ({ ok: true, json: async () => ({ posts: [] }) }), productUpdateModel: { bulkWrite: () => assert.fail('Unexpected write'), updateMany: () => assert.fail('An empty reply must not deactivate updates') } });
+	assert.deepEqual(result, { enabled: true, fetched: 0, upserted: 0, deactivated: 0 });
 });
 
 test('cursor uses timestamp and ID tie-breaker; rejects invalid cursor and seen IDs', async () => {

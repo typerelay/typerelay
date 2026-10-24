@@ -1,5 +1,9 @@
 {
   "name": "typerelay",
+  "version": "1.3.5",
+  "version_extension": "1.2.2",
+  "version_mobile": "1.3.0",
+  "build_mobile": 10,
   "private": true,
   "description": "Cross-platform text expansion with shared snippets and native keyboards",
   "license": "AGPL-3.0",

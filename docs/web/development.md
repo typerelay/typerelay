@@ -1,14 +1,25 @@
+---
+title: "Database-backed TypeRelay development"
+description: "Run TypeRelay development services and isolated database tests, including DBH settings and hosted feature checks."
+---
+
 # Database-backed TypeRelay development
 
 Run docker compose up -d --build from the repository root.
 `APP_URL` and `MCP_BASE_URL` select the development endpoints. `DEV_TYPERELAY_MONGODB_URI`, `MEMCACHED_SERVERS`, and `SMTP_SERVERS` connect to the shared dbh development services; the development Compose file does not run MongoDB, Memcached, or SMTP containers. Production deployment remains separate.
+
+## DBH hosted settings
+
+The DBH-only `.codex/dbh-run.toml` enables the existing `TYPERELAY_HOSTED_EDITION` and `WHITE_LABEL_ENABLED` flags. `BILLING_ENABLED` remains `false`, so development accounts retain Team entitlements without Stripe configuration or account changes. Owners and admins can open White-label independently of Subscription. DNS verification still requires both CNAME and account-specific TXT proof; provider provisioning requires separately configured credentials.
+
+After changing these values, run `dbh-run urls`, `dbh-run secrets`, and `dbh-run compose -- up -d --no-deps --build --force-recreate app`. Keep the scheduler and shared infrastructure unchanged. Check `dbh-run status` and the named app URL.
 
 ## Storage version 2
 
 MongoDB stores library metadata/grants separately from individual snippets.
 Content uses version:1, type:plain_text and text. Unknown types/versions are rejected; dynamic replacements are deferred.
 The SQLite database is in the configured directory, normally ~/.config/typerelay/snippets/typerelay.sqlite.
-It contains libraries, individual snippets, durable operations, cursors, staged downloads and recovery drafts.
+It contains libraries, individual snippets, durable operations, cursors and recovery drafts.
 Credentials remain in the private sync/credentials.json; prefix/server settings stay in settings.yml.
 
 YAML is parsed only for import and generated only for export. Regular server editing uses structured Rust validation.
@@ -56,7 +67,7 @@ Focused unit/browser tests: `node --test test/product-updates-service.test.js te
     python3 -m unittest discover -s scripts/tests
 
 Server tests use disposable typerelay_test, typerelay_e2e and typerelay_security databases and isolated desktop directories.
-Tests cover migration, offline replay, conflicts, Trash/restore/purge, expiry, access revocation, staged collisions and incremental UI updates.
+Tests cover migration, offline replay, conflicts, Trash/restore/purge, expiry, access revocation, snapshot validation collisions and incremental UI updates.
 Do not run the retired file-based desktop smoke scripts against the database client.
 
 ## Move storage introduced in v0.8

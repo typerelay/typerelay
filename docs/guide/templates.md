@@ -30,6 +30,10 @@ Set a label, default answer, required/optional status and single-line/multiline 
 
 Answers are literal: entering `{{key:enter}}` as an answer cannot create a keypress. There are no scripts, conditions, loops or nested evaluation.
 
+Rich text answers preserve literal character references such as `&copy;`. Answers inside inline or fenced code keep their punctuation without added backslashes.
+
+In a Rich text link, URL answers stay inside that link. Spaces and Markdown punctuation are encoded so an answer cannot add another link or image.
+
 ## Cursor position
 
 In **Text**, choose **Cursor position** to insert `{{cursor:here}}` where you want to continue typing. TypeRelay inserts the complete rendered snippet, removes the marker, then moves the caret to that position. For example, `Hello {{cursor:here}}, thanks!` leaves the caret after “Hello ”. Dates, fields, emoji and newlines before or after the marker are counted after rendering.
@@ -38,7 +42,7 @@ Use one marker per snippet. It cannot be combined with `{{key:enter}}` or used i
 
 An Enter used to trigger a marked abbreviation is consumed, so it does not submit or split the inserted text. Copy and **Fill and copy** remove the marker and report that cursor positioning was omitted. Clients from before this feature reject the new syntax; update them before using marked snippets.
 
-Chrome text fields and Android use exact text offsets. Chrome leaves single-line fields unchanged for marked multiline snippets and rejects marked insertions that exceed a field’s maximum length; use a textarea or Copy. On Linux, supported accessible text fields receive a direct caret jump after paste. Other desktop editors receive arrow-key movement; their handling of arrow keys, bidirectional text, emoji and multiline content can vary. iOS uses the host app’s text-position API. Desktop cursor movement requires active keyboard monitoring; on macOS, allow Input Monitoring and restart TypeRelay. Cursor positioning has no additional snippet-size or cursor-distance limit. Desktop editors that require arrow-key movement take longer for longer suffixes; keep the target focused until movement finishes. Focus changes or interrupted input cancel movement without repeating the insertion. Use Copy if an editor does not support the expected cursor movement.
+Chrome text fields and Android use exact text offsets. Chrome leaves single-line fields unchanged for marked multiline snippets and rejects marked insertions that exceed a field’s maximum length; use a textarea or Copy. When Chrome cannot complete an expansion, it restores the typed trigger delimiter (a space, or a newline in multiline fields) so the keypress is not lost. On Linux, supported accessible text fields receive a direct caret jump after paste. Other desktop editors receive arrow-key movement; their handling of arrow keys, bidirectional text, emoji and multiline content can vary. iOS uses the host app’s text-position API. Desktop cursor movement requires active keyboard monitoring; on macOS, allow Input Monitoring and restart TypeRelay. Cursor positioning has no additional snippet-size or cursor-distance limit. Desktop editors that require arrow-key movement take longer for longer suffixes; keep the target focused until movement finishes. Focus changes or interrupted input cancel movement without repeating the insertion. Use Copy if an editor does not support the expected cursor movement.
 
 ## Enter actions and copying
 

@@ -4,7 +4,7 @@ if kind === 'personal'
 		span.me-1 Shared abbreviation:
 		strong= snippet.trigger || 'None'
 	label.form-label(for="personal-trigger") My abbreviation
-	input#personal-trigger.form-control.form-control-sm.mb-3(name="trigger" value=snippet.personal.trigger || '' maxlength="63" pattern="[a-z0-9-]{1,63}")
+	input#personal-trigger.form-control.form-control-sm.mb-3(name="trigger" value=snippet.personal.trigger || '' maxlength="63" pattern="[a-z0-9\\-]{1,63}")
 	button.btn.btn-outline-secondary.btn-sm.mb-3(type="button" data-reset-personal) Use shared default
 	if snippet.personal.conflicts.length
 		label.form-label(for="personal-conflict") Resolve personal abbreviation conflict

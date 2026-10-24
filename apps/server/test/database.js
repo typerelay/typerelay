@@ -1,4 +1,8 @@
 import assert from 'node:assert/strict';
+import { ApiRateLimit } from '../rate_limit.js';
+
+// Keep sign-in/security limiter counters per test process instead of the shared dev Memcached.
+ApiRateLimit.storeFactory = () => undefined;
 
 export class TestDatabase {
 	static uri(source, name) {

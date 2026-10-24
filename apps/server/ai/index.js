@@ -4,6 +4,7 @@ import http from 'node:http';
 import https from 'node:https';
 import { Router } from 'express';
 import { rateLimit } from 'express-rate-limit';
+import { ApiRateLimit } from '../rate_limit.js';
 import pug from 'pug';
 import { AiSetting, AiUsage, AiRequest, Device } from '../model/index.js';
 import { AdminSettings } from '../services/admin_settings.js';
@@ -157,8 +158,10 @@ export class Ai {
 	static allowed(state) { Support.assert(state.installation.enabled && state.team.enabled && state.personal.enabled, 'AI is disabled for this account or user', 403); }
 	static connectionSummary(connection) { const { secret, key, ...value } = connection; return { ...value, key_configured: !!secret, masked: secret ? '********' : '' }; }
 	static summary(settings) { return { ...settings, connections: settings.connections.map(Ai.connectionSummary), private_endpoints: settings.private_endpoints || [] }; }
-	static async status(ctx) {
-		const state = await Ai.state(ctx); const day = new Date().toISOString().slice(0, 10); const used = (await AiUsage.findOne({ account: ctx.account, user: ctx.user, day }).lean())?.count || 0; const effective = {};
+	// AiSetting and AiUsage read from secondaries: `written` carries what this request just saved (a settings scope and/or the allowance used) so the response never shows older state.
+	static async status(ctx, written = {}) {
+		const state = await Ai.state(ctx); const day = new Date().toISOString().slice(0, 10); const used = written.used ?? ((await AiUsage.findOne({ account: ctx.account, user: ctx.user, day }).lean())?.count || 0); const effective = {};
+		if (written.scope) state[written.scope] = written.settings;
 		for (const workflow of Ai.workflows) { try { const value = Ai.route(state, workflow); effective[workflow] = { scope: value.scope, provider: value.connection.provider, model: value.route.model, name: value.connection.name, managed: value.managed }; } catch (error) { effective[workflow] = { error: error.message }; } }
 		const managed = { available: false, reason: 'Private Typerelay AI is available on the hosted edition.' };
 		if (Billing.hosted()) { try { Support.assert(state.installation.enabled, 'Private Typerelay AI is currently unavailable'); for (const workflow of Ai.workflows) Ai.route({ ...state, personal: { ...state.personal, use_managed: true } }, workflow); managed.available = true; managed.reason = ''; } catch (error) { managed.reason = error.message; } }
@@ -197,7 +200,7 @@ export class Ai {
 			}
 		}
 		await Ai.persist(ctx, scope, value, current.revision, installation);
-		return installation ? { settings: Ai.summary(value) } : { settings: Ai.summary(value), status: await Ai.status(ctx) };
+		return installation ? { settings: Ai.summary(value) } : { settings: Ai.summary(value), status: await Ai.status(ctx, { scope, settings: value }) };
 	}
 	static async persist(ctx, scope, value, revision, installation) {
 		const data = { enabled: value.enabled, use_managed: value.use_managed === true, routes: value.routes, connections: value.connections, ...(installation ? { daily_limit: value.daily_limit, private_endpoints: value.private_endpoints } : {}), revision: revision + 1 };
@@ -232,7 +235,7 @@ export class Ai {
 		}
 		await Ai.persist(ctx, scope, settings, settings.revision, installation);
 		const connection = settings.connections.find(item => item.id === body.id);
-		return { id: body.id, deleted: remove, connection: connection ? Ai.connectionSummary(connection) : null, html: connection ? pug.renderFile('./views/ajax/ai-connection.pug', { connection: Ai.connectionSummary(connection), scope, providers: AiProvider.catalog }) : '', settings: Ai.summary(settings), ...(installation ? {} : { status: await Ai.status(ctx) }) };
+		return { id: body.id, deleted: remove, connection: connection ? Ai.connectionSummary(connection) : null, html: connection ? pug.renderFile('./views/ajax/ai-connection.pug', { connection: Ai.connectionSummary(connection), scope, providers: AiProvider.catalog }) : '', settings: Ai.summary(settings), ...(installation ? {} : { status: await Ai.status(ctx, { scope, settings }) }) };
 	}
 	static async selected(ctx, body, installation = false) {
 		const settings = installation ? await Ai.installation() : await Ai.setting(ctx, body.scope || 'personal');
@@ -250,31 +253,32 @@ export class Ai {
 	}
 	static async reserve(ctx, id, workflow, resolved, installation) {
 		Support.assert(typeof id === 'string' && /^[a-zA-Z0-9-]{16,80}$/.test(id), 'Invalid AI request ID');
-		const day = new Date().toISOString().slice(0, 10); const expires = new Date(Date.parse(day) + 3 * 86400000);
+		const day = new Date().toISOString().slice(0, 10); const expires = new Date(Date.parse(day) + 3 * 86400000); let count;
 		try {
 			await AccountAccess.write(ctx.account, async session => {
 				await AiRequest.create([{ account: ctx.account, user: ctx.user, id, workflow, managed: resolved.managed, day, state: 'reserved', expires }], { session });
 				if (resolved.managed) {
 					const filter = { account: ctx.account, user: ctx.user, day };
 					await AiUsage.updateOne(filter, { $setOnInsert: { count: 0, expires } }, { upsert: true, session });
-					const used = await AiUsage.updateOne({ ...filter, count: { $lt: installation.daily_limit } }, { $inc: { count: 1 } }, { session });
-					Support.assert(used.modifiedCount, 'Managed AI allowance reached; resets at UTC midnight. You can configure your own AI connection.', 429);
+					const used = await AiUsage.findOneAndUpdate({ ...filter, count: { $lt: installation.daily_limit } }, { $inc: { count: 1 } }, { session, returnDocument: 'after' }).lean();
+					Support.assert(used, 'Managed AI allowance reached; resets at UTC midnight. You can configure your own AI connection.', 429);
+					count = used.count;
 				}
 			});
 		} catch (error) { if (error.code === 11000) throw new Fault(409, 'This AI action already ran; start a new action'); throw error; }
-		return day;
+		return { day, used: count };
 	}
 	static async run(ctx, body, workflow, task) {
 		const state = await Ai.state(ctx); Ai.allowed(state); const resolved = Ai.route(state, workflow);
 		const connection = { ...resolved.connection, key: resolved.connection.secret ? AdminSettings.decrypt(resolved.connection.secret) : '' };
-		const controller = body.signal; const day = await Ai.reserve(ctx, body.request_id, workflow, resolved, state.installation); let submitted = false; let completed = 0;
+		const controller = body.signal; const { day, used } = await Ai.reserve(ctx, body.request_id, workflow, resolved, state.installation); let submitted = false; let completed = 0;
 		const dispatch = async () => { Ai.allowed(await Ai.state(ctx)); if (!submitted) { await AiRequest.updateOne({ account: ctx.account, user: ctx.user, id: body.request_id }, { $set: { state: 'submitted' } }); submitted = true; } };
 		try {
 			const generate = async (system, input, tokens) => { const result = await AiProvider.generate(connection, state.installation, resolved.route, system, input, { signal: controller, dispatch, tokens }); completed++; return result; };
 			const result = await task(generate, state);
 			Ai.allowed(await Ai.state(ctx)); if (controller?.aborted) throw new Fault(499, 'AI request cancelled');
 			await AiRequest.updateOne({ account: ctx.account, user: ctx.user, id: body.request_id }, { $set: { state: 'done' } });
-			return { ...result, status: await Ai.status(ctx) };
+			return { ...result, status: await Ai.status(ctx, { used }) };
 		} catch (error) {
 			await AccountAccess.write(ctx.account, async session => { const changed = await AiRequest.updateOne({ account: ctx.account, user: ctx.user, id: body.request_id, state: { $in: ['reserved', 'submitted'] } }, { $set: { state: 'failed' } }, { session }); if ((!submitted || (error.no_inference && !completed)) && resolved.managed && changed.modifiedCount) await AiUsage.updateOne({ account: ctx.account, user: ctx.user, day, count: { $gt: 0 } }, { $inc: { count: -1 } }, { session }); }).catch(() => {});
 			throw error;
@@ -356,7 +360,7 @@ export class Ai {
 		router.get('/form', async (req, res) => res.type('html').send(pug.renderFile('./views/ajax/ai-settings.pug', { canManageTeam: Support.admin(req.ctx) })));
 		router.post('/connections', async (req, res) => res.json(await Ai.connection(req.ctx, req.body.scope || 'personal', req.body)));
 		router.delete('/connections/:id', async (req, res) => res.json(await Ai.connection(req.ctx, req.body.scope || 'personal', { id: req.params.id, revision: req.body.revision }, false, true)));
-		router.use(rateLimit({ windowMs: 60000, limit: 20, standardHeaders: 'draft-7', legacyHeaders: false, keyGenerator: req => req.ctx.account + ':' + req.ctx.user, message: { error: 'Too many AI requests; try again shortly' } }));
+		router.use(rateLimit({ windowMs: 60000, limit: 20, standardHeaders: 'draft-7', legacyHeaders: false, keyGenerator: req => req.ctx.account + ':' + req.ctx.user, store: ApiRateLimit.getStore('ai', 60000), passOnStoreError: true, message: { error: 'Too many AI requests; try again shortly' } }));
 		router.post('/models', async (req, res) => { const selected = await Ai.selected(req.ctx, req.body); res.json({ models: await AiProvider.models(selected.connection, selected.installation) }); });
 		router.post('/verify', async (req, res) => res.json(await Ai.verify(req.ctx, req.body)));
 		for (const workflow of ['author', 'search']) router.post('/' + workflow, async (req, res) => {

@@ -1,3 +1,5 @@
+import groovy.json.JsonSlurper
+
 apply plugin: 'com.android.application'
 apply plugin: 'org.jetbrains.kotlin.android'
 
@@ -7,6 +9,10 @@ def releaseKeyAlias = System.getenv("TYPERELAY_ANDROID_KEY_ALIAS")
 def releaseKeyPassword = System.getenv("TYPERELAY_ANDROID_KEY_PASSWORD")
 def allowUnsignedRelease = System.getenv("ALLOW_UNSIGNED_RELEASE") == "true"
 def releaseSigningConfigured = releaseKeystorePath && releaseKeystorePassword && releaseKeyAlias && releaseKeyPassword && file(releaseKeystorePath).exists()
+
+def releaseVersion = new JsonSlurper().parse(file('../../../../package.json'))
+if (!(releaseVersion.version_mobile instanceof String) || !(releaseVersion.version_mobile ==~ /(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)/)) throw new GradleException('Root version_mobile must contain three version integers')
+if (!(releaseVersion.build_mobile instanceof Integer) || releaseVersion.build_mobile < 1 || releaseVersion.build_mobile > 2100000000) throw new GradleException('Root build_mobile must be an integer from 1 to 2100000000')
 
 android {
     kotlinOptions { jvmTarget = "21" }
@@ -28,8 +34,8 @@ android {
         applicationId "com.typerelay.mobile"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 9
-        versionName "1.2.0"
+        versionCode releaseVersion.build_mobile
+        versionName releaseVersion.version_mobile
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -57,6 +63,7 @@ def mobileWebSources = files(
     new File(mobileWebRoot, 'package.json'),
     new File(mobileWebRoot, 'tsconfig.json'),
     new File(mobileWebRoot, 'vite.config.ts'),
+    file('../../../../package.json'),
     file('../../../../pnpm-lock.yaml'),
     file('../../../../pnpm-workspace.yaml')
 )

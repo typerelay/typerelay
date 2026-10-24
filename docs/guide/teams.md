@@ -57,7 +57,7 @@ Moving a snippet into a shared library shares it under the destination’s rules
 
 ## Personal abbreviations
 
-An existing personal abbreviation replaces a shared snippet’s default only for its owner; the expansion stays shared. The web and desktop interfaces do not currently expose controls for managing these overrides.
+An existing personal abbreviation replaces a shared snippet's default only for its owner; the expansion stays shared. In the web app, open a shared snippet you can edit and choose **My abbreviation** to set, reset or resolve your override. The desktop interface does not yet expose a control for managing these overrides.
 
 Personal abbreviations sync to your devices, browser extension, and mobile keyboard. Concurrent changes are retained as personal conflicts rather than changing the shared abbreviation.
 

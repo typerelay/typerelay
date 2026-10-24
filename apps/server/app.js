@@ -10,6 +10,8 @@ import session from 'express-session';
 import MongoStore from 'connect-mongo';
 import helmet from 'helmet';
 import { rateLimit } from 'express-rate-limit';
+import { ApiRateLimit } from './rate_limit.js';
+import { RateLimitSupport } from './rate_limit_support.js';
 import { mkdir, readdir, readFile, rm } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import formidable from 'formidable';
@@ -45,6 +47,7 @@ export class Server {
 			console.log(JSON.stringify({ event: 'service_started', service: process.env.OTEL_SERVICE_NAME || 'typerelay-scheduler', mode: 'scheduler', version: process.env.APP_VERSION || 'development' }));
 			return;
 		}
+		for (const name of ['SESSION_SECRET', 'JWT_SECRET']) if (!process.env[name]) throw new Error(name + ' is required');
 		await StorageMigration.code();
 		await StorageMigration.tokens();
 		await Promise.all(Object.values(mongoose.models).map(model => model.createIndexes()));
@@ -92,7 +95,7 @@ export class Server {
 		app.get('/health', (req, res) => res.json({ ok: true }));
 		// Seconds; retain non-rolling cookies and the separate admin deadline.
 		const sessionStore = MongoStore.create({ mongoUrl: process.env.MONGO_URI, collectionName: 'web_sessions', touchAfter: 60 });
-		app.use(session({ name: 'typerelay.sid', secret: process.env.SESSION_SECRET || 'change-me', store: sessionStore, resave: false, saveUninitialized: false, cookie: { httpOnly: true, sameSite: 'lax', secure: Auth.origin.startsWith('https:'), maxAge: 7 * 86400000 } }));
+		app.use(session({ name: 'typerelay.sid', secret: process.env.SESSION_SECRET, store: sessionStore, resave: false, saveUninitialized: false, cookie: { httpOnly: true, sameSite: 'lax', secure: Auth.origin.startsWith('https:'), maxAge: 7 * 86400000 } }));
 		app.use(WhiteLabel.resolveRequest);
 		app.use(async (req, res, next) => {
 			if (req.session.user) {
@@ -112,9 +115,10 @@ export class Server {
 		});
 		Admin.mount(app);
 		app.use(AdminSettings.middleware);
-		const authLimit = rateLimit({ windowMs: 900000, limit: 30, message: { error: 'Too many sign-in attempts; try again later.' } });
+		const authLimit = rateLimit({ windowMs: 900000, limit: 30, keyGenerator: req => RateLimitSupport.clientIp(req), store: ApiRateLimit.getStore('auth', 900000), passOnStoreError: true, message: { error: 'Too many sign-in attempts; try again later.' } });
+		const tokenLimit = ApiRateLimit.tokenLimiter(authLimit);
 		Security.mount(app, authLimit);
-		await PublicApi.mount(app, authLimit);
+		await PublicApi.mount(app, authLimit, tokenLimit);
 		app.post('/auth/login', authLimit, async (req, res) => { await Auth.login(req.body.email, null, { origin: req.boundAccount ? Server.requestOrigin(req) : Auth.origin, account: req.boundAccount, return_to: req.session.return_to && (req.session.return_to.startsWith('/oauth/authorize?') || req.session.return_to.startsWith('/account/delete')) ? req.session.return_to : undefined }); res.json({ message: 'Check your email for a sign-in link.' }); });
 		app.get('/auth/callback', async (req, res) => {
 			res.set('Referrer-Policy', 'no-referrer');
@@ -164,7 +168,7 @@ export class Server {
 			res.status(202).json({ html: pug.renderFile('./views/ajax/account-deletion-receipt.pug') });
 		});
 		app.post('/auth/logout', async (req, res) => { await new Promise(resolve => req.session.destroy(resolve)); res.json({ signed_out: true }); });
-		app.post('/oauth/token', authLimit, async (req, res) => res.json(await Auth.exchange(req.body)));
+		app.post('/oauth/token', tokenLimit, async (req, res) => res.json(await Auth.exchange(req.body)));
 		app.get('/oauth/browser-callback', (req, res) => { res.setHeader('Cache-Control', 'no-store'); res.setHeader('Referrer-Policy', 'no-referrer'); res.render('browser-callback'); });
 		app.get('/oauth/authorize', async (req, res) => {
 			if (!req.session.user) { req.session.return_to = req.originalUrl; return res.render('login', { returnTo: req.originalUrl }); }
@@ -192,7 +196,7 @@ export class Server {
 			const usage = await Billing.usage(account._id);
 			const profile = await User.findById(ctx.user).lean();
 			await AdminSettings.application(req, res, profile, ctx);
-			res.render('app', { productUpdatesEnabled: ProductUpdates.eligible(req), news: req.path === '/news', product_updates: req.path === '/news' ? await ProductUpdates.listProductUpdates() : null, importFormats: Libraries.importFormats, accounts, account, ctx, libraries: await Libraries.list(ctx), team: await Team.list(ctx), profile, avatarStyles, ...Billing.locals(account, ctx, usage), whiteLabelSettings: WhiteLabel.serialize(account) });
+			res.render('app', { productUpdatesEnabled: ProductUpdates.eligible(req), news: req.path === '/news', product_updates: req.path === '/news' ? await ProductUpdates.listProductUpdates() : null, importFormats: Libraries.importFormats, accounts, account, ctx, libraries: await Libraries.list(ctx), team: await Team.list(ctx), profile, avatarStyles, ...Billing.locals(account, ctx, usage), whiteLabelEnabled: WhiteLabel.enabled(), whiteLabelSettings: Support.admin(ctx) ? WhiteLabel.domainSettings(account) : WhiteLabel.serialize(account) });
 		});
 		app.get('/snippet-assets/:account/:id', async (req, res) => { const ctx = await Security.context(req, req.params.account); const asset = await Assets.get(ctx, req.params.id, true); res.set({ 'Content-Type': asset.mime_type, 'Content-Length': String(asset.size), ETag: `"${asset.id}"`, 'Cache-Control': 'private, max-age=31536000, immutable' }).send(asset.data); });
 		app.use('/api/v1', (req, res) => res.status(426).json({ error: 'Upgrade TypeRelay: rich text requires sync protocol 6', protocol: 6 }));
@@ -215,16 +219,22 @@ export class Server {
 		app.get('/api/v2/statistics/export', async (req, res) => res.type('text/csv').attachment('typerelay-statistics.csv').send(Statistics.csv(await Statistics.report(req.ctx, req.query))));
 		app.patch('/api/v2/statistics/preferences', async (req, res) => res.json(await Statistics.preferences(req.ctx, req.body.scope, req.body)));
 
-		app.post('/api/v2/assets', express.raw({ type: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'], limit: '5mb' }), async (req, res) => res.json(await Assets.put(req.ctx, req.body)));
+		// Same bucket and threshold as the /api/v3 upload limiter.
+		const uploadLimit = ApiRateLimit.createLimiter('api-upload', ApiRateLimit.getConfig().uploadPerMinute, undefined, ApiRateLimit.getUserKey);
+		// Only a library created with snippets or YAML can fetch images in bulk; sync, poll and plain edits stay unlimited.
+		const bulkCreateLimit = ApiRateLimit.createLimiter('api-upload', ApiRateLimit.getConfig().uploadPerMinute, request => !ApiRateLimit.isBulkLibraryCreate(request), ApiRateLimit.getUserKey);
+		// The desktop sync loop uploads every missing image with one PUT each, so it needs more headroom than the other upload routes.
+		const assetPutLimit = ApiRateLimit.createLimiter('api-asset-put', 120, undefined, ApiRateLimit.getUserKey);
+		app.post('/api/v2/assets', uploadLimit, express.raw({ type: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'], limit: '5mb' }), async (req, res) => res.json(await Assets.put(req.ctx, req.body)));
 		app.post('/api/v2/assets/presence', async (req, res) => res.json(await Assets.presence(req.ctx, req.body.ids)));
 		app.patch('/api/v2/assets/:id/sources', async (req, res) => res.json(await Assets.mergeSources(req.ctx, req.params.id, req.body.source_urls)));
-		app.put('/api/v2/assets/:id', express.raw({ type: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'], limit: '2mb' }), async (req, res) => res.json(await Assets.accept(req.ctx, req.body, req.params.id)));
+		app.put('/api/v2/assets/:id', assetPutLimit, express.raw({ type: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'], limit: '2mb' }), async (req, res) => res.json(await Assets.accept(req.ctx, req.body, req.params.id)));
 		app.get('/api/v2/assets/:id', async (req, res) => { const asset = await Assets.get(req.ctx, req.params.id, true); res.set({ 'Content-Type': asset.mime_type, 'Content-Length': String(asset.size), ETag: `"${asset.id}"`, 'Cache-Control': 'private, max-age=31536000, immutable' }).send(asset.data); });
-		app.post('/api/v2/assets/remote', async (req, res) => res.json(await Assets.remote(req.ctx, req.body.url)));
-		app.post('/api/v2/assets/:id/refresh', async (req, res) => { const asset = await Assets.get(req.ctx, req.params.id); Support.assert(asset.source_urls?.length, 'Asset has no remote source', 409); res.json(await Assets.remote(req.ctx, asset.source_urls.at(-1))); });
+		app.post('/api/v2/assets/remote', uploadLimit, async (req, res) => res.json(await Assets.remote(req.ctx, req.body.url)));
+		app.post('/api/v2/assets/:id/refresh', uploadLimit, async (req, res) => { const asset = await Assets.get(req.ctx, req.params.id); Support.assert(asset.source_urls?.length, 'Asset has no remote source', 409); res.json(await Assets.remote(req.ctx, asset.source_urls.at(-1))); });
 		app.get('/api/v2/libraries/:id/export-bundle', async (req, res) => { const bundle = await Bundles.export(req.ctx, req.params.id); res.set({ 'Content-Type': 'application/zip', 'Content-Disposition': `attachment; filename="${bundle.name}"`, 'Content-Length': String(bundle.bytes.length) }).send(bundle.bytes); });
-		app.post('/api/v2/import/bundle', express.raw({ type: ['application/zip', 'application/octet-stream'], limit: '16mb' }), async (req, res) => { const bundle = await Bundles.import(req.ctx, req.body); const result = await Libraries.mutate(req.ctx, String(req.headers['x-operation-id'] || ''), { bundle: Support.hash(req.body) }, async (ctx, session) => ({ library: await Libraries.create(ctx, bundle, session) })); await Server.result(res, req.ctx, result); });
-		Security.mountPrivate(app, rateLimit({ windowMs: 900000, limit: 60, message: { error: 'Too many security requests; try again later.' } }));
+		app.post('/api/v2/import/bundle', uploadLimit, express.raw({ type: ['application/zip', 'application/octet-stream'], limit: '16mb' }), async (req, res) => { const bundle = await Bundles.import(req.ctx, req.body); const result = await Libraries.mutate(req.ctx, String(req.headers['x-operation-id'] || ''), { bundle: Support.hash(req.body) }, async (ctx, session) => ({ library: await Libraries.create(ctx, bundle, session) }), { input: bundle }); await Server.result(res, req.ctx, result); });
+		Security.mountPrivate(app, rateLimit({ windowMs: 900000, limit: 60, keyGenerator: req => RateLimitSupport.clientIp(req), store: ApiRateLimit.getStore('security', 900000), passOnStoreError: true, message: { error: 'Too many security requests; try again later.' } }));
 		app.post('/api/v2/billing/trial', async (req, res) => {
 			Support.assert(Support.admin(req.ctx), 'Admin required', 403);
 			await Billing.startTrial(req.ctx.account);
@@ -264,18 +274,7 @@ export class Server {
 		app.post('/api/v2/white-label/domain/verify', async (req, res) => { Support.assert(Support.admin(req.ctx), 'Admin required', 403); Server.whiteLabelResult(res, await WhiteLabel.verify(req.ctx.account)); });
 		app.post('/api/v2/white-label/domain/refresh', async (req, res) => { Support.assert(Support.admin(req.ctx), 'Admin required', 403); Server.whiteLabelResult(res, await WhiteLabel.refresh(req.ctx.account)); });
 		app.delete('/api/v2/white-label/domain', async (req, res) => { Support.assert(Support.admin(req.ctx), 'Admin required', 403); Server.whiteLabelResult(res, await WhiteLabel.remove(req.ctx.account)); });
-		app.post('/api/v2/white-label/assets/:kind', async (req, res) => {
-			Support.assert(Support.admin(req.ctx), 'Admin required', 403);
-			await mkdir(WhiteLabel.temporaryRoot(req.ctx.account), { recursive: true });
-			const form = formidable({ uploadDir: WhiteLabel.temporaryRoot(req.ctx.account), keepExtensions: true, maxFileSize: WhiteLabel.maximumFileSize, minFileSize: 1, allowEmptyFiles: false, multiples: false });
-			let file;
-			try {
-				const [, files] = await form.parse(req);
-				file = (Array.isArray(files.file) ? files.file : [files.file]).find(value => value?.filepath);
-				Support.assert(file, 'Choose an image', 400);
-				Server.whiteLabelResult(res, await WhiteLabel.upload(req.ctx.account, req.params.kind, file));
-			} finally { if (file?.filepath) await rm(file.filepath, { force: true }); }
-		});
+		app.post('/api/v2/white-label/assets/:kind', async (req, res) => { Support.assert(Support.admin(req.ctx), 'Admin required', 403); await Server.whiteLabelAssetUpload(req, res); });
 		app.delete('/api/v2/white-label/assets/:kind', async (req, res) => { Support.assert(Support.admin(req.ctx), 'Admin required', 403); Server.whiteLabelResult(res, await WhiteLabel.deleteAsset(req.ctx.account, req.params.kind)); });
 		app.get('/api/v2/operations/:id', async (req, res) => {
 			const receipt = await Operation.findOne({ account: req.ctx.account, user: req.ctx.user, operation: req.params.id }).lean();
@@ -312,10 +311,10 @@ export class Server {
 			res.render('ajax/mobile_apps_modal', { model: { ios: { url: IOS_BETA_URL, qrcode: iosQrcode }, android: { url: ANDROID_BETA_URL, qrcode: androidQrcode } } });
 		});
 		app.get('/api/v2/libraries', async (req, res) => res.json(await Libraries.list(req.ctx)));
-		app.post('/api/v2/import/:format/preview', async (req, res) => { const preview = await Libraries.previewImport(req.params.format, req.body); res.json({ ...preview, html: pug.renderFile('./views/ajax/snippetslab.pug', preview) }); });
-		app.post('/api/v2/import/preview', async (req, res) => res.json(await Yaml.run(req.body.yaml)));
-		app.post('/api/v2/import/:format', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.commitImport(ctx, req.params.format, req.body, session))));
-		app.post('/api/v2/libraries', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, async (ctx, session) => ({ library: await Libraries.create(ctx, req.body, session) }))));
+		app.post('/api/v2/import/:format/preview', uploadLimit, async (req, res) => { const preview = await Libraries.previewImport(req.params.format, req.body); res.json({ ...preview, html: pug.renderFile('./views/ajax/snippetslab.pug', preview) }); });
+		app.post('/api/v2/import/preview', uploadLimit, async (req, res) => res.json(await Yaml.run(req.body.yaml)));
+		app.post('/api/v2/import/:format', uploadLimit, async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.commitImport(ctx, req.params.format, req.body, session), { format: req.params.format })));
+		app.post('/api/v2/libraries', bulkCreateLimit, async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, async (ctx, session) => ({ library: await Libraries.create(ctx, req.body, session) }))));
 		app.patch('/api/v2/libraries/:id', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.settings(ctx, req.params.id, req.body, session))));
 		app.post('/api/v2/libraries/:id/snippets', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.upload(ctx, req.params.id, req.body, session))));
 		app.get('/api/v2/personal-abbreviations', async (req, res) => res.json(await Server.personalPresentation(req.ctx)));
@@ -324,7 +323,7 @@ export class Server {
 			res.json({ ...result, ...await Server.personalPresentation(req.ctx) });
 		});
 		app.get('/api/v2/sync', async (req, res) => res.json({ ...await Libraries.download(req.ctx, Number(req.query.cursor || 0), req.headers['x-typerelay-personal-abbreviations'] === '1'), statistics_identity: { account: req.ctx.account, user: req.ctx.user, device: req.ctx.device || null } }));
-		app.post('/api/v2/conflicts/:id', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.resolve(ctx, req.params.id, req.body, session))));
+		app.post('/api/v2/conflicts/:id', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.resolve(ctx, req.params.id, req.body, session), { conflict: req.params.id })));
 		app.get('/api/v2/team', async (req, res) => res.json(await Team.list(req.ctx)));
 		app.post('/api/v2/team/members', async (req, res) => { const result = await Team.add(req.ctx, req.body); res.json({ ...result, html: pug.renderFile('./views/ajax/member.pug', { member: result.member, ctx: req.ctx, viewerAvatarStyle: (await User.findById(req.ctx.user).select('avatar_style').lean()).avatar_style }) }); });
 		app.post('/api/v2/team/invitations', async (req, res) => res.json(await Team.invite(req.ctx, req.body.email)));
@@ -399,11 +398,30 @@ export class Server {
 		return server;
 	}
 	static requestOrigin(req) {
-		const protocol = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0].trim();
-		const host = String(req.headers['x-forwarded-host'] || req.headers.host || new URL(Auth.origin).host).split(',')[0].trim();
-		return `${protocol}://${host}`;
+		// Only a verified custom domain may supply the origin; a forwarded Host header never does.
+		return req.boundOrigin || Auth.origin;
 	}
 	static whiteLabelResult(res, settings) { res.json({ settings, html: pug.renderFile('./views/ajax/white-label.pug', { whiteLabelSettings: settings }), brand_html: pug.renderFile('./views/ajax/brand.pug', { brandUrl: settings.logo_url }) }); }
+	static async whiteLabelAssetUpload(req, res) {
+		await WhiteLabel.assertUpload(req.ctx.account);
+		await mkdir(WhiteLabel.temporaryRoot(req.ctx.account), { recursive: true });
+		const form = formidable({ uploadDir: WhiteLabel.temporaryRoot(req.ctx.account), keepExtensions: true, maxFileSize: WhiteLabel.maximumFileSize, minFileSize: 1, allowEmptyFiles: false, multiples: false });
+		const paths = new Set();
+		form.on('fileBegin', (name, file) => { if (file?.filepath) paths.add(file.filepath); });
+		form.on('file', (name, file) => { if (file?.filepath) paths.add(file.filepath); });
+		const cleanup = () => Promise.allSettled([...paths].map(path => rm(path, { force: true })));
+		try {
+			const [, files] = await form.parse(req);
+			for (const values of Object.values(files)) for (const value of (Array.isArray(values) ? values : [values])) if (value?.filepath) paths.add(value.filepath);
+			const names = Object.keys(files);
+			Support.assert(names.length === 1 && names[0] === 'file', 'Choose an image', 400);
+			const file = (Array.isArray(files.file) ? files.file : [files.file]).find(value => value?.filepath);
+			Support.assert(file, 'Choose an image', 400);
+			const settings = await WhiteLabel.upload(req.ctx.account, req.params.kind, file);
+			await cleanup();
+			Server.whiteLabelResult(res, settings);
+		} finally { await cleanup(); }
+	}
 	static async personalPresentation(ctx) {
 		let result;
 		await mongoose.connection.transaction(async session => {

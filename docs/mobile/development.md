@@ -1,3 +1,8 @@
+---
+title: "TypeRelay mobile development"
+description: "Build and test TypeRelay mobile apps and native keyboards with shared root version metadata."
+---
+
 # TypeRelay mobile development
 
 The mobile app lives in `apps/mobile`. It uses Mailtwine's React, TypeScript, Vite and Capacitor stack. Swift and Kotlin implement the snippet keyboards. The existing Rust client supplies SQLite storage, outbox replay, asset normalization, conflict recovery and rendering through `crates/mobile`.
@@ -9,6 +14,10 @@ The editor exposes the current three authoring types: Text, Code, and Rich text.
 Snippet rows support configurable gestures. Defaults are left swipe to Copy, right swipe to Edit, and far-right swipe to move the snippet to Trash. Releasing after the action threshold executes immediately: Copy writes directly to the clipboard and Edit opens the editor. Tapping the row remains the prompted template/copy flow. Device-local settings under the keyboard section can assign Copy, Edit, Delete, or no action to each gesture. Vertical movement cancels a gesture so normal list scrolling remains available. Unsaved drafts appear above the list, can be resumed or discarded from the list, and expose a Trash action next to Save inside the editor.
 
 Saved snippets show a Trash action beside Save only when their library grants edit permission; the native store repeats permission and revision validation. Settings includes a Trash drawer. Returned items always expose Restore, while permanent deletion appears only for items whose library grants manage permission. All actions update the offline database and keyboard snapshot before synchronization.
+
+## Release versions
+
+Edit `version_mobile` and numeric `build_mobile` in the root `package.json`. Android and iOS share these values; the child mobile package has no release version. Android Gradle reads and validates the root values directly. `pnpm mobile:build`, `pnpm mobile:sync`, and both `pnpm native:*` entrypoints prepare all iOS app and keyboard Debug/Release settings. Commit the prepared Xcode metadata with the root change. Xcode checks the metadata before building and rejects stale values. To check it without building, run `node apps/mobile/scripts/version.mjs --check`. Apple builds, signing, archives, and uploads remain manual.
 
 ## Build
 

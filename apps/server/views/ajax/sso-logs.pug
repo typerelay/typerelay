@@ -13,4 +13,4 @@
 						tr(data-sso-log=log._id)
 							td
 								time(datetime=log.createdAt.toISOString() data-local-time)= log.createdAt.toISOString()
-							td= ({ settings_saved: 'Settings saved', recovery_generated: 'Recovery code generated', recovered: 'Owner recovery used', login_success: 'Identity verified; session sign-in started', login_failed: 'SAML response rejected', test_success: 'Provider test passed' })[log.event] || 'SSO event'
+							td= ({ settings_saved: 'Settings saved', recovery_generated: 'Recovery code generated', recovered: 'Owner recovery used', login_success: 'Identity verified; session sign-in started', login_failed: 'SAML response rejected', invite_required: 'Existing user needs an invitation', test_success: 'Provider test passed' })[log.event] || 'SSO event'

@@ -5,7 +5,7 @@ description: "Configure your TypeRelay profile, security, team, connected device
 
 # Settings
 
-Use the avatar menu in the web app to open Settings. The available sections depend on your role, plan and whether hosted billing is enabled.
+Use the avatar menu in the web app to open Settings. The available sections depend on your role, plan and which features the installation enables.
 
 ## Profile
 
@@ -41,7 +41,7 @@ Dynamic client registration remains available for compatible clients that do not
 
 ## Subscription and white-label
 
-Hosted account owners and admins can manage the plan, seats, payment details and invoices under **Subscription**. Team accounts can upload navigation/login logos and a favicon or configure a custom domain under **White-label**. See [Billing and white-label](../cloud/billing).
+Hosted account owners and admins can manage the plan, seats, payment details and invoices under **Subscription**. When white-label is enabled, owners and admins can upload navigation/login logos and a favicon or configure a custom domain under **White-label** with Team entitlement. This section is available independently of billing. See [Billing and white-label](../cloud/billing).
 
 ## Local desktop settings
 

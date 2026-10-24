@@ -2,5 +2,5 @@
 mod desktop_version;
 
 fn main() {
-    desktop_version::DesktopVersion::emit("../../apps/desktop/package.json");
+    desktop_version::DesktopVersion::emit("../../package.json");
 }

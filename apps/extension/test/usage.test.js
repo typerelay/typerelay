@@ -14,3 +14,11 @@ test('offline usage survives retry and stays bound to the originating identity',
 		await usage.flush(); assert.equal(sent.length, 1);
 	} finally { delete globalThis.chrome; }
 });
+
+test('identity retention deletes only usage from other identities', async () => {
+ const identity={server:'https://example.test',account:'one',user:'owner'};
+ const state={'usage-old':{identity:{...identity,account:'two'}},'usage-current':{identity},tokens:{access_token:'secret'}};
+ globalThis.chrome={storage:{local:{get:async()=>({...state}),remove:async keys=>{for(const key of keys)delete state[key];}}}};
+ try { const usage=new Usage(()=>{},()=>identity.server);await usage.retain(identity);assert.equal(state['usage-old'],undefined);assert(state['usage-current']);await usage.retain(null);assert.equal(state['usage-current'],undefined);assert(state.tokens); }
+ finally {delete globalThis.chrome;}
+});

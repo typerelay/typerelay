@@ -58,6 +58,23 @@ for (const [name, source, key, trigger] of [
 	assert.equal(imported.status, 200);
 });
 
+test('reads audit without fencing the account and record last use at most once a minute', async () => {
+	const grant = await Integration.findOne({ hash: Support.hash(ApiFixture.token) }).lean();
+	await Integration.updateOne({ _id: grant._id }, { $set: { last_used: null } });
+	const sequence = (await Account.findById(ApiFixture.owner.account).lean()).activity_sequence || 0;
+	const audits = await ApiAudit.countDocuments({ credential: grant._id });
+	assert.equal((await ApiFixture.request('/me')).status, 200);
+	const first = (await Integration.findById(grant._id).lean()).last_used;
+	assert.ok(first);
+	assert.equal((await ApiFixture.request('/me')).status, 200);
+	assert.equal(+(await Integration.findById(grant._id).lean()).last_used, +first);
+	await Integration.updateOne({ _id: grant._id }, { $set: { last_used: new Date(Date.now() - 61000) } });
+	assert.equal((await ApiFixture.request('/me')).status, 200);
+	assert.ok((await Integration.findById(grant._id).lean()).last_used > Date.now() - 10000);
+	for (let attempt = 0; attempt < 100 && await ApiAudit.countDocuments({ credential: grant._id }) < audits + 3; attempt++) await new Promise(resolve => setTimeout(resolve, 20));
+	assert.equal(await ApiAudit.countDocuments({ credential: grant._id }), audits + 3);
+	assert.equal((await Account.findById(ApiFixture.owner.account).lean()).activity_sequence || 0, sequence);
+});
 test('personal tokens are full access, non-expiring, hashed and revocable', async () => {
 	const before = (await AdminAccounts.counts([new mongoose.Types.ObjectId(ApiFixture.owner.account)])).get(ApiFixture.owner.account).integrations;
 	const { token, grant } = await Auth.createIntegration(ApiFixture.owner, { name: 'Mailtwine parity', days: 1, scopes: ['content:read'] });
@@ -86,6 +103,19 @@ test('private CRUD, metadata, retries and search use the shared sync data', asyn
 	const outsider = (await Auth.createIntegration(ApiFixture.outsider, { name: 'Other', scopes: Auth.scopes })).token;
 	assert.equal((await ApiFixture.request('/libraries/' + ApiFixture.library.id, 'GET', null, outsider)).status, 404);
 	assert.equal((await ApiFixture.request('/libraries', 'GET', null, outsider)).value.items.length, 0);
+});
+test('template variables named like internal fields are returned intact while internal fields stay hidden', async () => {
+	const variables = Object.fromEntries(['hash', 'refresh', 'records', 'replace'].map(name => [name, { label: name, default: 'ABC', required: false }]));
+	const content = { version: 1, type: 'template', text: 'Hi {{hash}} {{refresh}} {{records}} {{replace}}', variables };
+	const created = await ApiFixture.request('/libraries', 'POST', { operation_id: randomUUID(), name: 'Variables', snippets: [{ id: randomUUID(), title: 'Fields', trigger: null, content }] });
+	assert.equal(created.status, 200);
+	const id = created.value.library.id;
+	const rows = (await ApiFixture.request('/libraries/' + id + '/snippets')).value.items;
+	assert.deepEqual(rows[0].content, content);
+	assert.equal((await ApiFixture.request('/libraries/' + id + '/snippets/' + rows[0].id)).value.content.variables.hash.default, 'ABC');
+	for (const value of [created.value, ...rows]) for (const key of ['__v', 'purge_readers', 'api_scope', 'records']) assert.equal(value[key], undefined);
+	assert.equal(created.value.library.purge_readers, undefined);
+	assert.deepEqual(PublicApi.clean({ _id: 'x', hash: 'secret', __v: 1, content: { variables: { hash: 1 } }, local: { refresh: 2 } }), { id: 'x', content: { variables: { hash: 1 } }, local: { refresh: 2 } });
 });
 test('pagination, atomic stale moves, Trash and restore preserve IDs', async () => {
 	const library = ApiFixture.library;

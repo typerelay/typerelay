@@ -184,12 +184,12 @@ export class AdminAccounts {
 					const libraries = await Models.Library.find({ account: accountId, creator: userId }).session(session).lean();
 					const libraryIds = libraries.map(library => library._id);
 					const snippets = await Models.Snippet.find({ library: { $in: libraryIds } }).select('id content').session(session).lean();
-					const conflicts = await Models.Conflict.find({ $or: [{ library: { $in: libraryIds } }, { account: accountId, user: userId }] }).select('local base server').session(session).lean();
+					const conflicts = await Models.Conflict.find({ account: accountId, $or: [{ library: { $in: libraryIds } }, { user: userId }] }).select('local base server').session(session).lean();
 					const assetIds = Libraries.assetReferences([snippets, conflicts]);
 					await Models.PersonalAbbreviation.deleteMany({ account: accountId, snippet: { $in: snippets.map(snippet => snippet.id) } }, { session });
 					await Models.Operation.deleteMany({ account: accountId, $or: [{ 'result.library_id': { $in: libraryIds.map(String) } }, { 'result.library_ids': { $in: libraryIds.map(String) } }] }, { session });
 					await Models.Snippet.deleteMany({ library: { $in: libraryIds } }, { session });
-					await Models.Conflict.deleteMany({ $or: [{ library: { $in: libraryIds } }, { account: accountId, user: userId }] }, { session });
+					await Models.Conflict.deleteMany({ account: accountId, $or: [{ library: { $in: libraryIds } }, { user: userId }] }, { session });
 					await Models.Library.deleteMany({ _id: { $in: libraryIds } }, { session });
 					const references = [...libraryIds, ...libraryIds.map(String)];
 					await Models.MigrationBackup.deleteMany({ $or: [{ 'payload.library': { $in: references } }, { source_collection: 'libraries', 'payload._id': { $in: references } }, { 'payload.result.library._id': { $in: references } }, { 'payload.result.library_id': { $in: references } }, { 'payload.result.library_ids': { $in: references } }] }, { session });
@@ -207,7 +207,6 @@ export class AdminAccounts {
 				await Models.Ticket.create([{ hash: 'deletion-complete-' + userId, kind: 'deletion-complete', email: user.email, data: {} }], { session });
 				await Models.User.deleteOne({ _id: userId }, { session });
 			});
-			for await (const row of Models.mongoose.connection.collection('web_sessions').find({})) { let value; try { value = typeof row.session === 'string' ? JSON.parse(row.session) : row.session; } catch { continue; } if (String(value?.user) === String(userId) || String(value?.pending_factor?.user) === String(userId)) await Models.mongoose.connection.collection('web_sessions').deleteOne({ _id: row._id }); }
 		} catch (error) { await Models.User.updateOne({ _id: userId }, { $set: { 'deletion.error': 'Personal data cleanup will retry automatically.' } }); throw error; }
 	}
 	static async retry(id) {
@@ -231,16 +230,7 @@ export class AdminAccounts {
 		for (const id of schedules) { try { const schedule = await stripe.subscriptionSchedules.retrieve(id); if (['active', 'not_started'].includes(schedule.status)) await stripe.subscriptionSchedules.cancel(id, { invoice_now: false, prorate: false }); } catch (error) { if (error.code !== 'resource_missing') throw error; } }
 		for (const id of subscriptions) { try { const subscription = await stripe.subscriptions.retrieve(id); if (!['canceled', 'incomplete_expired'].includes(subscription.status)) await stripe.subscriptions.cancel(id, { invoice_now: false, prorate: false }); } catch (error) { if (error.code !== 'resource_missing') throw error; } }
 	}
-	static async removeDomain(account, options = {}) {
-		const ids = new Set([account.white_label?.cloudflare_hostname_id].filter(Boolean));
-		// Recover a hostname whose creation succeeded before its ID was persisted.
-		let records = [];
-		if (account.white_label?.hostname) { try { records = await (options.listHostnames || WhiteLabel.listHostnames)(account.white_label.hostname); } catch (error) { if (error.status !== 404) throw error; } }
-		for (const record of records) {
-			if (record.hostname === account.white_label.hostname && record.custom_metadata?.catalog === Billing.catalogName) ids.add(record.id);
-		}
-		for (const id of ids) await (options.deleteHostname || WhiteLabel.deleteHostname)(id);
-	}
+	static removeDomain(account, options = {}) { return WhiteLabel.cleanup(account._id, options); }
 	static tickets(account) { return { $or: [{ account: account._id }, { 'data.account': { $in: [account._id, String(account._id)] } }, { 'data.grant': { $in: [...(account.deletion.grants || []), ...(account.deletion.grants || []).map(String)] } }] }; }
 	static backups(account) { return { $or: [{ 'payload.account': { $in: [account._id, String(account._id)] } }, { source_collection: 'accounts', 'payload._id': { $in: [account._id, String(account._id)] } }] }; }
 	static async purge(id, options = {}) {
@@ -287,14 +277,6 @@ export class AdminAccounts {
 				await Models.AiRequest.deleteMany({ user: userId }, { session });
 				await Models.User.deleteOne({ _id: userId }, { session });
 			});
-			// connect-mongo stores sessions as JSON strings. Parse, never match a
-			// substring that could accidentally delete another user's session.
-			const orphanIds = new Set();
-			for (const userId of account.deletion.users) if (!await Models.User.exists({ _id: userId })) orphanIds.add(String(userId));
-			for await (const row of Models.mongoose.connection.collection('web_sessions').find({})) {
-				let session; try { session = typeof row.session === 'string' ? JSON.parse(row.session) : row.session; } catch { continue; }
-				if (orphanIds.has(String(session?.user)) || orphanIds.has(String(session?.pending_factor?.user))) await Models.mongoose.connection.collection('web_sessions').deleteOne({ _id: row._id });
-			}
 			stage = 'verification';
 			for (const name of AdminAccounts.owned) Support.assert(!await Models[name].exists({ account: account._id }), 'Account records remain', 409);
 			Support.assert(!await Models.Ticket.exists(AdminAccounts.tickets(account)) && !await Models.IntegrationToken.exists({ grant: { $in: account.deletion.grants } }) && !await Models.MigrationBackup.exists(AdminAccounts.backups(account)), 'Account references remain', 409);

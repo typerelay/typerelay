@@ -6,10 +6,9 @@ import { Support, Yaml } from './support.js';
 import { SnippetAsset } from '../model/index.js';
 
 export class Bundles {
-	static entry(snippet) { if (snippet.content?.type === 'rich_text') return { trigger: snippet.trigger, title: snippet.title, replace: snippet.content.markdown, type: 'rich_text', variables: snippet.content.variables || {} }; return Libraries.yaml(snippet); }
 	static async export(ctx, id) {
 		const library = await Libraries.get(ctx, id);
-		const manifest = await Yaml.export(library.snippets.map(Bundles.entry));
+		const manifest = await Yaml.export(library.snippets.map(snippet => Libraries.exportEntry(snippet, true)));
 		const ids = [...new Set(library.snippets.flatMap(snippet => snippet.content?.assets || []))]; const assetMetadata = {}; const files = { 'snippets.yml': strToU8(manifest.yaml) };
 		Support.assert(ids.length <= 998, 'Bundle has too many images; export smaller libraries', 413);
 		let total = files['snippets.yml'].length;
@@ -73,7 +72,7 @@ export class Bundles {
 		Support.assert(files['bundle.json'] && files['snippets.yml'], 'Bundle requires bundle.json and snippets.yml', 422);
 		let metadata; try { metadata = JSON.parse(strFromU8(files['bundle.json'])); } catch { Support.assert(false, 'Invalid bundle metadata', 422); }
 		Support.assert(metadata.version === 1 && typeof metadata.name === 'string' && Array.isArray(metadata.assets) && metadata.assets.length <= 998 && new Set(metadata.assets).size === metadata.assets.length, 'Unsupported bundle metadata', 422);
-		for (const id of metadata.assets) { Support.assert(typeof id === 'string' && /^[a-f0-9]{64}$/.test(id) && files[`assets/${id}`], `Bundle asset ${id} is missing`, 422); let saved = metadata.asset_metadata?.[id]; if (!saved && files[`metadata/${id}.json`]) { try { saved = JSON.parse(strFromU8(files[`metadata/${id}.json`])); } catch { Support.assert(false, 'Invalid image metadata', 422); } } const sources = saved?.source_urls || []; Support.assert(Array.isArray(sources) && sources.every(source => typeof source === 'string'), 'Invalid image sources', 422); await Assets.accept(ctx, Buffer.from(files[`assets/${id}`]), id, sources); }
+		for (const id of metadata.assets) { Support.assert(typeof id === 'string' && /^[a-f0-9]{64}$/.test(id) && files[`assets/${id}`], `Bundle asset ${id} is missing`, 422); let saved = metadata.asset_metadata?.[id]; if (!saved && files[`metadata/${id}.json`]) { try { saved = JSON.parse(strFromU8(files[`metadata/${id}.json`])); } catch { Support.assert(false, 'Invalid image metadata', 422); } } const sources = (Array.isArray(saved?.source_urls) ? saved.source_urls : []).filter(source => typeof source === 'string' && source.length <= 2048 && /^https?:\/\//i.test(source) && URL.canParse(source)).slice(-Assets.maxSources); await Assets.accept(ctx, Buffer.from(files[`assets/${id}`]), id, sources); }
 		const parsed = await Yaml.run(strFromU8(files['snippets.yml']));
 		return { name: metadata.name, snippets: parsed.matches };
 	}

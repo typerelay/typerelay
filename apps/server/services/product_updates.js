@@ -113,9 +113,9 @@ export class ProductUpdates {
 		if (updates.length) {
 			bulkResult = await productUpdateModel.bulkWrite(updates.map((update) => ({ updateOne: { filter: { ghost_id: update.ghost_id }, update: { $set: update }, upsert: true } })), { ordered: false });
 		}
-		const activeGhostIds = updates.map((update) => update.ghost_id);
-		const staleQuery = activeGhostIds.length ? { active: true, ghost_id: { $nin: activeGhostIds } } : { active: true };
-		const staleResult = await productUpdateModel.updateMany(staleQuery, { $set: { active: false, show_modal: false } });
+		// An empty list is indistinguishable from a broken reply; keep the current updates.
+		if (!updates.length) return { enabled: true, fetched: 0, upserted: 0, deactivated: 0 };
+		const staleResult = await productUpdateModel.updateMany({ active: true, ghost_id: { $nin: updates.map((update) => update.ghost_id) } }, { $set: { active: false, show_modal: false } });
 		return { enabled: true, fetched: updates.length, upserted: bulkResult?.upsertedCount || 0, deactivated: staleResult?.modifiedCount || 0 };
 	}
 

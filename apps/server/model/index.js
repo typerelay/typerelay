@@ -3,6 +3,8 @@ import { avatarStyles } from './avatar_styles.js';
 
 const objectid = mongoose.Schema.Types.ObjectId;
 const mixed = mongoose.Schema.Types.Mixed;
+// Read-mostly models read from secondaries like Helpmonks; MongoDB requires primary inside transactions.
+const secondaryReads = schema => schema.pre(['find', 'findOne', 'countDocuments', 'distinct'], function () { if (!this.getOptions().session?.inTransaction()) this.read('secondaryPreferred'); }).pre('aggregate', function () { if (!this.options.session?.inTransaction()) this.read('secondaryPreferred'); });
 const asset = new mongoose.Schema({ url: String, storage_key: { type: String, select: false }, mime_type: String, size: Number, width: Number, height: Number, updated_at: Date }, { _id: false });
 const User = mongoose.model('User', new mongoose.Schema({ deletion: { requested_at: Date, accounts: [objectid], owned_accounts: [objectid], review_accounts: [objectid], reviewed_at: Date, next_attempt_at: Date, error: String }, email: { type: String, unique: true }, name: String, avatar_style: { type: String, enum: Object.keys(avatarStyles), default: 'initials' }, password: { type: String, select: false }, totp_secret: { type: String, select: false }, totp_enabled: { type: Boolean, default: false }, totp_step: { type: Number, select: false }, auth_version: { type: Number, default: 0 }, activity_sequence: { type: Number, default: 0 }, last_login: { type: Date, default: null }, product_updates_seen_at: { type: Date, default: Date.now, select: false } }, { timestamps: true }));
 const Passkey = mongoose.model('Passkey', new mongoose.Schema({ user: { type: objectid, index: true }, credential_id: { type: String, unique: true }, public_key: { type: String, select: false }, counter: Number, transports: [String], name: String }, { timestamps: true }));
@@ -15,6 +17,8 @@ const accountSchema = new mongoose.Schema({
 	admin_override: { plan: { type: String, enum: ['free', 'pro', 'team', null], default: null }, limits: { people: { type: Number, default: null }, snippets: { type: Number, default: null }, libraries: { type: Number, default: null }, machines: { type: Number, default: null } } },
 	deletion: { requested_at: Date, stage: String, error: String, users: [objectid], grants: [objectid], lease: String, lease_until: Date },
 	sequence: { type: Number, default: 0 },
+	sync_history_version: Number,
+	sync_floor: Number,
 	plan: { type: String, enum: ['free', 'pro', 'team'], default: 'free' },
 	sso: {
 		enabled: { type: Boolean, default: false }, enforce: { type: Boolean, default: false }, provision: { type: Boolean, default: false },
@@ -23,6 +27,7 @@ const accountSchema = new mongoose.Schema({
 		recovery_hash: { type: String, select: false }, recovery_ready: { type: Boolean, default: false },
 	},
 	billing: {
+		revision: { type: Number, default: 0 },
 		stripe_customer_id: { type: String, select: false },
 		stripe_subscription_id: { type: String, select: false },
 		stripe_free_subscription_id: { type: String, select: false },
@@ -63,6 +68,11 @@ const accountSchema = new mongoose.Schema({
 		hostname: { type: String, default: '' },
 		state: { type: String, enum: ['unconfigured', 'pending_dns', 'pending_ssl', 'active', 'disabled_by_plan', 'error'], default: 'unconfigured' },
 		cloudflare_hostname_id: { type: String, default: '', select: false },
+		claim_token: { type: String, default: '', select: false },
+		provider_action: { type: String, enum: ['', 'creating', 'deleting'], default: '' },
+		pending_hostname: { type: String, default: null },
+		operation_token: { type: String, default: '', select: false },
+		operation_until: { type: Date, default: null, select: false },
 		cloudflare_hostname_status: { type: String, default: '' },
 		cloudflare_ssl_status: { type: String, default: '' },
 		dns_verified_at: { type: Date, default: null },
@@ -72,31 +82,38 @@ const accountSchema = new mongoose.Schema({
 		last_error: { type: String, default: '' },
 	},
 }, { timestamps: true });
-accountSchema.index({ 'white_label.hostname': 1 }, { unique: true, partialFilterExpression: { 'white_label.hostname': { $type: 'string', $gt: '' } } });
+accountSchema.index({ 'white_label.hostname': 1 }, { name: 'white_label_verified_hostname', unique: true, partialFilterExpression: { 'white_label.hostname': { $type: 'string', $gt: '' }, 'white_label.dns_verified_at': { $type: 'date' } } });
 accountSchema.index({ 'billing.helpmonks_sequence.status': 1, 'billing.helpmonks_sequence.next_attempt_at': 1 });
 accountSchema.index({ 'deletion.requested_at': 1, 'deletion.stage': 1 });
 const Account = mongoose.model('Account', accountSchema);
 const membership = new mongoose.Schema({ account: objectid, user: objectid, role: { type: String, enum: ['owner', 'admin', 'member'] } });
 membership.index({ account: 1, user: 1 }, { unique: true });
+membership.index({ user: 1 });
 const Member = mongoose.model('Member', membership);
-const Group = mongoose.model('Group', new mongoose.Schema({ account: objectid, name: String, users: [objectid] }));
+const Group = mongoose.model('Group', secondaryReads(new mongoose.Schema({ account: objectid, name: String, users: [objectid] })));
 const Ticket = mongoose.model('Ticket', new mongoose.Schema({ hash: { type: String, unique: true }, kind: String, email: String, account: objectid, data: mixed, expires: Date }));
 const signupNotificationSchema = new mongoose.Schema({ account: { type: objectid, required: true, unique: true, index: true }, user: { type: objectid, required: true, index: true }, email: { type: String, required: true }, name: { type: String, default: '' }, status: { type: String, enum: ['pending', 'sent', 'failed'], default: 'pending', index: true }, attempts: { type: Number, default: 0 }, next_attempt_at: { type: Date, default: null }, last_attempt_at: { type: Date, default: null }, sent_at: { type: Date, default: null }, failed_at: { type: Date, default: null }, last_error: { type: String, default: '' }, message_id: { type: String, required: true } }, { timestamps: true });
 signupNotificationSchema.index({ status: 1, next_attempt_at: 1 });
 const SignupNotification = mongoose.model('SignupNotification', signupNotificationSchema);
-const lifecycle = { state: { type: String, enum: ['active', 'trashed', 'purged'], default: 'active' }, trashed_at: Date, trashed_by: String, expires_at: Date };
+const lifecycle = { state: { type: String, enum: ['active', 'trashed', 'purged'], default: 'active' }, trashed_at: Date, trashed_by: String, expires_at: Date, purge_sequence: Number };
 const Library = mongoose.model('Library', new mongoose.Schema({ account: objectid, creator: objectid, name: String, shared: Boolean, editable: Boolean, members: [objectid], groups: [objectid], purge_readers: [objectid], revision: Number, ...lifecycle }));
 const snippetSchema = new mongoose.Schema({ account: objectid, library: objectid, id: String, title: String, trigger: String, content: mixed, position: Number, revision: Number, ...lifecycle }, { timestamps: true });
 snippetSchema.index({ library: 1, id: 1 }, { unique: true });
 snippetSchema.index({ account: 1, id: 1 }, { unique: true });
 snippetSchema.index({ library: 1, trigger: 1 }, { unique: true, partialFilterExpression: { state: 'active', trigger: { $type: 'string', $gt: '' } } });
+snippetSchema.index({ state: 1, expires_at: 1, account: 1 });
+snippetSchema.index({ account: 1, state: 1, purge_sequence: 1 });
+snippetSchema.index({ account: 1, 'content.assets': 1 });
+Library.schema.index({ state: 1, expires_at: 1, account: 1 });
+Library.schema.index({ account: 1, state: 1, purge_sequence: 1 });
 const Snippet = mongoose.model('Snippet', snippetSchema);
 const personalAbbreviationSchema = new mongoose.Schema({ account: { type: objectid, required: true }, user: { type: objectid, required: true }, snippet: { type: String, required: true }, trigger: { type: String, default: null }, revision: { type: Number, default: 0 }, conflicts: { type: [mixed], default: [] } }, { timestamps: true });
 personalAbbreviationSchema.index({ account: 1, user: 1, snippet: 1 }, { unique: true });
 export const PersonalAbbreviation = mongoose.model('PersonalAbbreviation', personalAbbreviationSchema);
 const snippetAssetSchema = new mongoose.Schema({ account: objectid, id: String, data: { type: Buffer, select: false }, mime_type: String, size: Number, width: Number, height: Number, animated: Boolean, source_urls: [String], staged_by: [objectid], last_referenced_at: Date }, { timestamps: true });
 snippetAssetSchema.index({ account: 1, id: 1 }, { unique: true });
-snippetAssetSchema.index({ account: 1, last_referenced_at: 1 });
+snippetAssetSchema.index({ account: 1, size: 1 });
+snippetAssetSchema.index({ updatedAt: 1, account: 1 });
 const SnippetAsset = mongoose.model('SnippetAsset', snippetAssetSchema);
 const Migration = mongoose.model('Migration', new mongoose.Schema({ key: { type: String, unique: true }, completed: Boolean }));
 const MigrationBackup = mongoose.model('MigrationBackup', new mongoose.Schema({ key: { type: String, unique: true }, source_collection: String, payload: mixed }));
@@ -105,8 +122,9 @@ Device.schema.add({ sso_revision: Number });
 const change = new mongoose.Schema({ account: objectid, sequence: Number, library: objectid, kind: String, departures: [String] });
 change.index({ account: 1, sequence: 1 }, { unique: true });
 const Change = mongoose.model('Change', change);
-const operation = new mongoose.Schema({ account: objectid, user: objectid, operation: String, fingerprint: String, result: mixed });
+const operation = new mongoose.Schema({ account: objectid, user: objectid, operation: String, fingerprint: String, result: mixed, expires: Date });
 operation.index({ account: 1, user: 1, operation: 1 }, { unique: true });
+operation.index({ expires: 1 }, { expireAfterSeconds: 0 });
 const Operation = mongoose.model('Operation', operation);
 const Conflict = mongoose.model('Conflict', new mongoose.Schema({ account: objectid, library: objectid, user: objectid, snippet: String, local: mixed, base: mixed, server: mixed, resolved: { type: Boolean, default: false } }, { timestamps: true }));
 
@@ -115,14 +133,16 @@ export { mongoose, User, Account, Member, Group, Ticket, SignupNotification, Lib
 // Integration credentials are independent of desktop enrollment.
 export const Integration = mongoose.model('Integration', new mongoose.Schema({ account: objectid, user: objectid, name: String, kind: { type: String, enum: ['pat', 'oauth'] }, scopes: [String], hash: { type: String, select: false }, expires: Date, revoked: { type: Boolean, default: false }, last_used: Date, client: String, resource: String, refresh: { type: String, select: false }, refresh_expires: Date }, { timestamps: true }));
 Integration.schema.add({ sso_revision: Number });
-export const SsoLog = mongoose.model('SsoLog', new mongoose.Schema({ account: { type: objectid, index: true }, user: objectid, event: String, expires: { type: Date, expires: 0 } }, { timestamps: true }));
+export const SsoLog = mongoose.model('SsoLog', secondaryReads(new mongoose.Schema({ account: { type: objectid, index: true }, user: objectid, event: String, expires: { type: Date, expires: 0 } }, { timestamps: true })));
 export const OAuthClient = mongoose.model('OAuthClient', new mongoose.Schema({ account: objectid, created_by: objectid, client_id: { type: String, unique: true }, name: String, client_uri: String, redirects: [String], registration_source: { type: String, enum: ['dynamic', 'manual'], default: 'dynamic' }, token_endpoint_auth_method: { type: String, enum: ['none', 'client_secret_post'], default: 'none' }, secret_hash: { type: String, select: false } }, { timestamps: true }));
 export const IntegrationToken = mongoose.model('IntegrationToken', new mongoose.Schema({ hash: { type: String, unique: true }, grant: objectid, resource: String, expires: Date }, { timestamps: true }));
-export const ApiAudit = mongoose.model('ApiAudit', new mongoose.Schema({ account: objectid, user: objectid, credential: objectid, operation: String, status: Number, expires: { type: Date, expires: 0 } }, { timestamps: true }));
-export const SystemSetting = mongoose.model('SystemSetting', new mongoose.Schema({ key: { type: String, unique: true }, value: mixed, revision: { type: Number, default: 0 } }, { timestamps: true }));
-export const AdminAudit = mongoose.model('AdminAudit', new mongoose.Schema({ account: objectid, actor: String, operation: String, status: Number }, { timestamps: true }));
+export const ApiAudit = mongoose.model('ApiAudit', secondaryReads(new mongoose.Schema({ account: objectid, user: objectid, credential: objectid, operation: String, status: Number, expires: { type: Date, expires: 0 } }, { timestamps: true })));
+export const SystemSetting = mongoose.model('SystemSetting', secondaryReads(new mongoose.Schema({ key: { type: String, unique: true }, value: mixed, revision: { type: Number, default: 0 } }, { timestamps: true })));
+export const AdminAudit = mongoose.model('AdminAudit', secondaryReads(new mongoose.Schema({ account: objectid, actor: String, operation: String, status: Number }, { timestamps: true })));
 export const AccountLease = mongoose.model('AccountLease', new mongoose.Schema({ account: { type: objectid, index: true }, token: { type: String, unique: true }, expires: { type: Date, expires: 0 } }));
-for (const model of [Group, Ticket, Library, Device, Conflict, ApiAudit, AdminAudit]) model.schema.index({ account: 1 });
+for (const model of [Group, Ticket, Device, ApiAudit, AdminAudit]) model.schema.index({ account: 1 });
+Conflict.schema.index({ account: 1, library: 1 });
+for (const field of ['access', 'refresh']) Device.schema.index({ [field]: 1 }, { sparse: true });
 IntegrationToken.schema.index({ expires: 1 }, { expireAfterSeconds: 0 });
 Ticket.schema.index({ expires: 1 }, { expireAfterSeconds: 0 });
 Integration.schema.index({ hash: 1 }, { unique: true, sparse: true });
@@ -148,23 +168,23 @@ const productUpdateSchema = new mongoose.Schema(
 productUpdateSchema.index({ active: 1, published_at: -1, _id: -1 });
 productUpdateSchema.index({ active: 1, show_modal: 1, published_at: -1, _id: -1 });
 
-export const ProductUpdate = mongoose.model('ProductUpdate', productUpdateSchema);
+export const ProductUpdate = mongoose.model('ProductUpdate', secondaryReads(productUpdateSchema));
 
 const usageEventSchema = new mongoose.Schema({ account: { type: objectid, required: true }, user: { type: objectid, required: true }, event_id: { type: String, required: true }, library: { type: objectid, required: true }, snippet: { type: String, required: true }, action: { type: String, enum: ['copy', 'insert'], required: true }, client: String, occurred_at: { type: Date, required: true }, characters: { type: Number, required: true }, shared: Boolean }, { timestamps: true });
 usageEventSchema.index({ account: 1, user: 1, event_id: 1 }, { unique: true });
 usageEventSchema.index({ account: 1, user: 1, occurred_at: 1 });
 usageEventSchema.index({ account: 1, shared: 1, occurred_at: 1 });
-export const UsageEvent = mongoose.model('UsageEvent', usageEventSchema);
+export const UsageEvent = mongoose.model('UsageEvent', secondaryReads(usageEventSchema));
 const statisticsPreferenceSchema = new mongoose.Schema({ account: { type: objectid, required: true }, user: { type: objectid, default: null }, wpm: { type: Number, default: 50 }, hourly_rate: { type: Number, default: 30 }, currency: { type: String, default: 'USD' } });
 statisticsPreferenceSchema.index({ account: 1, user: 1 }, { unique: true });
-export const StatisticsPreference = mongoose.model('StatisticsPreference', statisticsPreferenceSchema);
+export const StatisticsPreference = mongoose.model('StatisticsPreference', secondaryReads(statisticsPreferenceSchema));
 
 const aiSettingSchema = new mongoose.Schema({ use_managed: { type: Boolean, default: false }, account: { type: objectid, required: true }, user: { type: objectid, default: null }, enabled: { type: Boolean, default: true }, connections: { type: [mixed], default: [], select: false }, routes: { type: mixed, default: {} }, revision: { type: Number, default: 0 } }, { timestamps: true });
 aiSettingSchema.index({ account: 1, user: 1 }, { unique: true });
-export const AiSetting = mongoose.model('AiSetting', aiSettingSchema);
+export const AiSetting = mongoose.model('AiSetting', secondaryReads(aiSettingSchema));
 const aiUsageSchema = new mongoose.Schema({ account: { type: objectid, required: true }, user: { type: objectid, required: true }, day: { type: String, required: true }, count: { type: Number, default: 0 }, expires: { type: Date, expires: 0 } });
 aiUsageSchema.index({ account: 1, user: 1, day: 1 }, { unique: true });
-export const AiUsage = mongoose.model('AiUsage', aiUsageSchema);
+export const AiUsage = mongoose.model('AiUsage', secondaryReads(aiUsageSchema));
 const aiRequestSchema = new mongoose.Schema({ account: { type: objectid, required: true }, user: { type: objectid, required: true }, id: { type: String, required: true }, workflow: String, managed: Boolean, day: String, state: String, expires: { type: Date, expires: 0 } });
 aiRequestSchema.index({ account: 1, user: 1, id: 1 }, { unique: true });
-export const AiRequest = mongoose.model('AiRequest', aiRequestSchema);
+export const AiRequest = mongoose.model('AiRequest', secondaryReads(aiRequestSchema));

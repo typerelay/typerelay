@@ -1,10 +1,9 @@
 FROM rust:1.94-bookworm AS rust
 RUN apt-get update && apt-get install -y --no-install-recommends libxkbcommon-dev && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock package.json ./
 COPY crates ./crates
 COPY scripts ./scripts
-COPY apps/desktop/package.json ./apps/desktop/package.json
 COPY apps/desktop/helpers ./apps/desktop/helpers
 RUN cargo build --release --locked --bins
 RUN rustup target add wasm32-unknown-unknown && cargo build --release --locked -p typerelay-template-wasm --target wasm32-unknown-unknown

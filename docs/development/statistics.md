@@ -2,7 +2,7 @@
 
 Internal authenticated client endpoints under `/api/v2`:
 
-- `POST /statistics/events`: `{ identity?, events }`, batches up to 100. Optional identity binds account/user; authentication is authoritative. Events carry `event_id`, `library`, `snippet`, `action` (`copy`/`insert`), `client`, `occurred_at`, `characters`, and `shared`. Returns `accepted` and `discarded` event IDs. Clients acknowledge only these IDs.
+- `POST /statistics/events`: `{ identity?, events }`, batches up to 100. Optional identity binds account/user; authentication is authoritative. Events carry `event_id`, `library`, `snippet`, `action` (`copy`/`insert`), `client`, `occurred_at`, `characters`, and `shared`. Returns `accepted` and `discarded` event IDs. Each event is validated separately: an event with an invalid field (for example a malformed library ID or a future `occurred_at`) is listed in `discarded`, and the valid events in the same batch are stored. Clients acknowledge only these IDs.
 - `GET /statistics`: `scope=personal|team`, `range=7|30|90|all|custom`, `timezone`, and inclusive `start`/`end` dates for custom ranges. Returns settings, totals, daily/snippet/library/member groups, and Pug row fragments.
 - `GET /statistics/export`: same filters, CSV response with one Uses column (copies plus insertions), character/time/money savings, and report/estimate metadata; no separate Copies or Insertions columns.
 - `PATCH /statistics/preferences`: `scope`, `wpm`, `hourly_rate`, `currency` (ISO 4217). Defaults: 50, 30, USD.

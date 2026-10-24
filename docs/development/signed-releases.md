@@ -1,10 +1,15 @@
+---
+title: "TypeRelay signed desktop releases"
+description: "Prepare and verify signed TypeRelay desktop releases from the root package version."
+---
+
 # Maintainer signed releases
 
 TypeRelay uses a Tauri adapter in the shared desktop release toolkit. The Windows release command imports the existing Helpmonks YubiKey signer, certificate selection, PIN retry checks, signing probe, RFC 3161 timestamping and certificate-chain verification. It does not copy the signing implementation or export the private key.
 
 Normal GitHub builds remain unsigned test candidates. These maintainer commands require a clean `develop` checkout, pull it with `git pull --ff-only`, use frozen/locked dependencies, and never publish. Merge reviewed changes before running a release.
 
-For a desktop version change, edit only `apps/desktop/package.json`. Tauri reads it directly, and the native panel, engine, and TUI embed its version during their normal builds. Cargo crate versions are internal metadata and do not need to change for a desktop release.
+For a desktop version change, edit only `version` in the root `package.json`. Tauri resolves `../../../package.json` from `apps/desktop/src-tauri` and reads it directly, and the native panel, engine, and TUI embed its version during their normal builds. Cargo crate versions are internal metadata and do not need to change for a desktop release. The child desktop package has no release version. Builds read root metadata without rewriting tracked desktop files.
 
 For credentialed local macOS testing without notarization, use `pnpm build:macos:local` in `apps/desktop`. It builds the app and TUI with the installed Developer ID Application identity, verifies the bundle, and creates a local DMG. Set `APPLE_SIGNING_IDENTITY` only when more than one matching identity is installed. The stable identity keeps Accessibility and Input Monitoring approvals valid across rebuilds; ad-hoc signing is unsuitable because macOS treats each build as new code.
 

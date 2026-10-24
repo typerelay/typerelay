@@ -16,18 +16,24 @@
 							button.btn.btn-outline-danger.btn-sm(type="button" data-white-label-delete=kind disabled=!(whiteLabelSettings[kind] && whiteLabelSettings[kind].url)) Remove
 		.card.p-3.mb-5
 			h3.h6.fw-bold Custom domain
-			p.text-muted Add a DNS-only CNAME record pointing to the target, then verify it for Cloudflare SSL.
+			p.text-muted Save your hostname, then add the CNAME and ownership TXT records below before selecting Verify.
 			form#white-label-domain-form
 				label.form-label(for="white-label-hostname") Hostname
 				input#white-label-hostname.form-control.form-control-sm.mb-3(name="hostname" value=whiteLabelSettings.hostname autocomplete="off" required)
 				label.form-label(for="white-label-cname") CNAME target
 				input#white-label-cname.form-control.form-control-sm.mb-3(value=whiteLabelSettings.cname_target readonly)
+				if whiteLabelSettings.txt_name
+					label.form-label(for="white-label-txt-name") TXT name
+					input#white-label-txt-name.form-control.form-control-sm.mb-3(value=whiteLabelSettings.txt_name readonly)
+					label.form-label(for="white-label-txt-value") TXT value
+					input#white-label-txt-value.form-control.form-control-sm.mb-3(value=whiteLabelSettings.txt_value readonly)
+				div.small.text-muted.mb-3 Use DNS-only mode for the CNAME. Copy the TXT value exactly for this account.
 				.d-flex.justify-content-between
-					button.btn.btn-outline-danger.btn-sm(type="button" data-white-label-remove-domain disabled=!whiteLabelSettings.hostname) Remove
+					button#white-label-remove.btn.btn-outline-danger.btn-sm(type="button" data-white-label-remove-domain disabled=!whiteLabelSettings.hostname) Remove
 					.d-flex.gap-3
-						button.btn.btn-outline-secondary.btn-sm(type="button" data-white-label-refresh disabled=!whiteLabelSettings.hostname) Refresh
-						button.btn.btn-outline-primary.btn-sm(type="button" data-white-label-verify disabled=!whiteLabelSettings.hostname) Verify
-						button.btn.btn-primary.btn-sm(type="submit") Save
+						button#white-label-refresh.btn.btn-outline-secondary.btn-sm(type="button" data-white-label-refresh disabled=!whiteLabelSettings.hostname) Refresh
+						button#white-label-verify.btn.btn-outline-primary.btn-sm(type="button" data-white-label-verify disabled=!whiteLabelSettings.hostname) Verify
+						button#white-label-save.btn.btn-primary.btn-sm(type="submit") Save
 			.mt-3
 				span.badge.text-bg-secondary= whiteLabelSettings.state
 				if whiteLabelSettings.last_error

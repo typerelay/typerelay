@@ -19,9 +19,12 @@ typerelay import yaml ./snippets.yml --name "Imported"
 typerelay export "Imported" ./export.yml
 typerelay merge "Recovered snippets" "My snippets"
 typerelay trash
+typerelay recovery
 ```
 
 `connect` opens a browser unless `--no-browser` is passed. `trash` prints recoverable items; use `--restore ID` to restore one. Permanent emptying requires both `--empty` and `--yes`.
+
+`recovery` prints rejected offline edits, including their content and rejection reason. Copy the content before using `recovery --dismiss ID` to remove a saved record.
 
 On Omarchy, `typerelay doctor` inspects the session and required tools. Current desktop packages configure input access through the app and do not expose the legacy `install`, `setup` or `uninstall` commands. Those commands remain available only in standalone developer builds with `legacy-install` enabled.
 

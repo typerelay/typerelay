@@ -21,7 +21,7 @@ If you no longer have the code or access to the owner's ordinary sign-in, contac
 | SAML response rejected | Sign the complete response with SHA-256 or stronger. Compare issuer, audience, ACS, recipient, and current certificate against settings. |
 | Login expired or another browser | Start again from the TypeRelay SSO link in the same browser. Keep cookies enabled. Requests expire in ten minutes; the final handoff lasts one minute. |
 | Test login rejected | Use the same email as the TypeRelay owner/admin who started the test. Assign that identity to the provider app. |
-| User not added | Invite/add the user first, or test and enable provisioning. Check available seats and the provider's email NameID. |
+| User not added | Invite/add the user first, or test and enable provisioning. Provisioning never adds an existing TypeRelay user; invite that email instead. Check available seats and the provider's email NameID. |
 | Device/app no longer connects | Reauthenticate through SSO and approve the account again. Settings changes invalidate earlier SSO credentials; enforcement also blocks credentials issued without SSO. |
 | Domain changed | Update provider URLs to the values currently displayed in settings and repeat the test. |
 | Account is on Free | SSO and enforcement are inactive. The owner can use ordinary sign-in to manage the plan. |

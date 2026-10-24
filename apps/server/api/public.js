@@ -1,4 +1,3 @@
-import { AccountAccess } from '../services/account_access.js';
 import { timingSafeEqual } from 'node:crypto';
 import express from 'express';
 import pug from 'pug';
@@ -17,26 +16,28 @@ import { Assets } from '../services/assets.js';
 import { Bundles } from '../services/bundles.js';
 
 export class PublicApi {
-	static clean(value) {
+	// User-controlled payloads keep every key, so a template variable may be named hash, refresh, records or replace.
+	static userKeys = ['content', 'variables', 'local', 'base', 'server', 'value'];
+	static clean(value, raw = false) {
 		if (value == null || typeof value !== 'object') return value;
 		if (value instanceof Date) return value.toISOString();
 		if (value._bsontype === 'ObjectId') return String(value);
-		if (Array.isArray(value)) return value.map(item => PublicApi.clean(item));
+		if (Array.isArray(value)) return value.map(item => PublicApi.clean(item, raw));
 		const result = {};
 		for (const [key, item] of Object.entries(value)) {
-			if (['__v', 'records', 'replace', 'purge_readers', 'hash', 'refresh', 'api_scope'].includes(key) || (key === 'snippets' && value.creator)) continue;
-			if (key === '_id') { if (!value.id) result.id = String(item); } else result[key] = PublicApi.clean(item);
+			if (!raw && (['__v', 'records', 'replace', 'purge_readers', 'hash', 'refresh', 'api_scope'].includes(key) || (key === 'snippets' && value.creator))) continue;
+			if (key === '_id') { if (!value.id) result.id = String(item); } else result[key] = PublicApi.clean(item, raw || PublicApi.userKeys.includes(key));
 		}
 		return result;
 	}
 	static page(rows, query) {
 		const limit = Number(query.limit || 50);
 		Support.assert(Number.isInteger(limit) && limit >= 1 && limit <= 100, 'Limit must be 1–100');
-		const sorted = rows.map(PublicApi.clean).sort((a, b) => String(a.id) < String(b.id) ? -1 : String(a.id) > String(b.id) ? 1 : 0);
+		const sorted = rows.map(row => PublicApi.clean(row)).sort((a, b) => String(a.id) < String(b.id) ? -1 : String(a.id) > String(b.id) ? 1 : 0);
 		const rest = sorted.filter(row => !query.cursor || String(row.id) > String(query.cursor));
 		return { items: rest.slice(0, limit), next_cursor: rest.length > limit ? String(rest[limit - 1].id) : null };
 	}
-	static async mount(app, authLimit) {
+	static async mount(app, authLimit, tokenLimit = authLimit) {
 		const validators = new Map(operations.filter(operation => operation.method !== 'get').map(operation => [operation.id, new Ajv({ strict: false }).compile(ApiSchema.body(operation))]));
 		app.use('/api/v3', (req, res, next) => {
 			const origins = [Auth.origin, 'http://localhost:5173', ...(process.env.API_ALLOWED_ORIGINS || '').split(',')];
@@ -47,7 +48,7 @@ export class PublicApi {
 		app.get('/.well-known/oauth-authorization-server', (req, res) => res.json({ issuer: Auth.origin, authorization_endpoint: Auth.origin + '/integrations/authorize', token_endpoint: Auth.origin + '/integrations/token', registration_endpoint: Auth.origin + '/integrations/register', response_types_supported: ['code'], grant_types_supported: ['authorization_code', 'refresh_token'], token_endpoint_auth_methods_supported: ['none', 'client_secret_post'], code_challenge_methods_supported: ['S256'], scopes_supported: Auth.scopes }));
 		app.get('/.well-known/oauth-protected-resource/api/v3', (req, res) => res.json({ resource: Auth.apiResource(), authorization_servers: [Auth.origin], scopes_supported: Auth.scopes, bearer_methods_supported: ['header'] }));
 		app.post('/integrations/register', authLimit, async (req, res) => res.status(201).json(await Auth.registerIntegration(req.body)));
-		app.post('/integrations/token', authLimit, async (req, res) => { res.set('Cache-Control', 'no-store'); res.json(await Auth.exchangeIntegration(req.body)); });
+		app.post('/integrations/token', tokenLimit, async (req, res) => { res.set('Cache-Control', 'no-store'); res.json(await Auth.exchangeIntegration(req.body)); });
 		app.get('/integrations/authorize', async (req, res) => {
 			const { client, scopes } = await Auth.integrationRequest(req.query);
 			if (!req.session.user) { req.session.return_to = req.originalUrl; return res.render('login', { returnTo: req.originalUrl }); }
@@ -58,8 +59,8 @@ export class PublicApi {
 			res.render('integration-authorize', { client, scopes, request: req.query, accounts });
 		});
 		app.post('/integrations/authorize', async (req, res) => Security.authorizeWithSso(req, res, true));
-		app.post('/integrations/delegate', authLimit, async (req, res) => {
-			const expected = Buffer.from(process.env.JWT_SECRET || 'change-me');
+		app.post('/integrations/delegate', async (req, res) => {
+			const expected = Buffer.from(process.env.JWT_SECRET);
 			const supplied = Buffer.from(String(req.headers['x-mcp-secret'] || ''));
 			Support.assert(expected.length === supplied.length && timingSafeEqual(expected, supplied), 'Invalid MCP client', 401);
 			const resource = req.body?.resource ?? Auth.mcpResource();
@@ -82,9 +83,10 @@ export class PublicApi {
 		app.post('/api/v3/assets/remote', async (req, res) => { Auth.requireScope(req.ctx, 'content:write'); res.json(await Assets.remote(req.ctx, req.body.url)); });
 		app.post('/api/v3/assets/:id/refresh', async (req, res) => { Auth.requireScope(req.ctx, 'content:write'); const asset = await Assets.get(req.ctx, req.params.id); Support.assert(asset.source_urls?.length, 'Asset has no remote source', 409); res.json(await Assets.remote(req.ctx, asset.source_urls.at(-1))); });
 		app.get('/api/v3/libraries/:id/export-bundle', async (req, res) => { Auth.requireScope(req.ctx, 'content:read'); const bundle = await Bundles.export(req.ctx, req.params.id); res.set({ 'Content-Type': 'application/zip', 'Content-Disposition': `attachment; filename="${bundle.name}"`, 'Content-Length': String(bundle.bytes.length) }).send(bundle.bytes); });
-		app.post('/api/v3/imports/bundle', express.raw({ type: ['application/zip', 'application/octet-stream'], limit: '16mb' }), async (req, res) => { Auth.requireScope(req.ctx, 'content:write'); const operation = String(req.headers['x-operation-id'] || ''); const bundle = await Bundles.import(req.ctx, req.body); const result = await Libraries.mutate(req.ctx, operation, { bundle: Support.hash(req.body) }, async (ctx, session) => ({ library: await Libraries.create(ctx, bundle, session), api_scope: 'content:write' })); res.json(PublicApi.clean(result)); });
+		app.post('/api/v3/imports/bundle', express.raw({ type: ['application/zip', 'application/octet-stream'], limit: '16mb' }), async (req, res) => { Auth.requireScope(req.ctx, 'content:write'); const operation = String(req.headers['x-operation-id'] || ''); const bundle = await Bundles.import(req.ctx, req.body); const result = await Libraries.mutate(req.ctx, operation, { bundle: Support.hash(req.body) }, async (ctx, session) => ({ library: await Libraries.create(ctx, bundle, session), api_scope: 'content:write' }), { input: bundle }); res.json(PublicApi.clean(result)); });
 		for (const operation of operations) app[operation.method]('/api/v3' + operation.path, async (req, res) => {
-			res.on('finish', () => AccountAccess.write(req.ctx.account, async session => { await ApiAudit.create([{ account: req.ctx.account, user: req.ctx.user, credential: req.ctx.credential, operation: operation.id, status: res.statusCode, expires: new Date(Date.now() + 90 * 86400000) }], { session }); }).catch(() => console.error('API audit write failed')));
+			// Plain TTL insert: fencing would bump activity_sequence on every read and conflict with real edits.
+			res.on('finish', () => ApiAudit.create({ account: req.ctx.account, user: req.ctx.user, credential: req.ctx.credential, operation: operation.id, status: res.statusCode, expires: new Date(Date.now() + 90 * 86400000) }).catch(error => console.error('API audit write failed: ' + error.message)));
 			Auth.requireScope(req.ctx, operation.scope);
 			if (operation.scope.startsWith('team:')) Billing.assertTeam(req.ctx);
 			if (operation.scope === 'sharing:write') Billing.assertTeam(req.ctx, 'sharing');

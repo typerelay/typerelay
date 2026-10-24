@@ -12,6 +12,11 @@ export class Usage {
 		this.flushing = this.upload().finally(() => { this.flushing = null; });
 		return this.flushing;
 	}
+	async retain(identity) {
+		const state = await chrome.storage.local.get(null);
+		const keys = Object.entries(state).filter(([key, event]) => key.startsWith('usage-') && (!identity || JSON.stringify(event.identity) !== JSON.stringify(identity))).map(([key]) => key);
+		if (keys.length) await chrome.storage.local.remove(keys);
+	}
 	async upload() {
 		const state = await chrome.storage.local.get(null); const identity = state.statisticsIdentity;
 		if (!identity || identity.server !== this.origin()) return;

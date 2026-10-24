@@ -5,7 +5,7 @@ description: "Build, load, sign in to, and test the Type Relay Chrome extension 
 
 # TypeRelay Chrome extension
 
-The Chrome extension expands synced snippets in editable web fields. It keeps a local snapshot for offline use. The toolbar searches snippets on demand; account, sync, prefix, and web app links are in extension settings. Internal browser pages, the address bar, and native apps are outside its reach.
+The Chrome extension expands synced snippets in editable web fields. It keeps a local snapshot for offline use. If an expansion cannot complete, the typed delimiter (a space, or a newline in multiline fields) is restored to the field. The toolbar searches snippets on demand; account, sync, prefix, and web app links are in extension settings. Internal browser pages, the address bar, and native apps are outside its reach.
 
 ## Build and load
 
@@ -15,7 +15,7 @@ A fresh install opens the options page for sign-in. The toolbar opens settings w
 
 Sign in in the Chrome tab opened by the extension, then select an account and click **Connect device**. Magic Link sign-in can open another tab in the same browser profile; continue there. The extension recognizes its own callback on the Type Relay app origin, exchanges the code, and closes that callback tab. Account sign-in alone does not connect the extension.
 
-The extension uses the first-party device OAuth flow with PKCE and an exact callback path on the selected app origin. Browser connections appear in device management and do not count against Free's machine limit. Snippets and short-lived and refresh tokens stay in Chrome's extension storage. Images are cached in Cache Storage for offline insertion. The extension sends only OAuth and sync requests to the selected Type Relay app origin. It does not send field contents to Type Relay. The native host receives only a short-lived ownership signal; it never receives snippets or field text.
+The extension uses the first-party device OAuth flow with PKCE and an exact callback path on the selected app origin. Browser connections appear in device management and do not count against Free's machine limit. Snippets and short-lived and refresh tokens stay in Chrome's extension storage. Images are cached in Cache Storage for offline insertion. Sync sends the stored cursor and merges only changed libraries, access removals and deletions, falling back to a full snapshot when the server resets the cursor. The extension sends only OAuth and sync requests to the selected Type Relay app origin. It does not send field contents to Type Relay. The native host receives only a short-lived ownership signal; it never receives snippets or field text.
 
 ## Desktop coexistence
 
@@ -31,6 +31,8 @@ The Chrome Web Store assigns the final extension ID when the package is uploaded
 
 ## Release gate
 
+Template prompts preserve every valid field name, including `__proto__`, `constructor`, and `toString`.
+
 Google Docs uses the popup copy-and-manual-paste workflow. Automatic abbreviation expansion in Docs remains unsupported. Before Chrome Web Store submission, manually verify Enter and click copying, popup closure, paste at the original cursor/selection, multiline text, Unicode, variable submission/cancellation, formatting, links, and images in Docs and another rich editor. Also verify plain-text destinations, copying without the desktop bridge or a focused editor, and unchanged abbreviation expansion on supported sites. Formatting and image acceptance depend on the destination. Keep the listing staged until these checks pass; packaging alone does not clear this gate.
 
 The extension requests clipboardWrite to copy snippets; it does not request clipboardRead. The Web Store listing must disclose clipboard modification, broad site access, local snippet and image caching, sign-in tokens, and native messaging. Package only the `dist` directory. Keep all executable code in the package.
@@ -39,6 +41,8 @@ The extension requests clipboardWrite to copy snippets; it does not request clip
 
 Run `pnpm extension:package` from the repository root. Requires pnpm workspace dependencies, Node 24+, Cargo, and the `wasm32-unknown-unknown` Rust target used by the extension build.
 
-The command cleans the generated extension `dist`, builds for `https://app.typerelay.com`, and writes `apps/extension/releases/typerelay-extension-<manifest-version>.zip`. Custom build origins are rejected in packaging mode; users can still select their own server in Options. The archive contains only runtime files with `manifest.json` at its root. Artwork is uploaded separately. Generated ZIPs are ignored by Git.
+Edit `version_extension` in the root `package.json` for an extension release. It must contain three integers from 0 to 65535, with no leading zeroes and not all zero. The child extension package and source manifest have no release version. Every build writes the root version into the generated manifest.
+
+The command cleans the generated extension `dist`, builds for `https://app.typerelay.com`, and writes `apps/extension/releases/typerelay-extension-<version_extension>.zip`. Custom build origins are rejected in packaging mode; users can still select their own server in Options. The archive contains only runtime files with `manifest.json` at its root. Artwork is uploaded separately. Generated ZIPs are ignored by Git.
 
 Run `pnpm --filter @typerelay/extension test:package` to verify archive contents, stale-file exclusion, and production-origin enforcement. Packaging does not upload or publish, and does not clear the Google Docs release gate above.

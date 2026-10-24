@@ -204,6 +204,28 @@ test('provisioning is opt-in, creates members only and respects available seats'
 	await Account.updateOne({ _id: fixture.account._id }, { $set: { 'admin_override.limits.people': 2 } });
 	assert.equal((await Fixture.complete(new Browser(), fixture.account, 'full-' + randomUUID() + '@example.test')).finish.status, 409);
 });
+test('provisioning never claims an existing TypeRelay user without an accepted invitation', async t => {
+	const fixture = await Fixture.account(); await Fixture.configure(fixture);
+	await Fixture.complete(fixture.browser, fixture.account, fixture.user.email, '?test=true');
+	await fixture.browser.json('/api/v2/sso', 'PUT', Fixture.config(1, { provision: true }));
+	const existing = await User.create({ name: 'Existing elsewhere', email: 'existing-' + randomUUID() + '@example.test' });
+	assert.equal((await Fixture.complete(new Browser(), fixture.account, existing.email)).finish.status, 403);
+	assert.equal(await Member.exists({ account: fixture.account._id, user: existing._id }), null);
+	assert.ok(await SsoLog.exists({ account: fixture.account._id, event: 'invite_required' }));
+	const log = t.mock.method(Security, 'ssoLog', async () => { throw new Error('Synthetic log failure'); });
+	try { assert.equal((await Fixture.complete(new Browser(), fixture.account, existing.email)).finish.status, 403); } finally { log.mock.restore(); }
+	// The IdP administrator can also send invitations, so a pending invite alone must not let the IdP claim the user.
+	await Ticket.create({ hash: Support.hash(randomUUID()), kind: 'invite', email: existing.email, account: fixture.account._id, expires: new Date(Date.now() + 86400000) });
+	const pending = (await Fixture.complete(new Browser(), fixture.account, existing.email)).finish;
+	assert.equal(pending.status, 403);
+	assert.match(await pending.text(), /Accept the team invitation from your email first/);
+	assert.equal(await Member.exists({ account: fixture.account._id, user: existing._id }), null);
+	assert.ok(await Ticket.exists({ account: fixture.account._id, kind: 'invite', email: existing.email }));
+	// Accepting the invitation through the team flow creates the membership; SSO then signs the user in.
+	await Member.create({ account: fixture.account._id, user: existing._id, role: 'member' });
+	assert.equal((await Fixture.complete(new Browser(), fixture.account, existing.email)).finish.status, 302);
+	assert.equal(await Member.countDocuments({ account: fixture.account._id, user: existing._id }), 1);
+});
 test('SSO retains local two-factor authentication and account binding through the second factor', async () => {
 	const fixture = await Fixture.account(); await Fixture.configure(fixture);
 	const secret = generateSecret(); await User.updateOne({ _id: fixture.user._id }, { $set: { totp_enabled: true, totp_secret: secret } });
@@ -272,4 +294,26 @@ test('logs contain outcomes without SAML assertions, certificates or recovery co
 	const logs = await SsoLog.find().lean(); assert.ok(logs.some(log => log.event === 'login_failed'));
 	const serialized = JSON.stringify(logs);
 	assert.doesNotMatch(serialized, /SAMLResponse|Assertion>|BEGIN CERTIFICATE|recovery_hash|@example.test/);
+});
+
+
+test('white-label navigation and pane follow the feature flag independently of billing and preserve role access', async () => {
+	const fixture = await Fixture.account();
+	try {
+		for (const billing of ['false', 'true']) for (const enabled of ['false', 'true']) for (const role of ['owner', 'admin', 'member']) {
+			Object.assign(process.env, { BILLING_ENABLED: billing, WHITE_LABEL_ENABLED: enabled });
+			await Member.updateOne({ account: fixture.account._id, user: fixture.user._id }, { $set: { role } });
+			const { response, html } = await fixture.browser.page('/?account=' + fixture.account._id);
+			assert.equal(response.status, 200);
+			const dom = new JSDOM(html);
+			try {
+				const allowed = enabled === 'true' && role !== 'member';
+				assert.equal(Boolean(dom.window.document.querySelector('#settings-tab-whiteLabel')), allowed, `${billing}/${enabled}/${role} navigation`);
+				assert.equal(Boolean(dom.window.document.querySelector('#settings-pane-whiteLabel')), allowed, `${billing}/${enabled}/${role} pane`);
+				assert.equal(Boolean(dom.window.document.querySelector('#settings-pane-subscription')), billing === 'true');
+				assert.equal(Boolean(dom.window.document.querySelector('#settings-pane-sso')), role !== 'member');
+			} finally { dom.window.close(); }
+			if (role === 'member') await fixture.browser.json('/api/v2/white-label', 'GET', null, 403);
+		}
+	} finally { Object.assign(process.env, { BILLING_ENABLED: 'true', WHITE_LABEL_ENABLED: 'false' }); }
 });

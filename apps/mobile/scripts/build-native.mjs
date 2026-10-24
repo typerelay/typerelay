@@ -1,8 +1,11 @@
+import { MobileVersion } from './version.mjs';
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, mkdirSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+
+await MobileVersion.prepare();
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const mobile = join(root, 'apps/mobile');

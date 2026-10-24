@@ -14,6 +14,7 @@ import { Helpmonks } from '../services/helpmonks.js';
 import { Team } from '../services/team.js';
 import { Statistics } from '../services/statistics.js';
 import { AdminSettings } from '../services/admin_settings.js';
+import { StorageMigration } from '../services/storage_migration.js';
 
 class Fixture {
 	static environment = {};
@@ -219,19 +220,84 @@ test('white-label validation and Cloudflare readiness follow the Team contract',
 	assert.equal(free.logo_url, '');
 });
 
-test('Team custom hostname verifies DNS, Cloudflare status and request binding', async () => {
+test('Team custom hostname verifies DNS, Cloudflare status and request binding', async t => {
 	const account = await Account.create({ name: 'Branded Team', plan: 'team', billing: { status: 'active', seat_quantity: 5 } });
 	await WhiteLabel.configure(account._id, 'portal.customer.test');
-	const fetch = async (url, input) => ({ ok: true, status: 200, json: async () => ({ success: true, result: { id: 'cf-host', hostname: 'portal.customer.test', status: 'active', ssl: { status: 'active' } } }) });
-	const settings = await WhiteLabel.verify(account._id, { resolveCname: async () => ['custom.typerelay.com.'], fetch });
+	const fetch = async (url, input) => ({ ok: true, status: 200, json: async () => ({ success: true, result: { custom_metadata: JSON.parse(input.body).custom_metadata, id: 'cf-host', hostname: 'portal.customer.test', status: 'active', ssl: { status: 'active' } } }) });
+	const settings = await WhiteLabel.verify(account._id, { resolveCname: async () => ['custom.typerelay.com.'], resolveTxt: async name => (await Account.find({ 'white_label.hostname': name.replace(/^_typerelay\./, '') }).lean()).map(account => [`typerelay-domain-verification=${account._id}`]), fetch });
 	assert.equal(settings.state, 'active');
 	let continued = false;
 	const req = { headers: { host: 'portal.customer.test' }, hostname: 'portal.customer.test' };
 	const res = { locals: {}, status: value => ({ send: () => { throw new Error(`Unexpected ${value}`); } }) };
+	const findOne = t.mock.method(Account, 'findOne');
 	await WhiteLabel.resolveRequest(req, res, () => { continued = true; });
 	assert.equal(continued, true);
 	assert.equal(req.boundAccount, String(account._id));
 	assert.equal(res.locals.whiteLabel.active, true);
+	const plan = (await Account.find(findOne.mock.calls[0].arguments[0]).explain()).queryPlanner.winningPlan;
+	assert.match(JSON.stringify(plan), /"indexName":"white_label_verified_hostname"/);
+	const environment = process.env.NODE_ENV; process.env.NODE_ENV = 'test';
+	const { Server } = await import('../app.js');
+	process.env.NODE_ENV = environment;
+	assert.equal(Server.requestOrigin({ ...req, headers: { host: 'portal.customer.test', 'x-forwarded-host': 'portal.customer.test', 'x-forwarded-proto': 'http' } }), 'https://portal.customer.test');
+	for (const host of ['portal.customer.test:1@evil.test', 'portal.customer.test/evil.test', 'evil.test\\@portal.customer.test']) {
+		const injected = { headers: { host: 'app.typerelay.com', 'x-forwarded-host': host, 'x-forwarded-proto': 'https' } };
+		let status = 0;
+		await WhiteLabel.resolveRequest(injected, { locals: {}, status: value => ({ send: () => { status = value; } }) }, () => assert.fail('malformed host continued'));
+		assert.equal(status, 404);
+		assert.equal(injected.boundAccount, undefined);
+		assert.equal(Server.requestOrigin(injected), Auth.origin);
+	}
+	assert.equal(Server.requestOrigin({ headers: { host: 'evil.test', 'x-forwarded-host': 'evil.test', 'x-forwarded-proto': 'https' } }), Auth.origin);
+});
+
+test('only a DNS-verified custom hostname blocks other accounts', async () => {
+	await Account.collection.dropIndex('white_label_verified_hostname');
+	await Account.collection.createIndex({ 'white_label.hostname': 1 }, { unique: true, partialFilterExpression: { 'white_label.hostname': { $type: 'string', $gt: '' } } });
+	await StorageMigration.hostnames();
+	await StorageMigration.hostnames();
+	const owner = await Account.create({ name: 'Verified owner', plan: 'team', billing: { status: 'active', seat_quantity: 5 } });
+	const other = await Account.create({ name: 'Late claimant', plan: 'team', billing: { status: 'active', seat_quantity: 5 } });
+	await WhiteLabel.configure(owner._id, 'claimed.customer.test');
+	await WhiteLabel.configure(other._id, 'claimed.customer.test');
+	assert.equal(await WhiteLabel.claimed(other._id, 'claimed.customer.test'), null);
+	const fetch = async (url, input) => ({ ok: true, status: 200, json: async () => ({ success: true, result: { custom_metadata: JSON.parse(input.body).custom_metadata, id: 'cf-claimed', hostname: 'claimed.customer.test', status: 'active', ssl: { status: 'active' } } }) });
+	await WhiteLabel.verify(owner._id, { resolveCname: async () => ['custom.typerelay.com.'], resolveTxt: async name => (await Account.find({ 'white_label.hostname': name.replace(/^_typerelay\./, '') }).lean()).map(account => [`typerelay-domain-verification=${account._id}`]), fetch });
+	assert.ok(await WhiteLabel.claimed(other._id, 'claimed.customer.test'));
+	await assert.rejects(WhiteLabel.verify(other._id, { resolveCname: async () => ['custom.typerelay.com.'], resolveTxt: async name => (await Account.find({ 'white_label.hostname': name.replace(/^_typerelay\./, '') }).lean()).map(account => [`typerelay-domain-verification=${account._id}`]), fetch }), error => error.status === 409 && error.code === 'hostname_conflict');
+	await assert.rejects(Account.updateOne({ _id: other._id }, { $set: { 'white_label.dns_verified_at': new Date() } }), error => error.code === 11000);
+	await WhiteLabel.releaseHostname({ _id: other._id, white_label: { hostname: 'claimed.customer.test', cloudflare_hostname_id: 'cf-claimed' } }, { fetch: async () => assert.fail('another account hostname was deleted') });
+});
+
+test('concurrent hostname verification reserves one owner before Cloudflare creation', async t => {
+	const accounts = await Account.create([{ name: 'Concurrent owner', plan: 'team', billing: { status: 'active' } }, { name: 'Concurrent claimant', plan: 'team', billing: { status: 'active' } }]);
+	for (const account of accounts) await WhiteLabel.configure(account._id, 'concurrent.customer.test');
+	t.mock.method(WhiteLabel, 'claimed', async () => null);
+	let calls = 0;
+	const options = { resolveCname: async () => ['custom.typerelay.com.'], resolveTxt: async name => (await Account.find({ 'white_label.hostname': name.replace(/^_typerelay\./, '') }).lean()).map(account => [`typerelay-domain-verification=${account._id}`]), fetch: async (url, input) => { calls++; return { ok: true, status: 200, json: async () => ({ success: true, result: { ...JSON.parse(input.body), id: 'cf-concurrent', status: 'active', ssl: { status: 'active' } } }) }; } };
+	const results = await Promise.allSettled(accounts.map(account => WhiteLabel.verify(account._id, options)));
+	assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
+	assert.equal(calls, 1);
+	const failure = results.find(result => result.status === 'rejected').reason;
+	assert.equal(failure.status, 409);
+	assert.equal(failure.code, 'hostname_conflict');
+});
+
+test('a failed DNS recheck retains ownership while external deletion is pending', async () => {
+	const accounts = await Account.create([{ name: 'Removing domain owner', plan: 'team', billing: { status: 'active' } }, { name: 'Next domain owner', plan: 'team', billing: { status: 'active' } }]);
+	for (const account of accounts) await WhiteLabel.configure(account._id, 'deleting.customer.test');
+	let record;
+	const options = { resolveCname: async () => ['custom.typerelay.com.'], resolveTxt: async name => (await Account.find({ 'white_label.hostname': name.replace(/^_typerelay\./, '') }).lean()).map(account => [`typerelay-domain-verification=${account._id}`]), fetch: async (url, input) => { if (input.method === 'POST') record = { ...JSON.parse(input.body), id: 'cf-deleting', status: 'active', ssl: { status: 'active' } }; return { ok: true, status: 200, json: async () => ({ success: true, result: record }) }; } };
+	await WhiteLabel.verify(accounts[0]._id, options);
+	let started; const ready = new Promise(resolve => { started = resolve; }); let release; const gate = new Promise(resolve => { release = resolve; });
+	const removal = WhiteLabel.remove(accounts[0]._id, { getHostname: async () => record, fetch: async () => { started(); await gate; return { ok: true, status: 200, json: async () => ({ success: true, result: {} }) }; } });
+	await ready;
+	try {
+		await assert.rejects(WhiteLabel.verify(accounts[0]._id, { resolveCname: async () => [] }), error => error.code === 'domain_busy');
+		assert.ok(await WhiteLabel.claimed(accounts[1]._id, 'deleting.customer.test'));
+		await assert.rejects(WhiteLabel.verify(accounts[1]._id, options), error => error.status === 409 && error.code === 'hostname_conflict');
+	} finally { release(); await removal; }
+	assert.equal((await WhiteLabel.verify(accounts[1]._id, options)).state, 'active');
 });
 
 test('Team branding validates and normalizes image assets', async () => {
@@ -247,6 +313,36 @@ test('Team branding validates and normalizes image assets', async () => {
 		assert.equal((await stat(`${directory}/${settings.logo_url.replace('/white-label-assets/', '')}`)).isFile(), true);
 		assert.equal((await WhiteLabel.deleteAsset(account._id, 'logo')).logo, null);
 	} finally { await rm(directory, { recursive: true, force: true }); delete process.env.WHITE_LABEL_ASSETS_DIR; }
+});
+
+for (const interleave of ['upload-before', 'upload-after', 'delete-before']) test(`branding ${interleave} cannot remove the final referenced image`, async t => {
+	const directory = await mkdtemp('/tmp/typerelay-brand-race-'); const previousDirectory = process.env.WHITE_LABEL_ASSETS_DIR; process.env.WHITE_LABEL_ASSETS_DIR = directory;
+	t.after(async () => { await rm(directory, { recursive: true, force: true }); if (previousDirectory === undefined) delete process.env.WHITE_LABEL_ASSETS_DIR; else process.env.WHITE_LABEL_ASSETS_DIR = previousDirectory; });
+	const account = await Account.create({ name: 'Brand race', plan: 'team', billing: { status: 'active' } }); const source = `${directory}/source.png`;
+	await writeFile(source, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')); const file = { filepath: source, size: (await stat(source)).size };
+	await WhiteLabel.upload(account._id, 'logo', file);
+	let entered; let release; const ready = new Promise(resolve => { entered = resolve; }); const gate = new Promise(resolve => { release = resolve; }); let first = true;
+	const update = Account.findOneAndUpdate.bind(Account);
+	t.mock.method(Account, 'findOneAndUpdate', (...args) => {
+		const query = update(...args); if (!first || args[1].$set?.['white_label.logo'] === undefined) return query; first = false;
+		return { select() { return this; }, async lean() { const old = interleave === 'upload-after' ? await query.select('+white_label.logo.storage_key').lean() : null; entered(); await gate; return old || query.select('+white_label.logo.storage_key').lean(); } };
+	});
+	const pending = WhiteLabel.upload(account._id, 'logo', file); await ready;
+	try { if (interleave === 'delete-before') await WhiteLabel.deleteAsset(account._id, 'logo'); else await WhiteLabel.upload(account._id, 'logo', file); } finally { release(); }
+	await pending;
+	const final = await WhiteLabel.settings(account._id); assert.ok(final.logo_url); assert.equal((await stat(`${directory}/${final.logo_url.replace('/white-label-assets/', '')}`)).isFile(), true);
+});
+
+for (const outcome of ['upload-before', 'upload-after', 'delete-before', 'delete-after']) test(`branding ${outcome} metadata error retains every possibly referenced file`, async t => {
+	const directory = await mkdtemp('/tmp/typerelay-brand-failure-'); const previousDirectory = process.env.WHITE_LABEL_ASSETS_DIR; process.env.WHITE_LABEL_ASSETS_DIR = directory;
+	t.after(async () => { await rm(directory, { recursive: true, force: true }); if (previousDirectory === undefined) delete process.env.WHITE_LABEL_ASSETS_DIR; else process.env.WHITE_LABEL_ASSETS_DIR = previousDirectory; });
+	const account = await Account.create({ name: 'Brand failure', plan: 'team', billing: { status: 'active' } }); const source = `${directory}/source.png`;
+	await writeFile(source, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')); const file = { filepath: source, size: (await stat(source)).size };
+	const original = await WhiteLabel.upload(account._id, 'logo', file); const update = Account.findOneAndUpdate.bind(Account);
+	t.mock.method(Account, 'findOneAndUpdate', (...args) => ({ select() { return this; }, async lean() { if (outcome.endsWith('after')) await update(...args).lean(); throw new Error('metadata response failed'); } }));
+	await assert.rejects(outcome.startsWith('upload') ? WhiteLabel.upload(account._id, 'logo', file) : WhiteLabel.deleteAsset(account._id, 'logo'), /metadata response failed/);
+	assert.equal((await stat(`${directory}/${original.logo_url.replace('/white-label-assets/', '')}`)).isFile(), true);
+	const final = await WhiteLabel.settings(account._id); if (final.logo_url) assert.equal((await stat(`${directory}/${final.logo_url.replace('/white-label-assets/', '')}`)).isFile(), true);
 });
 
 test('Stripe provisioner creates exact tax-exclusive price shapes', () => {
@@ -330,6 +426,31 @@ test('an applied renewal change releases its Stripe schedule and clears local pe
 	await Billing.applySubscription(await Billing.account(account._id, null, true), subscription, { stripe });
 	assert.equal(released, 'sched_renew');
 	assert.equal((await Billing.account(account._id)).billing.scheduled_change, null);
+});
+
+for (const delayed of ['update', 'cancellation']) test(`delayed subscription ${delayed} cannot overwrite a newer billing write`, async t => {
+	const account = await Account.create({ name: 'Concurrent billing', plan: 'pro', billing: { stripe_customer_id: 'cus_race', stripe_subscription_id: 'sub_race', status: 'active' } });
+	if (delayed === 'update') await Account.updateOne({ _id: account._id }, { $unset: { 'billing.revision': '' } });
+	const snapshot = await Billing.account(account._id, null, true);
+	const subscription = { id: 'sub_race', customer: 'cus_race', status: 'active', metadata: Billing.metadata(account, 'pro'), items: { data: [{ id: 'si_race', price: { id: 'price_pro' }, quantity: 1 }] } };
+	const updated = { type: 'customer.subscription.updated', data: { object: subscription } };
+	const canceled = { type: 'customer.subscription.deleted', data: { object: { ...subscription, status: 'canceled' } } };
+	let release; let entered;
+	const paused = new Promise(resolve => { entered = resolve; }); const gate = new Promise(resolve => { release = resolve; });
+	const updateOne = Account.updateOne.bind(Account); let first = true;
+	t.mock.method(Account, 'updateOne', async (...args) => { if (args[0]['billing.revision'] !== undefined && first) { first = false; entered(); await gate; } return updateOne(...args); });
+	t.mock.method(WhiteLabel, 'disable', async () => {}); t.mock.method(Billing, 'ensureFreeSubscription', async () => null);
+	let current = subscription; const stripe = { subscriptions: { retrieve: async () => structuredClone(current) } };
+	const pending = Billing.processWebhook({ ...snapshot, billing: { ...snapshot.billing } }, delayed === 'update' ? updated : canceled, stripe);
+	const rejected = assert.rejects(pending, error => error.code === 'billing_changed');
+	await paused;
+	try { await Billing.processWebhook({ ...snapshot, billing: { ...snapshot.billing } }, delayed === 'update' ? canceled : updated, stripe); } finally { release(); }
+	await rejected;
+	assert.equal((await Billing.account(account._id)).billing.status, delayed === 'update' ? 'canceled' : 'active');
+	// Retried deliveries reload both account and provider state, instead of replaying stale data.
+	current = { ...subscription, status: 'canceled' };
+	await Billing.processWebhook(await Billing.account(account._id, null, true), delayed === 'update' ? updated : canceled, stripe);
+	assert.equal((await Billing.account(account._id)).plan, 'free');
 });
 
 test('delayed renewal reconciliation cannot release a newer scheduled change', async () => {

@@ -205,7 +205,8 @@ export class Auth {
 		const ctx = await Support.context(String(grant.user), String(grant.account));
 		await Security.credential(ctx, grant);
 		Billing.assertApi(ctx);
-		await Integration.updateOne({ _id: grant._id }, { $set: { last_used: new Date() } });
+		// Minute precision is enough for "last used"; skip the write on every other request.
+		await Integration.updateOne({ _id: grant._id, $or: [{ last_used: null }, { last_used: { $lt: new Date(Date.now() - 60000) } }] }, { $set: { last_used: new Date() } });
 		return { ...ctx, credential: String(grant._id), scopes: grant.scopes, grant };
 	}
 	static requireScope(ctx, scope) { Support.assert(ctx.scopes.includes(scope), 'Required scope: ' + scope, 403); }
@@ -242,6 +243,7 @@ export class Auth {
 		return Auth.registerIntegration(body, { manual: true, ctx });
 	}
 	static async authenticateOAuthClient(body) {
+		Support.assert(typeof body.client_id === 'string' && (body.resource === undefined || typeof body.resource === 'string'), 'Invalid client or resource');
 		const client = await OAuthClient.findOne({ client_id: body.client_id }).select('+secret_hash').lean();
 		Support.assert(client, 'Unregistered client', 401);
 		const method = client.token_endpoint_auth_method || 'none';
@@ -249,6 +251,7 @@ export class Auth {
 		return client;
 	}
 	static async integrationRequest(body) {
+		Support.assert(typeof body.client_id === 'string', 'Unregistered client or redirect');
 		const client = await OAuthClient.findOne({ client_id: body.client_id }).lean();
 		Support.assert(client && client.redirects.includes(body.redirect_uri), 'Unregistered client or redirect');
 		Support.assert(body.response_type === 'code' && body.code_challenge_method === 'S256' && /^[A-Za-z0-9_-]{43}$/.test(body.code_challenge || ''), 'S256 PKCE required');

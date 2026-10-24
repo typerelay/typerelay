@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 for (const custom of [false, true]) test(`browser sign-in captures callbacks and syncs images on the ${custom ? 'custom' : 'default'} server`, async () => {
 	const values = () => {
 		const data = {};
-		return { get: async keys => Object.fromEntries((typeof keys === 'string' ? [keys] : keys).map(key => [key, data[key]])), set: async entries => Object.assign(data, entries), remove: async keys => { for (const key of typeof keys === 'string' ? [keys] : keys) delete data[key]; } };
+		return { get: async keys => Object.fromEntries((keys === null ? Object.keys(data) : typeof keys === 'string' ? [keys] : keys).map(key => [key, data[key]])), set: async entries => Object.assign(data, entries), remove: async keys => { for (const key of keys === null ? Object.keys(data) : typeof keys === 'string' ? [keys] : keys) delete data[key]; } };
 	};
 	const local = values();
 	const session = values();

@@ -6,6 +6,16 @@ import pug from 'pug';
 import { promptFields } from '../prompt.js';
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+test('template answers preserve names inherited by ordinary JavaScript objects', async () => {
+ const dom = new JSDOM(pug.renderFile(new URL('../prompt.pug', import.meta.url).pathname));
+ try {
+  const root = dom.window.document; const fields = ['__proto__', 'constructor', 'toString'];
+  const pending = promptFields(root, fields, Object.fromEntries(fields.map(name => [name, { required: true }])));
+  for (const input of root.querySelectorAll('input')) input.value = `Answer for ${input.name}`;
+  root.querySelector('form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+  assert.equal(JSON.stringify(await pending), JSON.stringify(Object.fromEntries(fields.map(name => [name, `Answer for ${name}`]))));
+ } finally { dom.window.close(); }
+});
 for (const dialog of [false, true]) for (const action of ['submit', 'cancel', 'Escape']) test(`template ${action} retains focus ${dialog ? 'inside a Bootstrap modal' : 'on an ordinary page'}`, async () => {
  const markup = dialog ? '<div id="dialog" class="modal" role="dialog" tabindex="-1"><div class="modal-dialog"><div class="modal-content"><textarea></textarea></div></div></div>' : '<textarea></textarea>';
  const dom = new JSDOM(markup, { url: 'https://example.test', runScripts: 'outside-only' });

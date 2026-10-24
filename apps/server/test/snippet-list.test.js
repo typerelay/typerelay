@@ -12,7 +12,7 @@ test('personal abbreviation updates only its row and ignores duplicate and out-o
 		const source = (await readFile('./public/app.js', 'utf8')).replace(/^import .*;$/gm, '').replace('const client = new TypeRelay();', '').replace('export { client };', 'window.TypeRelay = TypeRelay;');
 		dom.window.eval(source);
 		const client = Object.create(dom.window.TypeRelay.prototype);
-		Object.assign(client, { libraries: new Map([['shared', library]]), tombstones: new Set(), selected: 'shared', selectedSnippets: new Set(['one']) });
+		Object.assign(client, { libraries: new Map([['shared', library]]), tombstones: new Map(), selected: 'shared', selectedSnippets: new Set(['one']) });
 		client.request = () => { throw new Error('No page, section, or library reload allowed'); };
 		const document = dom.window.document;
 		const container = document.querySelector('#snippets'); const sibling = document.querySelector('[data-snippet="two"]');
@@ -42,7 +42,7 @@ test('snippet edits and creates reorder individual rows without reloading or los
 		const source = (await readFile('./public/app.js', 'utf8')).replace(/^import .*;$/gm, '').replace('const client = new TypeRelay();', '').replace('export { client };', 'window.TypeRelay = TypeRelay;');
 		dom.window.eval(source);
 		const client = Object.create(dom.window.TypeRelay.prototype);
-		Object.assign(client, { libraries: new Map([['one', library]]), tombstones: new Set(), selected: 'one', selectedSnippets: new Set(['old']) });
+		Object.assign(client, { libraries: new Map([['one', library]]), tombstones: new Map(), selected: 'one', selectedSnippets: new Set(['old']) });
 		client.request = () => { throw new Error('Unexpected fetch or reload'); };
 		const { document } = dom.window;
 		const container = document.querySelector('#snippets');
@@ -98,6 +98,42 @@ test('active snippets sort by update timestamp, retaining legacy order without t
 	} finally { Snippet.find = original; }
 });
 
+
+test('library trash and restore are ordered by revision, so delayed deletions never remove a restored library', async () => {
+	const library = { _id: 'one', name: 'Library', revision: 1, permissions: { edit: true, manage: true }, snippets: [{ id: 'a', trigger: 'a', replace: 'A', revision: 1 }] };
+	const dom = new JSDOM('<div id="libraries"></div>' + pug.renderFile('./views/ajax/editor.pug', { library }), { runScripts: 'outside-only', pretendToBeVisual: true });
+	try {
+		const source = (await readFile('./public/app.js', 'utf8')).replace(/^import .*;$/gm, '').replace('const client = new TypeRelay();', '').replace('export { client };', 'window.TypeRelay = TypeRelay;');
+		dom.window.eval(source);
+		const client = Object.create(dom.window.TypeRelay.prototype);
+		Object.assign(client, { libraries: new Map([['one', library]]), tombstones: new Map(), selected: 'one', selectedSnippets: new Set() });
+		client.request = () => { throw new Error('No page, section, or library reload allowed'); };
+		const { document } = dom.window;
+		const at = (revision, deleted) => { const next = { ...library, revision, deleted }; return { library: next, html: pug.renderFile('./views/ajax/library.pug', { library: next }) }; };
+		const present = () => Boolean(document.querySelector('[data-id="one"]')) && Boolean(document.querySelector('[data-editor]')) && client.selected === 'one' && client.libraries.has('one');
+		await client.apply(at(3, false));
+		assert.equal(present(), true);
+		await client.apply(at(2, true));
+		assert.equal(present(), true);
+		assert.equal(client.tombstones.has('one'), false);
+		await client.apply(at(4, true));
+		assert.equal(document.querySelector('[data-id="one"]'), null);
+		assert.equal(document.querySelector('[data-editor]'), null);
+		assert.equal(client.selected, null);
+		await client.apply(at(4, true));
+		await client.apply(at(3, false));
+		assert.equal(document.querySelector('[data-id="one"]'), null);
+		await client.apply(at(5, false));
+		assert.ok(document.querySelector('[data-id="one"]'));
+		assert.equal(client.libraries.get('one').revision, 5);
+		assert.equal(client.tombstones.has('one'), false);
+		await client.apply({ library: { ...client.libraries.get('one'), deleted: true } });
+		assert.equal(document.querySelector('[data-id="one"]'), null);
+		await client.apply(at(5, false));
+		assert.ok(document.querySelector('[data-id="one"]'), 'access re-granted at the same revision shows the library again');
+		assert.equal(client.tombstones.has('one'), false);
+	} finally { dom.window.close(); }
+});
 
 test('library export sends its account, downloads the named bundle and preserves the editor on failure', async () => {
 	const library = { _id: 'library', name: 'Library', permissions: { edit: true, manage: true }, snippets: [] };

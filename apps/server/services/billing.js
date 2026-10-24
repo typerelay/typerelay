@@ -428,14 +428,14 @@ export class Billing {
 		if (account) await AccountAccess.acquire(account._id);
 		if (!account || Billing.entitlements(account, now).plan !== 'free' || account.billing?.trial_started_at) throw Billing.error(409, 'The Pro trial is no longer available', 'trial_unavailable');
 		const ends = new Date(now.getTime() + Billing.trialDays() * 86400000);
-		const result = await Account.updateOne({ _id: accountId, plan: { $in: ['free', null] }, 'billing.trial_started_at': null, $or: [{ 'billing.status': { $in: ['incomplete', 'trial_expired', 'canceled'] } }, { 'billing.status': { $exists: false } }] }, { $set: { plan: 'free', 'billing.status': 'trialing', 'billing.trial_source': 'no_card', 'billing.trial_started_at': now, 'billing.trial_ends_at': ends, 'billing.status_changed_at': now, 'billing.helpmonks_sequence.status': 'pending', 'billing.helpmonks_sequence.attempts': 0, 'billing.helpmonks_sequence.next_attempt_at': now, 'billing.helpmonks_sequence.last_error': '', 'billing.helpmonks_sequence.contact_id': '', 'billing.helpmonks_sequence.enrolled_at': null } });
+		const result = await Account.updateOne({ _id: accountId, plan: { $in: ['free', null] }, 'billing.trial_started_at': null, $or: [{ 'billing.status': { $in: ['incomplete', 'trial_expired', 'canceled'] } }, { 'billing.status': { $exists: false } }] }, { $set: { plan: 'free', 'billing.status': 'trialing', 'billing.trial_source': 'no_card', 'billing.trial_started_at': now, 'billing.trial_ends_at': ends, 'billing.status_changed_at': now, 'billing.helpmonks_sequence.status': 'pending', 'billing.helpmonks_sequence.attempts': 0, 'billing.helpmonks_sequence.next_attempt_at': now, 'billing.helpmonks_sequence.last_error': '', 'billing.helpmonks_sequence.contact_id': '', 'billing.helpmonks_sequence.enrolled_at': null }, $inc: { 'billing.revision': 1 } });
 		if (result.modifiedCount !== 1) throw Billing.error(409, 'The Pro trial is no longer available', 'trial_unavailable');
 		return Billing.account(accountId);
 	}
 
 	static async runTrialExpiry(now = new Date(), options = {}) {
 		const accountModel = options.accountModel || Account;
-		const result = await accountModel.updateMany({ ...AccountAccess.available, plan: 'free', 'billing.status': 'trialing', 'billing.trial_source': 'no_card', 'billing.trial_ends_at': { $lte: now } }, { $set: { 'billing.status': 'trial_expired', 'billing.status_changed_at': now } });
+		const result = await accountModel.updateMany({ ...AccountAccess.available, plan: 'free', 'billing.status': 'trialing', 'billing.trial_source': 'no_card', 'billing.trial_ends_at': { $lte: now } }, { $set: { 'billing.status': 'trial_expired', 'billing.status_changed_at': now }, $inc: { 'billing.revision': 1 } });
 		return { expired: result.modifiedCount || 0 };
 	}
 
@@ -453,6 +453,14 @@ export class Billing {
 		throw Billing.error(409, 'Stripe subscription uses an unknown Price', 'billing_mismatch');
 	}
 
+	static async updateSubscription(account, update) {
+		const revision = account.billing?.revision || 0;
+		const result = await Account.updateOne({ _id: account._id, 'billing.revision': revision || { $in: [null, 0] } }, { $set: update, $inc: { 'billing.revision': 1 } });
+		if (result.matchedCount !== 1) throw Billing.error(409, 'Billing changed; refresh and retry', 'billing_changed');
+		account.billing ||= {};
+		account.billing.revision = revision + 1;
+	}
+
 	static async applySubscription(account, subscription, options = {}) {
 		const item = Billing.validateSubscription(account, subscription);
 		if (account.billing?.stripe_subscription_id && account.billing.stripe_subscription_id !== subscription.id && ['active', 'past_due', 'trialing'].includes(account.billing.status) && account.billing.trial_source !== 'no_card') throw Billing.error(409, 'Another paid subscription is active', 'billing_mismatch');
@@ -466,7 +474,7 @@ export class Billing {
 		const update = { plan: active ? plan : 'free', 'billing.stripe_subscription_id': subscription.id, 'billing.price_id': item.price.id, 'billing.seat_quantity': Number(item.quantity || 1), 'billing.included_seats': includedSeats, 'billing.status': status, 'billing.trial_source': subscription.trial_end ? 'stripe' : null, 'billing.trial_ends_at': subscription.trial_end ? new Date(subscription.trial_end * 1000) : null, 'billing.status_changed_at': now };
 		const appliedSchedule = account.billing?.scheduled_change?.plan === plan && Number(account.billing.scheduled_change.seat_quantity) === Number(item.quantity || 1) && (!account.billing.scheduled_change.price_id || account.billing.scheduled_change.price_id === item.price.id) && (!account.billing.scheduled_change.effective_at || new Date(account.billing.scheduled_change.effective_at) <= now);
 		if (active) update['billing.checkout'] = null;
-		await Account.updateOne({ _id: account._id }, { $set: update });
+		await Billing.updateSubscription(account, update);
 		if (appliedSchedule) {
 			const schedule = subscription.schedule?.id || subscription.schedule;
 			if (schedule && schedule === account.billing.scheduled_change.schedule_id) await (options.stripe || Billing.stripe()).subscriptionSchedules.release(schedule);
@@ -519,7 +527,7 @@ export class Billing {
 		} else if (event.type === 'customer.subscription.deleted' && !Billing.isFreeSubscription(object)) {
 			if (account.billing?.stripe_subscription_id !== object.id) return { handled: false };
 			Billing.validateSubscription(account, object);
-			await Account.updateOne({ _id: account._id }, { $set: { plan: 'free', 'billing.status': 'canceled', 'billing.stripe_subscription_id': null, 'billing.trial_source': null, 'billing.trial_ends_at': null, 'billing.scheduled_change': null, 'billing.status_changed_at': new Date() } });
+			await Billing.updateSubscription(account, { plan: 'free', 'billing.status': 'canceled', 'billing.stripe_subscription_id': null, 'billing.trial_source': null, 'billing.trial_ends_at': null, 'billing.scheduled_change': null, 'billing.status_changed_at': new Date() });
 			account.plan = 'free'; account.billing.status = 'canceled'; account.billing.stripe_subscription_id = null;
 			const { WhiteLabel } = await import('./white_label.js');
 			await WhiteLabel.disable(account, { stripe }).catch(error => console.error(`White-label disable after cancellation failed: ${error.message}`));

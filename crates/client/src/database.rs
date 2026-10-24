@@ -27,6 +27,8 @@ impl Database {
 			CREATE TABLE IF NOT EXISTS assets(id TEXT PRIMARY KEY,mime_type TEXT NOT NULL,size INTEGER NOT NULL,width INTEGER NOT NULL,height INTEGER NOT NULL,animated INTEGER NOT NULL DEFAULT 0,source_urls TEXT NOT NULL DEFAULT '[]',data BLOB NOT NULL,uploaded INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS snippet_assets(snippet TEXT NOT NULL,asset TEXT NOT NULL,PRIMARY KEY(snippet,asset));
             CREATE INDEX IF NOT EXISTS snippet_asset_asset ON snippet_assets(asset);")?;
+        if !connection.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('recovery') WHERE name='reason')",[],|row|row.get::<_,bool>(0))? { connection.execute("ALTER TABLE recovery ADD COLUMN reason TEXT NOT NULL DEFAULT ''",[])?; }
+        connection.execute("DELETE FROM meta WHERE key='staged'",[])?;
         let db = Self { connection, directory: directory.to_owned() };
         db.migrate()?;
         Ok(db)
@@ -35,7 +37,14 @@ impl Database {
         if !self.connection.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='search_state')",[],|row|row.get::<_,bool>(0))? {
             let transaction=rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?;
             self.connection.execute_batch("CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(id UNINDEXED, library UNINDEXED, revision UNINDEXED, library_name UNINDEXED, abbreviation, title, body, tokenize='unicode61 remove_diacritics 2', prefix='2 3 4'); CREATE VIRTUAL TABLE IF NOT EXISTS search_vocab USING fts5vocab(search_fts, 'row'); CREATE TABLE IF NOT EXISTS search_state(id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL, built INTEGER NOT NULL); INSERT OR IGNORE INTO search_state VALUES(1,1,0);")?;
-            for table in ["snippets","libraries","meta","outbox"] { for operation in ["INSERT","UPDATE","DELETE"] { self.connection.execute_batch(&format!("CREATE TRIGGER IF NOT EXISTS search_dirty_{table}_{operation} AFTER {operation} ON {table} BEGIN UPDATE search_state SET version=version+1 WHERE id=1; END;"))?; } }
+            for table in ["snippets","libraries","outbox"] { for operation in ["INSERT","UPDATE","DELETE"] { self.connection.execute_batch(&format!("CREATE TRIGGER IF NOT EXISTS search_dirty_{table}_{operation} AFTER {operation} ON {table} BEGIN UPDATE search_state SET version=version+1 WHERE id=1; END;"))?; } }
+            transaction.commit()?;
+        }
+        if !self.connection.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='search_dirty_personal_UPDATE')",[],|row|row.get::<_,bool>(0))? {
+            let transaction=rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?;
+            for operation in ["INSERT","UPDATE","DELETE"] {
+                self.connection.execute_batch(&format!("DROP TRIGGER IF EXISTS search_dirty_meta_{operation}; CREATE TRIGGER IF NOT EXISTS search_dirty_personal_{operation} AFTER {operation} ON meta WHEN {} BEGIN UPDATE search_state SET version=version+1 WHERE id=1; END;",match operation {"INSERT"=>"NEW.key='personal_abbreviations'","DELETE"=>"OLD.key='personal_abbreviations'",_=>"(OLD.key='personal_abbreviations' OR NEW.key='personal_abbreviations') AND (OLD.key<>NEW.key OR OLD.value<>NEW.value)"}))?;
+            }
             transaction.commit()?;
         }
         if !self.connection.query_row("SELECT version!=built FROM search_state WHERE id=1",[],|row|row.get::<_,bool>(0))? {return Ok(());}
@@ -56,7 +65,7 @@ impl Database {
     pub fn meta(&self, key: &str) -> Result<Option<Value>> {
         self.connection.query_row("SELECT value FROM meta WHERE key=?1", [key], |row| row.get::<_, String>(0)).optional()?.map(|text| serde_json::from_str(&text).map_err(Into::into)).transpose()
     }
-    pub fn set_meta(&self, key: &str, value: &Value) -> Result<()> { self.connection.execute("INSERT INTO meta(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![key, value.to_string()])?; Ok(()) }
+    pub fn set_meta(&self, key: &str, value: &Value) -> Result<()> { self.connection.execute("INSERT INTO meta(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value<>excluded.value", params![key, value.to_string()])?; Ok(()) }
     pub fn usage(&self, library: &str, snippet: &str, action: &str, client: &str, characters: usize) -> Result<()> {
         if !self.synced(library)? { return Ok(()); }
         let Some(identity) = self.meta("statistics_identity")?.filter(|value| value["user"].is_string()) else { return Ok(()); };
@@ -69,6 +78,8 @@ impl Database {
         let mut statement = self.connection.prepare("SELECT event FROM usage_events WHERE identity=?1 ORDER BY rowid LIMIT 100")?;
         statement.query_map([identity.to_string()], |row| row.get::<_, String>(0))?.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
     }
+    /// Drops queued usage that belongs to another identity (or to none when disconnected).
+    pub fn retain_usage(&self, identity: Option<&Value>) -> Result<()> { self.connection.execute("DELETE FROM usage_events WHERE ?1 IS NULL OR identity<>?1", [identity.map(Value::to_string)])?; Ok(()) }
     pub fn acknowledge_usage(&self, ids: &[Value]) -> Result<()> { for id in ids { self.connection.execute("DELETE FROM usage_events WHERE id=?1", [id.as_str().context("Invalid usage acknowledgment")?])?; } Ok(()) }
     pub fn libraries(&self) -> Result<Vec<Value>> {
         let mut statement = self.connection.prepare("SELECT data FROM libraries ORDER BY name,id")?;
@@ -256,6 +267,7 @@ impl Database {
     }
 	pub fn put_asset(&self,metadata:&Value,data:&[u8],uploaded:bool)->Result<()> {let id=metadata["id"].as_str().context("Missing asset ID")?;ensure!(id.len()==64&&id.bytes().all(|byte|byte.is_ascii_hexdigit()),"Invalid asset ID");ensure!(data.len()<=2*1048576,"Asset exceeds 2 MiB");self.connection.execute("INSERT INTO assets(id,mime_type,size,width,height,animated,source_urls,data,uploaded,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(id) DO UPDATE SET mime_type=excluded.mime_type,size=excluded.size,width=excluded.width,height=excluded.height,animated=excluded.animated,source_urls=(SELECT json_group_array(value) FROM (SELECT value FROM json_each(assets.source_urls) WHERE type='text' UNION ALL SELECT DISTINCT value FROM json_each(excluded.source_urls) WHERE type='text' AND value NOT IN (SELECT value FROM json_each(assets.source_urls) WHERE type='text'))),data=excluded.data,uploaded=MAX(assets.uploaded,excluded.uploaded)",params![id,metadata["mime_type"].as_str().context("Missing asset MIME")?,data.len() as i64,metadata["width"].as_i64().unwrap_or(0),metadata["height"].as_i64().unwrap_or(0),metadata["animated"].as_bool().unwrap_or(false),metadata["source_urls"].to_string(),data,uploaded,Utc::now().timestamp()])?;Ok(())}
 	pub fn asset(&self,id:&str)->Result<Option<(Value,Vec<u8>)>> {self.connection.query_row("SELECT mime_type,size,width,height,animated,source_urls,data,uploaded FROM assets WHERE id=?1",[id],|row|{let sources:String=row.get(5)?;Ok((json!({"id":id,"mime_type":row.get::<_,String>(0)?,"size":row.get::<_,i64>(1)?,"width":row.get::<_,i64>(2)?,"height":row.get::<_,i64>(3)?,"animated":row.get::<_,bool>(4)?,"source_urls":serde_json::from_str::<Value>(&sources).unwrap_or(json!([])),"uploaded":row.get::<_,bool>(7)?}),row.get(6)?))}).optional().map_err(Into::into)}
+	pub fn delete_asset(&self,id:&str)->Result<()> {self.connection.execute("DELETE FROM assets WHERE id=?1",[id])?;Ok(())}
 	pub fn pending_asset_ids(&self)->Result<Vec<String>> {let mut statement=self.connection.prepare("SELECT DISTINCT asset.value FROM outbox, json_tree(outbox.operation, '$.body') content, json_each(content.value, '$.assets') asset WHERE content.key='content' AND content.type='object' ORDER BY asset.value")?;Ok(statement.query_map([],|row|row.get(0))?.collect::<std::result::Result<Vec<_>,_>>()?)}
     pub fn edit(&self, file: &OpenFile, index: Option<usize>, entry: Option<Match>) -> Result<OpenFile> {
         let transaction = if self.connection.is_autocommit() { Some(self.connection.unchecked_transaction()?) } else { None };
@@ -553,23 +565,29 @@ impl Database {
         transaction.commit()?;
         Ok(())
     }
-    pub fn recover(&self, library: &str, snippet: Option<&str>, data: &Value) -> Result<()> {
-        self.connection.execute("INSERT INTO recovery(id,library,snippet,data) SELECT ?1,?2,?3,?4 WHERE NOT EXISTS(SELECT 1 FROM recovery WHERE library=?2 AND snippet IS ?3 AND data=?4)", params![Uuid::new_v4().to_string(),library,snippet,data.to_string()])?;
+    pub fn recover(&self, library: &str, snippet: Option<&str>, data: &Value, reason: &str) -> Result<()> {
+        self.connection.execute("INSERT INTO recovery(id,library,snippet,data,reason) SELECT ?1,?2,?3,?4,?5 WHERE NOT EXISTS(SELECT 1 FROM recovery WHERE library=?2 AND snippet IS ?3 AND data=?4)", params![Uuid::new_v4().to_string(),library,snippet,data.to_string(),reason])?;
         Ok(())
     }
-    pub fn recover_operation(&self, operation: &Value) -> Result<()> {
+    pub fn recovery(&self) -> Result<Vec<Value>> {
+        let mut statement = self.connection.prepare("SELECT id,library,snippet,data,reason FROM recovery ORDER BY rowid")?;
+        let rows = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, String>(3)?, row.get::<_, String>(4)?)))?;
+        rows.map(|row| { let (id, library, snippet, data, reason) = row?; let library_name = library.as_deref().and_then(|id| self.library(id).ok()).and_then(|library| library["name"].as_str().map(str::to_owned)); Ok(json!({"id":id,"library":library,"library_name":library_name,"snippet":snippet,"reason":reason,"data":serde_json::from_str::<Value>(&data)?})) }).collect()
+    }
+    pub fn dismiss_recovery(&self, id: &str) -> Result<()> { self.connection.execute("DELETE FROM recovery WHERE id=?1", [id])?; Ok(()) }
+    pub fn recover_operation(&self, operation: &Value, reason: &str) -> Result<()> {
         let library = operation["library"].as_str().unwrap_or("");
         if operation["kind"]=="personal" { self.set_meta(&format!("personal_rejected:{}", operation["snippet"].as_str().unwrap_or("")), &operation["body"])?; return Ok(()); }
         if operation["kind"] == "batch" {
             if let Some(items) = operation["body"]["items"].as_array() { for item in items {
                 let purged: bool = self.connection.query_row("SELECT EXISTS(SELECT 1 FROM snippets WHERE id=?1 AND json_extract(data,'$.state')='purged')", [item["id"].as_str().unwrap_or("")], |row|row.get(0))?;
-                if !purged { self.recover(library, item["id"].as_str(), &json!({"action":operation["body"]["action"],"item":item,"record":operation["records"].as_array().and_then(|rows|rows.iter().find(|row|row["id"] == item["id"]))}))?; }
+                if !purged { self.recover(library, item["id"].as_str(), &json!({"action":operation["body"]["action"],"item":item,"record":operation["records"].as_array().and_then(|rows|rows.iter().find(|row|row["id"] == item["id"]))}), reason)?; }
             } }
         } else if let Some(changes) = operation["body"]["changes"].as_array() {
-            for change in changes { self.recover(library, change["id"].as_str(), change)?; }
+            for change in changes { self.recover(library, change["id"].as_str(), change, reason)?; }
         } else if let Some(records) = operation["body"]["snippets"].as_array() {
-            for record in records { self.recover(library, record["id"].as_str(), record)?; }
-        } else { self.recover(library, None, operation)?; }
+            for record in records { self.recover(library, record["id"].as_str(), record, reason)?; }
+        } else { self.recover(library, None, operation, reason)?; }
         Ok(())
     }
     pub fn remap(&self, old: &str, new: &str) -> Result<()> {
@@ -578,6 +596,7 @@ impl Database {
         self.connection.execute("UPDATE snippets SET library=?2 WHERE library=?1", params![old,new])?;
         self.connection.execute("UPDATE base_libraries SET id=?2 WHERE id=?1", params![old,new])?;
         self.connection.execute("UPDATE base_snippets SET library=?2 WHERE library=?1", params![old,new])?;
+        self.connection.execute("UPDATE usage_events SET event=json_set(event,'$.library',?2) WHERE json_extract(event,'$.library')=?1", params![old,new])?;
         for (seq, mut operation) in self.pending()? {
             let previous = operation.clone();
             if operation["library"] == old { operation["library"] = json!(new); }
@@ -591,9 +610,9 @@ impl Database {
         let id = remote["_id"].as_str().context("Missing library ID")?;
         ensure!(id.len() <= 128 && !id.is_empty(), "Invalid library ID");
         let old_name: Option<String> = self.connection.query_row("SELECT name FROM libraries WHERE id=?1", [id], |row| row.get(0)).optional()?;
-        let mut name = remote["name"].as_str().map(str::to_owned).or(old_name).unwrap_or_else(|| "Library".into());
-        let occupied: bool = self.connection.query_row("SELECT EXISTS(SELECT 1 FROM libraries WHERE name=?1 AND id<>?2)", params![name,id], |row|row.get(0))?;
-        if occupied { name = format!("{name} [{id}]"); }
+        let base = remote["name"].as_str().map(str::to_owned).or(old_name).unwrap_or_else(|| "Library".into());
+        let mut name=base.clone();let mut suffix=1;
+        while self.connection.query_row("SELECT EXISTS(SELECT 1 FROM libraries WHERE name=?1 AND id<>?2)", params![name,id], |row|row.get::<_,bool>(0))? { name=if suffix==1{format!("{base} [{id}]")}else{format!("{base} [{id}-{suffix}]")};suffix+=1; }
         let mut library = remote.clone();
         for key in ["snippets","records","yaml","deleted"] { library.as_object_mut().context("Invalid library")?.remove(key); }
         self.connection.execute("INSERT INTO base_libraries(id,data) VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET data=excluded.data", params![id,library.to_string()])?;
@@ -650,7 +669,7 @@ impl Database {
             let permission = if operation["kind"] == "trash" && (operation["body"]["action"] == "purge" || operation["body"]["target"]["type"] == "library") { "manage" } else { "edit" };
             if operation["kind"] == "batch" && (library["state"] != "active" || library["permissions"][permission] != true) { continue; }
             if library["permissions"][permission] != true {
-                self.recover_operation(&operation)?;
+                self.recover_operation(&operation, "Edit permission was removed")?;
                 self.connection.execute("DELETE FROM outbox WHERE seq=?1", [seq])?; continue;
             }
             if operation["kind"] == "create" {
@@ -691,7 +710,7 @@ impl Database {
                     let old = self.records(id)?.into_iter().find(|record| record["id"] == change["id"]);
                     if old.as_ref().is_some_and(|record| record["state"] == "purged") { continue; }
                     if library["state"] != "active" || (old.as_ref().is_some_and(|record| record["state"] == "trashed") && !change["value"].is_null()) {
-                        self.recover(id, change["id"].as_str(), &change["value"])?; continue;
+                        self.recover(id, change["id"].as_str(), &change["value"], "The library or snippet is no longer active")?; continue;
                     }
                     let mut record = old.unwrap_or(json!({"id":change["id"],"position":self.records(id)?.iter().filter_map(|entry|entry["position"].as_i64()).max().unwrap_or(-1)+1}));
                     record["revision"] = json!(change["base_revision"].as_i64().unwrap_or(0)+1);
@@ -706,7 +725,6 @@ impl Database {
         Ok(())
     }
     pub fn apply(&self, response: &Value, ack: Option<(i64, &Value)>) -> Result<()> {
-        self.set_meta("staged", response)?;
         let transaction = self.connection.unchecked_transaction()?;
 		let mut merged_source=None;
         if let Some(rows)=response["personal_abbreviations"].as_array() {
@@ -717,7 +735,7 @@ impl Database {
         if response["capabilities"]["personal_abbreviations"]==1 { self.set_meta("personal_capability", &json!(1))?; }
         if let Some((seq, operation)) = ack {
             if response["conflicts"].as_array().is_some_and(|rows| !rows.is_empty())
-                && let Some(changes) = operation["body"]["changes"].as_array() { for change in changes { self.recover(operation["library"].as_str().unwrap_or(""), change["id"].as_str(), &change["value"])?; } }
+                && let Some(changes) = operation["body"]["changes"].as_array() { for change in changes { self.recover(operation["library"].as_str().unwrap_or(""), change["id"].as_str(), &change["value"], "The server reported a conflict")?; } }
             if operation["kind"] == "create" { self.remap(operation["library"].as_str().unwrap(), response["library"]["_id"].as_str().context("Missing created library")?)?; }
 			if operation["kind"]=="merge_local"&&!response["conflicts"].as_array().is_some_and(|rows|!rows.is_empty()){merged_source=operation["source"].as_str().map(str::to_owned);}
             self.connection.execute("DELETE FROM outbox WHERE seq=?1", [seq])?;
@@ -731,7 +749,7 @@ impl Database {
                 let pending_create = self.pending()?.iter().any(|(_, operation)| operation["kind"] == "create" && operation["library"] == id);
                 if self.synced(&id)? && !pending_create && !accessible.iter().any(|value| value == &id) {
                     for (seq, operation) in self.pending()? {
-                        if operation["library"] == id || operation["body"]["destination_library"] == id { self.recover_operation(&operation)?; self.connection.execute("DELETE FROM outbox WHERE seq=?1", [seq])?; }
+                        if operation["library"] == id || operation["body"]["destination_library"] == id { self.recover_operation(&operation, "Library access was removed")?; self.connection.execute("DELETE FROM outbox WHERE seq=?1", [seq])?; }
                     }
                     self.connection.execute("DELETE FROM snippets WHERE library=?1", [&id])?;
                     self.connection.execute("DELETE FROM base_snippets WHERE library=?1", [&id])?;
@@ -757,7 +775,7 @@ impl Database {
                 self.put_record(library, &json!({"id":id,"revision":record["revision"],"state":"purged"}))?;
                 for (seq, operation) in self.pending()? {
                     if operation["kind"] == "batch" && operation["body"]["items"].as_array().is_some_and(|items|items.iter().any(|item|item["id"] == id)) {
-                        self.recover_operation(&operation)?;
+                        self.recover_operation(&operation, "A selected snippet was permanently removed")?;
                         self.connection.execute("DELETE FROM outbox WHERE seq=?1", [seq])?;
                         self.set_meta("last_failure", &json!("A selected snippet was permanently removed; the bulk action was cancelled"))?;
                     }
@@ -777,7 +795,6 @@ impl Database {
         self.validated_snapshot()?;
         if let Some(conflicts) = response.get("conflicts") && conflicts.as_array().is_some_and(|rows| rows.is_empty() || rows[0].is_object()) { self.set_meta("conflicts", conflicts)?; }
         if let Some(cursor) = response.get("cursor") { self.set_meta("cursor", cursor)?; }
-        self.set_meta("staged", &Value::Null)?;
         transaction.commit()?;
         Ok(())
     }
@@ -912,6 +929,32 @@ impl DatabaseSnapshot {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sync_names_skip_all_occupied_suffixes_and_stay_stable() {
+        let directory=tempfile::tempdir().unwrap();let db=super::Database::open(directory.path()).unwrap();let id="0123456789abcdef01234567";
+        for name in ["Team".to_owned(),format!("Team [{id}]"),format!("Team [{id}-2]")] {db.import(&name,"matches: []").unwrap();}
+        let mut remote=serde_json::json!({"_id":id,"name":"Team","revision":1,"state":"active","permissions":{"read":true,"edit":true,"manage":true},"records":[]});
+        for _ in 0..2 {db.apply(&serde_json::json!({"libraries":[remote.clone()]}),None).unwrap();let file=db.editor(&format!("Team [{id}-3]")).unwrap();assert_eq!(file.id,id);assert_eq!(db.libraries().unwrap().len(),4);}
+        remote["name"]=serde_json::json!("Renamed");db.apply(&serde_json::json!({"libraries":[remote]}),None).unwrap();assert_eq!(db.editor("Renamed").unwrap().id,id);
+    }
+    #[test]
+    fn idle_sync_keeps_search_index_and_migrates_legacy_metadata_triggers() {
+        let directory=tempfile::tempdir().unwrap();let db=super::Database::open(directory.path()).unwrap();
+        db.import("Library","matches: [{trigger: abc, replace: Searchable}]").unwrap();
+        db.set_meta("personal_abbreviations",&serde_json::json!([])).unwrap();db.search_index().unwrap();
+        db.connection.execute_batch("DROP TRIGGER search_dirty_personal_INSERT; DROP TRIGGER search_dirty_personal_UPDATE; DROP TRIGGER search_dirty_personal_DELETE; CREATE TRIGGER search_dirty_meta_UPDATE AFTER UPDATE ON meta BEGIN UPDATE search_state SET version=version+1 WHERE id=1; END;").unwrap();
+        db.search_index().unwrap();
+        let version=||db.connection.query_row("SELECT version FROM search_state",[],|row|row.get::<_,i64>(0)).unwrap();let before=version();
+        for cursor in [1,1,2] {
+            db.set_meta("statistics_identity",&serde_json::json!({"account":"one","user":"two"})).unwrap();db.set_meta("sync_protocol",&serde_json::json!(6)).unwrap();
+            db.apply(&serde_json::json!({"libraries":[],"personal_abbreviations":[],"conflicts":[],"cursor":cursor,"capabilities":{"personal_abbreviations":1}}),None).unwrap();
+            db.search_index().unwrap();assert_eq!(version(),before);
+        }
+        let personal=serde_json::json!([{"snippet":"one","trigger":"mine","revision":1}]);
+        db.set_meta("personal_abbreviations",&personal).unwrap();assert!(version()>before);db.search_index().unwrap();let before=version();
+        db.set_meta("personal_abbreviations",&personal).unwrap();assert_eq!(version(),before);
+        db.connection.execute("DELETE FROM meta WHERE key='personal_abbreviations'",[]).unwrap();assert!(version()>before);
+    }
     use super::*;
     #[test]
     fn personal_abbreviations_are_offline_overlays_with_independent_revisions() {
@@ -1264,6 +1307,24 @@ mod tests {
         db.acknowledge_usage(&[event["event_id"].clone()]).unwrap();
         assert!(db.pending_usage(&identity).unwrap().is_empty());
         let file=db.create("Local").unwrap(); db.set_meta("statistics_identity",&identity).unwrap(); db.usage(&file.id,"snippet","copy","terminal",40).unwrap(); assert!(db.pending_usage(&identity).unwrap().is_empty());
+    }
+    #[test]
+    fn usage_follows_remap_and_other_identities_are_dropped() {
+        let root=tempfile::tempdir().unwrap(); let db=Database::open(root.path()).unwrap();
+        let identity=json!({"server":"https://example.test","account":"one","user":"owner"}); let other=json!({"server":"https://example.test","account":"two","user":"owner"});
+        let file=db.create("Local").unwrap(); db.enroll("Local").unwrap(); db.set_meta("statistics_identity",&identity).unwrap(); db.usage(&file.id,"snippet","copy","terminal",4).unwrap();
+        db.queue_usage(&other,&Database::usage_event("222222222222222222222222","snippet",false,"insert","desktop",1)).unwrap();
+        db.remap(&file.id,"333333333333333333333333").unwrap(); assert_eq!(db.pending_usage(&identity).unwrap()[0]["library"],"333333333333333333333333");
+        db.retain_usage(Some(&identity)).unwrap(); assert!(db.pending_usage(&other).unwrap().is_empty()); assert_eq!(db.pending_usage(&identity).unwrap().len(),1);
+        db.retain_usage(None).unwrap(); assert!(db.pending_usage(&identity).unwrap().is_empty());
+    }
+    #[test]
+    fn recovery_lists_reason_and_dismisses() {
+        let root=tempfile::tempdir().unwrap(); let db=Database::open(root.path()).unwrap();
+        db.recover_operation(&json!({"kind":"edit","library":"library","body":{"changes":[{"id":"snippet","value":{"trigger":"hi","content":{"text":"Hi"}}}]}}),"Server 410: Library is gone").unwrap();
+        let rows=db.recovery().unwrap(); assert_eq!(rows.len(),1); assert_eq!(rows[0]["reason"],"Server 410: Library is gone"); assert_eq!(rows[0]["snippet"],"snippet"); assert_eq!(rows[0]["data"]["value"]["content"]["text"],"Hi");
+        db.dismiss_recovery(rows[0]["id"].as_str().unwrap()).unwrap(); assert!(db.recovery().unwrap().is_empty());
+        drop(db); let db=Database::open(root.path()).unwrap(); db.set_meta("staged",&json!({"large":true})).unwrap(); drop(db); assert!(Database::open(root.path()).unwrap().meta("staged").unwrap().is_none());
     }
 
 }

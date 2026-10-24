@@ -173,6 +173,25 @@ fn mobile_delete_is_offline_durable_and_idempotent() {
 }
 
 #[test]
+fn operation_receipts_expire_after_thirty_days_but_keep_recent_idempotency() {
+    let fixture = Fixture::new();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+    let db = Database::open(fixture.private.path()).unwrap();
+    db.set_meta("mobile-save-recent-operation", &json!({"signature":"x","result":{"id":"a"},"at":now})).unwrap();
+    db.set_meta("mobile-save-old-operation", &json!({"signature":"x","result":{"id":"b"},"at":now - 31 * 24 * 60 * 60})).unwrap();
+    db.set_meta("mobile-delete-legacy-operation", &json!({"signature":"x","result":{"deleted":true}})).unwrap();
+    db.set_meta("mobile-trash-ancient-operation", &json!({"signature":"x","result":{},"at":now - 40 * 24 * 60 * 60})).unwrap();
+    fixture.call(json!({"action":"state"})).unwrap();
+    let db = Database::open(fixture.private.path()).unwrap();
+    assert!(db.meta("mobile-save-recent-operation").unwrap().is_some());
+    assert!(db.meta("mobile-save-old-operation").unwrap().is_none());
+    let legacy = db.meta("mobile-delete-legacy-operation").unwrap().expect("legacy receipt must be stamped, not dropped, on first open");
+    assert!(legacy["at"].as_i64().is_some_and(|at| at >= now - 1 && at <= now + 1));
+    assert!(db.meta("mobile-trash-ancient-operation").unwrap().is_none());
+    assert_eq!(db.meta("mobile_identity").unwrap(), None);
+}
+
+#[test]
 fn identities_cannot_mix_accounts_or_server_origins() {
     let fixture = Fixture::new();
     let request = json!({"action":"bind","server":"https://example.test","account":"account-one"});
