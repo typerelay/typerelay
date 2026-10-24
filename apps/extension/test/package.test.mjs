@@ -14,7 +14,7 @@ test('store package excludes stale files and always uses the production origin',
 	execFileSync(process.execPath, ['build.mjs', '--package'], { cwd, stdio: 'pipe' });
 	const source = JSON.parse(readFileSync(new URL('../manifest.json', import.meta.url)));
 	const files = unzipSync(readFileSync(new URL(`../releases/typerelay-extension-${source.version}.zip`, import.meta.url)));
-	assert.deepEqual(Object.keys(files).sort(), ['ai.css', 'ai.js', 'content.js', 'icon.png', 'manifest.json', 'messages.js', 'notice.css', 'options.css', 'options.html', 'options.js', 'popup.css', 'popup.html', 'popup.js', 'prompt.css', 'prompt.js', 'prompt.html', 'runtime.js', 'sweetalert2.all.min.js', 'sweetalert2.min.css', 'template.wasm', 'usage.js', 'worker.js'].sort());
+	assert.deepEqual(Object.keys(files).sort(), ['ai.css', 'ai.js', 'content.js', 'icon.png', 'manifest.json', 'merge.js', 'messages.js', 'notice.css', 'options.css', 'options.html', 'options.js', 'popup.css', 'popup.html', 'popup.js', 'prompt.css', 'prompt.js', 'prompt.html', 'runtime.js', 'sweetalert2.all.min.js', 'sweetalert2.min.css', 'template.wasm', 'usage.js', 'worker.js'].sort());
 	const manifest = JSON.parse(strFromU8(files['manifest.json']));
 	assert.equal(manifest.version, source.version);
 	assert.deepEqual(manifest.content_security_policy, { extension_pages: "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';" });

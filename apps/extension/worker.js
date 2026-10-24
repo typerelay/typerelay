@@ -1,5 +1,6 @@
 import { Runtime } from './runtime.js';
 import { Usage } from './usage.js';
+import { resolveCursor, mergeItems } from './merge.js';
 
 let origin = 'https://app.typerelay.com';
 const originReady = chrome.storage.local.get('origin').then(data => { origin = data.origin || origin; });
@@ -123,7 +124,9 @@ async function sync() {
 	if (syncJob) return syncJob;
 	const version = connection.version;
 	syncJob = (async () => {
-		const response = await request('/api/v2/sync?cursor=0');
+		const stored = await chrome.storage.local.get(['items', 'cursor']);
+		const cursor = resolveCursor(stored);
+		const response = await request(`/api/v2/sync?cursor=${cursor}`);
 		const snapshot = await response.json();
 		if (snapshot.protocol !== 6) throw new Error('TypeRelay sync protocol mismatch');
 		const cache = await connection.write(version, () => caches.open('typerelay-assets-v1'));
@@ -133,14 +136,11 @@ async function sync() {
 			const key = `${origin}${assetPath(id)}`;
 			if (!await cache.match(key)) { connection.assert(version); const image = await request(assetPath(id)); await connection.write(version, () => cache.put(key, image)); }
 		}
-		const overrides = new Map((snapshot.personal_abbreviations || []).map(row => [row.snippet, row.trigger]));
-		const items = snapshot.libraries.filter(library => library.state === 'active').flatMap(library => library.snippets.filter(snippet => snippet.state === 'active').map(snippet => ({ id: snippet.id, trigger: library.shared ? (overrides.get(snippet.id) ?? snippet.trigger) : snippet.trigger, title: snippet.title, library: library.name, library_id: library._id, shared: library.shared === true, content: snippet.content })));
-		const counts = new Map(); for (const item of items) if (item.trigger) counts.set(item.trigger, (counts.get(item.trigger) || 0) + 1);
-		for (const item of items) item.abbreviation_collision = (counts.get(item.trigger) || 0) > 1;
+		const items = mergeItems(Array.isArray(stored.items) ? stored.items : [], snapshot);
 		const statisticsIdentity = snapshot.statistics_identity ? { server: origin, account: snapshot.statistics_identity.account, user: snapshot.statistics_identity.user } : null;
 		await connection.write(version, async () => { await chrome.storage.local.set({ items, cursor: snapshot.cursor, lastSync: Date.now(), statisticsIdentity }); await usage.retain(statisticsIdentity); });
 		await usage.flush().catch(() => undefined);
-		for (const key of await cache.keys()) if (!ids.has(key.url.split('/').at(-1))) await connection.write(version, () => cache.delete(key));
+		if (cursor === 0 || snapshot.resync === true) for (const key of await cache.keys()) if (!ids.has(key.url.split('/').at(-1))) await connection.write(version, () => cache.delete(key));
 		await connection.write(version, () => chrome.storage.session.remove('browserAuthError'));
 		return { count: items.length, cursor: snapshot.cursor };
 	})().finally(() => { if (version === connection.version) syncJob = null; });
