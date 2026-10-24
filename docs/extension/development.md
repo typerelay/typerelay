@@ -5,7 +5,7 @@ description: "Build, load, sign in to, and test the Type Relay Chrome extension 
 
 # TypeRelay Chrome extension
 
-The Chrome extension expands synced snippets in editable web fields. It keeps a local snapshot for offline use. The toolbar searches snippets on demand; account, sync, prefix, and web app links are in extension settings. Internal browser pages, the address bar, and native apps are outside its reach.
+The Chrome extension expands synced snippets in editable web fields. It keeps a local snapshot for offline use. If an expansion cannot complete, the typed delimiter (a space, or a newline in multiline fields) is restored to the field. The toolbar searches snippets on demand; account, sync, prefix, and web app links are in extension settings. Internal browser pages, the address bar, and native apps are outside its reach.
 
 ## Build and load
 
@@ -15,7 +15,7 @@ A fresh install opens the options page for sign-in. The toolbar opens settings w
 
 Sign in in the Chrome tab opened by the extension, then select an account and click **Connect device**. Magic Link sign-in can open another tab in the same browser profile; continue there. The extension recognizes its own callback on the Type Relay app origin, exchanges the code, and closes that callback tab. Account sign-in alone does not connect the extension.
 
-The extension uses the first-party device OAuth flow with PKCE and an exact callback path on the selected app origin. Browser connections appear in device management and do not count against Free's machine limit. Snippets and short-lived and refresh tokens stay in Chrome's extension storage. Images are cached in Cache Storage for offline insertion. The extension sends only OAuth and sync requests to the selected Type Relay app origin. It does not send field contents to Type Relay. The native host receives only a short-lived ownership signal; it never receives snippets or field text.
+The extension uses the first-party device OAuth flow with PKCE and an exact callback path on the selected app origin. Browser connections appear in device management and do not count against Free's machine limit. Snippets and short-lived and refresh tokens stay in Chrome's extension storage. Images are cached in Cache Storage for offline insertion. Sync sends the stored cursor and merges only changed libraries, access removals and deletions, falling back to a full snapshot when the server resets the cursor. The extension sends only OAuth and sync requests to the selected Type Relay app origin. It does not send field contents to Type Relay. The native host receives only a short-lived ownership signal; it never receives snippets or field text.
 
 ## Desktop coexistence
 
