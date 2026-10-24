@@ -10,6 +10,15 @@ use typerelay_core::rich_text::{RichRequest, RichText};
 pub struct Mobile;
 impl Mobile {
     fn text<'a>(request: &'a Value, key: &str) -> Result<&'a str> { request[key].as_str().with_context(|| format!("Missing {key}")) }
+    fn receipt_time() -> i64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|since| since.as_secs() as i64).unwrap_or(i64::MAX) }
+    /// Receipts keep save/delete/trash idempotency for 30 days. Legacy receipts predate the timestamp, so they are stamped on first sight and expire 30 days later instead of dropping idempotency for in-flight operations on open.
+    fn prune_receipts(db: &Database) -> Result<()> {
+        let now = Self::receipt_time();
+        let cutoff = now - 30 * 24 * 60 * 60;
+        db.connection.execute("UPDATE meta SET value=json_set(value,'$.at',?1) WHERE (key LIKE 'mobile-save-%' OR key LIKE 'mobile-delete-%' OR key LIKE 'mobile-trash-%') AND json_type(value)='object' AND json_extract(value,'$.at') IS NULL", [now])?;
+        db.connection.execute("DELETE FROM meta WHERE (key LIKE 'mobile-save-%' OR key LIKE 'mobile-delete-%' OR key LIKE 'mobile-trash-%') AND CAST(json_extract(value,'$.at') AS INTEGER) < ?1", [cutoff])?;
+        Ok(())
+    }
     pub fn dispatch(directory: &Path, shared: &Path, request: &Value) -> Result<Value> {
         let action = Self::text(request, "action")?;
         // Extensions use only these read-only operations, without opening the SQLite database.
@@ -59,6 +68,7 @@ impl Mobile {
             return Ok(json!({}));
         }
         let db = Database::open(directory)?;
+        let _ = Self::prune_receipts(&db);
         let result = match action {
             "state" => Self::state(&db)?,
             "bind" => {
@@ -89,7 +99,7 @@ impl Mobile {
                 if let Some(receipt) = db.meta(&key)? { ensure!(receipt["signature"] == signature, "This Trash action already completed for another item."); return Ok(receipt["result"].clone()); }
                 db.trash_action(&request["target"], trash_action)?;
                 let result = json!({"completed":true,"items":db.trash()?});
-                db.set_meta(&key, &json!({"signature":signature,"result":result}))?;
+                db.set_meta(&key, &json!({"signature":signature,"result":result,"at":Self::receipt_time()}))?;
                 result
             }
             "suspend" => { db.set_meta("keyboard_blocked", &json!(true))?; Self::publish(&db, shared)?; json!({}) },
@@ -107,7 +117,7 @@ impl Mobile {
                 let entry: Match = serde_json::from_value(request["entry"].clone())?;
                 let saved = db.edit(&file, index, Some(entry))?;
                 let result = json!({"library": saved.id, "id": index.map(|index| saved.ids[index].clone()).unwrap_or_else(|| saved.ids.last().unwrap().clone())});
-                db.set_meta(&key, &json!({"signature":signature,"result":result}))?;
+                db.set_meta(&key, &json!({"signature":signature,"result":result,"at":Self::receipt_time()}))?;
                 transaction.commit()?;
                 result
             }
@@ -126,7 +136,7 @@ impl Mobile {
                 ensure!(record["revision"] == request["record_revision"], "This snippet changed. Reopen it before deleting.");
                 db.edit(&file, Some(index), None)?;
                 let result = json!({"library":file.id,"id":id,"deleted":true});
-                db.set_meta(&key, &json!({"signature":signature,"result":result}))?;
+                db.set_meta(&key, &json!({"signature":signature,"result":result,"at":Self::receipt_time()}))?;
                 transaction.commit()?;
                 result
             }
