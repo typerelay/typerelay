@@ -241,6 +241,10 @@ final class KeyboardViewController: UIInputViewController {
             guard validAnchor() else { throw NSError(domain: "TypeRelay", code: 1, userInfo: [NSLocalizedDescriptionKey: "Text changed. Select the snippet again."]) }
             changingHost = true
             for _ in anchorFragment { textDocumentProxy.deleteBackward() }
+            // Hosts that ignore deleteBackward would end up with abbreviation + snippet; abort instead of duplicating.
+            if !anchorFragment.isEmpty && (textDocumentProxy.documentContextBeforeInput ?? "").lowercased().hasSuffix(anchorFragment.lowercased()) {
+                throw NSError(domain: "TypeRelay", code: 2, userInfo: [NSLocalizedDescriptionKey: "The host app did not accept the deletion of the typed abbreviation; snippet not inserted."])
+            }
             textDocumentProxy.insertText(rendered["text"] as? String ?? "")
             if let cursor = rendered["cursor"] as? [String: Any], let backward = cursor["backward_utf16"] as? Int { textDocumentProxy.adjustTextPosition(byCharacterOffset: -backward) }
             changingHost = false
