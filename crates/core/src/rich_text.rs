@@ -86,6 +86,7 @@ impl RichText {
         let literal=|value:&str|CowStr::from(Self::replace_values(value,replacements,str::to_owned));
         Ok(match event{
             Event::Text(value)=>Event::Text(literal(&value)),Event::Code(value)=>Event::Code(literal(&value)),
+            Event::FootnoteReference(value)=>Event::FootnoteReference(literal(&value)),Event::Start(Tag::FootnoteDefinition(value))=>Event::Start(Tag::FootnoteDefinition(literal(&value))),
             Event::Html(value)=>Event::Html(Self::replace_values(&value,replacements,|value|html_escape::encode_quoted_attribute(value).into_owned()).into()),
             Event::InlineHtml(value)=>Event::InlineHtml(Self::replace_values(&value,replacements,|value|html_escape::encode_quoted_attribute(value).into_owned()).into()),
             Event::Start(Tag::Link{link_type,dest_url,title,id})=>Event::Start(Tag::Link{link_type,dest_url:Self::answer_url(&dest_url,replacements)?,title:literal(&title),id:id.into_static()}),
@@ -275,6 +276,11 @@ mod tests {
             let value="file_name &copy; ++abc++ ``` ~~~ <b>literal</b>";let mut request=RichRequest{markdown:markdown.into(),preview:false,..Default::default()};request.values.insert("name".into(),value.into());let result=RichText::render(request).unwrap();assert!(result.text.ends_with(value),"{markdown}: {}",result.text);assert!(result.html.contains("file_name &amp;copy; ++abc++ ``` ~~~ &lt;b&gt;literal&lt;/b&gt;"),"{markdown}: {}",result.html);assert!(!result.html.contains("<u>"));assert!(result.rtf.contains("file_name &copy; ++abc++ ``` ~~~ <b>literal</b>"));
         }
     }
+    #[test]
+    fn footnote_fields_do_not_expose_internal_markers(){
+        let mut request=RichRequest{markdown:"Ref [^{{name}}]\n\n[^{{name}}]: Details".into(),preview:false,..Default::default()};request.values.insert("name".into(),"note".into());let result=RichText::render(request).unwrap();assert!(result.html.contains("href=\"#note\""));assert!(!result.html.contains("TYRELAYVARIABLE"));
+    }
+
     #[test]
     fn answers_cannot_change_code_fences_or_image_label_emphasis(){
         let mut request=RichRequest{markdown:"```{{lang}}\ntext\n```\n\ntail".into(),preview:false,..Default::default()};request.values.insert("lang".into(),"~rust".into());let result=RichText::render(request).unwrap();assert!(result.html.ends_with("<p>tail</p>\n"));assert_eq!(result.text,"text\ntail");
