@@ -81,21 +81,27 @@ test('release tooling creates signed updater artifacts for every supported platf
 	assert.match(config.plugins.updater.pubkey, /^[A-Za-z0-9+/=]+$/);
 });
 
-test('desktop package version feeds Tauri and native builds', async () => {
-	const config=JSON.parse(await fs.readFile(path.join(PanelRelease.root,'apps/desktop/src-tauri/tauri.conf.json'),'utf8'));const desktop=JSON.parse(await fs.readFile(path.join(PanelRelease.root,'apps/desktop/package.json'),'utf8'));const panel=await fs.readFile(path.join(PanelRelease.root,'apps/desktop/src-tauri/Cargo.toml'),'utf8');
-	assert.equal(config.version,'../package.json');assert.equal((await DesktopVersion.config()).version,desktop.version);assert.doesNotMatch(panel,/^version = /m);
+test('root package version feeds Tauri and native builds', async () => {
+	const config=JSON.parse(await fs.readFile(path.join(PanelRelease.root,'apps/desktop/src-tauri/tauri.conf.json'),'utf8'));const desktop=JSON.parse(await fs.readFile(path.join(PanelRelease.root,'package.json'),'utf8'));const panel=await fs.readFile(path.join(PanelRelease.root,'apps/desktop/src-tauri/Cargo.toml'),'utf8');
+	assert.equal(config.version,'../../../package.json');assert.equal((await DesktopVersion.config()).version,desktop.version);assert.doesNotMatch(panel,/^version = /m);
 	for(const name of ['crates/client/src/main.rs','crates/client/src/tui/main.rs','apps/desktop/src-tauri/src/main.rs'])assert.match(await fs.readFile(path.join(PanelRelease.root,name),'utf8'),/env!\("TYPERELAY_VERSION"\)/);
 	for(const name of ['crates/client/build.rs','apps/desktop/src-tauri/build.rs'])assert.match(await fs.readFile(path.join(PanelRelease.root,name),'utf8'),/DesktopVersion::emit/);
 	assert.match(await fs.readFile(path.join(PanelRelease.root,'scripts/desktop-version-build.rs'),'utf8'),/cargo:rerun-if-changed/);
 });
 
-test('changing only the desktop package version changes the release version', async () => {
+test('changing only the root package version changes the release version', async () => {
 	const root=await fs.mkdtemp(path.join(os.tmpdir(),'typerelay-version-test-'));const originalRoot=DesktopVersion.root;
 	try {
-		for(const name of ['apps/desktop/package.json','apps/desktop/src-tauri/tauri.conf.json']) {const destination=path.join(root,name);await fs.mkdir(path.dirname(destination),{recursive:true});await fs.copyFile(path.join(originalRoot,name),destination);}
-		const desktopPath=path.join(root,'apps/desktop/package.json');const desktop=JSON.parse(await fs.readFile(desktopPath,'utf8'));desktop.version='9.8.7';await fs.writeFile(desktopPath,JSON.stringify(desktop,null,2)+'\n');
+		for(const name of ['package.json','apps/desktop/src-tauri/tauri.conf.json']) {const destination=path.join(root,name);await fs.mkdir(path.dirname(destination),{recursive:true});await fs.copyFile(path.join(originalRoot,name),destination);}
+		const desktopPath=path.join(root,'package.json');const desktop=JSON.parse(await fs.readFile(desktopPath,'utf8'));desktop.version='9.8.7';await fs.writeFile(desktopPath,JSON.stringify(desktop,null,2)+'\n');
 		DesktopVersion.root=root;
 		assert.equal(await DesktopVersion.version(),'9.8.7');assert.equal((await DesktopVersion.config()).version,'9.8.7');
+		for (const version of [null, 123, '', 'invalid', '1.2', '01.2.3', '1.2.3-01', '1.2.3..4']) {
+			await fs.writeFile(desktopPath,JSON.stringify({ version }));
+			await assert.rejects(DesktopVersion.version(), /SemVer/);
+		}
+		await fs.writeFile(desktopPath,JSON.stringify({ version:'1.2.3-beta.1+build.02' }));
+		assert.equal(await DesktopVersion.version(),'1.2.3-beta.1+build.02');
 	}finally{DesktopVersion.root=originalRoot;await fs.rm(root,{recursive:true,force:true});}
 });
 

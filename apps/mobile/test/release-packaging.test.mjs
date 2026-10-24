@@ -41,17 +41,17 @@ describe('mobile release packaging', () => {
 	});
 
 	it('keeps Android and iOS release versions aligned', () => {
-		const mobile = JSON.parse(source('apps/mobile/package.json'));
+		const mobile = JSON.parse(source('package.json'));
 		const gradle = source('apps/mobile/android/app/build.gradle');
 		const xcode = source('apps/mobile/ios/App/App.xcodeproj/project.pbxproj');
-		const androidVersion = gradle.match(/versionName "([^"]+)"/)?.[1];
-		const androidBuild = gradle.match(/versionCode (\d+)/)?.[1];
 		const iosVersions = [...xcode.matchAll(/MARKETING_VERSION = ([^;]+);/g)].map(match => match[1]);
 		const iosBuilds = [...xcode.matchAll(/CURRENT_PROJECT_VERSION = (\d+);/g)].map(match => match[1]);
-		assert.equal(androidVersion, mobile.version);
-		assert.ok(Number(androidBuild) > 1);
-		assert.deepEqual([...new Set(iosVersions)], [mobile.version]);
-		assert.deepEqual([...new Set(iosBuilds)], [androidBuild]);
+		assert.match(gradle, /versionName releaseVersion\.version_mobile/);
+		assert.match(gradle, /versionCode releaseVersion\.build_mobile/);
+		assert.match(gradle, /JsonSlurper.*package\.json/);
+		assert.ok(Number.isInteger(mobile.build_mobile) && mobile.build_mobile > 1);
+		assert.deepEqual([...new Set(iosVersions)], [mobile.version_mobile]);
+		assert.deepEqual([...new Set(iosBuilds)], [String(mobile.build_mobile)]);
 	});
 
 	it('keeps both native keyboards aligned to platform-sized keycaps', () => {

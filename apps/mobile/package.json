@@ -1,18 +1,17 @@
 {
   "name": "@typerelay/mobile",
-  "version": "1.3.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "build": "node scripts/build-renderer.mjs && tsc --noEmit && vite build",
-    "cap:sync": "pnpm assets && pnpm build && capacitor sync",
+    "build": "node scripts/version.mjs && node scripts/build-renderer.mjs && tsc --noEmit && vite build",
+    "cap:sync": "node scripts/version.mjs && pnpm assets && pnpm build && capacitor sync",
     "android:release": "bash scripts/android-release-bundle.sh",
     "native:ios": "node scripts/build-native.mjs ios",
     "native:android": "node scripts/build-native.mjs android",
     "test": "cargo test --manifest-path ../../Cargo.toml -p typerelay-mobile --lib",
     "assets": "node scripts/assets.mjs",
-    "test:release": "node --test test/release-packaging.test.mjs",
+    "test:release": "node --test test/release-packaging.test.mjs test/version.test.mjs",
     "test:ui": "node --test test/ui.test.mjs test/auth.test.mjs",
     "test:preview": "node --test test/preview-server.test.mjs"
   },

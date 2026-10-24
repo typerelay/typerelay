@@ -1,7 +1,6 @@
 {
   "name": "@typerelay/extension",
   "private": true,
-  "version": "1.2.2",
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
