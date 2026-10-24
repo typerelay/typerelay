@@ -1,5 +1,5 @@
 import { AccountAccess } from './account_access.js';
-import { resolveCname } from 'node:dns/promises';
+import { resolveCname, resolveTxt } from 'node:dns/promises';
 import { mkdir, rename, rm, stat } from 'node:fs/promises';
 import { domainToASCII } from 'node:url';
 import { join, resolve } from 'node:path';
@@ -64,6 +64,8 @@ export class WhiteLabel {
 		return { entitled, logo: asset('logo'), favicon: asset('favicon'), login_logo: asset('login_logo'), logo_url: entitled ? whiteLabel.logo?.url || '' : '', favicon_url: entitled ? whiteLabel.favicon?.url || '' : '', login_logo_url: entitled ? whiteLabel.login_logo?.url || '' : '', hostname: whiteLabel.hostname || '', state: whiteLabel.state || 'unconfigured', cname_target: WhiteLabel.cnameTarget(), cloudflare_hostname_status: whiteLabel.cloudflare_hostname_status || '', cloudflare_ssl_status: whiteLabel.cloudflare_ssl_status || '', dns_verified_at: whiteLabel.dns_verified_at || null, cloudflare_checked_at: whiteLabel.cloudflare_checked_at || null, last_error: whiteLabel.last_error || '', active: entitled && !whiteLabel.disabled_at && !whiteLabel.provider_action && whiteLabel.state === 'active' };
 	}
 
+	static domainSettings(account) { return { ...WhiteLabel.serialize(account), txt_name: account.white_label?.hostname ? `_typerelay.${account.white_label.hostname}` : '', txt_value: `typerelay-domain-verification=${account._id}` }; }
+
 	static public(account) {
 		const settings = WhiteLabel.serialize(account, Billing.entitlements(account).plan === 'team');
 		return settings.active || settings.logo_url || settings.favicon_url || settings.login_logo_url ? settings : null;
@@ -72,7 +74,7 @@ export class WhiteLabel {
 	static async settings(accountId) {
 		const account = await WhiteLabel.account(accountId);
 		if (!account) throw WhiteLabel.error(404, 'Account missing', 'account_missing');
-		return WhiteLabel.serialize(account);
+		return WhiteLabel.domainSettings(account);
 	}
 
 	static cloudflareConfig() {
@@ -161,10 +163,10 @@ export class WhiteLabel {
 	static async configure(accountId, hostname, options = {}) {
 		hostname = WhiteLabel.normalizeHostname(hostname);
 		return WhiteLabel.mutation(accountId, async account => {
-			if (hostname === account.white_label?.hostname) { if (account.white_label.provider_action) throw WhiteLabel.busy(); return WhiteLabel.serialize(account); }
+			if (hostname === account.white_label?.hostname) { if (account.white_label.provider_action) throw WhiteLabel.busy(); return WhiteLabel.domainSettings(account); }
 			if (hostname && await WhiteLabel.claimed(account._id, hostname)) throw WhiteLabel.error(409, 'This hostname is already connected', 'hostname_conflict');
 			account = await WhiteLabel.releaseHostname(account, options, hostname);
-			return WhiteLabel.serialize(await WhiteLabel.saveState(account, WhiteLabel.domainState(hostname)));
+			return WhiteLabel.domainSettings(await WhiteLabel.saveState(account, WhiteLabel.domainState(hostname)));
 		});
 	}
 
@@ -180,16 +182,24 @@ export class WhiteLabel {
 	static async verifyState(account, options, refresh = false) {
 		const hostname = WhiteLabel.normalizeHostname(account.white_label?.hostname, false);
 		if (!account.white_label.dns_verified_at && account.white_label.provider_action) throw WhiteLabel.reconciliation();
-		if (account.white_label.provider_action === 'deleting' || account.white_label.disabled_at && (account.white_label.provider_action || account.white_label.cloudflare_hostname_id)) return WhiteLabel.serialize(await WhiteLabel.releaseHostname(account, options));
+		if (account.white_label.provider_action === 'deleting' || account.white_label.disabled_at && (account.white_label.provider_action || account.white_label.cloudflare_hostname_id)) return WhiteLabel.domainSettings(await WhiteLabel.releaseHostname(account, options));
 		if (account.white_label.dns_verified_at && !account.white_label.claim_token) throw WhiteLabel.reconciliation();
-		if (account.white_label.provider_action === 'creating') return WhiteLabel.serialize(await WhiteLabel.recoverCreating(account, options));
+		if (account.white_label.provider_action === 'creating') return WhiteLabel.domainSettings(await WhiteLabel.recoverCreating(account, options));
 		try {
 			if (account.white_label.disabled_at || !account.white_label.claim_token) account = await WhiteLabel.saveState(account, { disabled_at: null, claim_token: account.white_label.claim_token || randomUUID() });
-			if (!refresh || !account.white_label.cloudflare_hostname_id) {
+			if (!refresh || !account.white_label.dns_verified_at || !account.white_label.cloudflare_hostname_id) {
 				const records = await (options.resolveCname || resolveCname)(hostname).catch(() => []);
 				if (!records.map(record => String(record).toLowerCase().replace(/\.$/, '')).includes(WhiteLabel.cnameTarget())) {
-					account = await WhiteLabel.saveState(account, { state: 'pending_dns', next_check_at: new Date(Date.now() + WhiteLabel.pendingDelay), last_error: `CNAME must point to ${WhiteLabel.cnameTarget()}` });
-					throw Object.assign(WhiteLabel.error(400, `CNAME must point to ${WhiteLabel.cnameTarget()}`, 'cname_not_verified', { records }), { settings: WhiteLabel.serialize(account) });
+					account = await WhiteLabel.saveState(account, { state: account.white_label.cloudflare_hostname_id ? account.white_label.state : 'pending_dns', next_check_at: new Date(Date.now() + WhiteLabel.pendingDelay), last_error: `CNAME must point to ${WhiteLabel.cnameTarget()}` });
+					throw Object.assign(WhiteLabel.error(400, `CNAME must point to ${WhiteLabel.cnameTarget()}`, 'cname_not_verified', { records }), { settings: WhiteLabel.domainSettings(account) });
+				}
+				if (!account.white_label.dns_verified_at || !account.white_label.cloudflare_hostname_id) {
+					const { txt_name, txt_value } = WhiteLabel.domainSettings(account);
+					const records = await (options.resolveTxt || resolveTxt)(txt_name).catch(() => []);
+					if (!records.some(record => (Array.isArray(record) ? record.join('') : record) === txt_value)) {
+						account = await WhiteLabel.saveState(account, { state: 'pending_dns', next_check_at: new Date(Date.now() + WhiteLabel.pendingDelay), last_error: 'Domain ownership TXT record is missing or does not match this account' });
+						throw Object.assign(WhiteLabel.error(400, 'Domain ownership TXT record is missing or does not match this account', 'txt_not_verified'), { settings: WhiteLabel.domainSettings(account) });
+					}
 				}
 				if (!account.white_label.dns_verified_at) {
 					if (await WhiteLabel.claimed(account._id, hostname)) throw WhiteLabel.error(409, 'This hostname is already connected', 'hostname_conflict');
@@ -212,7 +222,7 @@ export class WhiteLabel {
 				}
 			}
 			if (!WhiteLabel.owns(account, record, account.white_label.cloudflare_hostname_id)) throw WhiteLabel.reconciliation();
-			return WhiteLabel.serialize(await WhiteLabel.saveState(account, { ...WhiteLabel.cloudflareState(record), provider_action: '' }));
+			return WhiteLabel.domainSettings(await WhiteLabel.saveState(account, { ...WhiteLabel.cloudflareState(record), provider_action: '' }));
 		} catch (error) {
 			if (error.code === 'domain_busy') throw error;
 			await WhiteLabel.saveState(account, { last_error: error.message, next_check_at: new Date(Date.now() + WhiteLabel.pendingDelay) });
@@ -235,7 +245,7 @@ export class WhiteLabel {
 	static remove(accountId, options = {}) {
 		return WhiteLabel.mutation(accountId, async account => {
 			account = await WhiteLabel.releaseHostname(account, options, '');
-			return WhiteLabel.serialize(await WhiteLabel.saveState(account, WhiteLabel.domainState()));
+			return WhiteLabel.domainSettings(await WhiteLabel.saveState(account, WhiteLabel.domainState()));
 		});
 	}
 

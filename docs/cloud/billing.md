@@ -1,6 +1,6 @@
 ---
 title: "TypeRelay Cloud billing"
-description: "Understand TypeRelay Cloud plans, trials, billing, seat limits, cancellation, Stripe Tax, and custom-domain white-label settings."
+description: "Understand TypeRelay Cloud plans, trials, billing, seat limits, cancellation, Stripe Tax, and custom-domain CNAME and ownership TXT verification."
 ---
 
 # Billing
@@ -25,13 +25,20 @@ Stripe Tax is enabled for Checkout. Keep the live account's registrations active
 
 ## White-label domains
 
-Team owners and admins can upload a navigation logo, login logo, and favicon in **Settings → White-label**. For a custom hostname, create a DNS-only CNAME to `custom.typerelay.com`, save the hostname, and select **Verify**. TypeRelay shows the domain as active only after Cloudflare reports both hostname and SSL status active. A saved hostname that is not verified does not reserve the domain. After an account verifies the CNAME, other accounts cannot connect the same hostname.
+Team owners and admins can upload a navigation logo, login logo, and favicon in **Settings → White-label**. For a custom hostname, save the hostname first. Add both DNS records shown in these settings:
+
+| Type | Name | Value |
+| --- | --- | --- |
+| CNAME | Your custom hostname, for example `app.example.com` | `custom.typerelay.com` (DNS-only) |
+| TXT | `_typerelay.<custom-hostname>`, for example `_typerelay.app.example.com` | `typerelay-domain-verification=<account-id>` |
+
+Copy the exact TXT value from settings. It identifies the account that may claim this hostname. Some DNS providers add the zone name automatically; enter the record name so its full name matches the name in settings. Keep both records in DNS, then select **Verify**. TypeRelay shows the domain as active only after Cloudflare reports both hostname and SSL status active. A saved hostname that is not verified does not reserve the domain. After an account verifies both the CNAME and its ownership TXT record, other accounts cannot connect the same hostname.
 
 Brand assets accept PNG, JPG, WebP, AVIF, GIF or ICO images up to 5 MB and are normalized to PNG storage. Removing an asset returns that location to the TypeRelay default. The hostname field accepts only a hostname on your own domain, not a URL, path, TypeRelay-owned name or hostname already connected to another account.
 
 Branding changes retain files that may still be selected. If a save reports an error, reload White-label settings before retrying because the change may already have completed.
 
-Domain states distinguish missing DNS from pending SSL. **Refresh** rechecks the existing Cloudflare hostname; **Verify** checks the DNS CNAME and creates or recovers the Cloudflare custom hostname. A failed DNS recheck preserves an existing verified reservation. Remove or change the hostname to release it after external cleanup finishes. Removing the domain stops branded-host routing but does not remove the account or its libraries. A Team-plan loss disables the custom hostname until the entitlement returns.
+Domain states distinguish missing DNS from pending SSL. **Refresh** rechecks the existing Cloudflare hostname; **Verify** checks the DNS CNAME and creates or recovers the Cloudflare custom hostname. A new hostname requires the matching CNAME and account TXT record before TypeRelay reserves it or creates a Cloudflare hostname. Missing, incorrect, or unavailable DNS cannot create a provider hostname. Existing working domains continue to refresh without a new TXT check. If Cloudflare reports that the provider hostname is missing, recreation requires both records again, even for a previously verified domain. A failed DNS recheck preserves an existing verified reservation and does not disable a working provider hostname. Remove or change the hostname to release it after external cleanup finishes. Removing the domain stops branded-host routing but does not remove the account or its libraries. A Team-plan loss disables the custom hostname until the entitlement returns.
 
 Domain changes run one at a time per account. A conflicting request returns 409; retry after the current operation finishes. If a provider request has an uncertain outcome, TypeRelay keeps its reservation and cleanup details. **Verify** or **Refresh** can recover a provider record only when its account and claim metadata match. A pending create is never repeated or discarded merely because time passed. If no exact record can be confirmed, an operator must reconcile the provider state before the hostname can be changed or removed.
 

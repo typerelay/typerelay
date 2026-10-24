@@ -269,11 +269,23 @@ class TypeRelay {
 	}
 	async refreshBilling() { if (document.querySelector('#settings-pane-subscription')) this.applyBilling(await this.request('billing/fragments')); }
 	applyWhiteLabel(result) {
+		const focused = document.querySelector('#white-label-content')?.contains(document.activeElement) ? document.activeElement : null;
+		const focusSelector = focused?.id ? '#' + CSS.escape(focused.id) : null;
+		const selection = focused?.selectionStart == null ? null : [focused.selectionStart, focused.selectionEnd, focused.selectionDirection];
 		if (result.html) this.update('#white-label-content', '#settings-pane-whiteLabel', result.html);
+		if (focusSelector) { const next = document.querySelector(focusSelector); next?.focus({ preventScroll: true }); if (selection && next?.setSelectionRange) next.setSelectionRange(...selection); }
 		if (result.brand_html) this.update('header .brand', '.brand-link', result.brand_html);
 		if (result.settings) document.querySelector('link[rel="icon"]').href = result.settings.favicon_url || '/assets/favicon.ico';
 	}
-	async whiteLabelRequest(path, method = 'GET', body) { try { const result = await this.request(path, method, body); this.applyWhiteLabel(result); return result; } catch (error) { this.applyWhiteLabel(error); throw error; } }
+	async whiteLabelRequest(path, method = 'GET', body, button) {
+		let restoreFocus = button && button === document.activeElement;
+		const trackFocus = event => { if (event.target !== button && event.target !== document.body) restoreFocus = false; };
+		if (restoreFocus) document.addEventListener('focusin', trackFocus);
+		if (button) button.disabled = true;
+		try { const result = await this.request(path, method, body); this.applyWhiteLabel(result); return result; }
+		catch (error) { this.applyWhiteLabel(error); throw error; }
+		finally { if (button) button.disabled = false; document.removeEventListener('focusin', trackFocus); if (restoreFocus && document.activeElement === document.body) document.getElementById(button.id)?.focus({ preventScroll: true }); }
+	}
 	async refreshWhiteLabel() { await this.whiteLabelRequest('white-label'); }
 	async whiteLabelUpload(input) {
 		const button = input;
@@ -504,7 +516,7 @@ class TypeRelay {
 			}
 			if (form.id === 'record-form') { this.submitting = true; if (await this.submit(data) !== false) { bootstrap.Modal.getInstance(document.querySelector('#form-modal')).hide(); this.toast('Saved'); } }
 		} catch (error) { const warning = form.querySelector('#import-error'); if (warning) { warning.textContent = error.message; warning.hidden = false; warning.scrollIntoView?.({ block: 'nearest' }); } this.toast(error.message, 'error'); }
-		finally { this.submitting = false; if (form.id === 'profile-form') this.profileSaving = false; if (button) button.disabled = false; document.removeEventListener('focusin', trackSubmitFocus); if (restoreSubmitFocus && button.isConnected && document.activeElement === document.body && !form.closest('[hidden], [aria-hidden="true"], .modal:not(.show)')) button.focus({ preventScroll: true }); }
+		finally { this.submitting = false; if (form.id === 'profile-form') this.profileSaving = false; if (button) button.disabled = false; document.removeEventListener('focusin', trackSubmitFocus); const focusButton = button?.isConnected ? button : form.id === 'white-label-domain-form' ? document.querySelector('#white-label-save') : null; if (restoreSubmitFocus && focusButton && document.activeElement === document.body && !focusButton.closest('[hidden], [aria-hidden="true"], .modal:not(.show)')) focusButton.focus({ preventScroll: true }); }
 	}
 	async confirm(title) { return (await Swal.fire({ title, icon: 'warning', showCancelButton: true, allowOutsideClick: false, allowEscapeKey: false, confirmButtonText: 'Confirm' })).isConfirmed; }
 	async snippet(id, value, snapshot = null) {
@@ -598,8 +610,8 @@ class TypeRelay {
 		if (button.hasAttribute('data-cancel-pending-checkout') && await this.confirm('Cancel the open checkout?')) { button.disabled = true; try { this.applyBilling(await this.request('billing/checkout/cancel', 'POST', {})); this.toast('Checkout canceled'); } finally { button.disabled = false; } return; }
 		if (button.hasAttribute('data-cancel-billing-change') && await this.confirm('Cancel the scheduled subscription change?')) { button.disabled = true; try { this.applyBilling(await this.request('billing/change/cancel', 'POST', {})); this.toast('Scheduled change canceled'); } finally { button.disabled = false; } return; }
 		if (button.dataset.whiteLabelDelete && await this.confirm('Remove this brand asset?')) { this.applyWhiteLabel(await this.request('white-label/assets/' + button.dataset.whiteLabelDelete, 'DELETE')); return; }
-		if (button.hasAttribute('data-white-label-verify')) { button.disabled = true; try { await this.whiteLabelRequest('white-label/domain/verify', 'POST', {}); this.toast('Domain verification started'); } finally { button.disabled = false; } return; }
-		if (button.hasAttribute('data-white-label-refresh')) { button.disabled = true; try { await this.whiteLabelRequest('white-label/domain/refresh', 'POST', {}); } finally { button.disabled = false; } return; }
+		if (button.hasAttribute('data-white-label-verify')) { await this.whiteLabelRequest('white-label/domain/verify', 'POST', {}, button); this.toast('Domain verification started'); return; }
+		if (button.hasAttribute('data-white-label-refresh')) { await this.whiteLabelRequest('white-label/domain/refresh', 'POST', {}, button); return; }
 		if (button.hasAttribute('data-white-label-remove-domain') && await this.confirm('Remove this custom domain?')) { await this.whiteLabelRequest('white-label/domain', 'DELETE'); return; }
 		if (button.hasAttribute('data-bulk-move')) return this.batchAction('move');
 		if (button.hasAttribute('data-bulk-trash')) return this.batchAction('trash');

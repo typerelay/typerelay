@@ -10,6 +10,7 @@ import { AdminAccounts } from '../services/admin_accounts.js';
 class Fixture {
 	static environment = {};
 	static dns = async () => ['custom.typerelay.com.'];
+	static txt = async name => (await Account.find({ 'white_label.hostname': name.replace(/^_typerelay\./, '') }).lean()).map(account => [`typerelay-domain-verification=${account._id}`]);
 	static barrier() { let start; let release; const ready = new Promise(resolve => { start = resolve; }); const gate = new Promise(resolve => { release = resolve; }); return { ready, release, wait: async () => { start(); await gate; } }; }
 	static async account(hostname = `${randomUUID()}.example.test`) { const account = await Account.create({ name: 'Domain lifecycle', plan: 'team', billing: { status: 'active' } }); await WhiteLabel.configure(account._id, hostname); return WhiteLabel.account(account._id, true); }
 	static expire(account) { return Account.updateOne({ _id: account._id }, { $set: { 'white_label.operation_until': new Date(0) } }); }
@@ -22,7 +23,7 @@ class Fixture {
 // A provider record has its own immutable ID; DELETE always targets that ID.
 class Provider {
 	records = []; calls = []; beforeCreate; afterCreate; beforeGet; beforeDelete; afterDelete;
-	options() { return { fetch: this.fetch, resolveCname: Fixture.dns }; }
+	options() { return { fetch: this.fetch, resolveCname: Fixture.dns, resolveTxt: Fixture.txt }; }
 	count(method) { return this.calls.filter(call => call.method === method).length; }
 	fetch = async (url, input) => {
 		const parsed = new URL(url); const method = input.method; const id = parsed.pathname.split('/').at(-1); const body = input.body && JSON.parse(input.body);
@@ -249,7 +250,7 @@ test('disable fences a paused CREATE immediately and reconciliation later cleans
 
 test('legacy verified catalog-only binding fails closed and preserves routing and reservation', { timeout: 15000 }, async () => {
 	const account = await Account.create({ plan: 'team', billing: { status: 'active' }, white_label: { hostname: 'legacy-verified.example.test', state: 'active', dns_verified_at: new Date(), cloudflare_hostname_id: 'legacy-id' } });
-	const options = { fetch: async () => assert.fail('legacy resource was accessed'), resolveCname: Fixture.dns };
+	const options = { fetch: async () => assert.fail('legacy resource was accessed'), resolveCname: Fixture.dns, resolveTxt: Fixture.txt };
 	for (const action of ['verify', 'refresh', 'remove']) await assert.rejects(WhiteLabel[action](account._id, options), Fixture.unresolved);
 	const current = await WhiteLabel.account(account._id, true); assert.equal(current.white_label.state, 'active'); assert.equal(current.white_label.cloudflare_hostname_id, 'legacy-id'); assert.ok(current.white_label.dns_verified_at); assert.equal(current.white_label.claim_token, '');
 });
@@ -299,7 +300,7 @@ test('failed DNS recheck keeps a verified reservation and known provider binding
 	const account = await Fixture.account(); const next = await Fixture.account(account.white_label.hostname); const provider = new Provider(); await WhiteLabel.verify(account._id, provider.options());
 	const before = await WhiteLabel.account(account._id, true);
 	await assert.rejects(WhiteLabel.verify(account._id, { ...provider.options(), resolveCname: async () => [] }), error => error.code === 'cname_not_verified');
-	const current = await WhiteLabel.account(account._id, true); assert.equal(current.white_label.dns_verified_at.getTime(), before.white_label.dns_verified_at.getTime()); assert.equal(current.white_label.cloudflare_hostname_id, before.white_label.cloudflare_hostname_id); assert.equal(current.white_label.claim_token, before.white_label.claim_token);
+	const current = await WhiteLabel.account(account._id, true); assert.equal(current.white_label.dns_verified_at.getTime(), before.white_label.dns_verified_at.getTime()); assert.equal(current.white_label.cloudflare_hostname_id, before.white_label.cloudflare_hostname_id); assert.equal(current.white_label.claim_token, before.white_label.claim_token); assert.equal(current.white_label.state, 'active');
 	await assert.rejects(WhiteLabel.verify(next._id, provider.options()), error => error.code === 'hostname_conflict');
 	assert.equal(provider.count('POST'), 1);
 	await WhiteLabel.remove(account._id, provider.options()); assert.equal((await WhiteLabel.verify(next._id, provider.options())).active, true);
@@ -312,4 +313,71 @@ test('a stale claimed-conflict error cannot change the replacement hostname', { 
 	try { await Fixture.expire(account); await WhiteLabel.configure(account._id, 'conflict-replacement.example.test', provider.options()); }
 	finally { barrier.release(); await rejected; }
 	const current = await WhiteLabel.account(account._id, true); assert.equal(current.white_label.hostname, 'conflict-replacement.example.test'); assert.equal(current.white_label.last_error, ''); assert.equal(current.white_label.dns_verified_at, null); assert.equal(provider.count('POST'), 0);
+});
+
+for (const proof of ['absent', 'wrong-account', 'extra-space', 'transient']) for (const action of ['verify', 'refresh']) test(`${action} rejects ${proof} TXT before reservation or provider access`, { timeout: 15000 }, async () => {
+	const account = await Fixture.account(); const provider = new Provider();
+	const resolveTxt = async name => {
+		assert.equal(name, `_typerelay.${account.white_label.hostname}`);
+		if (proof === 'transient') throw Object.assign(new Error('DNS timeout'), { code: 'ETIMEOUT' });
+		return proof === 'absent' ? [] : [[`typerelay-domain-verification=${proof === 'wrong-account' ? new mongoose.Types.ObjectId() : account._id + ' '}`]];
+	};
+	await assert.rejects(WhiteLabel[action](account._id, { ...provider.options(), resolveTxt }), error => error.code === 'txt_not_verified' && error.settings.txt_value === `typerelay-domain-verification=${account._id}`);
+	const current = await WhiteLabel.account(account._id, true);
+	assert.equal(current.white_label.dns_verified_at, null); assert.equal(current.white_label.provider_action, ''); assert.equal(current.white_label.state, 'pending_dns'); assert.equal(provider.calls.length, 0);
+	assert.doesNotMatch(JSON.stringify(WhiteLabel.serialize(current)), /typerelay-domain-verification=/);
+});
+
+test('split TXT chunks match exactly within one record and settings never expose the internal claim', { timeout: 15000 }, async () => {
+	const account = await Fixture.account(); const provider = new Provider();
+	const settings = await WhiteLabel.verify(account._id, { ...provider.options(), resolveTxt: async () => [['unrelated'], ['typerelay-domain-', 'verification=', String(account._id)]] });
+	assert.equal(settings.active, true); assert.equal(settings.txt_name, `_typerelay.${account.white_label.hostname}`); assert.equal(settings.txt_value, `typerelay-domain-verification=${account._id}`);
+	assert.equal(settings.claim_token, undefined);
+	const current = await WhiteLabel.account(account._id, true);
+	assert.equal(WhiteLabel.public(current).txt_value, undefined); assert.equal(WhiteLabel.serialize(current).txt_name, undefined); assert.equal(WhiteLabel.public(current).claim_token, undefined);
+	assert.equal((await WhiteLabel.saveAsset(account._id, 'logo', null)).txt_value, settings.txt_value);
+	assert.equal((await WhiteLabel.deleteAsset(account._id, 'favicon')).txt_name, settings.txt_name);
+	const changed = await WhiteLabel.configure(account._id, 'changed-proof.example.test', provider.options());
+	assert.equal(changed.txt_name, '_typerelay.changed-proof.example.test'); assert.equal(changed.txt_value, settings.txt_value);
+	assert.equal((await WhiteLabel.remove(account._id, provider.options())).txt_name, '');
+});
+
+test('separate TXT records cannot be concatenated into an ownership proof', { timeout: 15000 }, async () => {
+	const account = await Fixture.account(); const provider = new Provider();
+	await assert.rejects(WhiteLabel.verify(account._id, { ...provider.options(), resolveTxt: async () => [['typerelay-domain-verification='], [String(account._id)]] }), error => error.code === 'txt_not_verified');
+	assert.equal(provider.calls.length, 0);
+});
+
+test('only the account named by TXT can win concurrent claims', { timeout: 15000 }, async () => {
+	const owner = await Fixture.account(); const other = await Fixture.account(owner.white_label.hostname); const provider = new Provider();
+	const options = { ...provider.options(), resolveTxt: async () => [[`typerelay-domain-verification=${owner._id}`]] };
+	const results = await Promise.allSettled([WhiteLabel.verify(other._id, options), WhiteLabel.verify(owner._id, options)]);
+	assert.equal(results[0].status, 'rejected'); assert.equal(results[0].reason.code, 'txt_not_verified'); assert.equal(results[1].value.active, true); assert.equal(provider.count('POST'), 1);
+	assert.equal((await WhiteLabel.account(other._id, true)).white_label.dns_verified_at, null);
+});
+
+for (const action of ['verify', 'refresh']) test(`${action} preserves working domains without TXT but gates recreation after provider 404`, { timeout: 15000 }, async () => {
+	const account = await Fixture.account(); const provider = new Provider(); await WhiteLabel.verify(account._id, provider.options());
+	const options = { ...provider.options(), resolveTxt: async () => { throw new Error('TXT unavailable'); } };
+	assert.equal((await WhiteLabel[action](account._id, options)).active, true);
+	const before = await WhiteLabel.account(account._id, true); provider.records = [];
+	await assert.rejects(WhiteLabel[action](account._id, options), error => error.code === 'txt_not_verified');
+	const current = await WhiteLabel.account(account._id, true);
+	assert.equal(current.white_label.dns_verified_at.getTime(), before.white_label.dns_verified_at.getTime()); assert.equal(current.white_label.cloudflare_hostname_id, ''); assert.equal(current.white_label.provider_action, ''); assert.equal(provider.count('POST'), 1); assert.equal(provider.count('DELETE'), 0);
+	assert.equal((await WhiteLabel[action](account._id, provider.options())).active, true); assert.equal(provider.count('POST'), 2);
+});
+
+test('unverified legacy provider IDs cannot bypass TXT using refresh', { timeout: 15000 }, async () => {
+	const account = await Fixture.account(); const provider = new Provider();
+	await Account.updateOne({ _id: account._id }, { $set: { 'white_label.cloudflare_hostname_id': 'unproven-id' } });
+	await assert.rejects(WhiteLabel.refresh(account._id, { ...provider.options(), resolveTxt: async () => [] }), error => error.code === 'txt_not_verified');
+	assert.equal(provider.calls.length, 0); assert.equal((await WhiteLabel.account(account._id, true)).white_label.dns_verified_at, null);
+});
+
+test('uncertain successful creates reconcile exact metadata even if TXT later disappears', { timeout: 15000 }, async () => {
+	const account = await Fixture.account(); const provider = new Provider();
+	provider.afterCreate = async () => { throw new Error('response lost'); };
+	await assert.rejects(WhiteLabel.verify(account._id, provider.options()), Fixture.unresolved);
+	assert.equal((await WhiteLabel.refresh(account._id, { ...provider.options(), resolveTxt: async () => [] })).active, true);
+	assert.equal(provider.count('POST'), 1); assert.equal(provider.count('DELETE'), 0);
 });
