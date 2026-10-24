@@ -45,6 +45,13 @@ function restore(editor, saved) {
 	else { const selection = editor.ownerDocument.getSelection(); selection.removeAllRanges(); selection.addRange(saved); }
 }
 
+function reinsertDelimiter(editor, saved, key) {
+	if (!editor.isConnected || !saved || document.activeElement !== editor || !document.hasFocus()) return;
+	restore(editor, saved);
+	const text = key === ' ' ? ' ' : editor instanceof HTMLInputElement ? '' : '\n';
+	if (text && typeof document.execCommand === 'function') document.execCommand('insertText', false, text);
+}
+
 async function notice(message) {
 	try {
 		const host = document.createElement('div');
@@ -165,7 +172,7 @@ document.addEventListener('keydown', event => {
 		if (document.activeElement !== editor || !document.hasFocus()) throw new Error('The original field lost focus; abbreviation left unchanged');
 		if (!result || result.trigger !== item.trigger || result.erase !== match[0].length) throw new Error('Abbreviation changed');
 		return expand(editor, saved, item.id, match[0], result.erase);
-	}).catch(error => notice(error.message)).finally(() => { expansionEditors.delete(editor); });
+	}).catch(error => { reinsertDelimiter(editor, saved, event.key); notice(error.message); }).finally(() => { expansionEditors.delete(editor); });
 }, true);
 
 chrome.runtime.onMessage.addListener((message, _sender, reply) => {
