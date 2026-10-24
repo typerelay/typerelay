@@ -7,11 +7,12 @@ import { TypeRelayMcp } from '../server.js';
 import { McpRateLimit } from '../rate_limit.js';
 import { operations } from '../../server/api/catalog.js';
 
-class Fixture { static upstream; static server; static url; static calls = []; static revoked = false; static toolExpired = false; }
+class Fixture { static upstream; static server; static url; static calls = []; static revoked = false; static toolExpired = false; static delegations = 0; }
 before(async () => {
 	const app = express(); app.use(express.json());
 	app.post('/integrations/delegate', (req, res) => {
 		assert.equal(req.headers['x-mcp-secret'], 'fixture-secret');
+		Fixture.delegations++;
 		if (req.headers.authorization !== 'Bearer fixture-token' || Fixture.revoked) return res.status(401).json({ error: 'Revoked' });
 		res.json({ access_token: 'delegated-token' });
 	});
@@ -69,10 +70,12 @@ test('authenticated MCP requests use the configured request limiter', async () =
 	const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'rate-limit-test', version: '1.0' } } });
 	try {
 		const url = 'http://127.0.0.1:' + limited.address().port + '/mcp';
+		const delegations = Fixture.delegations;
 		assert.equal((await fetch(url, { method: 'POST', headers: { Authorization: 'Bearer fixture-token', 'Content-Type': 'application/json' }, body })).status, 200);
 		const response = await fetch(url, { method: 'POST', headers: { Authorization: 'Bearer fixture-token', 'Content-Type': 'application/json' }, body });
 		assert.equal(response.status, 429);
 		assert.ok(response.headers.get('retry-after'));
+		assert.equal(Fixture.delegations, delegations + 1, 'over-limit requests must not mint delegated tokens');
 	} finally {
 		await new Promise(resolve => limited.close(resolve));
 		McpRateLimit.storeFactory = undefined;

@@ -58,6 +58,23 @@ for (const [name, source, key, trigger] of [
 	assert.equal(imported.status, 200);
 });
 
+test('reads audit without fencing the account and record last use at most once a minute', async () => {
+	const grant = await Integration.findOne({ hash: Support.hash(ApiFixture.token) }).lean();
+	await Integration.updateOne({ _id: grant._id }, { $set: { last_used: null } });
+	const sequence = (await Account.findById(ApiFixture.owner.account).lean()).activity_sequence || 0;
+	const audits = await ApiAudit.countDocuments({ credential: grant._id });
+	assert.equal((await ApiFixture.request('/me')).status, 200);
+	const first = (await Integration.findById(grant._id).lean()).last_used;
+	assert.ok(first);
+	assert.equal((await ApiFixture.request('/me')).status, 200);
+	assert.equal(+(await Integration.findById(grant._id).lean()).last_used, +first);
+	await Integration.updateOne({ _id: grant._id }, { $set: { last_used: new Date(Date.now() - 61000) } });
+	assert.equal((await ApiFixture.request('/me')).status, 200);
+	assert.ok((await Integration.findById(grant._id).lean()).last_used > Date.now() - 10000);
+	for (let attempt = 0; attempt < 100 && await ApiAudit.countDocuments({ credential: grant._id }) < audits + 3; attempt++) await new Promise(resolve => setTimeout(resolve, 20));
+	assert.equal(await ApiAudit.countDocuments({ credential: grant._id }), audits + 3);
+	assert.equal((await Account.findById(ApiFixture.owner.account).lean()).activity_sequence || 0, sequence);
+});
 test('personal tokens are full access, non-expiring, hashed and revocable', async () => {
 	const before = (await AdminAccounts.counts([new mongoose.Types.ObjectId(ApiFixture.owner.account)])).get(ApiFixture.owner.account).integrations;
 	const { token, grant } = await Auth.createIntegration(ApiFixture.owner, { name: 'Mailtwine parity', days: 1, scopes: ['content:read'] });

@@ -126,8 +126,9 @@ export class TypeRelayMcp {
 				try {
 					if (!/^(Bearer|Token) [^ ]+$/.test(req.headers.authorization || '')) { const error = new Error('Authentication required'); error.status = 401; throw error; }
 					const upstream = new McpApi(apiBase, req.headers.authorization, issuer);
-					const delegated = await upstream.request('/integrations/delegate', 'POST', { resource: surface.resource }, { 'X-MCP-Secret': secret() });
+					// Over-limit requests must never mint a delegated token.
 					if (applyRateLimits && !await McpRateLimit.consumeAuthenticatedRequest(authenticatedRequestLimiter, req, res)) return;
+					const delegated = await upstream.request('/integrations/delegate', 'POST', { resource: surface.resource }, { 'X-MCP-Secret': secret() });
 					const rateLimitKey = applyRateLimits ? McpRateLimit.getCredentialOrIpKey(req) : null;
 					const api = new McpApi(apiBase, 'Bearer ' + delegated.access_token, issuer);
 					const identity = await api.request('/api/v3/me');

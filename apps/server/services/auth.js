@@ -205,7 +205,8 @@ export class Auth {
 		const ctx = await Support.context(String(grant.user), String(grant.account));
 		await Security.credential(ctx, grant);
 		Billing.assertApi(ctx);
-		await Integration.updateOne({ _id: grant._id }, { $set: { last_used: new Date() } });
+		// Minute precision is enough for "last used"; skip the write on every other request.
+		await Integration.updateOne({ _id: grant._id, $or: [{ last_used: null }, { last_used: { $lt: new Date(Date.now() - 60000) } }] }, { $set: { last_used: new Date() } });
 		return { ...ctx, credential: String(grant._id), scopes: grant.scopes, grant };
 	}
 	static requireScope(ctx, scope) { Support.assert(ctx.scopes.includes(scope), 'Required scope: ' + scope, 403); }
