@@ -44,5 +44,5 @@ test('sync source metadata merges only into visible assets and rejects malformed
 	assert.equal(update.mock.callCount(), 3);
 	t.mock.method(Assets, 'visible', async () => []);
 	await assert.rejects(Assets.mergeSources(ctx, id, sources), error => error.status === 404);
-	assert.equal(update.mock.callCount(), 2);
+	assert.equal(update.mock.callCount(), 3);
 });
