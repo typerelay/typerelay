@@ -38,7 +38,9 @@ export class RichText {
 		if (content?.version !== 2 || content?.type !== 'rich_text') return content;
 		const markdown = String(content.markdown || ''); const parts = []; const sources = new Map();
 		for (const part of RichText.call('rich_text_images', markdown)) { const previous = parts.at(-1); if (previous && part.block != null && previous.block === part.block) { previous.end = part.end; previous.html += part.html; previous.pieces.push(part); } else parts.push({ ...part, pieces: [part] }); }
-		const sourcePosition = (part, index) => { let offset = 0; for (const piece of part.pieces) { if (index < offset + piece.html.length) return piece.start + Buffer.byteLength(piece.html.slice(0, index - offset)); offset += piece.html.length; } throw new Error('Invalid image source position'); };
+		const input = Buffer.from(markdown);
+		// Parsed HTML omits Markdown container prefixes; map each line back to the original source.
+		const sourcePosition = (part, index) => { let offset = 0; for (const piece of part.pieces) { if (index < offset + piece.html.length) { const before = piece.html.slice(0, index - offset).split('\n'); const line = before.length - 1; const logical = piece.html.split('\n')[line].replace(/\r$/, ''); const raw = input.subarray(piece.start, piece.end).toString().split('\n'); const physical = raw[line].replace(/\r$/, ''); Support.assert(physical.endsWith(logical), 'Invalid image source position', 422); return piece.start + Buffer.byteLength(raw.slice(0, line).map(value => value + '\n').join('') + physical.slice(0, physical.length - logical.length + before.at(-1).length)); } offset += piece.html.length; } throw new Error('Invalid image source position'); };
 		for (const part of parts) {
 			part.images = [];
 			const parser = new Parser({ onopentag: (name, attributes) => {
@@ -47,7 +49,7 @@ export class RichText {
 				let url; try { url = new URL(source.trim().startsWith('//') ? 'https:' + source.trim() : source); } catch {}
 				const remote = ['http:', 'https:'].includes(url?.protocol) ? url.href : null;
 				if (!remote && !/^data:image\/(?:png|jpeg|webp|gif);base64,/i.test(source.trim())) return;
-				part.images.push({ start: sourcePosition(part, parser.startIndex), end: sourcePosition(part, parser.endIndex) + 1, attributes, source }); sources.set(source, remote);
+				part.images.push({ start: part.label !== undefined ? part.start : sourcePosition(part, parser.startIndex), end: part.label !== undefined ? part.end : sourcePosition(part, parser.endIndex) + 1, attributes, source }); sources.set(source, remote);
 			} }, { decodeEntities: true });
 			parser.end(part.html);
 		}
@@ -60,7 +62,7 @@ export class RichText {
 			else { const bytes = Buffer.from(source.slice(source.indexOf(',') + 1), 'base64'); Support.assert(bytes.length <= Assets.maximumInput, 'Embedded image exceeds 5 MiB', 413); asset = await Assets.put(ctx, bytes, '', session); }
 			cached.set(source, `typerelay-asset:${asset.id}`);
 		}
-		const input = Buffer.from(markdown); const edits = [];
+		const edits = [];
 		for (const part of parts) {
 			if (!part.images.length) continue;
 			if (part.label !== undefined) { const image = part.images[0]; const title = image.attributes.title; const value = `![${part.label}](${cached.get(image.source)}${part.title ? ' ' + part.title : title ? ' "' + title.replaceAll('&', '&amp;').replaceAll('\n', '&#10;').replaceAll('\r', '&#13;').replaceAll('\\', '\\\\').replaceAll('"', '\\"') + '"' : ''})`; edits.push({ start: part.start, end: part.end, value }); }
