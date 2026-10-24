@@ -79,7 +79,7 @@ Copy or export the content before dismissing it. Recovery does not retry a rejec
 
 ## Conflicts
 
-Different snippet IDs merge independently. If the same snippet changed from an older base on two devices, the server retains the local, base and current server versions as a conflict. Open the web app and choose **Resolve** to: Resolving a conflict deletes the stored versions.
+Different snippet IDs merge independently. If the same snippet changed from an older base on two devices, the server retains the local, base and current server versions as a conflict. Open the web app and choose **Resolve** and one of these options. Resolving a conflict deletes the stored versions.
 
 - keep the local version, including a local deletion;
 - keep the current server version; or
