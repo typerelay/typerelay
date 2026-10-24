@@ -87,6 +87,19 @@ test('private CRUD, metadata, retries and search use the shared sync data', asyn
 	assert.equal((await ApiFixture.request('/libraries/' + ApiFixture.library.id, 'GET', null, outsider)).status, 404);
 	assert.equal((await ApiFixture.request('/libraries', 'GET', null, outsider)).value.items.length, 0);
 });
+test('template variables named like internal fields are returned intact while internal fields stay hidden', async () => {
+	const variables = Object.fromEntries(['hash', 'refresh', 'records', 'replace'].map(name => [name, { label: name, default: 'ABC', required: false }]));
+	const content = { version: 1, type: 'template', text: 'Hi {{hash}} {{refresh}} {{records}} {{replace}}', variables };
+	const created = await ApiFixture.request('/libraries', 'POST', { operation_id: randomUUID(), name: 'Variables', snippets: [{ id: randomUUID(), title: 'Fields', trigger: null, content }] });
+	assert.equal(created.status, 200);
+	const id = created.value.library.id;
+	const rows = (await ApiFixture.request('/libraries/' + id + '/snippets')).value.items;
+	assert.deepEqual(rows[0].content, content);
+	assert.equal((await ApiFixture.request('/libraries/' + id + '/snippets/' + rows[0].id)).value.content.variables.hash.default, 'ABC');
+	for (const value of [created.value, ...rows]) for (const key of ['__v', 'purge_readers', 'api_scope', 'records']) assert.equal(value[key], undefined);
+	assert.equal(created.value.library.purge_readers, undefined);
+	assert.deepEqual(PublicApi.clean({ _id: 'x', hash: 'secret', __v: 1, content: { variables: { hash: 1 } }, local: { refresh: 2 } }), { id: 'x', content: { variables: { hash: 1 } }, local: { refresh: 2 } });
+});
 test('pagination, atomic stale moves, Trash and restore preserve IDs', async () => {
 	const library = ApiFixture.library;
 	const rows = (await ApiFixture.request('/libraries/' + library.id + '/snippets')).value.items;

@@ -17,22 +17,24 @@ import { Assets } from '../services/assets.js';
 import { Bundles } from '../services/bundles.js';
 
 export class PublicApi {
-	static clean(value) {
+	// User-controlled payloads keep every key, so a template variable may be named hash, refresh, records or replace.
+	static userKeys = ['content', 'variables', 'local', 'base', 'server', 'value'];
+	static clean(value, raw = false) {
 		if (value == null || typeof value !== 'object') return value;
 		if (value instanceof Date) return value.toISOString();
 		if (value._bsontype === 'ObjectId') return String(value);
-		if (Array.isArray(value)) return value.map(item => PublicApi.clean(item));
+		if (Array.isArray(value)) return value.map(item => PublicApi.clean(item, raw));
 		const result = {};
 		for (const [key, item] of Object.entries(value)) {
-			if (['__v', 'records', 'replace', 'purge_readers', 'hash', 'refresh', 'api_scope'].includes(key) || (key === 'snippets' && value.creator)) continue;
-			if (key === '_id') { if (!value.id) result.id = String(item); } else result[key] = PublicApi.clean(item);
+			if (!raw && (['__v', 'records', 'replace', 'purge_readers', 'hash', 'refresh', 'api_scope'].includes(key) || (key === 'snippets' && value.creator))) continue;
+			if (key === '_id') { if (!value.id) result.id = String(item); } else result[key] = PublicApi.clean(item, raw || PublicApi.userKeys.includes(key));
 		}
 		return result;
 	}
 	static page(rows, query) {
 		const limit = Number(query.limit || 50);
 		Support.assert(Number.isInteger(limit) && limit >= 1 && limit <= 100, 'Limit must be 1–100');
-		const sorted = rows.map(PublicApi.clean).sort((a, b) => String(a.id) < String(b.id) ? -1 : String(a.id) > String(b.id) ? 1 : 0);
+		const sorted = rows.map(row => PublicApi.clean(row)).sort((a, b) => String(a.id) < String(b.id) ? -1 : String(a.id) > String(b.id) ? 1 : 0);
 		const rest = sorted.filter(row => !query.cursor || String(row.id) > String(query.cursor));
 		return { items: rest.slice(0, limit), next_cursor: rest.length > limit ? String(rest[limit - 1].id) : null };
 	}
