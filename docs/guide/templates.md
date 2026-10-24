@@ -30,6 +30,8 @@ Set a label, default answer, required/optional status and single-line/multiline 
 
 Answers are literal: entering `{{key:enter}}` as an answer cannot create a keypress. There are no scripts, conditions, loops or nested evaluation.
 
+Rich text answers preserve literal character references such as `&copy;`. Answers inside inline or fenced code keep their punctuation without added backslashes.
+
 In a Rich text link, URL answers stay inside that link. Spaces and Markdown punctuation are encoded so an answer cannot add another link or image.
 
 ## Cursor position

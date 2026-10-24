@@ -39,7 +39,7 @@ In the TUI, code-mode Tab inserts a literal tab and Enter continues the current 
 
 Rich text stores portable Markdown and preserved raw-HTML blocks. The web editor supports headings, bold, italic, underline, strike, alignment, links, ordered/bullet/task lists, blockquotes, code, rules, tables and inline/block images. Raw HTML stays editable but is sanitized for preview, copy and insertion; scripts, event handlers, unsafe URLs, forms, frames, embedded objects and external CSS never execute.
 
-Uploaded and remote images are normalized, privately cached and synchronized as deduplicated binary assets. They are not stored as base64 in snippet records. Each paste offers HTML, RTF and plain text, so the destination application chooses the richest format it supports. The plain fallback keeps readable structure and image alt text.
+Uploaded and remote images are normalized, privately cached and synchronized as deduplicated binary assets. This includes reference-style Markdown images, image URLs inside angle brackets, and HTML image tags. Image preparation skips code examples and keeps ordinary links unchanged. Images are not stored as base64 in snippet records. Each paste offers HTML, RTF and plain text, so the destination application chooses the richest format it supports. The plain fallback keeps readable structure and image alt text.
 
 Rich text supports the complete template-variable system. User answers remain literal and are escaped according to their text, link or HTML context. Enter actions must appear on their own line between rich-text blocks.
 

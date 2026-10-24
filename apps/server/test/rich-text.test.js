@@ -57,3 +57,27 @@ test('rich editor is Pug-backed and contains the complete document controls', ()
 	assert.match(app, /#form-modal[\s\S]*?\.modal-dialog\.modal-xl\.modal-dialog-scrollable/);
 	for (const command of ['bold', 'italic', 'underline', 'strike', 'taskList', 'blockquote', 'codeBlock', 'horizontalRule', 'link', 'image', 'refreshImage', 'table', 'html', 'source']) assert.match(toolbar, new RegExp(`data-rich-command="${command}"`));
 });
+
+
+test('parsed Markdown and HTML images become private assets without changing unrelated source', async t => {
+ const id = 'a'.repeat(64); const urls = [];
+ t.mock.method(Assets, 'remote', async (ctx, url, session) => { assert.equal(session, null); urls.push(url); return { id }; });
+ const forms = ['![pixel](<https://example.test/pixel?x=1&y=2>)', '![pixel][p]\n\n[p]: https://example.test/pixel?x=1&y=2', '<img alt="pixel" width="20" src=https://example.test/pixel>', '<div>before<img alt="pixel" src="https://example.test/pixel?x=1&amp;y=2">after</div>'];
+ for (const form of forms) {
+  const markdown = '😀 **before**\n\n' + form + '\n\n[ordinary](https://example.test/pixel?x=1&y=2)'; const prepared = await RichText.prepare({}, { version: 2, type: 'rich_text', markdown }); const rendered = RichText.render(prepared);
+  assert.deepEqual(rendered.assets, [id]); assert.match(rendered.html, /alt="pixel"/); assert.match(rendered.html, /<strong>before<\/strong>/); assert.doesNotMatch(rendered.html, /src="https:/); assert.match(prepared.markdown, /\[ordinary\]\(https:\/\/example.test\/pixel\?x=1&y=2\)/); assert.equal(urls.at(-1), form.includes('src=https:') ? 'https://example.test/pixel' : 'https://example.test/pixel?x=1&y=2');
+ }
+ assert.equal(urls.length, forms.length);
+});
+test('image discovery ignores code, deduplicates sources and handles embedded HTML images', async t => {
+ const id = 'b'.repeat(64); t.mock.method(Assets, 'remote', async () => ({ id })); t.mock.method(Assets, 'put', async (ctx, bytes) => { assert.equal(bytes.toString(), 'image'); return { id }; });
+ const literal = '`![x](https://example.test/code)`\n\n```html\n<img src=https://example.test/code>\n```';
+ assert.equal((await RichText.prepare({}, { version: 2, type: 'rich_text', markdown: literal }, {})).markdown, literal);
+ const prepared = await RichText.prepare({}, { version: 2, type: 'rich_text', markdown: '![one](https://example.test/one) ![two](<https://example.test/one>) <img src="data:image/png;base64,aW1hZ2U=">' });
+ assert.deepEqual(RichText.content(prepared).assets, [id]); assert.equal(Assets.remote.mock.callCount(), 1); assert.equal(Assets.put.mock.callCount(), 1);
+});
+test('every parsed remote image form obeys preflight and image-count limits', async t => {
+ t.mock.method(Assets, 'remote', async () => assert.fail('must not fetch'));
+ for (const markdown of ['![x](<https://example.test/x>)', '![x][ref]\n\n[ref]: https://example.test/x', '<img src=https://example.test/x>']) await assert.rejects(RichText.prepare({}, { version: 2, type: 'rich_text', markdown }, {}), /before starting/);
+ const markdown = Array.from({ length: 17 }, (_, i) => `![x](<https://example.test/${i}>)`).join('\n'); await assert.rejects(RichText.prepare({}, { version: 2, type: 'rich_text', markdown }), /at most 16/);
+});

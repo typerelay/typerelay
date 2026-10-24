@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { Parser } from 'htmlparser2';
 import { Assets } from './assets.js';
 import { Support } from './support.js';
 
@@ -13,15 +14,15 @@ export class RichText {
 		if (!RichText.instance) RichText.instance = new WebAssembly.Instance(new WebAssembly.Module(readFileSync(RichText.wasmPath())), {}).exports;
 		return RichText.instance;
 	}
-	static render(input) {
+	static render(input) { return RichText.call('rich_text_render', { markdown: input.markdown || '', variables: input.variables || {}, values: input.values || {}, assets: Array.isArray(input.assets) ? {} : (input.assets || {}), now_ms: input.now_ms ?? Date.now(), offset_minutes: input.offset_minutes ?? 0, preview: input.preview ?? true }); }
+	static call(name, input) {
 		const wasm = RichText.load();
-		const request = { markdown: input.markdown || '', variables: input.variables || {}, values: input.values || {}, assets: Array.isArray(input.assets) ? {} : (input.assets || {}), now_ms: input.now_ms ?? Date.now(), offset_minutes: input.offset_minutes ?? 0, preview: input.preview ?? true };
-		const bytes = new TextEncoder().encode(JSON.stringify(request));
+		const bytes = new TextEncoder().encode(JSON.stringify(input));
 		const pointer = wasm.template_alloc(bytes.length);
 		new Uint8Array(wasm.memory.buffer, pointer, bytes.length).set(bytes);
 		let output;
 		try {
-			const packed = wasm.rich_text_render(pointer, bytes.length);
+			const packed = wasm[name](pointer, bytes.length);
 			const address = Number(packed >> 32n); const length = Number(packed & 0xffffffffn);
 			try { output = JSON.parse(new TextDecoder().decode(new Uint8Array(wasm.memory.buffer, address, length))); }
 			finally { wasm.template_free(address, length); }
@@ -35,14 +36,35 @@ export class RichText {
 	}
 	static async prepare(ctx, content, session = null) {
 		if (content?.version !== 2 || content?.type !== 'rich_text') return content;
-		let markdown = String(content.markdown || '');
-		const matches = [...markdown.matchAll(/!\[[^\]]*\]\((https?:\/\/[^\s)]+)|<img\b[^>]*\bsrc=["'](https?:\/\/[^"']+)["'][^>]*>/gi)];
-		const urls = [...new Set(matches.map(match => match[1] || match[2]))];
-		Support.assert(!session || (!urls.length && !/data:image\/(?:png|jpeg|webp|gif);base64,/.test(markdown)), 'Prepare snippet images before starting the transaction', 422);
-		Support.assert(urls.length <= 16, 'Rich text supports at most 16 remote images', 422);
-		for (const url of urls) { const asset = await Assets.remote(ctx, url, session); markdown = markdown.split(url).join(`typerelay-asset:${asset.id}`); }
-		for (const match of [...markdown.matchAll(/data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/=]+)/g)]) { const bytes = Buffer.from(match[2], 'base64'); Support.assert(bytes.length <= Assets.maximumInput, 'Embedded image exceeds 5 MiB', 413); const asset = await Assets.put(ctx, bytes, '', session); markdown = markdown.split(match[0]).join(`typerelay-asset:${asset.id}`); }
-		return { ...content, markdown };
+		const markdown = String(content.markdown || ''); const parts = RichText.call('rich_text_images', markdown); const sources = new Set();
+		for (const part of parts) {
+			part.images = [];
+			const parser = new Parser({ onopentag: (name, attributes) => {
+				const source = attributes.src;
+				if (name !== 'img' || !source || !/^(https?:\/\/|data:image\/(?:png|jpeg|webp|gif);base64,)/i.test(source)) return;
+				part.images.push({ start: parser.startIndex, end: parser.endIndex + 1, attributes, source }); sources.add(source);
+			} }, { decodeEntities: true });
+			parser.end(part.html);
+		}
+		Support.assert(!session || !sources.size, 'Prepare snippet images before starting the transaction', 422);
+		Support.assert([...sources].filter(source => /^https?:/i.test(source)).length <= 16, 'Rich text supports at most 16 remote images', 422);
+		const cached = new Map();
+		for (const source of sources) {
+			let asset;
+			if (/^https?:/i.test(source)) asset = await Assets.remote(ctx, source, session);
+			else { const bytes = Buffer.from(source.slice(source.indexOf(',') + 1), 'base64'); Support.assert(bytes.length <= Assets.maximumInput, 'Embedded image exceeds 5 MiB', 413); asset = await Assets.put(ctx, bytes, '', session); }
+			cached.set(source, `typerelay-asset:${asset.id}`);
+		}
+		const input = Buffer.from(markdown); const output = []; let position = 0;
+		for (const part of parts) {
+			if (!part.images.length) continue;
+			let html = part.html;
+			if (part.label !== undefined) { const image = part.images[0]; const title = image.attributes.title; html = `![${part.label}](${cached.get(image.source)}${title ? ' "' + title.replaceAll('\\', '\\\\').replaceAll('"', '\\"') + '"' : ''})`; }
+			else for (const image of part.images.reverse()) { const attributes = { ...image.attributes, src: cached.get(image.source) }; const tag = '<img' + Object.entries(attributes).map(([key, value]) => ` ${key}="${value.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;')}"`).join('') + '>'; html = html.slice(0, image.start) + tag + html.slice(image.end); }
+			output.push(input.subarray(position, part.start), Buffer.from(html)); position = part.end;
+		}
+		output.push(input.subarray(position));
+		return { ...content, markdown: Buffer.concat(output).toString() };
 	}
 	static async styled(value) {
 		let bytes;
