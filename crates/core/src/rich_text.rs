@@ -64,7 +64,8 @@ impl RichText {
 			.add_tag_attributes("img", ["src", "alt", "title", "width", "height", "data-asset", "data-source-url"])
 			.add_tag_attributes("a", ["href", "title", "target"])
 			.url_schemes(["http", "https", "mailto", "tel", "data", "typerelay-asset"].into_iter().collect())
-			.attribute_filter(|_,attribute,value|if attribute=="style"{let normalized=value.trim().to_ascii_lowercase().replace(' ',"");Regex::new(r"^text-align:(left|center|right|justify);?$").unwrap().is_match(&normalized).then_some(Cow::Owned(normalized))}else{Some(Cow::Borrowed(value))});
+			// ammonia drops non-whitelisted URL schemes before this filter, so "data" stays in url_schemes for img src; here every other data: URL is removed, keeping only data:image/ image sources.
+			.attribute_filter(|element,attribute,value|if attribute=="style"{let normalized=value.trim().to_ascii_lowercase().replace(' ',"");Regex::new(r"^text-align:(left|center|right|justify);?$").unwrap().is_match(&normalized).then_some(Cow::Owned(normalized))}else{let lower=value.trim().to_ascii_lowercase();if lower.starts_with("data:")&&!(element=="img"&&attribute=="src"&&lower.starts_with("data:image/")){None}else{Some(Cow::Borrowed(value))}});
         builder
     }
     fn code_spans(markdown:&str)->Vec<std::ops::Range<usize>>{
@@ -235,6 +236,20 @@ mod tests {
         assert!(!value.html.contains("onclick"));
         assert!(!value.html.contains("<script"));
         assert!(RichText::render(RichRequest { markdown: "[bad](javascript:alert(1))".into(), ..Default::default() }).is_err());
+    }
+    #[test]
+    fn raw_html_data_links_are_stripped_but_data_image_sources_survive() {
+        let value = render("<a href=\"data:text/html;base64,PHNjcmlwdD5iYWQoKTwvc2NyaXB0Pg==\">Bad</a><img src=\"data:image/png;base64,AA==\" alt=\"dot\">");
+        assert!(!value.html.contains("data:text/html"));
+        assert!(!value.html.contains("href=\"data:"));
+        assert!(value.html.contains("src=\"data:image/png;base64,AA==\""));
+        for (tag,attribute) in [("a","href"),("img","srcset"),("video","poster"),("body","background"),("blockquote","cite"),("form","action"),("button","formaction")] {
+            let value = render(&format!("<{tag} {attribute}=\"data:image/png;base64,AA==\">x</{tag}>"));
+            assert!(!value.html.contains(&format!("{attribute}=\"data:")), "{attribute} kept a data: URL in {0}", value.html);
+        }
+        assert!(!render("<img src=\"data:text/html,x\">x").html.contains("src=\"data:"));
+        assert!(RichText::render(RichRequest { markdown: "[bad](data:text/html,x)".into(), ..Default::default() }).is_err());
+        assert!(RichText::render(RichRequest { markdown: "[bad](data:image/png;base64,AA==)".into(), ..Default::default() }).is_err());
     }
     #[test]
     fn extracts_and_resolves_assets() {
