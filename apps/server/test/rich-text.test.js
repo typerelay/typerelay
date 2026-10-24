@@ -33,9 +33,11 @@ test('image normalization strips metadata, constrains formats and hashes stored 
 	await assert.rejects(Assets.normalize(Buffer.from('<svg onload="bad()"></svg>')), /Upload a PNG/);
 });
 
-test('remote image host filtering blocks private and special addresses', () => {
-	for (const address of ['127.0.0.1', '10.0.0.1', '172.16.0.1', '192.168.1.1', '169.254.1.1', '::1', 'fd00::1', 'fe80::1', '::ffff:127.0.0.1']) assert.equal(Assets.privateIp(address), true, address);
-	for (const address of ['8.8.8.8', '1.1.1.1', '2606:4700:4700::1111']) assert.equal(Assets.privateIp(address), false, address);
+test('remote image host filtering blocks private and special addresses', async () => {
+	for (const address of ['127.0.0.1', '10.0.0.1', '172.16.0.1', '192.168.1.1', '169.254.1.1', '192.0.0.8', '::1', 'fd00::1', 'fe80::1', 'fec0::1', 'feff::1', '::ffff:127.0.0.1', '64:ff9b::7f00:1', '2002:7f00:1::']) assert.equal(Assets.privateIp(address), true, address);
+	for (const address of ['8.8.8.8', '1.1.1.1', '192.0.2.1', '2606:4700:4700::1111']) assert.equal(Assets.privateIp(address), false, address);
+	// URL hostnames keep the IPv6 brackets; they must still be recognised as addresses.
+	for (const url of ['http://[::1]/a.png', 'http://[64:ff9b::7f00:1]/a.png', 'http://[2002:7f00:1::]/a.png', 'http://[fec0::1]/a.png', 'http://192.0.0.8/a.png']) await assert.rejects(Assets.publicHost(new URL(url)), error => error.status === 400 && /not public/.test(error.message), url);
 });
 
 test('RTF imports formatting, paragraphs, Unicode and embedded pictures as rich HTML', () => {

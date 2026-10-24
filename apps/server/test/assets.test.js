@@ -34,11 +34,11 @@ test('sync source metadata merges only into visible assets and rejects malformed
 	const id = 'a'.repeat(64); const session = {}; const ctx = { account: 'account', user: 'user' }; const sources = ['https://example.test/one.png', 'https://example.test/two.png']; const stored = new Set([sources[0]]);
 	t.mock.method(AccountAccess, 'write', async (account, action) => { assert.equal(account, ctx.account); return action(session); });
 	t.mock.method(Assets, 'visible', async (context, ids, transaction) => { assert.equal(context, ctx); assert.equal(transaction, session); assert.deepEqual(ids, [id]); return [id]; });
-	const update = t.mock.method(SnippetAsset, 'updateOne', async (filter, change, options) => { assert.deepEqual(filter, { account: ctx.account, id }); assert.equal(options.session, session); for (const source of change.$addToSet.source_urls.$each) stored.add(source); return { matchedCount: 1 }; });
+	const update = t.mock.method(SnippetAsset, 'updateOne', async (filter, change, options) => { assert.deepEqual(filter, { account: ctx.account, id }); assert.equal(options.session, session); assert.equal(options.updatePipeline, true); for (const source of change[0].$set.source_urls.$slice[0].$concatArrays[1].$filter.input.$literal) stored.add(source); return { matchedCount: 1 }; });
 	await Assets.mergeSources(ctx, id, sources);
 	await Assets.mergeSources(ctx, id, sources);
 	assert.deepEqual([...stored], sources);
-	for (const invalid of [null, 'url', [3], ['x'.repeat(65536)]]) await assert.rejects(Assets.mergeSources(ctx, id, invalid), /Invalid image sources/);
+	for (const invalid of [null, 'url', [3], ['x'.repeat(65536)], ['ftp://example.test/a.png'], ['https://example.test/' + 'x'.repeat(2048)], Array.from({ length: 11 }, (_, index) => 'https://example.test/' + index)]) await assert.rejects(Assets.mergeSources(ctx, id, invalid), /Image sources must be/);
 	assert.equal(update.mock.callCount(), 2);
 	t.mock.method(Assets, 'visible', async () => []);
 	await assert.rejects(Assets.mergeSources(ctx, id, sources), error => error.status === 404);

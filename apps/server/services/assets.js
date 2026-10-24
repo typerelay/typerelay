@@ -6,7 +6,7 @@ import { isIP } from 'node:net';
 import { fileTypeFromBuffer } from 'file-type';
 import sharp from 'sharp';
 import { AccountAccess } from './account_access.js';
-import { SnippetAsset, Library, Snippet, Conflict } from '../model/index.js';
+import { mongoose, SnippetAsset, Library, Snippet, Conflict } from '../model/index.js';
 import { Support } from './support.js';
 
 export class Assets {
@@ -42,11 +42,33 @@ export class Assets {
 	static async accept(ctx,input,expectedId='',sourceUrl='') {
 		Support.assert(Buffer.isBuffer(input)&&input.length>0&&input.length<=Assets.maximumStored,'Asset exceeds 2 MiB',413);const detected=await fileTypeFromBuffer(input);Support.assert(detected&&Assets.types.has(detected.mime),'Invalid image asset',415);const metadata=await sharp(input,{animated:true,limitInputPixels:4096*4096*4}).metadata();const height=metadata.pageHeight||metadata.height;Support.assert(metadata.width&&height&&metadata.width<=Assets.maximumDimension&&height<=Assets.maximumDimension,'Invalid normalized image dimensions',400);const asset={id:Assets.id(input),data:input,mime_type:detected.mime,size:input.length,width:metadata.width,height,animated:detected.mime==='image/gif'&&Number(metadata.pages||1)>1};Support.assert(!expectedId||asset.id===expectedId,'Asset hash does not match its URL',409);return Assets.save(ctx,asset,sourceUrl);
 	}
+	static quota = { assets: 1000, bytes: 256 * 1048576 };
+	static maxSources = 10;
+	// Client-supplied source URLs are untrusted: bound their number and length.
+	static sources(list) {
+		Support.assert(Array.isArray(list) && list.length <= Assets.maxSources && list.every(source => typeof source === 'string' && source.length <= 2048 && /^https?:\/\//i.test(source) && URL.canParse(source)), `Image sources must be at most ${Assets.maxSources} http(s) URLs of up to 2048 characters`, 422);
+		return list;
+	}
+	// shortcut: concurrent first saves may overshoot the quota slightly, enforce atomically with an account counter if that matters.
+	static async admit(ctx, id, session) {
+		if (await SnippetAsset.exists({ account: ctx.account, id }).session(session)) return;
+		const [used] = await SnippetAsset.aggregate([{ $match: { account: new mongoose.Types.ObjectId(ctx.account) } }, { $group: { _id: null, count: { $sum: 1 }, bytes: { $sum: '$size' } } }]).session(session);
+		Support.assert(!used || (used.count < Assets.quota.assets && used.bytes < Assets.quota.bytes), `Image storage is full (${Assets.quota.assets} images or ${Assets.quota.bytes / 1048576} MiB per account); remove unused images or snippets first`, 413);
+	}
+	// Merges into the capped list in one update; $addToSet cannot bound the array.
+	static async addSources(account, id, sources, session) {
+		const existing = { $ifNull: ['$source_urls', []] };
+		return SnippetAsset.updateOne({ account, id }, [{ $set: { source_urls: { $slice: [{ $concatArrays: [existing, { $filter: { input: { $literal: sources }, cond: { $not: [{ $in: ['$$this', existing] }] } } }] }, Assets.maxSources] } } }], { session, updatePipeline: true });
+	}
 	static async save(ctx,asset,sourceUrl='',session=null) {
-		const sources = Array.isArray(sourceUrl) ? sourceUrl : sourceUrl ? [sourceUrl] : [];
-		const update = { $setOnInsert: { account: ctx.account, ...asset, last_referenced_at: new Date() }, $addToSet: { staged_by: ctx.user, ...(sources.length ? { source_urls: { $each: sources } } : {}) } };
-		if (session) await SnippetAsset.updateOne({ account: ctx.account, id: asset.id }, update, { upsert: true, session });
-		else await AccountAccess.write(ctx.account, transaction => SnippetAsset.updateOne({ account: ctx.account, id: asset.id }, update, { upsert: true, session: transaction }));
+		const sources = Assets.sources(Array.isArray(sourceUrl) ? sourceUrl : sourceUrl ? [sourceUrl] : []);
+		const update = { $setOnInsert: { account: ctx.account, ...asset, last_referenced_at: new Date() }, $addToSet: { staged_by: ctx.user } };
+		const write = async transaction => {
+			await Assets.admit(ctx, asset.id, transaction);
+			await SnippetAsset.updateOne({ account: ctx.account, id: asset.id }, update, { upsert: true, session: transaction });
+			if (sources.length) await Assets.addSources(ctx.account, asset.id, sources, transaction);
+		};
+		if (session) await write(session); else await AccountAccess.write(ctx.account, write);
 		return Assets.metadata({ ...asset, source_urls: sources });
 	}
 	static async visible(ctx, ids, session = null) {
@@ -81,10 +103,10 @@ export class Assets {
 		return { assets: assets.map(Assets.metadata), missing: [...new Set(ids)].filter(id => !found.has(id)) };
 	}
 	static async mergeSources(ctx, id, sources) {
-		Support.assert(Array.isArray(sources) && sources.every(source => typeof source === 'string') && Buffer.byteLength(JSON.stringify(sources)) <= 65536, 'Invalid image sources', 422);
+		Assets.sources(sources);
 		await AccountAccess.write(ctx.account, async session => {
 			Support.assert((await Assets.visible(ctx, [id], session)).includes(id), 'Image not found', 404);
-			const result = await SnippetAsset.updateOne({ account: ctx.account, id }, { $addToSet: { source_urls: { $each: sources } } }, { session });
+			const result = await Assets.addSources(ctx.account, id, sources, session);
 			Support.assert(result.matchedCount === 1, 'Image not found', 404);
 		});
 		return { saved: true };
@@ -92,24 +114,29 @@ export class Assets {
 	static privateIp(address) {
 		if (isIP(address) === 4) {
 			const bytes = address.split('.').map(Number);
-			return bytes[0] === 10 || bytes[0] === 127 || bytes[0] === 0 || bytes[0] >= 224 || (bytes[0] === 169 && bytes[1] === 254) || (bytes[0] === 172 && bytes[1] >= 16 && bytes[1] <= 31) || (bytes[0] === 192 && bytes[1] === 168) || (bytes[0] === 100 && bytes[1] >= 64 && bytes[1] <= 127);
+			return bytes[0] === 10 || bytes[0] === 127 || bytes[0] === 0 || bytes[0] >= 224 || (bytes[0] === 169 && bytes[1] === 254) || (bytes[0] === 172 && bytes[1] >= 16 && bytes[1] <= 31) || (bytes[0] === 192 && bytes[1] === 168) || (bytes[0] === 192 && bytes[1] === 0 && bytes[2] === 0) || (bytes[0] === 100 && bytes[1] >= 64 && bytes[1] <= 127);
 		}
 		const normalized = address.toLowerCase();
-		return normalized === '::1' || normalized === '::' || normalized.startsWith('fc') || normalized.startsWith('fd') || normalized.startsWith('fe8') || normalized.startsWith('fe9') || normalized.startsWith('fea') || normalized.startsWith('feb') || normalized.startsWith('ff') || normalized.startsWith('::ffff:');
+		return normalized === '::1' || normalized === '::' || ['fc', 'fd', 'fe8', 'fe9', 'fea', 'feb', 'fec', 'fed', 'fee', 'fef', 'ff', '::ffff:', '64:ff9b:', '2002:'].some(prefix => normalized.startsWith(prefix));
 	}
 	static async publicHost(url) {
 		Support.assert(['http:', 'https:'].includes(url.protocol) && !url.username && !url.password, 'Use a public HTTP or HTTPS image URL', 400);
-		const addresses = await lookup(url.hostname, { all: true, verbatim: true });
+		// URL keeps the brackets of IPv6 literals; DNS lookup and isIP need the bare address.
+		const addresses = await lookup(url.hostname.replace(/^\[(.*)\]$/, '$1'), { all: true, verbatim: true });
 		Support.assert(addresses.length && addresses.every(item => !Assets.privateIp(item.address)), 'Remote image host is not public', 400);
 		return addresses.map(item => item.address).sort();
 	}
-	static async remote(ctx, value, session = null) {
+	// One budget per request: a shared URL cache, distinct fetch limits and a wall-clock deadline.
+	static budget() { return { assets: new Map(), remote: 0, embedded: 0, deadline: Date.now() + 60000 }; }
+	static maximumRemote = 32;
+	static maximumEmbedded = 64;
+	static async remote(ctx, value, session = null, deadline = Infinity) {
 		let url; try { url = new URL(value); } catch { Support.assert(false, 'Invalid remote image URL', 400); }
 		for (let redirects = 0; redirects <= 3; redirects++) {
 			const addresses = await Assets.publicHost(url);
 			// Pin the socket lookup to validated addresses; keep the URL hostname for Host and TLS.
 			const response = await new Promise((resolve, reject) => {
-				const request = (url.protocol === 'https:' ? https : http).get(url, { agent: false, signal: AbortSignal.timeout(10000), lookup: (hostname, options, callback) => options.all ? callback(null, addresses.map(address => ({ address, family: isIP(address) }))) : callback(null, addresses[0], isIP(addresses[0])), headers: { Accept: 'image/png,image/jpeg,image/webp,image/gif', 'User-Agent': 'TypeRelay/1.0 image cache' } }, resolve);
+				const request = (url.protocol === 'https:' ? https : http).get(url, { agent: false, signal: AbortSignal.timeout(Math.max(1, Math.min(10000, deadline - Date.now()))), lookup: (hostname, options, callback) => options.all ? callback(null, addresses.map(address => ({ address, family: isIP(address) }))) : callback(null, addresses[0], isIP(addresses[0])), headers: { Accept: 'image/png,image/jpeg,image/webp,image/gif', 'User-Agent': 'TypeRelay/1.0 image cache' } }, resolve);
 				request.on('error', reject);
 			});
 			try {
@@ -119,7 +146,7 @@ export class Assets {
 				Support.assert(!length || length <= Assets.maximumInput, 'Remote image exceeds 5 MiB', 413);
 				const chunks = []; let total = 0;
 				for await (const chunk of response) { total += chunk.length; Support.assert(total <= Assets.maximumInput, 'Remote image exceeds 5 MiB', 413); chunks.push(chunk); }
-				return await Assets.put(ctx, Buffer.concat(chunks), url.href, session);
+				return await Assets.put(ctx, Buffer.concat(chunks), url.href.length <= 2048 ? url.href : '', session);
 			} finally { response.destroy(); }
 		}
 		Support.assert(false, 'Remote image could not be downloaded', 422);

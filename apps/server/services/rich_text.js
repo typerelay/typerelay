@@ -34,7 +34,7 @@ export class RichText {
 		const result = RichText.render({ markdown: content.markdown, variables: content.variables || {} });
 		return { version: 2, type: 'rich_text', markdown: result.markdown, text: result.text, assets: result.assets, variables: result.variables };
 	}
-	static async prepare(ctx, content, session = null) {
+	static async prepare(ctx, content, session = null, budget = Assets.budget()) {
 		if (content?.version !== 2 || content?.type !== 'rich_text') return content;
 		const markdown = String(content.markdown || ''); const parts = []; const sources = new Map();
 		for (const part of RichText.call('rich_text_images', markdown)) { const previous = parts.at(-1); if (previous && part.block != null && previous.block === part.block) { previous.end = part.end; previous.html += part.html; previous.pieces.push(part); } else parts.push({ ...part, pieces: [part] }); }
@@ -57,9 +57,13 @@ export class RichText {
 		Support.assert([...sources.values()].filter(Boolean).length <= 16, 'Rich text supports at most 16 remote images', 422);
 		const cached = new Map();
 		for (const [source, remote] of sources) {
-			let asset;
-			if (remote) asset = await Assets.remote(ctx, remote, session);
-			else { const bytes = Buffer.from(source.slice(source.indexOf(',') + 1), 'base64'); Support.assert(bytes.length <= Assets.maximumInput, 'Embedded image exceeds 5 MiB', 413); asset = await Assets.put(ctx, bytes, '', session); }
+			const key = remote || source; let asset = budget.assets.get(key);
+			if (!asset) {
+				Support.assert(Date.now() < budget.deadline, 'Fetching images took too long; import fewer images at a time', 422);
+				if (remote) { Support.assert(++budget.remote <= Assets.maximumRemote, `A request can fetch at most ${Assets.maximumRemote} different remote images`, 422); asset = await Assets.remote(ctx, remote, session, budget.deadline); }
+				else { Support.assert(++budget.embedded <= Assets.maximumEmbedded, `A request can embed at most ${Assets.maximumEmbedded} different images`, 422); const bytes = Buffer.from(source.slice(source.indexOf(',') + 1), 'base64'); Support.assert(bytes.length <= Assets.maximumInput, 'Embedded image exceeds 5 MiB', 413); asset = await Assets.put(ctx, bytes, '', session); }
+				budget.assets.set(key, asset);
+			}
 			cached.set(source, `typerelay-asset:${asset.id}`);
 		}
 		const edits = [];
