@@ -37,7 +37,8 @@ export class RichText {
 	static async prepare(ctx, content, session = null) {
 		if (content?.version !== 2 || content?.type !== 'rich_text') return content;
 		const markdown = String(content.markdown || ''); const parts = []; const sources = new Map();
-		for (const part of RichText.call('rich_text_images', markdown)) { const previous = parts.at(-1); if (previous && previous.label === undefined && part.label === undefined && previous.end === part.start) { previous.end = part.end; previous.html += part.html; } else parts.push(part); }
+		for (const part of RichText.call('rich_text_images', markdown)) { const previous = parts.at(-1); if (previous && part.block != null && previous.block === part.block) { previous.end = part.end; previous.html += part.html; previous.pieces.push(part); } else parts.push({ ...part, pieces: [part] }); }
+		const sourcePosition = (part, index) => { let offset = 0; for (const piece of part.pieces) { if (index < offset + piece.html.length) return piece.start + Buffer.byteLength(piece.html.slice(0, index - offset)); offset += piece.html.length; } throw new Error('Invalid image source position'); };
 		for (const part of parts) {
 			part.images = [];
 			const parser = new Parser({ onopentag: (name, attributes) => {
@@ -46,7 +47,7 @@ export class RichText {
 				let url; try { url = new URL(source.trim().startsWith('//') ? 'https:' + source.trim() : source); } catch {}
 				const remote = ['http:', 'https:'].includes(url?.protocol) ? url.href : null;
 				if (!remote && !/^data:image\/(?:png|jpeg|webp|gif);base64,/i.test(source.trim())) return;
-				part.images.push({ start: parser.startIndex, end: parser.endIndex + 1, attributes, source }); sources.set(source, remote);
+				part.images.push({ start: sourcePosition(part, parser.startIndex), end: sourcePosition(part, parser.endIndex) + 1, attributes, source }); sources.set(source, remote);
 			} }, { decodeEntities: true });
 			parser.end(part.html);
 		}
@@ -59,14 +60,14 @@ export class RichText {
 			else { const bytes = Buffer.from(source.slice(source.indexOf(',') + 1), 'base64'); Support.assert(bytes.length <= Assets.maximumInput, 'Embedded image exceeds 5 MiB', 413); asset = await Assets.put(ctx, bytes, '', session); }
 			cached.set(source, `typerelay-asset:${asset.id}`);
 		}
-		const input = Buffer.from(markdown); const output = []; let position = 0;
+		const input = Buffer.from(markdown); const edits = [];
 		for (const part of parts) {
 			if (!part.images.length) continue;
-			let html = part.html;
-			if (part.label !== undefined) { const image = part.images[0]; const title = image.attributes.title; html = `![${part.label}](${cached.get(image.source)}${part.title ? ' ' + part.title : title ? ' "' + title.replaceAll('&', '&amp;').replaceAll('\n', '&#10;').replaceAll('\r', '&#13;').replaceAll('\\', '\\\\').replaceAll('"', '\\"') + '"' : ''})`; }
-			else for (const image of part.images.reverse()) { const attributes = { ...image.attributes, src: cached.get(image.source) }; const tag = '<img' + Object.entries(attributes).map(([key, value]) => ` ${key}="${value.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;')}"`).join('') + '>'; html = html.slice(0, image.start) + tag + html.slice(image.end); }
-			output.push(input.subarray(position, part.start), Buffer.from(html)); position = part.end;
+			if (part.label !== undefined) { const image = part.images[0]; const title = image.attributes.title; const value = `![${part.label}](${cached.get(image.source)}${part.title ? ' ' + part.title : title ? ' "' + title.replaceAll('&', '&amp;').replaceAll('\n', '&#10;').replaceAll('\r', '&#13;').replaceAll('\\', '\\\\').replaceAll('"', '\\"') + '"' : ''})`; edits.push({ start: part.start, end: part.end, value }); }
+			else for (const image of part.images) { const attributes = { ...image.attributes, src: cached.get(image.source) }; const value = '<img' + Object.entries(attributes).map(([key, value]) => ` ${key}="${value.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;')}"`).join('') + '>'; edits.push({ start: image.start, end: image.end, value }); }
 		}
+		const output = []; let position = 0;
+		for (const edit of edits.sort((a, b) => a.start - b.start)) { output.push(input.subarray(position, edit.start), Buffer.from(edit.value)); position = edit.end; }
 		output.push(input.subarray(position));
 		return { ...content, markdown: Buffer.concat(output).toString() };
 	}

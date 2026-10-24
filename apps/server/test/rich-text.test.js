@@ -101,3 +101,9 @@ test('URL-normalized and protocol-relative HTML images cannot bypass private cac
  const urls = []; const id = 'f'.repeat(64); t.mock.method(Assets, 'remote', async (ctx, url) => { urls.push(url); return { id }; });
  for (const source of [' https://example.test/pixel ', 'https:&#10;//example.test/pixel', '//example.test/pixel']) { const markdown = `<img src="${source}">`; await assert.rejects(RichText.prepare({}, { version: 2, type: 'rich_text', markdown }, {}), /before starting/); const content = await RichText.prepare({}, { version: 2, type: 'rich_text', markdown }); assert.deepEqual(RichText.content(content).assets, [id]); assert.equal(urls.at(-1), 'https://example.test/pixel'); }
 });
+
+test('multiline image tags keep their surrounding Markdown containers', async t => {
+ const id = 'a'.repeat(64); t.mock.method(Assets, 'remote', async () => ({ id }));
+ for (const markdown of ['> <div>\n> <img\n> src="https://example.test/a">\n> </div>\n> tail', '- item\n\n  <div>\n  <img\n  src="https://example.test/a">\n  </div>\n\n  tail', '> > <div>\n> > <img\n> > src="https://example.test/a">\n> > </div>']) {
+  await assert.rejects(RichText.prepare({}, { version: 2, type: 'rich_text', markdown }, {}), /before starting/); const before = RichText.render({ markdown }); const prepared = await RichText.prepare({}, { version: 2, type: 'rich_text', markdown }); const rendered = RichText.render(prepared); assert.deepEqual(rendered.assets, [id]); assert.equal(rendered.html.replaceAll('typerelay-asset:' + id, 'https://example.test/a'), before.html); }
+});
