@@ -96,7 +96,7 @@ function insert(editor, saved, expected, erase, rendered, rich) {
 		const start = editor.selectionStart;
 		const begin = erase ? start - erase : start;
 		const end = erase ? start : editor.selectionEnd;
-		if (rendered.cursor && editor.maxLength >= 0 && editor.value.length - (end - begin) + rendered.text.length > editor.maxLength) throw new Error('This field is too short for the complete snippet and cursor position. Field unchanged.');
+		if (editor.maxLength >= 0 && editor.value.length - (end - begin) + rendered.text.length > editor.maxLength) throw new Error('This field is too short for the complete snippet. Field unchanged.');
 		editor.setSelectionRange(begin, end);
 		if (!document.execCommand('insertText', false, rendered.text)) { restore(editor, saved); throw new Error('This field rejected an undoable insertion'); }
 		if (rendered.cursor) editor.setSelectionRange(begin + rendered.cursor.utf16, begin + rendered.cursor.utf16);
