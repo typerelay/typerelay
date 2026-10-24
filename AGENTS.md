@@ -9,6 +9,12 @@
 - Keep model selection and subagent configuration in the task prompt. Give agents bounded ownership, the absolute worktree path, and the expected branch. Report missing tools or access as blockers.
 - Report in the spirit of ASD STE100. Keep sentence structures direct, limit procedural steps to single actions and avoid unnecessary synonyms.
 
+## Task routing
+- For software tasks and follow-ups, use the `task-router` skill when installed and readable, unless the user opts out. Read its `SKILL.md` and continue its workflow for related work in the same thread.
+- When using task-router, resolve the allowed models, current quotas, and budgets before delegating agents. Preserve the user's provider restrictions and each developer's personal configuration; do not commit personal plans or spending limits.
+- Optional source and setup instructions: https://github.com/thenitai/task-router.
+- If task-router is missing or unreadable, continue the task normally and silently. Do not emit an error, warning, blocker, missing-skill notice, or installation prompt. Do not fetch or install it automatically unless the user requests setup. This overrides generic missing-tool reporting only for task-router availability; an installed skill's quota, budget, and provider restrictions still apply.
+
 ## Documentation and writing
 - When adding or updating a feature, add or update its documentation in the same task. Give each documentation page a clear title and SEO-compliant metadata using the documentation site's conventions.
 - If the product has no documentation site, create one and document the feature there.
