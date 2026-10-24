@@ -289,10 +289,13 @@ export class WhiteLabel {
 		return WhiteLabel.saveAsset(accountId, kind, null);
 	}
 
-	static requestHostname(req) {
-		const forwarded = String(req.headers?.['x-forwarded-host'] || '').split(',')[0].trim();
-		return String(forwarded || req.headers?.host || req.hostname || '').split(':')[0].toLowerCase().replace(/\.$/, '');
+	// Plain host[:port] only: userinfo or paths (victim.test:1@evil.test) must never bind an account or reach emailed links.
+	static requestHost(req) {
+		const host = String(req.headers?.['x-forwarded-host'] || req.headers?.host || req.hostname || '').split(',')[0].trim().toLowerCase();
+		return !host || /^[a-z0-9](?:[a-z0-9_.-]*[a-z0-9])?\.?(?::\d{1,5})?$/.test(host) ? host : null;
 	}
+
+	static requestHostname(req) { return WhiteLabel.requestHost(req)?.replace(/:\d+$/, '').replace(/\.$/, '') ?? null; }
 
 	static platformHostname(hostname) {
 		let canonical = '';
@@ -305,10 +308,12 @@ export class WhiteLabel {
 			res.locals.whiteLabel = null;
 			if (!WhiteLabel.enabled()) return next();
 			const hostname = WhiteLabel.requestHostname(req);
-			if (WhiteLabel.platformHostname(hostname)) return next();
-			const account = await Account.findOne({ ...AccountAccess.available, 'white_label.hostname': hostname, 'white_label.state': 'active', 'white_label.disabled_at': null, 'white_label.provider_action': { $in: ['', null] } }).lean();
+			if (hostname !== null && WhiteLabel.platformHostname(hostname)) return next();
+			// Active implies DNS-verified; restating the partial filter lets white_label_verified_hostname serve this per-request lookup.
+			const account = hostname === null ? null : await Account.findOne({ ...AccountAccess.available, 'white_label.hostname': { $eq: hostname, $type: 'string', $gt: '' }, 'white_label.dns_verified_at': { $type: 'date' }, 'white_label.state': 'active', 'white_label.disabled_at': null, 'white_label.provider_action': { $in: ['', null] } }).lean();
 			if (!account || Billing.entitlements(account).plan !== 'team') return res.status(404).send('Custom domain is not configured.');
 			req.boundAccount = String(account._id);
+			req.boundOrigin = 'https://' + account.white_label.hostname;
 			res.locals.whiteLabel = WhiteLabel.public(account);
 			return next();
 		} catch (error) { return next(error); }

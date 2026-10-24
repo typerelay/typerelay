@@ -391,9 +391,10 @@ export class Server {
 		return server;
 	}
 	static requestOrigin(req) {
-		const protocol = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0].trim();
-		const host = String(req.headers['x-forwarded-host'] || req.headers.host || new URL(Auth.origin).host).split(',')[0].trim();
-		return `${protocol}://${host}`;
+		if (req.boundOrigin) return req.boundOrigin;
+		const protocol = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0].trim().toLowerCase();
+		const host = WhiteLabel.requestHost(req);
+		return host && ['http', 'https'].includes(protocol) ? `${protocol}://${host}` : Auth.origin;
 	}
 	static whiteLabelResult(res, settings) { res.json({ settings, html: pug.renderFile('./views/ajax/white-label.pug', { whiteLabelSettings: settings }), brand_html: pug.renderFile('./views/ajax/brand.pug', { brandUrl: settings.logo_url }) }); }
 	static async whiteLabelAssetUpload(req, res) {

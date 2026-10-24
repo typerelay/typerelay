@@ -220,7 +220,7 @@ test('white-label validation and Cloudflare readiness follow the Team contract',
 	assert.equal(free.logo_url, '');
 });
 
-test('Team custom hostname verifies DNS, Cloudflare status and request binding', async () => {
+test('Team custom hostname verifies DNS, Cloudflare status and request binding', async t => {
 	const account = await Account.create({ name: 'Branded Team', plan: 'team', billing: { status: 'active', seat_quantity: 5 } });
 	await WhiteLabel.configure(account._id, 'portal.customer.test');
 	const fetch = async (url, input) => ({ ok: true, status: 200, json: async () => ({ success: true, result: { custom_metadata: JSON.parse(input.body).custom_metadata, id: 'cf-host', hostname: 'portal.customer.test', status: 'active', ssl: { status: 'active' } } }) });
@@ -229,10 +229,25 @@ test('Team custom hostname verifies DNS, Cloudflare status and request binding',
 	let continued = false;
 	const req = { headers: { host: 'portal.customer.test' }, hostname: 'portal.customer.test' };
 	const res = { locals: {}, status: value => ({ send: () => { throw new Error(`Unexpected ${value}`); } }) };
+	const findOne = t.mock.method(Account, 'findOne');
 	await WhiteLabel.resolveRequest(req, res, () => { continued = true; });
 	assert.equal(continued, true);
 	assert.equal(req.boundAccount, String(account._id));
 	assert.equal(res.locals.whiteLabel.active, true);
+	const plan = (await Account.find(findOne.mock.calls[0].arguments[0]).explain()).queryPlanner.winningPlan;
+	assert.match(JSON.stringify(plan), /"indexName":"white_label_verified_hostname"/);
+	const environment = process.env.NODE_ENV; process.env.NODE_ENV = 'test';
+	const { Server } = await import('../app.js');
+	process.env.NODE_ENV = environment;
+	assert.equal(Server.requestOrigin({ ...req, headers: { host: 'portal.customer.test', 'x-forwarded-host': 'portal.customer.test', 'x-forwarded-proto': 'http' } }), 'https://portal.customer.test');
+	for (const host of ['portal.customer.test:1@evil.test', 'portal.customer.test/evil.test', 'evil.test\\@portal.customer.test']) {
+		const injected = { headers: { host: 'app.typerelay.com', 'x-forwarded-host': host, 'x-forwarded-proto': 'https' } };
+		let status = 0;
+		await WhiteLabel.resolveRequest(injected, { locals: {}, status: value => ({ send: () => { status = value; } }) }, () => assert.fail('malformed host continued'));
+		assert.equal(status, 404);
+		assert.equal(injected.boundAccount, undefined);
+		assert.equal(Server.requestOrigin(injected), Auth.origin);
+	}
 });
 
 test('only a DNS-verified custom hostname blocks other accounts', async () => {
