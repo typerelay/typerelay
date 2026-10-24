@@ -403,7 +403,7 @@ export class Server {
 		const paths = new Set();
 		form.on('fileBegin', (name, file) => { if (file?.filepath) paths.add(file.filepath); });
 		form.on('file', (name, file) => { if (file?.filepath) paths.add(file.filepath); });
-		const cleanup = () => Promise.all([...paths].map(path => rm(path, { force: true })));
+		const cleanup = () => Promise.allSettled([...paths].map(path => rm(path, { force: true })));
 		try {
 			const [, files] = await form.parse(req);
 			for (const values of Object.values(files)) for (const value of (Array.isArray(values) ? values : [values])) if (value?.filepath) paths.add(value.filepath);

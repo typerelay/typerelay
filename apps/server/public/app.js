@@ -177,7 +177,9 @@ class TypeRelay {
 		const prior = this.libraries.get(library._id);
 		// Trash and restore both bump the revision, so order every update, deletions included, by revision.
 		if (prior && prior.revision > library.revision) return;
-		if (this.tombstones.get(library._id) >= library.revision) return;
+		// An equal-revision active view is a re-grant after the inaccessibility sweep; only deletions repeat at an equal revision.
+		const tombstone = this.tombstones.get(library._id);
+		if (library.deleted ? tombstone >= library.revision : tombstone > library.revision) return;
 		this.libraries.set(library._id, library);
 		if (library.deleted) {
 			this.tombstones.set(library._id, library.revision);

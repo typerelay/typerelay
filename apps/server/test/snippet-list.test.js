@@ -127,6 +127,11 @@ test('library trash and restore are ordered by revision, so delayed deletions ne
 		assert.ok(document.querySelector('[data-id="one"]'));
 		assert.equal(client.libraries.get('one').revision, 5);
 		assert.equal(client.tombstones.has('one'), false);
+		await client.apply({ library: { ...client.libraries.get('one'), deleted: true } });
+		assert.equal(document.querySelector('[data-id="one"]'), null);
+		await client.apply(at(5, false));
+		assert.ok(document.querySelector('[data-id="one"]'), 'access re-granted at the same revision shows the library again');
+		assert.equal(client.tombstones.has('one'), false);
 	} finally { dom.window.close(); }
 });
 
