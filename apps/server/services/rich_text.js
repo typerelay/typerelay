@@ -36,7 +36,8 @@ export class RichText {
 	}
 	static async prepare(ctx, content, session = null) {
 		if (content?.version !== 2 || content?.type !== 'rich_text') return content;
-		const markdown = String(content.markdown || ''); const parts = RichText.call('rich_text_images', markdown); const sources = new Set();
+		const markdown = String(content.markdown || ''); const parts = []; const sources = new Set();
+		for (const part of RichText.call('rich_text_images', markdown)) { const previous = parts.at(-1); if (previous && previous.label === undefined && part.label === undefined && previous.end === part.start) { previous.end = part.end; previous.html += part.html; } else parts.push(part); }
 		for (const part of parts) {
 			part.images = [];
 			const parser = new Parser({ onopentag: (name, attributes) => {
@@ -59,7 +60,7 @@ export class RichText {
 		for (const part of parts) {
 			if (!part.images.length) continue;
 			let html = part.html;
-			if (part.label !== undefined) { const image = part.images[0]; const title = image.attributes.title; html = `![${part.label}](${cached.get(image.source)}${title ? ' "' + title.replaceAll('\\', '\\\\').replaceAll('"', '\\"') + '"' : ''})`; }
+			if (part.label !== undefined) { const image = part.images[0]; const title = image.attributes.title; html = `![${part.label}](${cached.get(image.source)}${part.title ? ' ' + part.title : title ? ' "' + title.replaceAll('&', '&amp;').replaceAll('\n', '&#10;').replaceAll('\r', '&#13;').replaceAll('\\', '\\\\').replaceAll('"', '\\"') + '"' : ''})`; }
 			else for (const image of part.images.reverse()) { const attributes = { ...image.attributes, src: cached.get(image.source) }; const tag = '<img' + Object.entries(attributes).map(([key, value]) => ` ${key}="${value.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;')}"`).join('') + '>'; html = html.slice(0, image.start) + tag + html.slice(image.end); }
 			output.push(input.subarray(position, part.start), Buffer.from(html)); position = part.end;
 		}

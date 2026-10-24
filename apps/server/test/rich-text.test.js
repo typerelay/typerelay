@@ -81,3 +81,18 @@ test('every parsed remote image form obeys preflight and image-count limits', as
  for (const markdown of ['![x](<https://example.test/x>)', '![x][ref]\n\n[ref]: https://example.test/x', '<img src=https://example.test/x>']) await assert.rejects(RichText.prepare({}, { version: 2, type: 'rich_text', markdown }, {}), /before starting/);
  const markdown = Array.from({ length: 17 }, (_, i) => `![x](<https://example.test/${i}>)`).join('\n'); await assert.rejects(RichText.prepare({}, { version: 2, type: 'rich_text', markdown }), /at most 16/);
 });
+
+test('image normalization preserves escaped template openers in labels and titles', async t => {
+ t.mock.method(Assets, 'remote', async () => ({ id: 'c'.repeat(64) }));
+ for (const markdown of [String.raw`![\{{name}}](https://example.test/image "\{{title}}")`, String.raw`![\{{name}}][ref]` + '\n\n' + String.raw`[ref]: https://example.test/image "\{{title}}"`]) { const prepared = await RichText.prepare({}, { version: 2, type: 'rich_text', markdown }); const rendered = RichText.render({ ...prepared, preview: false }); assert.deepEqual(rendered.fields, []); assert.match(rendered.html, /alt="\{\{name\}\}"/); assert.match(rendered.html, /title="\{\{title\}\}"/); }
+});
+
+test('multiline raw HTML images are cached and obey the transaction guard', async t => {
+ const id = 'd'.repeat(64); const markdown = '<div>\n<img\nsrc="https://example.test/pixel">\n</div>'; t.mock.method(Assets, 'remote', async () => ({ id }));
+ await assert.rejects(RichText.prepare({}, { version: 2, type: 'rich_text', markdown }, {}), /before starting/);
+ const content = await RichText.prepare({}, { version: 2, type: 'rich_text', markdown }); assert.deepEqual(RichText.content(content).assets, [id]); assert.doesNotMatch(RichText.render(content).html, /src="https:/);
+});
+test('image titles retain literal entities and encoded blank lines', async t => {
+ t.mock.method(Assets, 'remote', async () => ({ id: 'e'.repeat(64) }));
+ for (const title of ['&amp;copy;', 'a&#10;&#10;b']) { const markdown = `![x](https://example.test/image "${title}")`; const before = RichText.render({ markdown }); const content = await RichText.prepare({}, { version: 2, type: 'rich_text', markdown }); const rendered = RichText.render(content); assert.equal(rendered.html.replaceAll('typerelay-asset:' + 'e'.repeat(64), 'https://example.test/image'), before.html); }
+});
