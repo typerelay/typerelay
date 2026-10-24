@@ -152,6 +152,17 @@ test('one request budget caps remote fetches, embedded images and time, and reus
 	assert.equal(remote.mock.callCount(), 0);
 });
 
+test('an import stages with the import budget instead of a fresh one', async t => {
+	const ctx = await Fixture.context('Import budget');
+	const prepared = []; const staged = [];
+	t.mock.method(Libraries, 'previewImport', async () => ({ entries: [{ key: 'one' }] }));
+	t.mock.method(Libraries, 'prepared', async (c, entry, session, budget) => { prepared.push(budget); return entry; });
+	t.mock.method(Libraries, 'stage', async (c, input, budget) => { staged.push(budget); });
+	await Libraries.mutate(ctx, randomUUID(), { selected: [{ key: 'one' }] }, async () => ({}), { format: 'yaml' });
+	assert.equal(prepared.length, 1);
+	assert.equal(staged[0], prepared[0]);
+});
+
 test('per-account image quota rejects new images only and never touches existing ones', async t => {
 	const ctx = await Fixture.context('Quota');
 	const saved = { ...Assets.quota };
@@ -183,8 +194,12 @@ test('image source URLs are capped at 10 http(s) URLs of 2048 characters, includ
 	await Assets.mergeSources(ctx, image.id, list(3));
 	assert.equal((await SnippetAsset.findOne({ account: ctx.account, id: image.id }).lean()).source_urls.length, 10);
 	const bundle = sources => Buffer.from(zipSync({ 'snippets.yml': strToU8('matches: []\n'), [`assets/${image.id}`]: new Uint8Array(bytes), 'bundle.json': strToU8(JSON.stringify({ version: 1, name: 'Sources', assets: [image.id], asset_metadata: { [image.id]: { source_urls: sources } } })) }));
-	await assert.rejects(Bundles.import(ctx, bundle(list(11))), error => error.status === 422 && /Image sources/.test(error.message));
-	await assert.rejects(Bundles.import(ctx, bundle(['ftp://example.test/a.png'])), error => error.status === 422);
+	// Older exports may carry more than 10 or non-http(s) sources: filter them, never fail the bundle.
+	const fresh = await Fixture.image(11);
+	const old = Buffer.from(zipSync({ 'snippets.yml': strToU8('matches: []\n'), [`assets/${Assets.id(fresh)}`]: new Uint8Array(fresh), 'bundle.json': strToU8(JSON.stringify({ version: 1, name: 'Old', assets: [Assets.id(fresh)], asset_metadata: { [Assets.id(fresh)]: { source_urls: ['ftp://example.test/a.png', 'javascript:alert(1)', 'https://example.test/' + 'x'.repeat(2048), 7, ...list(12)] } } })) }));
+	await Bundles.import(ctx, old);
+	assert.deepEqual((await SnippetAsset.findOne({ account: ctx.account, id: Assets.id(fresh) }).lean()).source_urls, list(12).slice(2));
+	await Bundles.import(ctx, bundle(['ftp://example.test/a.png']));
 });
 
 test('download skips tombstone work for quiet incremental syncs but still reports purges', async t => {

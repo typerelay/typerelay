@@ -427,7 +427,7 @@ export class Libraries {
 				const conflict = await Conflict.findOne({ _id: Support.id(conflictId), account: ctx.account, resolved: false }).lean();
 				if (conflict) { await Libraries.get(ctx, String(conflict.library), null, true); input[Libraries.conflictValue] = await Libraries.prepared(ctx, conflict.local); }
 			}
-			await Libraries.stage(ctx, input);
+			await Libraries.stage(ctx, input, budget);
 		}
 		let result;
 		await mongoose.connection.transaction(async session => {
