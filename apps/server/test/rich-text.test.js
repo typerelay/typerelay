@@ -96,3 +96,8 @@ test('image titles retain literal entities and encoded blank lines', async t => 
  t.mock.method(Assets, 'remote', async () => ({ id: 'e'.repeat(64) }));
  for (const title of ['&amp;copy;', 'a&#10;&#10;b']) { const markdown = `![x](https://example.test/image "${title}")`; const before = RichText.render({ markdown }); const content = await RichText.prepare({}, { version: 2, type: 'rich_text', markdown }); const rendered = RichText.render(content); assert.equal(rendered.html.replaceAll('typerelay-asset:' + 'e'.repeat(64), 'https://example.test/image'), before.html); }
 });
+
+test('URL-normalized and protocol-relative HTML images cannot bypass private caching', async t => {
+ const urls = []; const id = 'f'.repeat(64); t.mock.method(Assets, 'remote', async (ctx, url) => { urls.push(url); return { id }; });
+ for (const source of [' https://example.test/pixel ', 'https:&#10;//example.test/pixel', '//example.test/pixel']) { const markdown = `<img src="${source}">`; await assert.rejects(RichText.prepare({}, { version: 2, type: 'rich_text', markdown }, {}), /before starting/); const content = await RichText.prepare({}, { version: 2, type: 'rich_text', markdown }); assert.deepEqual(RichText.content(content).assets, [id]); assert.equal(urls.at(-1), 'https://example.test/pixel'); }
+});

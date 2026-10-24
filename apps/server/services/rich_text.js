@@ -36,23 +36,26 @@ export class RichText {
 	}
 	static async prepare(ctx, content, session = null) {
 		if (content?.version !== 2 || content?.type !== 'rich_text') return content;
-		const markdown = String(content.markdown || ''); const parts = []; const sources = new Set();
+		const markdown = String(content.markdown || ''); const parts = []; const sources = new Map();
 		for (const part of RichText.call('rich_text_images', markdown)) { const previous = parts.at(-1); if (previous && previous.label === undefined && part.label === undefined && previous.end === part.start) { previous.end = part.end; previous.html += part.html; } else parts.push(part); }
 		for (const part of parts) {
 			part.images = [];
 			const parser = new Parser({ onopentag: (name, attributes) => {
 				const source = attributes.src;
-				if (name !== 'img' || !source || !/^(https?:\/\/|data:image\/(?:png|jpeg|webp|gif);base64,)/i.test(source)) return;
-				part.images.push({ start: parser.startIndex, end: parser.endIndex + 1, attributes, source }); sources.add(source);
+				if (name !== 'img' || !source) return;
+				let url; try { url = new URL(source.trim().startsWith('//') ? 'https:' + source.trim() : source); } catch {}
+				const remote = ['http:', 'https:'].includes(url?.protocol) ? url.href : null;
+				if (!remote && !/^data:image\/(?:png|jpeg|webp|gif);base64,/i.test(source.trim())) return;
+				part.images.push({ start: parser.startIndex, end: parser.endIndex + 1, attributes, source }); sources.set(source, remote);
 			} }, { decodeEntities: true });
 			parser.end(part.html);
 		}
 		Support.assert(!session || !sources.size, 'Prepare snippet images before starting the transaction', 422);
-		Support.assert([...sources].filter(source => /^https?:/i.test(source)).length <= 16, 'Rich text supports at most 16 remote images', 422);
+		Support.assert([...sources.values()].filter(Boolean).length <= 16, 'Rich text supports at most 16 remote images', 422);
 		const cached = new Map();
-		for (const source of sources) {
+		for (const [source, remote] of sources) {
 			let asset;
-			if (/^https?:/i.test(source)) asset = await Assets.remote(ctx, source, session);
+			if (remote) asset = await Assets.remote(ctx, remote, session);
 			else { const bytes = Buffer.from(source.slice(source.indexOf(',') + 1), 'base64'); Support.assert(bytes.length <= Assets.maximumInput, 'Embedded image exceeds 5 MiB', 413); asset = await Assets.put(ctx, bytes, '', session); }
 			cached.set(source, `typerelay-asset:${asset.id}`);
 		}
