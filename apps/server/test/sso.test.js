@@ -204,7 +204,7 @@ test('provisioning is opt-in, creates members only and respects available seats'
 	await Account.updateOne({ _id: fixture.account._id }, { $set: { 'admin_override.limits.people': 2 } });
 	assert.equal((await Fixture.complete(new Browser(), fixture.account, 'full-' + randomUUID() + '@example.test')).finish.status, 409);
 });
-test('provisioning never claims an existing TypeRelay user without an invitation', async t => {
+test('provisioning never claims an existing TypeRelay user without an accepted invitation', async t => {
 	const fixture = await Fixture.account(); await Fixture.configure(fixture);
 	await Fixture.complete(fixture.browser, fixture.account, fixture.user.email, '?test=true');
 	await fixture.browser.json('/api/v2/sso', 'PUT', Fixture.config(1, { provision: true }));
@@ -214,9 +214,17 @@ test('provisioning never claims an existing TypeRelay user without an invitation
 	assert.ok(await SsoLog.exists({ account: fixture.account._id, event: 'invite_required' }));
 	const log = t.mock.method(Security, 'ssoLog', async () => { throw new Error('Synthetic log failure'); });
 	try { assert.equal((await Fixture.complete(new Browser(), fixture.account, existing.email)).finish.status, 403); } finally { log.mock.restore(); }
+	// The IdP administrator can also send invitations, so a pending invite alone must not let the IdP claim the user.
 	await Ticket.create({ hash: Support.hash(randomUUID()), kind: 'invite', email: existing.email, account: fixture.account._id, expires: new Date(Date.now() + 86400000) });
+	const pending = (await Fixture.complete(new Browser(), fixture.account, existing.email)).finish;
+	assert.equal(pending.status, 403);
+	assert.match(await pending.text(), /Accept the team invitation from your email first/);
+	assert.equal(await Member.exists({ account: fixture.account._id, user: existing._id }), null);
+	assert.ok(await Ticket.exists({ account: fixture.account._id, kind: 'invite', email: existing.email }));
+	// Accepting the invitation through the team flow creates the membership; SSO then signs the user in.
+	await Member.create({ account: fixture.account._id, user: existing._id, role: 'member' });
 	assert.equal((await Fixture.complete(new Browser(), fixture.account, existing.email)).finish.status, 302);
-	assert.ok(await Member.exists({ account: fixture.account._id, user: existing._id }));
+	assert.equal(await Member.countDocuments({ account: fixture.account._id, user: existing._id }), 1);
 });
 test('SSO retains local two-factor authentication and account binding through the second factor', async () => {
 	const fixture = await Fixture.account(); await Fixture.configure(fixture);
