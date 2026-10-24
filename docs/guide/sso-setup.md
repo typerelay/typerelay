@@ -7,7 +7,7 @@ description: "Configure a TypeRelay SAML provider, exchange Entity ID and ACS UR
 
 You need owner/admin access to a Pro or Team account and permission to configure an application at your identity provider.
 
-1. Open **Settings → Single sign-on** in the correct TypeRelay account.
+1. Open **Settings → Single sign-on** in the correct TypeRelay account. The cards group **Identity provider**, **Service provider**, **Settings**, and **Owner recovery**.
 2. Create a SAML 2.0 application at your provider. Copy TypeRelay's **Entity ID / metadata URL** into the provider's audience/identifier field and **Assertion Consumer Service URL** into its ACS/reply/recipient fields.
 3. Configure **NameID as the user's email address**. It must match an existing TypeRelay member unless you later enable provisioning. Optional `displayName` supplies a new member's initial name.
 4. Configure the provider to sign the complete **SAML response** using RSA SHA-256 (or stronger). Signing the assertion too is supported. Assertion-only signing is insufficient. Use an unencrypted assertion, HTTP-POST responses, and application-initiated sign-in.

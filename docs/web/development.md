@@ -1,7 +1,18 @@
+---
+title: "Database-backed TypeRelay development"
+description: "Run TypeRelay development services and isolated database tests, including DBH settings and hosted feature checks."
+---
+
 # Database-backed TypeRelay development
 
 Run docker compose up -d --build from the repository root.
 `APP_URL` and `MCP_BASE_URL` select the development endpoints. `DEV_TYPERELAY_MONGODB_URI`, `MEMCACHED_SERVERS`, and `SMTP_SERVERS` connect to the shared dbh development services; the development Compose file does not run MongoDB, Memcached, or SMTP containers. Production deployment remains separate.
+
+## DBH hosted settings
+
+The DBH-only `.codex/dbh-run.toml` enables the existing `TYPERELAY_HOSTED_EDITION` and `WHITE_LABEL_ENABLED` flags. `BILLING_ENABLED` remains `false`, so development accounts retain Team entitlements without Stripe configuration or account changes. Owners and admins can open White-label independently of Subscription. DNS verification still requires both CNAME and account-specific TXT proof; provider provisioning requires separately configured credentials.
+
+After changing these values, run `dbh-run urls`, `dbh-run secrets`, and `dbh-run compose -- up -d --no-deps --build --force-recreate app`. Keep the scheduler and shared infrastructure unchanged. Check `dbh-run status` and the named app URL.
 
 ## Storage version 2
 

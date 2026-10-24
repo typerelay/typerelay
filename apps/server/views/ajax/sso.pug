@@ -9,43 +9,47 @@
 			a.ms-2(href="/#settings-subscription") View plans
 	else
 		form#sso-settings-form(data-revision=settings.revision || 0 data-enforced=settings.enforce ? 'true' : 'false')
-			h3.h6.mb-3 Identity provider
-			.mb-3
-				label.form-label(for="sso-issuer") Identity provider Entity ID / issuer
-				input#sso-issuer.form-control.form-control-sm(name="issuer" value=settings.issuer required maxlength="2048")
-			.mb-3
-				label.form-label(for="sso-login-url") Identity provider login URL
-				input#sso-login-url.form-control.form-control-sm(type="url" name="login_url" value=settings.login_url required maxlength="2048")
-			.mb-5
-				label.form-label(for="sso-certificate") Public X.509 signing certificate (PEM)
-				textarea#sso-certificate.form-control.form-control-sm(name="certificate" rows="6" required maxlength="16384")= settings.certificate
-			h3.h6.mb-3 Service provider
-			each label, key in { metadata: 'Entity ID / metadata URL', callback: 'Assertion Consumer Service URL', login: 'SSO sign-in link' }
+			.card.p-3.mb-5
+				h3.h6.fw-bold.mb-3 Identity provider
 				.mb-3
-					label.form-label(for='sso-' + key)= label
-					input.form-control.form-control-sm(id='sso-' + key value=settings.urls[key] readonly)
-			p.text-muted.mb-5 Configure email address as NameID and sign the SAML response with SHA-256. Share the SSO sign-in link with your members.
-			h3.h6.mb-3 Settings
-			each label, key in { enabled: 'Enable SSO sign-in', enforce: 'Require SSO for this account', provision: 'Create members automatically on first SSO sign-in' }
-				.form-check.d-flex.align-items-center.gap-2.mb-3
-					input.form-check-input.h-20px.w-30px(type="checkbox" id='sso-' + key name=key checked=settings[key])
-					label.form-check-label(for='sso-' + key)= label
-			p.text-muted.mb-3 Provisioned users receive the Member role and use available seats. Existing users retain their roles. Private libraries remain private.
-			p.text-muted.mb-3 Enforcement requires a successful test and an owner recovery code. Existing sessions and connected apps must sign in again when SSO settings change.
-			div.mb-3(role="status")
-				if settings.tested
-					span.text-success Provider test passed. Enforcement and provisioning are available.
-				else
-					span Save your provider settings, then test with your own administrator identity.
-			.d-flex.flex-wrap.align-items-center.justify-content-between.gap-3.mb-5
-				button.btn.btn-outline-secondary.btn-sm(type="button" data-sso-refresh) Reload settings
-				button.btn.btn-primary.btn-sm(type="submit") Save settings
-		.d-flex.flex-wrap.gap-3.mb-5
-			a.btn.btn-outline-primary.btn-sm(href=settings.urls.login + '?test=true' target="_blank" rel="noopener") Test login
-			a.btn.btn-outline-secondary.btn-sm(href=settings.urls.metadata target="_blank" rel="noopener") View metadata
-		h3.h6.mb-3 Owner recovery
-		p.mb-3= settings.recovery_ready ? 'A recovery code is ready. Keep it in a secure place outside TypeRelay.' : 'The owner must generate and store a recovery code before enabling enforcement.'
-		if settings.owner
-			button.btn.btn-outline-secondary.btn-sm.mb-3(type="button" data-sso-recovery-code) Generate new recovery code
-		p.small.text-muted.mb-3 Recovery requires the owner's password, Magic Link or passkey, any enabled two-factor authentication, and the one-use recovery code.
-		a(href=settings.urls.recovery target="_blank" rel="noopener") Open recovery page
+					label.form-label(for="sso-issuer") Identity provider Entity ID / issuer
+					input#sso-issuer.form-control.form-control-sm(name="issuer" value=settings.issuer required maxlength="2048")
+				.mb-3
+					label.form-label(for="sso-login-url") Identity provider login URL
+					input#sso-login-url.form-control.form-control-sm(type="url" name="login_url" value=settings.login_url required maxlength="2048")
+				.mb-5
+					label.form-label(for="sso-certificate") Public X.509 signing certificate (PEM)
+					textarea#sso-certificate.form-control.form-control-sm(name="certificate" rows="6" required maxlength="16384")= settings.certificate
+			.card.p-3.mb-5
+				h3.h6.fw-bold.mb-3 Service provider
+				each label, key in { metadata: 'Entity ID / metadata URL', callback: 'Assertion Consumer Service URL', login: 'SSO sign-in link' }
+					.mb-3
+						label.form-label(for='sso-' + key)= label
+						input.form-control.form-control-sm(id='sso-' + key value=settings.urls[key] readonly)
+				p.text-muted.mb-5 Configure email address as NameID and sign the SAML response with SHA-256. Share the SSO sign-in link with your members.
+			.card.p-3.mb-5
+				h3.h6.fw-bold.mb-3 Settings
+				each label, key in { enabled: 'Enable SSO sign-in', enforce: 'Require SSO for this account', provision: 'Create members automatically on first SSO sign-in' }
+					.form-check.d-flex.align-items-center.gap-2.mb-3
+						input.form-check-input.h-20px.w-30px(type="checkbox" id='sso-' + key name=key checked=settings[key])
+						label.form-check-label(for='sso-' + key)= label
+				p.text-muted.mb-3 Provisioned users receive the Member role and use available seats. Existing users retain their roles. Private libraries remain private.
+				p.text-muted.mb-3 Enforcement requires a successful test and an owner recovery code. Existing sessions and connected apps must sign in again when SSO settings change.
+				div.mb-3(role="status")
+					if settings.tested
+						span.text-success Provider test passed. Enforcement and provisioning are available.
+					else
+						span Save your provider settings, then test with your own administrator identity.
+				.d-flex.flex-wrap.align-items-center.justify-content-between.gap-3.mb-5
+					button.btn.btn-outline-secondary.btn-sm(type="button" data-sso-refresh) Reload settings
+					button.btn.btn-primary.btn-sm(type="submit") Save settings
+				.d-flex.flex-wrap.gap-3.mb-5
+					a.btn.btn-outline-primary.btn-sm(href=settings.urls.login + '?test=true' target="_blank" rel="noopener") Test login
+					a.btn.btn-outline-secondary.btn-sm(href=settings.urls.metadata target="_blank" rel="noopener") View metadata
+		.card.p-3.mb-5
+			h3.h6.fw-bold.mb-3 Owner recovery
+			p.mb-3= settings.recovery_ready ? 'A recovery code is ready. Keep it in a secure place outside TypeRelay.' : 'The owner must generate and store a recovery code before enabling enforcement.'
+			if settings.owner
+				button.btn.btn-outline-secondary.btn-sm.mb-3(type="button" data-sso-recovery-code) Generate new recovery code
+			p.small.text-muted.mb-3 Recovery requires the owner's password, Magic Link or passkey, any enabled two-factor authentication, and the one-use recovery code.
+			a(href=settings.urls.recovery target="_blank" rel="noopener") Open recovery page

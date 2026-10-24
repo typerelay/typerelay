@@ -44,3 +44,36 @@ test('SSO saves update only the configuration, preserve focus and scroll, and ig
 		assert.equal(document.querySelector('#sso-issuer').value, 'https://new.example.test'); assert.equal(document.querySelector('#workspace'), workspace); assert.equal(document.querySelector('#settings'), modal); assert.equal(document.querySelector('#draft').value, 'Unsaved snippet');
 	} finally { fixture.dom.window.close(); }
 });
+
+
+test('SSO cards preserve the single form, provider fields, progressive status and owner recovery controls', () => {
+	for (const owner of [false, true]) for (const tested of [false, true]) {
+		const dom = new JSDOM(pug.renderFile('./views/ajax/sso.pug', { settings: { entitled: true, owner, tested, revision: 7, urls: { metadata: '/metadata', callback: '/callback', login: '/login', recovery: '/recovery' } } }));
+		try {
+			const document = dom.window.document; const form = document.querySelector('#sso-settings-form');
+			assert.equal(document.querySelectorAll('form').length, 1);
+			assert.deepEqual([...document.querySelectorAll('.card h3')].map(heading => heading.textContent), ['Identity provider', 'Service provider', 'Settings', 'Owner recovery']);
+			assert.equal(form.querySelectorAll('.card').length, 3);
+			for (const id of ['issuer', 'login-url', 'certificate', 'metadata', 'callback', 'login', 'enabled', 'enforce', 'provision']) assert.equal(document.querySelector('#sso-' + id).form, form);
+			assert.equal(form.dataset.revision, '7'); assert.equal(form.dataset.enforced, 'false');
+			assert.ok(form.querySelector('[data-sso-refresh]')); assert.ok(form.querySelector('button[type="submit"]'));
+			assert.equal(form.querySelector('a[href="/login?test=true"]').textContent, 'Test login');
+			assert.match(form.querySelector('[role="status"]').textContent, tested ? /Provider test passed/ : /Save your provider settings/);
+			assert.equal(Boolean(document.querySelector('[data-sso-recovery-code]')), owner);
+			assert.ok(document.querySelector('a[href="/recovery"]').closest('.card'));
+		} finally { dom.window.close(); }
+	}
+});
+
+test('the card form submits provider values and enforcement through the existing handler', async () => {
+	const requests = []; const fixture = await Fixture.create(async (path, method, body) => { requests.push({ path, method, body }); return Fixture.settings(); });
+	try {
+		await fixture.ui.sso();
+		fixture.client.confirm = async () => true;
+		const form = fixture.document.querySelector('#sso-settings-form');
+		form.querySelector('#sso-enabled').checked = true; form.querySelector('#sso-enforce').checked = true;
+		await fixture.ui.submit({ target: form, submitter: form.querySelector('button[type="submit"]'), preventDefault() {} });
+		assert.equal(requests[1].path, 'sso'); assert.equal(requests[1].method, 'PUT');
+		assert.deepEqual(JSON.parse(JSON.stringify(requests[1].body)), { issuer: 'https://idp.example.test', login_url: 'https://idp.example.test/sso', certificate: 'Fixture certificate', enabled: true, enforce: true, revision: 1, provision: false });
+	} finally { fixture.dom.window.close(); }
+});

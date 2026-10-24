@@ -295,3 +295,25 @@ test('logs contain outcomes without SAML assertions, certificates or recovery co
 	const serialized = JSON.stringify(logs);
 	assert.doesNotMatch(serialized, /SAMLResponse|Assertion>|BEGIN CERTIFICATE|recovery_hash|@example.test/);
 });
+
+
+test('white-label navigation and pane follow the feature flag independently of billing and preserve role access', async () => {
+	const fixture = await Fixture.account();
+	try {
+		for (const billing of ['false', 'true']) for (const enabled of ['false', 'true']) for (const role of ['owner', 'admin', 'member']) {
+			Object.assign(process.env, { BILLING_ENABLED: billing, WHITE_LABEL_ENABLED: enabled });
+			await Member.updateOne({ account: fixture.account._id, user: fixture.user._id }, { $set: { role } });
+			const { response, html } = await fixture.browser.page('/?account=' + fixture.account._id);
+			assert.equal(response.status, 200);
+			const dom = new JSDOM(html);
+			try {
+				const allowed = enabled === 'true' && role !== 'member';
+				assert.equal(Boolean(dom.window.document.querySelector('#settings-tab-whiteLabel')), allowed, `${billing}/${enabled}/${role} navigation`);
+				assert.equal(Boolean(dom.window.document.querySelector('#settings-pane-whiteLabel')), allowed, `${billing}/${enabled}/${role} pane`);
+				assert.equal(Boolean(dom.window.document.querySelector('#settings-pane-subscription')), billing === 'true');
+				assert.equal(Boolean(dom.window.document.querySelector('#settings-pane-sso')), role !== 'member');
+			} finally { dom.window.close(); }
+			if (role === 'member') await fixture.browser.json('/api/v2/white-label', 'GET', null, 403);
+		}
+	} finally { Object.assign(process.env, { BILLING_ENABLED: 'true', WHITE_LABEL_ENABLED: 'false' }); }
+});
