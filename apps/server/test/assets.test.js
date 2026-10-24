@@ -37,9 +37,11 @@ test('sync source metadata merges only into visible assets and rejects malformed
 	const update = t.mock.method(SnippetAsset, 'updateOne', async (filter, change, options) => { assert.deepEqual(filter, { account: ctx.account, id }); assert.equal(options.session, session); assert.equal(options.updatePipeline, true); for (const source of change[0].$set.source_urls.$slice[0].$concatArrays[1].$filter.input.$literal) stored.add(source); return { matchedCount: 1 }; });
 	await Assets.mergeSources(ctx, id, sources);
 	await Assets.mergeSources(ctx, id, sources);
+	await Assets.mergeSources(ctx, id, [sources[1], sources[1]]);
+	assert.deepEqual(update.mock.calls.at(-1).arguments[1][0].$set.source_urls.$slice[0].$concatArrays[1].$filter.input.$literal, [sources[1]]);
 	assert.deepEqual([...stored], sources);
 	for (const invalid of [null, 'url', [3], ['x'.repeat(65536)], ['ftp://example.test/a.png'], ['https://example.test/' + 'x'.repeat(2048)], Array.from({ length: 11 }, (_, index) => 'https://example.test/' + index)]) await assert.rejects(Assets.mergeSources(ctx, id, invalid), /Image sources must be/);
-	assert.equal(update.mock.callCount(), 2);
+	assert.equal(update.mock.callCount(), 3);
 	t.mock.method(Assets, 'visible', async () => []);
 	await assert.rejects(Assets.mergeSources(ctx, id, sources), error => error.status === 404);
 	assert.equal(update.mock.callCount(), 2);

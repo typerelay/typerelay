@@ -58,7 +58,7 @@ export class Assets {
 	// Merges into the capped list in one update; $addToSet cannot bound the array.
 	static async addSources(account, id, sources, session) {
 		const existing = { $ifNull: ['$source_urls', []] };
-		return SnippetAsset.updateOne({ account, id }, [{ $set: { source_urls: { $slice: [{ $concatArrays: [existing, { $filter: { input: { $literal: sources }, cond: { $not: [{ $in: ['$$this', existing] }] } } }] }, Assets.maxSources] } } }], { session, updatePipeline: true });
+		return SnippetAsset.updateOne({ account, id }, [{ $set: { source_urls: { $slice: [{ $concatArrays: [existing, { $filter: { input: { $literal: [...new Set(sources)] }, cond: { $not: [{ $in: ['$$this', existing] }] } } }] }, Assets.maxSources] } } }], { session, updatePipeline: true });
 	}
 	static async save(ctx,asset,sourceUrl='',session=null) {
 		const sources = Assets.sources(Array.isArray(sourceUrl) ? sourceUrl : sourceUrl ? [sourceUrl] : []);
