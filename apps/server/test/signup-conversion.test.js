@@ -15,6 +15,7 @@ import { ProductUpdates } from '../services/product_updates.js';
 import { PublicApi } from '../api/public.js';
 import { SignupNotifications } from '../services/signup_notifications.js';
 import { StarterContent } from '../services/starter_content.js';
+import { ApiRateLimit } from '../rate_limit.js';
 import { mongoose, User, Account, Member, Ticket } from '../model/index.js';
 
 class Fixture {
@@ -47,6 +48,7 @@ before(async () => {
 	for (const method of ['code', 'tokens', 'run']) mock.method(StorageMigration, method, async () => {});
 	mock.method(ProductUpdates, 'enabled', () => false);
 	mock.method(PublicApi, 'mount', async () => {});
+	mock.method(ApiRateLimit, 'createLimiter', bucket => Object.assign((req, res, next) => next(), { bucket }));
 	mock.method(AccountAccess, 'middleware', (req, res, next) => next());
 	mock.method(WhiteLabel, 'resolveRequest', (req, res, next) => { if (req.hostname === 'tenant.example') req.boundAccount = 'tenant'; next(); });
 	mock.method(AdminSettings, 'middleware', (req, res, next) => next());
@@ -84,6 +86,13 @@ test('application startup rejects either missing security secret', async () => {
 		try { delete process.env[name]; await assert.rejects(Server.start(), new RegExp(name + ' is required')); }
 		finally { if (saved === undefined) delete process.env[name]; else process.env[name] = saved; }
 	}
+});
+
+test('API v2 upload and import routes use the API upload limiter', () => {
+	const routes = Fixture.server.listeners('request')[0].router.stack.filter(layer => layer.route).map(layer => ({ path: layer.route.path, methods: Object.keys(layer.route.methods), buckets: layer.route.stack.map(entry => entry.handle.bucket).filter(Boolean) }));
+	const limited = ['/api/v2/assets', '/api/v2/assets/remote', '/api/v2/assets/:id/refresh', '/api/v2/import/bundle', '/api/v2/import/:format/preview', '/api/v2/import/preview', '/api/v2/import/:format'];
+	for (const path of limited) assert.deepEqual(routes.find(route => route.path === path && route.methods.includes('post'))?.buckets, ['api-upload'], path);
+	assert.deepEqual(routes.find(route => route.path === '/api/v2/libraries' && route.methods.includes('get')).buckets, []);
 });
 
 test('Ads are restricted to canonical hosted production and attribution is allowlisted', () => {

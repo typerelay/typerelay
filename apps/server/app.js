@@ -219,15 +219,17 @@ export class Server {
 		app.get('/api/v2/statistics/export', async (req, res) => res.type('text/csv').attachment('typerelay-statistics.csv').send(Statistics.csv(await Statistics.report(req.ctx, req.query))));
 		app.patch('/api/v2/statistics/preferences', async (req, res) => res.json(await Statistics.preferences(req.ctx, req.body.scope, req.body)));
 
-		app.post('/api/v2/assets', express.raw({ type: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'], limit: '5mb' }), async (req, res) => res.json(await Assets.put(req.ctx, req.body)));
+		// Same bucket and threshold as the /api/v3 upload limiter.
+		const uploadLimit = ApiRateLimit.createLimiter('api-upload', ApiRateLimit.getConfig().uploadPerMinute);
+		app.post('/api/v2/assets', uploadLimit, express.raw({ type: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'], limit: '5mb' }), async (req, res) => res.json(await Assets.put(req.ctx, req.body)));
 		app.post('/api/v2/assets/presence', async (req, res) => res.json(await Assets.presence(req.ctx, req.body.ids)));
 		app.patch('/api/v2/assets/:id/sources', async (req, res) => res.json(await Assets.mergeSources(req.ctx, req.params.id, req.body.source_urls)));
 		app.put('/api/v2/assets/:id', express.raw({ type: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'], limit: '2mb' }), async (req, res) => res.json(await Assets.accept(req.ctx, req.body, req.params.id)));
 		app.get('/api/v2/assets/:id', async (req, res) => { const asset = await Assets.get(req.ctx, req.params.id, true); res.set({ 'Content-Type': asset.mime_type, 'Content-Length': String(asset.size), ETag: `"${asset.id}"`, 'Cache-Control': 'private, max-age=31536000, immutable' }).send(asset.data); });
-		app.post('/api/v2/assets/remote', async (req, res) => res.json(await Assets.remote(req.ctx, req.body.url)));
-		app.post('/api/v2/assets/:id/refresh', async (req, res) => { const asset = await Assets.get(req.ctx, req.params.id); Support.assert(asset.source_urls?.length, 'Asset has no remote source', 409); res.json(await Assets.remote(req.ctx, asset.source_urls.at(-1))); });
+		app.post('/api/v2/assets/remote', uploadLimit, async (req, res) => res.json(await Assets.remote(req.ctx, req.body.url)));
+		app.post('/api/v2/assets/:id/refresh', uploadLimit, async (req, res) => { const asset = await Assets.get(req.ctx, req.params.id); Support.assert(asset.source_urls?.length, 'Asset has no remote source', 409); res.json(await Assets.remote(req.ctx, asset.source_urls.at(-1))); });
 		app.get('/api/v2/libraries/:id/export-bundle', async (req, res) => { const bundle = await Bundles.export(req.ctx, req.params.id); res.set({ 'Content-Type': 'application/zip', 'Content-Disposition': `attachment; filename="${bundle.name}"`, 'Content-Length': String(bundle.bytes.length) }).send(bundle.bytes); });
-		app.post('/api/v2/import/bundle', express.raw({ type: ['application/zip', 'application/octet-stream'], limit: '16mb' }), async (req, res) => { const bundle = await Bundles.import(req.ctx, req.body); const result = await Libraries.mutate(req.ctx, String(req.headers['x-operation-id'] || ''), { bundle: Support.hash(req.body) }, async (ctx, session) => ({ library: await Libraries.create(ctx, bundle, session) }), { input: bundle }); await Server.result(res, req.ctx, result); });
+		app.post('/api/v2/import/bundle', uploadLimit, express.raw({ type: ['application/zip', 'application/octet-stream'], limit: '16mb' }), async (req, res) => { const bundle = await Bundles.import(req.ctx, req.body); const result = await Libraries.mutate(req.ctx, String(req.headers['x-operation-id'] || ''), { bundle: Support.hash(req.body) }, async (ctx, session) => ({ library: await Libraries.create(ctx, bundle, session) }), { input: bundle }); await Server.result(res, req.ctx, result); });
 		Security.mountPrivate(app, rateLimit({ windowMs: 900000, limit: 60, keyGenerator: req => RateLimitSupport.clientIp(req), store: ApiRateLimit.getStore('security', 900000), passOnStoreError: true, message: { error: 'Too many security requests; try again later.' } }));
 		app.post('/api/v2/billing/trial', async (req, res) => {
 			Support.assert(Support.admin(req.ctx), 'Admin required', 403);
@@ -305,9 +307,9 @@ export class Server {
 			res.render('ajax/mobile_apps_modal', { model: { ios: { url: IOS_BETA_URL, qrcode: iosQrcode }, android: { url: ANDROID_BETA_URL, qrcode: androidQrcode } } });
 		});
 		app.get('/api/v2/libraries', async (req, res) => res.json(await Libraries.list(req.ctx)));
-		app.post('/api/v2/import/:format/preview', async (req, res) => { const preview = await Libraries.previewImport(req.params.format, req.body); res.json({ ...preview, html: pug.renderFile('./views/ajax/snippetslab.pug', preview) }); });
-		app.post('/api/v2/import/preview', async (req, res) => res.json(await Yaml.run(req.body.yaml)));
-		app.post('/api/v2/import/:format', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.commitImport(ctx, req.params.format, req.body, session), { format: req.params.format })));
+		app.post('/api/v2/import/:format/preview', uploadLimit, async (req, res) => { const preview = await Libraries.previewImport(req.params.format, req.body); res.json({ ...preview, html: pug.renderFile('./views/ajax/snippetslab.pug', preview) }); });
+		app.post('/api/v2/import/preview', uploadLimit, async (req, res) => res.json(await Yaml.run(req.body.yaml)));
+		app.post('/api/v2/import/:format', uploadLimit, async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.commitImport(ctx, req.params.format, req.body, session), { format: req.params.format })));
 		app.post('/api/v2/libraries', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, async (ctx, session) => ({ library: await Libraries.create(ctx, req.body, session) }))));
 		app.patch('/api/v2/libraries/:id', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.settings(ctx, req.params.id, req.body, session))));
 		app.post('/api/v2/libraries/:id/snippets', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.upload(ctx, req.params.id, req.body, session))));
