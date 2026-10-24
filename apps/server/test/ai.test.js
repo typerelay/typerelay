@@ -363,3 +363,30 @@ test('explicit managed AI bypasses team providers and preserves BYO routes throu
 		await Account.updateOne({ _id: ctx.account }, { $set: { admin_override: { plan: 'free' } } }); const state = await Ai.state(ctx); assert.throws(() => Ai.route(state, 'authoring'), /Pro\/Team/); await assert.rejects(Ai.save(ctx, 'personal', { use_managed: true }), /Pro\/Team/);
 	} finally { process.env.TYPERELAY_HOSTED_EDITION = 'false'; }
 });
+
+test('write responses merge the saved revision and allowance instead of reading lagging secondaries', async t => {
+	const ctx = await Fixture.context(); await Fixture.configure(ctx);
+	// Pin every AiSetting read to the revision that existed before the write, like a lagging secondary.
+	const lag = async () => { const personal = await AiSetting.findOne({ account: ctx.account, user: ctx.user }).select('+connections').lean(); return { personal, mock: t.mock.method(AiSetting, 'findOne', filter => ({ select() { return this; }, lean: async () => filter.user ? personal : null })) }; };
+	let stale = await lag();
+	const saved = await Ai.save(ctx, 'personal', { enabled: true, routes: stale.personal.routes, revision: stale.personal.revision });
+	assert.equal(saved.settings.revision, stale.personal.revision + 1);
+	assert.equal(saved.status.revisions.personal, saved.settings.revision);
+	stale.mock.mock.restore(); stale = await lag();
+	const added = await Ai.connection(ctx, 'personal', { name: 'Second', provider: 'openai', api_key: 'second-key', revision: stale.personal.revision });
+	assert.equal(added.status.revisions.personal, added.settings.revision);
+	assert.equal(added.settings.revision, saved.settings.revision + 1);
+	stale.mock.mock.restore();
+	assert.equal((await Ai.setting(ctx, 'personal')).revision, added.settings.revision);
+	process.env.TYPERELAY_HOSTED_EDITION = 'true'; process.env.BILLING_ENABLED = 'true';
+	const installation = await Ai.installation();
+	try {
+		await Ai.save(null, 'installation', { daily_limit: 5 }, true); const managed = await Fixture.context();
+		t.mock.method(AiUsage, 'findOne', () => ({ lean: async () => null }));
+		await Fixture.provider(async () => {
+			const result = await Ai.search(managed, { request_id: randomUUID(), query: 'refund', local: [{ id: 'refund', library: 'local', revision: 1, text: 'Refund instructions' }] });
+			assert.equal(result.status.allowance.used, 1);
+		}, (call, count) => ({ status: 'completed', output_text: count === 1 ? '{"terms":["refund"]}' : '{"indices":[0]}' }));
+		assert.equal((await AiUsage.collection.findOne({ account: new mongoose.Types.ObjectId(managed.account) })).count, 1);
+	} finally { await Ai.save(null, 'installation', { daily_limit: installation.daily_limit }, true); process.env.TYPERELAY_HOSTED_EDITION = 'false'; process.env.BILLING_ENABLED = 'false'; }
+});
