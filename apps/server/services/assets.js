@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import http from 'node:http';
 import https from 'node:https';
-import { isIP } from 'node:net';
+import { BlockList, isIP } from 'node:net';
 import { fileTypeFromBuffer } from 'file-type';
 import sharp from 'sharp';
 import { AccountAccess } from './account_access.js';
@@ -111,13 +111,16 @@ export class Assets {
 		});
 		return { saved: true };
 	}
+	// IPv4-compatible ::/96, discard 100::/64 and Teredo 2001::/32 can all tunnel to private IPv4 hosts.
+	static blocked = new BlockList();
+	static { for (const [ip, prefix] of [['::', 96], ['100::', 64], ['2001::', 32]]) Assets.blocked.addSubnet(ip, prefix, 'ipv6'); }
 	static privateIp(address) {
 		if (isIP(address) === 4) {
 			const bytes = address.split('.').map(Number);
-			return bytes[0] === 10 || bytes[0] === 127 || bytes[0] === 0 || bytes[0] >= 224 || (bytes[0] === 169 && bytes[1] === 254) || (bytes[0] === 172 && bytes[1] >= 16 && bytes[1] <= 31) || (bytes[0] === 192 && bytes[1] === 168) || (bytes[0] === 192 && bytes[1] === 0 && bytes[2] === 0) || (bytes[0] === 100 && bytes[1] >= 64 && bytes[1] <= 127);
+			return bytes[0] === 10 || bytes[0] === 127 || bytes[0] === 0 || bytes[0] >= 224 || (bytes[0] === 169 && bytes[1] === 254) || (bytes[0] === 172 && bytes[1] >= 16 && bytes[1] <= 31) || (bytes[0] === 192 && bytes[1] === 168) || (bytes[0] === 192 && bytes[1] === 0 && bytes[2] === 0) || (bytes[0] === 192 && bytes[1] === 88 && bytes[2] === 99) || (bytes[0] === 198 && (bytes[1] === 18 || bytes[1] === 19)) || (bytes[0] === 100 && bytes[1] >= 64 && bytes[1] <= 127);
 		}
 		const normalized = address.toLowerCase();
-		return normalized === '::1' || normalized === '::' || ['fc', 'fd', 'fe8', 'fe9', 'fea', 'feb', 'fec', 'fed', 'fee', 'fef', 'ff', '::ffff:', '64:ff9b:', '2002:'].some(prefix => normalized.startsWith(prefix));
+		return Assets.blocked.check(normalized, 'ipv6') || ['fc', 'fd', 'fe8', 'fe9', 'fea', 'feb', 'fec', 'fed', 'fee', 'fef', 'ff', '::ffff:', '64:ff9b:', '2002:'].some(prefix => normalized.startsWith(prefix));
 	}
 	static async publicHost(url) {
 		Support.assert(['http:', 'https:'].includes(url.protocol) && !url.username && !url.password, 'Use a public HTTP or HTTPS image URL', 400);
