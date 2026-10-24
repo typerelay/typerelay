@@ -49,9 +49,10 @@ impl Sync {
     }
     fn response(response: reqwest::blocking::Response) -> Result<Value> {
         let status = response.status();
-        let value: Value = response.json()?;
-        if !status.is_success() { return Err(ServerError { status: status.as_u16(), message: if status.as_u16()==426 {"Server and client versions must match: rich text requires sync protocol 6".into()}else{value["error"].as_str().unwrap_or("Request failed").into()} }.into()); }
-        Ok(value)
+        let body = response.text()?;
+        // Read text first: an HTML error page (captive portal, proxy) must never mask the HTTP status.
+        if !status.is_success() { let value: Value = serde_json::from_str(&body).unwrap_or(Value::Null); return Err(ServerError { status: status.as_u16(), message: if status.as_u16()==426 {"Server and client versions must match: rich text requires sync protocol 6".into()}else{value["error"].as_str().unwrap_or("Request failed").into()} }.into()); }
+        Ok(serde_json::from_str(&body)?)
     }
     fn callback(stream: &mut TcpStream, state: &str, timeout: Duration) -> Result<Option<BTreeMap<String, String>>> {
         stream.set_read_timeout(Some(timeout))?;
@@ -105,10 +106,14 @@ impl Sync {
         let sources = metadata["source_urls"].as_array();
         ensure!(metadata["source_urls"].is_null() || sources.is_some_and(|sources| sources.iter().all(Value::is_string)), "Invalid asset sources");
         if let Some((mut cached, bytes)) = db.asset(id)? {
-            ensure!(bytes.len() == size as usize, "Asset size mismatch");
-            if sources.is_none_or(|sources| sources.iter().all(|source| cached["source_urls"].as_array().is_some_and(|values| values.contains(source)))) { return Ok(()); }
-            cached["source_urls"] = metadata["source_urls"].clone();
-            return db.put_asset(&cached, &bytes, true);
+            if bytes.len() != size as usize {
+                // A cache whose stored bytes disagree with server metadata is dropped and re-downloaded with hash verification, not allowed to stall every cycle.
+                db.delete_asset(id)?;
+            } else {
+                if sources.is_none_or(|sources| sources.iter().all(|source| cached["source_urls"].as_array().is_some_and(|values| values.contains(source)))) { return Ok(()); }
+                cached["source_urls"] = metadata["source_urls"].clone();
+                return db.put_asset(&cached, &bytes, true);
+            }
         }
         let mut bytes = Vec::new();
         self.asset_request(credentials, reqwest::Method::GET, id, None, None)?.take(2 * 1048576 + 1).read_to_end(&mut bytes)?;
@@ -302,12 +307,15 @@ impl Sync {
         ensure!(root.join("sync/credentials.json").exists(), "Connect first: typerelay connect --server URL");
         Paths::atomic_write(&root.join("sync/request"), Uuid::new_v4().to_string().as_bytes(), false)
     }
+    /// Doubling retry delay after failed cycles: 30 s, 60 s, 120 s, 240 s, then capped at 5 minutes. Zero until the first failure.
+    fn failure_backoff(failures: u32) -> Duration { if failures == 0 { Duration::ZERO } else { Duration::from_secs(30u64.saturating_mul(1u64 << (failures - 1).min(4))).min(Duration::from_secs(300)) } }
     pub fn worker(root: PathBuf, directory: PathBuf) {
         std::thread::spawn(move || {
             let Ok(sync) = Self::new(root, directory) else { return; };
             let Ok(leader) = fs::OpenOptions::new().create(true).truncate(false).read(true).write(true).open(sync.path("leader.lock")) else { return; };
             while leader.try_lock_exclusive().is_err() { std::thread::sleep(Duration::from_millis(500)); }
             let mut last = Instant::now() - Duration::from_secs(31);
+            let mut failures = 0u32;
             let mut cleanup = Instant::now() - Duration::from_secs(3601);
             let mut request = Vec::new();
             loop {
@@ -317,9 +325,12 @@ impl Sync {
                 if !sync.path("credentials.json").exists() { continue; }
                 let next = fs::read(sync.path("request")).unwrap_or_default();
                 let pending = db.pending().is_ok_and(|rows| !rows.is_empty());
-                if last.elapsed() >= Duration::from_secs(30) || next != request || (pending && last.elapsed() >= Duration::from_secs(2)) {
+                // After a failed cycle the pending fast path is suspended and retries back off exponentially, so one queued operation cannot re-run a full cycle every 2 seconds.
+                if next != request || last.elapsed() >= Duration::from_secs(30).max(Self::failure_backoff(failures)) || (pending && failures == 0 && last.elapsed() >= Duration::from_secs(2)) {
                     request = next;
-                    if let Err(error) = sync.cycle() && !error.to_string().contains("Sync already running") { let _ = Paths::atomic_write(&sync.path("status"), format!("Sync: {error:#}").as_bytes(), false); }
+                    let result = sync.cycle();
+                    if let Err(error) = &result && !error.to_string().contains("Sync already running") { let _ = Paths::atomic_write(&sync.path("status"), format!("Sync: {error:#}").as_bytes(), false); }
+                    failures = match result { Ok(()) => 0, Err(error) => if error.to_string().contains("Sync already running") { failures } else { failures.saturating_add(1) } };
                     last = Instant::now();
                 }
             }
@@ -403,6 +414,62 @@ mod tests {
         assert!(!ServerError::rejected(&anyhow::anyhow!("connection refused at http://127.0.0.1:40901"), true));
         assert!(!ServerError::rejected(&ServerError { status: 503, message: "Try again".into() }.into(), true));
         assert!(ServerError::rejected(&ServerError { status: 409, message: "Selection changed".into() }.into(), true));
+    }
+    #[test]
+    fn failed_cycles_back_off_before_the_pending_fast_path() {
+        assert_eq!(Sync::failure_backoff(0), Duration::ZERO);
+        assert_eq!(Sync::failure_backoff(1), Duration::from_secs(30));
+        assert_eq!(Sync::failure_backoff(2), Duration::from_secs(60));
+        assert_eq!(Sync::failure_backoff(3), Duration::from_secs(120));
+        assert_eq!(Sync::failure_backoff(4), Duration::from_secs(240));
+        assert_eq!(Sync::failure_backoff(5), Duration::from_secs(300));
+        assert_eq!(Sync::failure_backoff(40), Duration::from_secs(300));
+    }
+    #[test]
+    fn error_responses_report_the_http_status_when_the_body_is_not_json() {
+        let listener=TcpListener::bind("127.0.0.1:0").unwrap(); let address=listener.local_addr().unwrap();
+        let worker=std::thread::spawn(move||{
+            for index in 0..3 {
+                let (mut stream,_)=listener.accept().unwrap(); stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap(); let mut headers=Vec::new(); let mut byte=[0];
+                while !headers.ends_with(b"\r\n\r\n") {stream.read_exact(&mut byte).unwrap();headers.push(byte[0]);}
+                let (status,mime,body)=match index {0=>("502 Bad Gateway","text/html","<html><body>Proxy login page</body></html>".to_owned()),1=>("426 Upgrade Required","text/html","<html>Upgrade</html>".to_owned()),_=>("409 Conflict","application/json",json!({"error":"Selection changed"}).to_string())};
+                write!(stream,"HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
+            }
+        });
+        let fetch=||reqwest::blocking::get(format!("http://{address}")).unwrap();
+        let error=Sync::response(fetch()).unwrap_err(); let page=error.downcast_ref::<ServerError>().unwrap();
+        assert_eq!(page.status,502); assert_eq!(page.message,"Request failed");
+        let error=Sync::response(fetch()).unwrap_err(); let upgrade=error.downcast_ref::<ServerError>().unwrap();
+        assert_eq!(upgrade.status,426); assert_eq!(upgrade.message,"Server and client versions must match: rich text requires sync protocol 6");
+        let error=Sync::response(fetch()).unwrap_err(); let conflict=error.downcast_ref::<ServerError>().unwrap();
+        assert_eq!(conflict.status,409); assert_eq!(conflict.message,"Selection changed");
+        worker.join().unwrap();
+    }
+    #[test]
+    fn size_mismatched_cached_asset_is_replaced_by_a_verified_download() {
+        let root=tempfile::tempdir().unwrap(); let directory=root.path().join("snippets"); let db=Database::open(&directory).unwrap();
+        let id="0123456789abcdef01234567"; let snippet="snippet-0000000001";
+        let library=json!({"_id":id,"name":"Mine","revision":1,"state":"active","permissions":{"read":true,"edit":true,"manage":true},"records":[{"id":snippet,"trigger":"one","title":"","content":{"version":1,"type":"plain_text","text":"One"},"revision":1,"state":"active","position":0}]});
+        let initial=json!({"protocol":6,"cursor":1,"libraries":[library],"accessible":[id],"assets":[],"conflicts":[]});
+        db.apply(&initial,None).unwrap();
+        let mut bytes=std::io::Cursor::new(Vec::new()); image::RgbaImage::from_pixel(1,1,image::Rgba([0,0,0,255])).write_to(&mut bytes,image::ImageFormat::Png).unwrap(); let bytes=bytes.into_inner(); let asset=format!("{:x}",Sha256::digest(&bytes));
+        let mut fresh=initial.clone(); fresh["cursor"]=json!(2); fresh["assets"]=json!([{"id":asset,"mime_type":"image/png","size":bytes.len(),"width":1,"height":1,"animated":false,"source_urls":[]}]);
+        fresh["libraries"][0]["revision"]=json!(2); fresh["libraries"][0]["records"][0]["revision"]=json!(2); fresh["libraries"][0]["records"][0]["content"]=json!({"version":2,"type":"rich_text","markdown":format!("![](typerelay-asset:{asset})"),"assets":[asset]});
+        // Seed a cache whose stored bytes are shorter than the server metadata, as after a truncated download.
+        db.put_asset(&json!({"id":asset,"mime_type":"image/png","size":bytes.len(),"width":1,"height":1,"source_urls":[]}), b"truncated".as_slice(), true).unwrap();
+        let expected=bytes.clone(); let listener=TcpListener::bind("127.0.0.1:0").unwrap(); let server=format!("http://{}",listener.local_addr().unwrap());
+        let worker=std::thread::spawn(move||{
+            for index in 0..3 {
+                let (mut stream,_)=listener.accept().unwrap(); stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap(); let mut headers=Vec::new(); let mut byte=[0];
+                while !headers.ends_with(b"\r\n\r\n") {stream.read_exact(&mut byte).unwrap();headers.push(byte[0]);}
+                let headers=String::from_utf8(headers).unwrap(); let length=headers.lines().find_map(|line|line.to_lowercase().strip_prefix("content-length: ").and_then(|length|length.parse::<usize>().ok())).unwrap_or(0);stream.read_exact(&mut vec![0;length]).unwrap();
+                let (status,mime,body)=match index {1=>{assert!(headers.starts_with("GET /api/v2/assets/"));("200 OK","image/png",bytes.clone())},_=>("200 OK","application/json",fresh.to_string().into_bytes())};
+                write!(stream,"HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",body.len()).unwrap();stream.write_all(&body).unwrap();
+            }
+        });
+        let sync=Sync::new(root.path().into(),directory.clone()).unwrap(); sync.secret(&Credentials{server,access_token:"access".into(),refresh_token:"".into(),account:None,device:None}).unwrap();
+        sync.cycle().unwrap();worker.join().unwrap();let db=Database::open(&directory).unwrap();let (cached,stored)=db.asset(&asset).unwrap().unwrap();
+        assert_eq!(stored,expected);assert_eq!(cached["size"],json!(expected.len()));assert!(db.pending().unwrap().is_empty());
     }
     #[test]
     fn disconnect_succeeds_when_server_is_unavailable() {
