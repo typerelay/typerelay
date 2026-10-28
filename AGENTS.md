@@ -4,6 +4,7 @@
 - Keep shared agent instructions in `AGENTS.md` as the source of truth for every agent. Agent-specific instruction files should reference it instead of duplicating rules.
 - Be extremely concise. Prefer the simplest solution; follow explicit requirements and verify uncertain facts.
 - Use fish-compatible commands. Reuse existing code; do not duplicate code, extend services, or add global functions.
+- When interacting with Cloudflare, use the `cf` CLI unless the project has a Wrangler configuration file.
 - Keep ordinary documentation out of the repository root; agent instruction files are exceptions.
 - Respect the task's planning and approval gate. Planning is read-only; wait for explicit approval before implementation.
 - Keep model selection and subagent configuration in the task prompt. Give agents bounded ownership, the absolute worktree path, and the expected branch. Report missing tools or access as blockers.
