@@ -73,7 +73,8 @@ export class Billing {
 	}
 
 	static async account(id, session = null, secrets = false) {
-		let query = Account.findById(id).session(session || null).read(session ? 'primary' : 'secondaryPreferred');
+		let query = Account.findById(id).session(session || null);
+		if (session?.inTransaction()) query.session(session).read('primary');
 		if (secrets) query = query.select('+billing.stripe_customer_id +billing.stripe_subscription_id +billing.stripe_free_subscription_id +billing.scheduled_change.schedule_id +billing.checkout.session_id +white_label.cloudflare_hostname_id +white_label.logo.storage_key +white_label.favicon.storage_key +white_label.login_logo.storage_key');
 		const account = await query.lean();
 		if (account) AccountAccess.assert(account);
@@ -103,13 +104,17 @@ export class Billing {
 	}
 
 	static async usage(accountId, session = null) {
-		const activeLibraries = await Library.find({ account: accountId, state: 'active' }).select('_id').session(session || null).read(session ? 'primary' : 'secondaryPreferred').lean();
-		const [snippets, people, invitations, machines] = await Promise.all([
-			Snippet.countDocuments({ account: accountId, library: { $in: activeLibraries.map(library => library._id) }, state: 'active' }).session(session || null).read(session ? 'primary' : 'secondaryPreferred'),
-			Member.countDocuments({ account: accountId }).session(session || null).read(session ? 'primary' : 'secondaryPreferred'),
-			Ticket.countDocuments({ account: accountId, kind: 'invite', expires: { $gt: new Date() } }).session(session || null).read(session ? 'primary' : 'secondaryPreferred'),
-			Device.countDocuments({ account: accountId, revoked: false, client_type: { $ne: 'browser' } }).session(session || null).read(session ? 'primary' : 'secondaryPreferred'),
-		]);
+		const activeLibrariesQuery = Library.find({ account: accountId, state: 'active' }).select('_id').session(session || null).lean();
+		if (session?.inTransaction()) activeLibrariesQuery.session(session).read('primary');
+		const activeLibraries = await activeLibrariesQuery;
+		const queries = [
+			Snippet.countDocuments({ account: accountId, library: { $in: activeLibraries.map(library => library._id) }, state: 'active' }).session(session || null),
+			Member.countDocuments({ account: accountId }).session(session || null),
+			Ticket.countDocuments({ account: accountId, kind: 'invite', expires: { $gt: new Date() } }).session(session || null),
+			Device.countDocuments({ account: accountId, revoked: false, client_type: { $ne: 'browser' } }).session(session || null),
+		];
+		if (session?.inTransaction()) for (const query of queries) query.session(session).read('primary');
+		const [snippets, people, invitations, machines] = await Promise.all(queries);
 		return { libraries: activeLibraries.length, snippets, people, invitations, machines };
 	}
 
@@ -121,7 +126,9 @@ export class Billing {
 		const capacity = Billing.seatCapacity(account, entitlements);
 		if (!capacity) return true;
 		// Retained memberships can outlive a paid plan. Keep the owner and earliest members within the effective capacity.
-		const position = await Member.countDocuments({ account: account._id, $or: [{ role: 'owner' }, { role: { $ne: 'owner' }, _id: { $lte: member._id } }] }).session(session || null).read(session ? 'primary' : 'secondaryPreferred');
+		const positionQuery = Member.countDocuments({ account: account._id, $or: [{ role: 'owner' }, { role: { $ne: 'owner' }, _id: { $lte: member._id } }] }).session(session || null);
+		if (session?.inTransaction()) positionQuery.session(session).read('primary');
+		const position = await positionQuery;
 		return position <= capacity;
 	}
 
@@ -140,7 +147,9 @@ export class Billing {
 	static async assertDeviceEnrollment(ctx, session = null, client = 'typerelay-desktop') {
 		if (client === 'typerelay-browser') return;
 		if (!ctx.entitlements.limits.machines) return;
-		const count = await Device.countDocuments({ account: ctx.account, user: ctx.user, revoked: false, client_type: { $ne: 'browser' } }).session(session || null).read(session ? 'primary' : 'secondaryPreferred');
+		const countQuery = Device.countDocuments({ account: ctx.account, user: ctx.user, revoked: false, client_type: { $ne: 'browser' } }).session(session || null);
+		if (session?.inTransaction()) countQuery.session(session).read('primary');
+		const count = await countQuery;
 		Billing.assertLimit(ctx, 'machines', count, 1);
 	}
 
@@ -148,7 +157,9 @@ export class Billing {
 		if (device.client_type === 'browser') return;
 		if (!ctx.entitlements.limits.machines) return;
 		if (ctx.entitlements.machine_override) return;
-		const primary = await Device.findOne({ account: ctx.account, user: ctx.user, revoked: false, client_type: { $ne: 'browser' } }).sort({ createdAt: 1, _id: 1 }).select('_id').session(session || null).read(session ? 'primary' : 'secondaryPreferred').lean();
+		const deviceQuery = Device.findOne({ account: ctx.account, user: ctx.user, revoked: false, client_type: { $ne: 'browser' } }).sort({ createdAt: 1, _id: 1 }).select('_id').session(session || null).lean();
+		if (session?.inTransaction()) deviceQuery.session(session).read('primary');
+		const primary = await deviceQuery;
 		if (!primary || String(primary._id) === String(device._id || device)) return;
 		throw Billing.error(403, 'Free allows one connected machine', 'plan_limit', { resource: 'machines', limit: 1, upgrade_url: '/#settings-subscription' });
 	}

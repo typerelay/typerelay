@@ -16,3 +16,13 @@ test('primary reads outside transactions do not grow', () => {
 	const hits = files.flatMap(file => readFileSync(file, 'utf8').split('\n').filter(line => PRIMARY_READ.test(line) && !line.includes('session')).map(line => `${file}: ${line.trim().slice(0, 160)}`));
 	assert.ok(hits.length <= BASELINE, `Primary reads above baseline ${BASELINE}:\n${hits.join('\n')}`);
 });
+
+const SECONDARY_QUERY = /\.read\([^;\n]*['"]secondaryPreferred['"]/;
+
+test('secondaryPreferred belongs in schemas, not query overrides', () => {
+	assert.equal(SECONDARY_QUERY.test("new Schema({}, { read: 'secondaryPreferred' })"), false);
+	assert.equal(SECONDARY_QUERY.test("Model.find().read('secondaryPreferred')"), true);
+	assert.equal(SECONDARY_QUERY.test("query.read(session ? 'primary' : 'secondaryPreferred')"), true);
+	const hits = walk(fileURLToPath(new URL('../../..', import.meta.url))).flatMap(file => readFileSync(file, 'utf8').split('\n').filter(line => SECONDARY_QUERY.test(line)).map(line => `${file}: ${line.trim()}`));
+	assert.deepEqual(hits, []);
+});

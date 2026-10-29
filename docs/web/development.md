@@ -14,6 +14,10 @@ The DBH-only `.codex/dbh-run.toml` enables the existing `TYPERELAY_HOSTED_EDITIO
 
 After changing these values, run `dbh-run urls`, `dbh-run secrets`, and `dbh-run compose -- up -d --no-deps --build --force-recreate app`. Keep the scheduler and shared infrastructure unchanged. Check `dbh-run status` and the named app URL.
 
+## MongoDB read defaults
+
+Ordinary service reads inherit each model's schema `read` option, including `secondaryPreferred`. Do not repeat this preference on queries. In TypeRelay, reads inside active transactions use `.session(session).read('primary')` on the same line. Helpers with optional sessions check `session?.inTransaction()` before applying this exception. Supplied inactive sessions stay attached and retain the schema default.
+
 ## Storage version 2
 
 MongoDB stores library metadata/grants separately from individual snippets.
