@@ -2,8 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
+import { Support } from '../services/support.js';
 
-// Execute the actual helper bodies with query doubles; no database or service imports.
+// Execute the actual helper bodies with query doubles; no database connection.
 const method = (service, name, globals) => {
 	const source = readFileSync(new URL(`../services/${service}.js`, import.meta.url), 'utf8');
 	const start = source.indexOf(`\tstatic async ${name}(`);
@@ -23,7 +24,7 @@ for (const active of [undefined, false, true]) test(`optional session reads: tra
 	const globals = Object.fromEntries(['Library', 'Snippet', 'PersonalAbbreviation', 'SnippetAsset', 'Conflict', 'Group'].map(name => [name, model([])]));
 	globals.Account = model({ _id: 'account' });
 	globals.AccountAccess = { assert() {}, storage: { getStore: () => ({ read: true }) } };
-	globals.Support = { assert: assert.ok, access: () => ({ read: true, edit: true }) };
+	globals.Support = { assert: assert.ok, access: () => ({ read: true, edit: true }), transactionRead: Support.transactionRead };
 	globals.Libraries = { personalState: method('libraries', 'personalState', globals) };
 	const ctx = { account: 'account', user: 'user' };
 	await globals.Libraries.personalState(ctx, session);

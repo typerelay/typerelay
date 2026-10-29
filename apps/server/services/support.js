@@ -14,25 +14,21 @@ export class Support {
 	static text(value, max = 100) { Support.assert(typeof value === 'string' && value.trim().length > 0 && value.length <= max, 'Invalid text'); return value.trim(); }
 	static id(value) { Support.assert(typeof value === 'string' && /^[a-f0-9]{24}$/.test(value), 'Invalid ID'); return value; }
 	static equal(a, b) { return String(a) === String(b); }
+	// Transactions require primary reads; all other reads keep the schema default.
+	static transactionRead(query, session) { return session?.inTransaction() ? query.session(session).read('primary') : query; }
 	static async context(user, account, session) {
 		Support.id(String(account));
-		const memberQuery = Member.findOne({ user, account }).session(session || null).lean();
-		if (session?.inTransaction()) memberQuery.session(session).read('primary');
-		const member = await memberQuery;
+		const member = await Support.transactionRead(Member.findOne({ user, account }).session(session || null).lean(), session);
 		Support.assert(member, 'Account access denied', 403);
 		// Reads only need the availability check below; deletion drains leases held by writes.
 		if (!AccountAccess.storage.getStore()?.read) await (session ? AccountAccess.fence(account, session) : AccountAccess.acquire(account));
-		const recordQuery = Account.findById(account).session(session || null).lean();
-		if (session?.inTransaction()) recordQuery.session(session).read('primary');
-		const record = await recordQuery;
+		const record = await Support.transactionRead(Account.findById(account).session(session || null).lean(), session);
 		Support.assert(record, 'Account missing', 404);
 		AccountAccess.assert(record);
 		const entitlements = Billing.entitlements(record);
 		if (!entitlements.capabilities.team && member.role !== 'owner') throw new Fault(403, 'This account requires Pro or Team', 'plan_required', { capability: 'people', upgrade_url: '/#settings-subscription' });
 		if (!await Billing.memberAllowed(record, member, session)) throw new Fault(403, 'This membership exceeds the account seat capacity. Ask the owner to add seats or remove extra members.', 'plan_limit', { resource: 'people', upgrade_url: '/#settings-subscription' });
-		const groupsQuery = Group.find({ account, users: user }).session(session || null).lean();
-		if (session?.inTransaction()) groupsQuery.session(session).read('primary');
-		const groups = await groupsQuery;
+		const groups = await Support.transactionRead(Group.find({ account, users: user }).session(session || null).lean(), session);
 		return { user: String(user), account: String(account), role: member.role, groups: groups.map(group => String(group._id)), plan: record.plan || 'free', entitlements };
 	}
 	static admin(ctx) { return ['owner', 'admin'].includes(ctx.role); }

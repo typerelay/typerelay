@@ -16,7 +16,7 @@ After changing these values, run `dbh-run urls`, `dbh-run secrets`, and `dbh-run
 
 ## MongoDB read defaults
 
-Ordinary service reads inherit each model's schema `read` option, including `secondaryPreferred`. Do not repeat this preference on queries. In TypeRelay, reads inside active transactions use `.session(session).read('primary')` on the same line. Helpers with optional sessions check `session?.inTransaction()` before applying this exception. Supplied inactive sessions stay attached and retain the schema default.
+Ordinary service reads inherit each model's schema `read` option, including `secondaryPreferred`. Do not repeat this preference on queries. In TypeRelay, reads inside active transactions use `.session(session).read('primary')` on the same line. Helpers with optional sessions wrap queries in `Support.transactionRead(query, session)`, which applies this exception only when `session?.inTransaction()` is true. Supplied inactive sessions stay attached and retain the schema default.
 
 ## Storage version 2
 
