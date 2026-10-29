@@ -73,16 +73,16 @@ export class Assets {
 	}
 	static async visible(ctx, ids, session = null) {
 		Support.assert(Array.isArray(ids) && ids.every(id => typeof id === 'string' && /^[a-f0-9]{64}$/.test(id)), 'Invalid asset IDs', 400);
-		const libraries = await Library.find({ account: ctx.account, state: { $ne: 'purged' } }).session(session).read('primary').lean();
+		const libraries = await Library.find({ account: ctx.account, state: { $ne: 'purged' } }).session(session).read(session ? 'primary' : 'secondaryPreferred').lean();
 		const readable = new Set(libraries.filter(library => Support.access(ctx, library).read).map(library => String(library._id)));
 		const editable = new Set(libraries.filter(library => Support.access(ctx, library).edit).map(library => String(library._id)));
 		const allowed = new Set();
-		const snippets = await Snippet.find({ account: ctx.account, state: { $ne: 'purged' }, 'content.assets': { $in: ids } }).select('library content.assets').session(session).read('primary').lean();
+		const snippets = await Snippet.find({ account: ctx.account, state: { $ne: 'purged' }, 'content.assets': { $in: ids } }).select('library content.assets').session(session).read(session ? 'primary' : 'secondaryPreferred').lean();
 		for (const snippet of snippets) for (const id of snippet.content.assets) { if (readable.has(String(snippet.library))) allowed.add(id); }
-		const conflicts = await Conflict.find({ account: ctx.account, resolved: false, $or: ['local', 'base', 'server'].map(key => ({ [key + '.content.assets']: { $in: ids } })) }).select('library resolved local.content.assets base.content.assets server.content.assets').session(session).read('primary').lean();
+		const conflicts = await Conflict.find({ account: ctx.account, resolved: false, $or: ['local', 'base', 'server'].map(key => ({ [key + '.content.assets']: { $in: ids } })) }).select('library resolved local.content.assets base.content.assets server.content.assets').session(session).read(session ? 'primary' : 'secondaryPreferred').lean();
 		for (const conflict of conflicts) for (const value of [conflict.local, conflict.base, conflict.server]) for (const id of value?.content?.assets || []) { if (!conflict.resolved && editable.has(String(conflict.library))) allowed.add(id); }
 		// Uploading bytes grants temporary access; validation consumes the grant in the write transaction.
-		const staged = await SnippetAsset.find({ account: ctx.account, id: { $in: ids }, staged_by: ctx.user }).select('id').session(session).read('primary').lean();
+		const staged = await SnippetAsset.find({ account: ctx.account, id: { $in: ids }, staged_by: ctx.user }).select('id').session(session).read(session ? 'primary' : 'secondaryPreferred').lean();
 		for (const asset of staged) allowed.add(asset.id);
 		return ids.filter(id => allowed.has(id));
 	}

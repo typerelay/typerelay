@@ -12,17 +12,17 @@ import { RichText } from './rich_text.js';
 
 export class Libraries {
 	static async personalState(ctx, session = null) {
-		const libraries = await Library.find({ account: ctx.account, state: { $ne: 'purged' } }).session(session).read('primary').lean();
+		const libraries = await Library.find({ account: ctx.account, state: { $ne: 'purged' } }).session(session).read(session ? 'primary' : 'secondaryPreferred').lean();
 		const visible = libraries.filter(library => Support.access(ctx, library).read).map(library => library._id);
-		const snippets = await Snippet.find({ account: ctx.account, library: { $in: visible }, state: { $ne: 'purged' } }).select('id').session(session).read('primary').lean();
-		return PersonalAbbreviation.find({ account: ctx.account, user: ctx.user, snippet: { $in: snippets.map(snippet => snippet.id) } }).select('snippet trigger revision conflicts -_id').session(session).read('primary').lean();
+		const snippets = await Snippet.find({ account: ctx.account, library: { $in: visible }, state: { $ne: 'purged' } }).select('id').session(session).read(session ? 'primary' : 'secondaryPreferred').lean();
+		return PersonalAbbreviation.find({ account: ctx.account, user: ctx.user, snippet: { $in: snippets.map(snippet => snippet.id) } }).select('snippet trigger revision conflicts -_id').session(session).read(session ? 'primary' : 'secondaryPreferred').lean();
 	}
 	static async personalize(ctx, libraries, session = null) {
 		const personal = new Map((await Libraries.personalState(ctx, session)).map(row => [row.snippet, row]));
 		const counts = new Map();
-		const visible = (await Library.find({ account: ctx.account, state: 'active' }).session(session).read('primary').lean()).filter(library => Support.access(ctx, library).read);
+		const visible = (await Library.find({ account: ctx.account, state: 'active' }).session(session).read(session ? 'primary' : 'secondaryPreferred').lean()).filter(library => Support.access(ctx, library).read);
 		const shared = new Set(visible.filter(library => library.shared).map(library => String(library._id)));
-		for (const snippet of await Snippet.find({ library: { $in: visible.map(library => library._id) }, state: 'active' }).select('id library trigger').session(session).read('primary').lean()) {
+		for (const snippet of await Snippet.find({ library: { $in: visible.map(library => library._id) }, state: 'active' }).select('id library trigger').session(session).read(session ? 'primary' : 'secondaryPreferred').lean()) {
 			const effective = (shared.has(String(snippet.library)) ? personal.get(snippet.id)?.trigger : null) ?? snippet.trigger;
 			if (effective) counts.set(effective, (counts.get(effective) || 0) + 1);
 		}
@@ -393,7 +393,7 @@ export class Libraries {
 			result.libraries = await Promise.all(stored.library_ids.flatMap(id => { const library = libraries.find(library => Support.equal(library._id, id)); return library ? [Libraries.hydrate(library, session, records.filter(record => Support.equal(record.library, library._id))).then(value => Libraries.view(ctx, value))] : []; }));
 		}
 		if (stored.library_id) {
-			const raw = await Library.findOne({ _id: stored.library_id, account: ctx.account }).session(session).read('primary').lean();
+			const raw = await Library.findOne({ _id: stored.library_id, account: ctx.account }).session(session).read(session ? 'primary' : 'secondaryPreferred').lean();
 			if (raw?.state === 'purged') result.purged = [stored.library_id];
 			else result.library = Libraries.view(ctx, await Libraries.get(ctx, stored.library_id, session, true));
 		}
