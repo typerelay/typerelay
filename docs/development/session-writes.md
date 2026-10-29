@@ -22,7 +22,7 @@ ClickStack application-log search for September 16–17 returned no non-Ghost Ty
 Run through the repository's remote Docker workflow on NadaMini:
 
 ```fish
-dbh-run compose -- exec app corepack pnpm install --frozen-lockfile
+dbh-run compose -- exec app pnpm install --frozen-lockfile
 dbh-run compose -- exec -T -e TYPERELAY_HOSTED_EDITION=false -e TYPERELAY_GHOST_CONTENT_API_KEY= app node --test --test-force-exit test/session-store.test.js test/scheduler.test.js
 ```
 
