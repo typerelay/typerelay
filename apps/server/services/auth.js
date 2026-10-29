@@ -95,9 +95,9 @@ export class Auth {
 			const ticket = await Ticket.findOneAndDelete({ hash: Support.hash(Support.text(token, 256)), kind: 'login', expires: { $gt: new Date() } }, { session }).lean();
 			Support.assert(ticket, 'Link expired or already used', 401);
 			returnTo = ticket.data?.return_to;
-			user = await User.findOne({ email: ticket.email }).session(session).lean();
-			if (ticket.data?.account) AccountAccess.assert(await Account.findById(ticket.data.account).session(session).lean());
-			if (ticket.data?.account) Support.assert(user && await Member.exists({ account: ticket.data.account, user: user._id }).session(session), 'Account access denied', 403);
+			user = await User.findOne({ email: ticket.email }).session(session).read('primary').lean();
+			if (ticket.data?.account) AccountAccess.assert(await Account.findById(ticket.data.account).session(session).read('primary').lean());
+			if (ticket.data?.account) Support.assert(user && await Member.exists({ account: ticket.data.account, user: user._id }).session(session).read('primary'), 'Account access denied', 403);
 			if (!user) {
 				Support.assert(Security.signupEnabled(), 'Signup is disabled', 403);
 				[user] = await User.create([{ email: ticket.email, name: ticket.data?.name || ticket.email.split('@')[0] }], { session });
@@ -148,7 +148,7 @@ export class Auth {
 		await mongoose.connection.transaction(async session => {
 			if (body.grant_type === 'authorization_code') {
 				Support.assert(['typerelay-desktop', 'typerelay-mobile', 'typerelay-browser'].includes(body.client_id) && /^[A-Za-z0-9._~-]{43,128}$/.test(body.code_verifier), 'Invalid client or verifier');
-				const ticket = await Ticket.findOne({ hash: Support.hash(Support.text(body.code, 256)), kind: 'oauth', expires: { $gt: new Date() } }).session(session).lean();
+				const ticket = await Ticket.findOne({ hash: Support.hash(Support.text(body.code, 256)), kind: 'oauth', expires: { $gt: new Date() } }).session(session).read('primary').lean();
 				Support.assert(ticket && (ticket.data.client || 'typerelay-desktop') === body.client_id && ticket.data.redirect === Auth.redirect(body.redirect_uri, body.client_id) && ticket.data.challenge === createHash('sha256').update(body.code_verifier).digest('base64url'), 'Invalid authorization code', 401);
 				const ctx = await Support.context(ticket.data.user, String(ticket.account), session);
 				await Security.credential(ctx, ticket.data);
@@ -157,7 +157,7 @@ export class Auth {
 				[device] = await Device.create([{ account: ticket.account, user: ticket.data.user, name: ticket.data.name, sso_revision: ticket.data.sso_revision, client_type: ticket.data.client_type, os: ticket.data.os, oauth_client: ticket.data.client || 'typerelay-desktop' }], { session });
 			} else {
 				Support.assert(body.grant_type === 'refresh_token', 'Unsupported grant');
-				device = await Device.findOne({ refresh: Support.hash(Support.text(body.refresh_token, 256)), refresh_expires: { $gt: new Date() }, revoked: false }).session(session).lean();
+				device = await Device.findOne({ refresh: Support.hash(Support.text(body.refresh_token, 256)), refresh_expires: { $gt: new Date() }, revoked: false }).session(session).read('primary').lean();
 				Support.assert(device, 'Invalid refresh token', 401);
 				Support.assert(['typerelay-mobile', 'typerelay-browser'].includes(device.oauth_client) ? body.client_id === device.oauth_client : (!body.client_id || body.client_id === (device.oauth_client || 'typerelay-desktop')), 'Invalid refresh client', 401);
 				const ctx = await Support.context(String(device.user), String(device.account), session);
@@ -291,7 +291,7 @@ export class Auth {
 				[grant] = await Integration.create([{ user: ticket.data.user, account: ticket.account, name: ticket.data.name, sso_revision: ticket.data.sso_revision, kind: 'oauth', client: body.client_id, resource: body.resource, scopes: ticket.data.scopes, expires: new Date(Date.now() + 90 * 86400000) }], { session });
 			} else {
 				Support.assert(body.grant_type === 'refresh_token', 'Unsupported grant');
-				grant = await Integration.findOne({ refresh: Support.hash(String(body.refresh_token || '')), client: body.client_id, resource: body.resource, revoked: false, refresh_expires: { $gt: new Date() }, expires: { $gt: new Date() } }).session(session).lean();
+				grant = await Integration.findOne({ refresh: Support.hash(String(body.refresh_token || '')), client: body.client_id, resource: body.resource, revoked: false, refresh_expires: { $gt: new Date() }, expires: { $gt: new Date() } }).session(session).read('primary').lean();
 				Support.assert(grant, 'Invalid refresh token or resource', 401);
 				const ctx = await Support.context(String(grant.user), String(grant.account), session);
 				await Security.credential(ctx, grant);

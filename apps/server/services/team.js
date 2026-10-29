@@ -35,8 +35,8 @@ export class Team {
 			await Ticket.deleteMany({ account: ctx.account, kind: 'invite', email }, { session });
 			await Billing.assertSeatCapacity(ctx, 1, session);
 			let user = await User.findOneAndUpdate({ email, 'deletion.requested_at': null }, { $inc: { activity_sequence: 1 } }, { session, returnDocument: 'after' }).lean();
-			Support.assert(user || !await User.exists({ email }).session(session), 'Account deletion requested', 409);
-			Support.assert(!user || !await Member.exists({ account: ctx.account, user: user._id }).session(session), 'User is already a member of this account', 409);
+			Support.assert(user || !await User.exists({ email }).session(session).read('primary'), 'Account deletion requested', 409);
+			Support.assert(!user || !await Member.exists({ account: ctx.account, user: user._id }).session(session).read('primary'), 'User is already a member of this account', 409);
 			let temporaryPassword;
 			if (!user) {
 				const name = Support.text(body.name);
@@ -56,11 +56,11 @@ export class Team {
 		return result;
 	}
 	static async accept(ctx, token, session) {
-		const user = await User.findById(ctx.user).session(session).lean();
+		const user = await User.findById(ctx.user).session(session).read('primary').lean();
 		Support.assert(user && !user.deletion?.requested_at, 'Account deletion requested', 409);
 		const ticket = await Ticket.findOneAndDelete({ hash: Support.hash(token), kind: 'invite', email: user.email, expires: { $gt: new Date() } }, { session }).lean();
 		Support.assert(ticket, 'Invitation invalid, expired, or for another email');
-		const account = await Account.findById(ticket.account).session(session).lean();
+		const account = await Account.findById(ticket.account).session(session).read('primary').lean();
 		AccountAccess.assert(account);
 		await User.updateOne({ _id: ctx.user }, { $inc: { activity_sequence: 1 } }, { session });
 		await Billing.assertSeatCapacity({ account: String(ticket.account), entitlements: Billing.entitlements(account) }, 1, session);
@@ -69,7 +69,7 @@ export class Team {
 		return { account: String(ticket.account) };
 	}
 	static async member(ctx, id, body, session) {
-		const target = await Member.findOne({ _id: Support.id(id), account: ctx.account }).session(session).lean();
+		const target = await Member.findOne({ _id: Support.id(id), account: ctx.account }).session(session).read('primary').lean();
 		Support.assert(target && target.role !== 'owner' && Support.admin(ctx) && (ctx.role === 'owner' || (target.role === 'member' && !body.role)), 'Cannot change this member', 403);
 		if (body.role) {
 			Billing.assertTeam(ctx);
@@ -86,12 +86,12 @@ export class Team {
 	static async group(ctx, id, body, session) {
 		Support.assert(Support.admin(ctx), 'Admin required', 403);
 		Billing.assertTeam(ctx);
-		if (id) Support.assert(await Group.exists({ _id: Support.id(id), account: ctx.account }).session(session), 'Group not found', 404);
+		if (id) Support.assert(await Group.exists({ _id: Support.id(id), account: ctx.account }).session(session).read('primary'), 'Group not found', 404);
 		if (body.deleted) await Group.deleteOne({ _id: id, account: ctx.account }, { session });
 		else {
 			Support.assert(Array.isArray(body.users) && body.users.length <= 1000, 'Invalid group members');
 			const users = [...new Set(body.users.map(Support.id))];
-			Support.assert(await Member.countDocuments({ account: ctx.account, user: { $in: users } }).session(session) === users.length, 'Member not in account');
+			Support.assert(await Member.countDocuments({ account: ctx.account, user: { $in: users } }).session(session).read('primary') === users.length, 'Member not in account');
 			const group = await Group.findOneAndUpdate({ _id: id || new Account()._id, account: ctx.account }, { $set: { name: Support.text(body.name), users } }, { upsert: !id, returnDocument: 'after', session }).lean();
 			await Support.change(ctx.account, null, 'membership', session);
 			return { group };

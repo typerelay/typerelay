@@ -16,17 +16,17 @@ export class Support {
 	static equal(a, b) { return String(a) === String(b); }
 	static async context(user, account, session) {
 		Support.id(String(account));
-		const member = await Member.findOne({ user, account }).session(session || null).lean();
+		const member = await Member.findOne({ user, account }).session(session || null).read(session ? 'primary' : 'secondaryPreferred').lean();
 		Support.assert(member, 'Account access denied', 403);
 		// Reads only need the availability check below; deletion drains leases held by writes.
 		if (!AccountAccess.storage.getStore()?.read) await (session ? AccountAccess.fence(account, session) : AccountAccess.acquire(account));
-		const record = await Account.findById(account).session(session || null).lean();
+		const record = await Account.findById(account).session(session || null).read(session ? 'primary' : 'secondaryPreferred').lean();
 		Support.assert(record, 'Account missing', 404);
 		AccountAccess.assert(record);
 		const entitlements = Billing.entitlements(record);
 		if (!entitlements.capabilities.team && member.role !== 'owner') throw new Fault(403, 'This account requires Pro or Team', 'plan_required', { capability: 'people', upgrade_url: '/#settings-subscription' });
 		if (!await Billing.memberAllowed(record, member, session)) throw new Fault(403, 'This membership exceeds the account seat capacity. Ask the owner to add seats or remove extra members.', 'plan_limit', { resource: 'people', upgrade_url: '/#settings-subscription' });
-		const groups = await Group.find({ account, users: user }).session(session || null).lean();
+		const groups = await Group.find({ account, users: user }).session(session || null).read(session ? 'primary' : 'secondaryPreferred').lean();
 		return { user: String(user), account: String(account), role: member.role, groups: groups.map(group => String(group._id)), plan: record.plan || 'free', entitlements };
 	}
 	static admin(ctx) { return ['owner', 'admin'].includes(ctx.role); }

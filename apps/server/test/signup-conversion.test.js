@@ -26,7 +26,7 @@ class Fixture {
 	static ticket = null;
 	static cookie = '';
 	static owner = true;
-	static query(value) { const query = { lean: async () => value, session: () => query, select: () => query }; return query; }
+	static query(value) { const query = { lean: async () => value, session: () => query, read: () => query, select: () => query }; return query; }
 	static async http(path, body, csrf, host = 'app.typerelay.com') {
 		return new Promise((resolve, reject) => {
 			const req = request({ hostname: '127.0.0.1', port: Fixture.server.address().port, path, method: body ? 'POST' : 'GET', headers: { Host: host, 'X-Forwarded-Proto': 'https', Cookie: Fixture.cookie, ...(body ? { 'Content-Type': 'application/json' } : {}), ...(csrf ? { 'X-CSRF-Token': csrf } : {}) } }, res => {

@@ -37,7 +37,7 @@
 
 ## Code and UI conventions
 - Use `pnpm`. Keep log statements and variable declarations on single lines; collapse unnecessarily wrapped calls and conditions.
-- Use `objectid` for ObjectID fields in Mongoose models. Use `.lean()` for queries unless the returned document must be saved. `secondaryPreferred` is never the explanation for MongoDB writes failing. Never use primary reads (`.read('primary')`, `primaryQuery`, or `readPreference: 'primary'`), including to fix stale data after a write; merge the write result into the follow-up read instead. Typesense cannot filter empty strings.
+- Use `objectid` for ObjectID fields in Mongoose models. Use `.lean()` for queries unless the returned document must be saved. Mongoose read preference is set per model with the schema `read` option (`{ 'read': 'secondaryPreferred' }`); never add query or connection read preferences or primary-read helpers, and never treat replica lag or secondary reads as the cause of a bug. Transaction reads chain `.session(session).read('primary')` on one line. To use data just written, use the write result instead of reading again. Typesense cannot filter empty strings.
 - Pug uses tabs, not spaces. Use `span`/`div` for text, never `|`. Render frontend HTML through Pug templates in `views/ajax`, not JavaScript strings.
 - Forms: save/submit right, cancel/abort left; no placeholders; use `-sm` controls except checkboxes/radios. Vertically center controls in rows; `form-check-input` uses `h-20px w-30px`.
 - Headers: page `h1`, section `h2`, subsection `h3`, title `h6`. Spacing: main elements `mb-5`, fields `mb-3`, buttons `mx-3`/`ms-3`/`me-3`.

@@ -43,9 +43,9 @@ export class Statistics {
 		const malformed = [...discarded];
 		await AccountAccess.write(ctx.account, async session => {
 			accepted.length = 0; discarded.splice(0, discarded.length, ...malformed);
-			const libraries = new Map((await Library.find({ account: ctx.account, _id: { $in: events.map(event => event.library) } }).session(session).lean()).map(row => [String(row._id), row]));
-			const snippets = new Set((await Snippet.find({ account: ctx.account, id: { $in: events.map(event => event.snippet) } }).select('id library').session(session).lean()).map(row => row.id + ':' + row.library));
-			const previous = new Set((await UsageEvent.find({ account: ctx.account, user: ctx.user, event_id: { $in: events.map(event => event.event_id) } }).select('event_id').session(session).lean()).map(row => row.event_id));
+			const libraries = new Map((await Library.find({ account: ctx.account, _id: { $in: events.map(event => event.library) } }).session(session).read('primary').lean()).map(row => [String(row._id), row]));
+			const snippets = new Set((await Snippet.find({ account: ctx.account, id: { $in: events.map(event => event.snippet) } }).select('id library').session(session).read('primary').lean()).map(row => row.id + ':' + row.library));
+			const previous = new Set((await UsageEvent.find({ account: ctx.account, user: ctx.user, event_id: { $in: events.map(event => event.event_id) } }).select('event_id').session(session).read('primary').lean()).map(row => row.event_id));
 			const inserts = [];
 			for (const event of events) {
 				if (previous.has(event.event_id)) { accepted.push(event.event_id); continue; }

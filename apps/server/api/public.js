@@ -94,7 +94,7 @@ export class PublicApi {
 			Support.assert(!validate || validate(req.body), 'Invalid request: ' + (validate?.errors?.map(error => error.instancePath + " " + error.message).join('; ') || 'body required'));
 			const result = operation.mutation ? await Libraries.mutate(req.ctx, req.body.operation_id, { operation: operation.id, params: req.params, body: req.body }, async (ctx, session) => {
 				// Recheck grant revocation/scopes inside the same write transaction.
-				const grant = await Integration.findOne({ _id: req.ctx.credential, revoked: false, $or: [{ expires: { $gt: new Date() } }, { kind: 'pat', expires: { $type: 'null' } }] }).session(session).lean();
+				const grant = await Integration.findOne({ _id: req.ctx.credential, revoked: false, $or: [{ expires: { $gt: new Date() } }, { kind: 'pat', expires: { $type: 'null' } }] }).session(session).read('primary').lean();
 				Support.assert(grant?.scopes.includes(operation.scope), 'Integration revoked or scope removed', 403);
 				return { ...await PublicApi.run(operation.id, ctx, req.params, req.body, req.query, session), api_scope: operation.scope };
 			}) : await PublicApi.run(operation.id, req.ctx, req.params, req.body, req.query);

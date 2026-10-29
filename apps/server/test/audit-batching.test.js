@@ -15,7 +15,7 @@ class Fixture {
 	static ctx = { account: '0123456789abcdef01234567', user: '1123456789abcdef01234567', role: 'owner', groups: [] };
 	static library = { _id: '2123456789abcdef01234567', account: Fixture.ctx.account, creator: Fixture.ctx.user, state: 'active', shared: false, members: [], groups: [], revision: 1 };
 	static image() { return { content: { version: 2, type: 'rich_text', markdown: '![](https://example.test/image.png)' } }; }
-	static query(rows) { return { session() { return this; }, select() { return this; }, sort() { return this; }, lean: async () => rows, then: (resolve, reject) => Promise.resolve(rows).then(resolve, reject) }; }
+	static query(rows) { return { session() { return this; }, read() { return this; }, select() { return this; }, sort() { return this; }, lean: async () => rows, then: (resolve, reject) => Promise.resolve(rows).then(resolve, reject) }; }
 	static transaction(t) {
 		t.mock.method(mongoose.connection, 'transaction', async action => action({ transaction: true }));
 		t.mock.method(Account, 'updateOne', async () => ({ matchedCount: 1 }));

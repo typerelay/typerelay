@@ -105,9 +105,9 @@ export class Security {
 		await mongoose.connection.transaction(async session => {
 			const ticket = await Ticket.findOneAndDelete({ hash: Support.hash(Support.text(req.body.token, 256)), kind: 'email-change', 'data.user': req.session.user, expires: { $gt: new Date() } }, { session }).lean();
 			Support.assert(ticket, 'Email link expired or already used', 400);
-			const user = await User.findById(req.session.user).session(session).lean();
+			const user = await User.findById(req.session.user).session(session).read('primary').lean();
 			Support.assert(user.email === ticket.data.old && (user.auth_version || 0) === ticket.data.version, 'Email link no longer valid');
-			Support.assert(!await User.exists({ email: ticket.email }).session(session), 'Email address unavailable', 409);
+			Support.assert(!await User.exists({ email: ticket.email }).session(session).read('primary'), 'Email address unavailable', 409);
 			await User.updateOne({ _id: user._id }, { $set: { email: ticket.email } }, { session });
 			await Ticket.deleteMany({ email: user.email, kind: { $in: ['login', 'password-reset', 'email-change'] } }, { session });
 		});
@@ -130,7 +130,7 @@ export class Security {
 		await mongoose.connection.transaction(async session => {
 			const ticket = await Ticket.findOneAndDelete({ hash: Support.hash(Support.text(req.body.token, 256)), kind: 'password-reset', expires: { $gt: new Date() } }, { session }).lean();
 			Support.assert(ticket, 'Reset link expired or already used');
-			const user = await User.findById(ticket.data.user).session(session).lean();
+			const user = await User.findById(ticket.data.user).session(session).read('primary').lean();
 			Support.assert(user && user.email === ticket.email && (user.auth_version || 0) === ticket.data.version, 'Reset link no longer valid');
 			result = await Security.resetPassword(user._id, session);
 			await Ticket.deleteMany({ email: user.email, kind: 'login' }, { session });
@@ -337,11 +337,11 @@ export class Security {
 			return res.render('sso-message', { title: 'SSO test successful', message: 'Your identity provider verified your administrator identity. Return to Single sign-on settings to enable SSO or update its policy.', destination: `/?account=${account._id}#settings-sso` });
 		}
 		const user = await AccountAccess.write(account._id, async session => {
-			const current = await Account.findById(account._id).session(session).lean();
+			const current = await Account.findById(account._id).session(session).read('primary').lean();
 			Security.checkSso(current, data.revision);
 			let user = await User.findOneAndUpdate({ email: data.email, 'deletion.requested_at': null }, { $inc: { activity_sequence: 1 } }, { session, returnDocument: 'after' }).lean();
-			Support.assert(user || !await User.exists({ email: data.email }).session(session), 'Account deletion is in progress', 403);
-			if (!user || !await Member.exists({ account: account._id, user: user._id }).session(session)) {
+			Support.assert(user || !await User.exists({ email: data.email }).session(session).read('primary'), 'Account deletion is in progress', 403);
+			if (!user || !await Member.exists({ account: account._id, user: user._id }).session(session).read('primary')) {
 				Support.assert(current.sso.provision, 'Ask an administrator to add you to this account', 403);
 				// Existing TypeRelay users join only by accepting a team invitation; the IdP admin can also mint invites, so neither alone may claim them.
 				if (user) throw new Fault(403, 'This email already has a TypeRelay account. Accept the team invitation from your email first, then sign in with SSO.', 'sso_invite_required');

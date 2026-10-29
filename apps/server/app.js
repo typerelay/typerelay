@@ -426,7 +426,7 @@ export class Server {
 		let result;
 		await mongoose.connection.transaction(async session => {
 			const libraries = await Libraries.list(ctx, session);
-			const account = await Account.findById(ctx.account).select('sequence').session(session).lean();
+			const account = await Account.findById(ctx.account).select('sequence').session(session).read('primary').lean();
 			result = { personal_sequence: account.sequence, personal_fragments: libraries.flatMap(library => library.snippets.map(snippet => ({ library: library._id, snippet, html: pug.renderFile('./views/ajax/snippet.pug', { snippet, library }) }))) };
 		}, { readConcern: { level: 'snapshot' } });
 		return result;
