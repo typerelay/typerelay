@@ -50,7 +50,7 @@ impl Cli {
                 dirty = true;
             }
         }
-        app.persist_draft(false)?;
+        app.quit_preserving()?;
         Ok(())
     }
 }

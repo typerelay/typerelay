@@ -206,7 +206,7 @@ impl App {
         match destination {
             Destination::Recovery => { self.show_recovery()?; }
             Destination::Trash => { self.load_trash()?; self.screen = Screen::Trash; }
-            Destination::Quit => { self.persist_draft(false)?; self.cancel_operation(); self.quit = true; },
+            Destination::Quit => self.quit_preserving()?,
             Destination::Files => { self.reload_files()?; self.file_state.select(Some(0)); self.global_edit = false; self.screen = Screen::Files; }
             Destination::Browse => self.screen = if self.file.is_some() { Screen::Browse } else { Screen::Files },
             Destination::Settings => {
@@ -583,7 +583,7 @@ impl App {
                     return if key.code == KeyCode::Char(expected) { self.confirm(0) } else if matches!(key.code, KeyCode::Esc | KeyCode::Enter | KeyCode::Char('c')) { self.confirm(1) } else { Ok(()) };
                 }
                 if self.pending_delete.is_some() { return match key.code { KeyCode::Char('d') => self.confirm(0), KeyCode::Esc | KeyCode::Enter | KeyCode::Char('c') => self.confirm(1), _ => Ok(()) }; }
-                return match key.code { KeyCode::Char('q') => { self.persist_draft(false)?; self.cancel_operation(); self.quit=true; Ok(()) }, KeyCode::Char('s') => self.confirm(0), KeyCode::Char('d') => self.confirm(1), KeyCode::Char('c') | KeyCode::Esc | KeyCode::Enter => self.confirm(2), _ => Ok(()) };
+                return match key.code { KeyCode::Char('q') => self.quit_preserving(), KeyCode::Char('s') => self.confirm(0), KeyCode::Char('d') => self.confirm(1), KeyCode::Char('c') | KeyCode::Esc | KeyCode::Enter => self.confirm(2), _ => Ok(()) };
             }
             if matches!(key.code, KeyCode::Char('c' | 'C')) && key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER | KeyModifiers::META) {
                 return if self.can_copy() { self.copy_current() } else { Ok(()) };

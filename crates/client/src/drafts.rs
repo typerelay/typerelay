@@ -124,4 +124,16 @@ mod tests {
     fn draft_base_and_destination_follow_library_id_remapping() {
         let root=tempfile::tempdir().unwrap();let db=Database::open(root.path()).unwrap();let file=db.create("Local").unwrap();let draft=Draft::new(&file,None,entry("New"),None);db.put_draft(&Value::Null,&draft,None).unwrap();db.remap(&file.id,"remote-id").unwrap();let draft=db.drafts(&Value::Null).unwrap().remove(0);assert_eq!(draft.file.id,"remote-id");assert_eq!(draft.origin_library,"remote-id");db.save_draft(&Value::Null,&draft,false).unwrap();assert_eq!(db.editor_id("remote-id").unwrap().entries.len(),1);
     }
+    #[test]
+    fn moved_snippet_drafts_are_scrubbed_by_snippet_or_destination_library_purge() {
+        for whole_library in [false,true] {
+            let root=tempfile::tempdir().unwrap();let db=Database::open(root.path()).unwrap();let source=db.import("Source","matches: [{replace: Original}]").unwrap();let destination=db.create("Destination").unwrap();let unrelated=db.import("Unrelated","matches: [{replace: Keep}]").unwrap();let draft=Draft::new(&source,Some(0),entry("Forbidden after purge"),None);db.put_draft(&Value::Null,&draft,None).unwrap();let keep=Draft::new(&unrelated,None,entry("Keep"),None);db.put_draft(&Value::Null,&keep,None).unwrap();
+            for file in [&source,&unrelated] {db.recover(&file.id,Some(&file.ids[0]),&file.entries[0].value(),"Rejected edit").unwrap();db.connection.execute("INSERT INTO base_snippets(id,library,data) VALUES(?1,?2,?3)",params![file.ids[0],file.id,db.records(&file.id).unwrap()[0].to_string()]).unwrap();}db.set_meta("conflicts",&json!([{"library":source.id,"snippet":source.ids[0],"local":source.entries[0].value()},{"library":unrelated.id,"snippet":unrelated.ids[0],"local":unrelated.entries[0].value()}])).unwrap();
+            db.edit_move(&source,0,source.entries[0].clone(),&destination.id).unwrap();let moved=db.editor("Destination").unwrap();
+            if whole_library {let library=db.library(&destination.id).unwrap();db.trash_action(&json!({"type":"library","id":destination.id,"library":destination.id,"revision":library["revision"]}),"trash").unwrap();}
+            else {db.edit(&moved,Some(0),None).unwrap();}
+            db.empty(&db.trash().unwrap()).unwrap();let remaining=db.drafts(&Value::Null).unwrap();assert_eq!(remaining.len(),1);assert_eq!(remaining[0].id,keep.id);assert_eq!(db.recovery().unwrap().iter().map(|row|row["snippet"].clone()).collect::<Vec<_>>(),vec![json!(unrelated.ids[0])]);assert_eq!(db.meta("conflicts").unwrap().unwrap()[0]["snippet"],unrelated.ids[0]);assert_eq!(db.meta("conflicts").unwrap().unwrap().as_array().unwrap().len(),1);assert_eq!(db.connection.query_row("SELECT count(*) FROM base_snippets WHERE id=?1",[&source.ids[0]],|row|row.get::<_,i64>(0)).unwrap(),0);assert_eq!(db.connection.query_row("SELECT count(*) FROM base_snippets",[],|row|row.get::<_,i64>(0)).unwrap(),1);assert!(db.save_draft(&Value::Null,&draft,true).is_err());assert!(db.put_draft(&Value::Null,&draft,None).is_err());
+        }
+    }
+
 }

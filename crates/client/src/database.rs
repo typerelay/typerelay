@@ -415,8 +415,10 @@ impl Database {
         Ok(result)
     }
     fn scrub(&self, library: &str, snippet: Option<&str>) -> Result<()> {
-        self.connection.execute("DELETE FROM tui_drafts WHERE (json_extract(data,'$.file.id')=?1 AND (?2 IS NULL OR json_extract(data,'$.file.ids[0]')=?2)) OR (json_extract(data,'$.origin_library')=?1 AND (?2 IS NULL OR json_extract(data,'$.origin_snippet')=?2))", params![library,snippet])?;
-        for mut record in self.records(library)? {
+        self.connection.execute("DELETE FROM tui_drafts WHERE (?2 IS NOT NULL AND (json_extract(data,'$.file.ids[0]')=?2 OR json_extract(data,'$.origin_snippet')=?2)) OR (?2 IS NULL AND (json_extract(data,'$.file.id')=?1 OR json_extract(data,'$.origin_library')=?1 OR json_extract(data,'$.file.ids[0]') IN (SELECT id FROM snippets WHERE library=?1) OR json_extract(data,'$.origin_snippet') IN (SELECT id FROM snippets WHERE library=?1)))", params![library,snippet])?;
+        let records=self.records(library)?;
+        let purged_ids:std::collections::BTreeSet<String>=records.iter().filter_map(|record|record["id"].as_str().map(str::to_owned)).collect();
+        for mut record in records {
             if snippet.is_some_and(|id| record["id"] != id) { continue; }
             let id=record["id"].as_str().unwrap_or("");
             let mut personal=self.meta("personal_abbreviations")?.unwrap_or(json!([]));
@@ -427,11 +429,11 @@ impl Database {
             record = json!({"id":record["id"],"state":"purged","revision":record["revision"].as_i64().unwrap_or(0)+1});
             self.put_record(library, &record)?;
         }
-        self.connection.execute("DELETE FROM base_snippets WHERE library=?1 AND (?2 IS NULL OR id=?2)", params![library,snippet])?;
+        self.connection.execute("DELETE FROM base_snippets WHERE (?2 IS NULL AND (library=?1 OR id IN (SELECT id FROM snippets WHERE library=?1))) OR id=?2", params![library,snippet])?;
         if snippet.is_none() { self.connection.execute("DELETE FROM base_libraries WHERE id=?1", [library])?; }
-        self.connection.execute("DELETE FROM recovery WHERE library=?1 AND (?2 IS NULL OR snippet=?2)", params![library, snippet])?;
+        self.connection.execute("DELETE FROM recovery WHERE (?2 IS NULL AND (library=?1 OR snippet IN (SELECT id FROM snippets WHERE library=?1))) OR snippet=?2", params![library, snippet])?;
         let mut conflicts = self.meta("conflicts")?.unwrap_or(json!([]));
-        if let Some(rows) = conflicts.as_array_mut() { rows.retain(|row| row["library"] != library || snippet.is_some_and(|id| row["snippet"] != id)); }
+        if let Some(rows) = conflicts.as_array_mut() { rows.retain(|row| if let Some(id)=snippet {row["snippet"]!=id}else{row["library"]!=library&&!row["snippet"].as_str().is_some_and(|id|purged_ids.contains(id))}); }
         self.set_meta("conflicts", &conflicts)?;
         Ok(())
     }

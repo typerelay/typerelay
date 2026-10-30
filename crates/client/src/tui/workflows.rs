@@ -41,6 +41,9 @@ impl Workflow {
 impl App {
     pub(super) fn refresh_draft(&mut self) -> Result<()> {
         self.check_identity()?;
+        self.refresh_saved_draft()
+    }
+    fn refresh_saved_draft(&mut self) -> Result<()> {
         let Some(previous)=self.draft_record.clone() else{return Ok(());};
         let db=Database::open(&self.store.directory)?;
         if let Some(stored)=db.drafts(&self.identity)?.into_iter().find(|row|row.id==previous.id) {
@@ -50,7 +53,7 @@ impl App {
             self.draft_record=Some(stored);
         } else {
             self.draft_record=None;self.draft_lock=None;self.file=None;self.original_entry=None;self.title=TextArea::default();self.trigger=TextArea::default();self.expansion=TextArea::default();self.variables.clear();self.workflow=None;self.pending=None;self.screen=Screen::Files;
-            self.show_drafts()?;self.message("Draft removed by permanent purge or another operation",true);
+            if !self.quit {self.show_drafts()?;}self.message("Draft removed by permanent purge or another operation",true);
         }
         Ok(())
     }
@@ -58,7 +61,8 @@ impl App {
     pub(super) fn check_identity(&self) -> Result<()> { anyhow::ensure!(Draft::identity(self.settings.config_dir())?==self.identity,"Connection changed in another session. Quit and reopen; drafts remain isolated by account and server");Ok(()) }
     pub(crate) fn persist_draft(&mut self, force: bool) -> Result<()> {
         if !matches!(self.effective_screen(),Screen::Edit|Screen::Image) || self.file.is_none() || (!force && !self.dirty() && self.draft_record.is_none()) { return Ok(()); }
-        self.refresh_draft()?;
+        if !self.quit {self.check_identity()?;}
+        self.refresh_saved_draft()?;
         if self.file.is_none(){return Ok(());}
         let entry=self.draft();
         if self.draft_record.as_ref().is_some_and(|draft|draft.entry==entry&&draft.destination==self.move_destination) { return Ok(()); }
@@ -67,6 +71,12 @@ impl App {
         draft.entry=entry;draft.destination=self.move_destination.clone();draft.updated_at=chrono::Utc::now().to_rfc3339();
         Database::open(&self.store.directory)?.put_draft(&self.identity,&draft,self.draft_record.as_ref())?;
         self.draft_record=Some(draft);
+        Ok(())
+    }
+    pub(crate) fn quit_preserving(&mut self) -> Result<()> {
+        self.quit=true;self.cancel_operation();
+        self.persist_draft(false).context("Quitting: latest edits were NOT stored; existing durable drafts remain")?;
+        self.message(if self.draft_record.is_some(){"Draft preserved under its original account; quitting"}else{"Quitting"},false);
         Ok(())
     }
     pub(super) fn discard_active(&mut self) -> Result<()> {
@@ -198,7 +208,7 @@ impl App {
         }else{event};
         let key=if let Event::Key(key)=&event { if key.kind==KeyEventKind::Release {self.workflow=Some(view);return Ok(());}Some(*key) } else {None};
         let code=key.map(|key|key.code);
-        if key.is_some_and(|key|key.modifiers.contains(KeyModifiers::CONTROL)&&key.code==KeyCode::Char('q')) || (!matches!(view.mode,Mode::Form(_)|Mode::Commands)&&code==Some(KeyCode::Char('q'))) {self.persist_draft(false)?;self.cancel_operation();self.quit=true;self.workflow=Some(view);return Ok(());}
+        if key.is_some_and(|key|key.modifiers.contains(KeyModifiers::CONTROL)&&key.code==KeyCode::Char('q')) || (!matches!(view.mode,Mode::Form(_)|Mode::Commands)&&code==Some(KeyCode::Char('q'))) {self.workflow=Some(view);return self.quit_preserving();}
         if code==Some(KeyCode::Esc) {
             if self.operation.is_some() {self.cancel_operation();self.message("Authentication cancellation requested",false);}
             if matches!(view.mode,Mode::Drafts) {self.workflow=Some(view);return Ok(());}
@@ -375,6 +385,19 @@ mod tests {
     #[test]
     fn live_editor_adopts_enrollment_remap_without_losing_new_keystrokes() {
         let root=tempfile::tempdir().unwrap();let mut app=app(root.path());new_draft(&mut app,"Before remap");let db=Database::open(&app.store.directory).unwrap();let old=app.file.as_ref().unwrap().id.clone();db.remap(&old,"server-library").unwrap();app.handle(Event::Paste(" after remap".into()));assert!(!app.error,"{}",app.status);assert_eq!(app.file.as_ref().unwrap().id,"server-library");assert_eq!(db.drafts(&Value::Null).unwrap()[0].entry.replace,"Before remap after remap");key(&mut app,KeyCode::Char('s'),KeyModifiers::CONTROL);assert_eq!(db.editor_id("server-library").unwrap().entries[0].replace,"Before remap after remap");assert!(db.drafts(&Value::Null).unwrap().is_empty());
+    }
+
+    #[test]
+    fn changed_account_can_quit_and_preserve_latest_text_only_under_original_identity() {
+        for through_confirmation in [true,false] {
+            let root=tempfile::tempdir().unwrap();std::fs::create_dir(root.path().join("sync")).unwrap();let path=root.path().join("sync/credentials.json");std::fs::write(&path,json!({"server":"https://one.invalid","account":"one"}).to_string()).unwrap();let mut app=app(root.path());new_draft(&mut app,"Before account change");let original=app.identity.clone();std::fs::write(&path,json!({"server":"https://two.invalid","account":"two"}).to_string()).unwrap();app.handle(Event::Paste(" plus latest text".into()));assert!(app.error);
+            if through_confirmation {key(&mut app,KeyCode::Char('q'),KeyModifiers::CONTROL);assert_eq!(app.screen,Screen::Confirm);key(&mut app,KeyCode::Char('q'),KeyModifiers::NONE);}else{key(&mut app,KeyCode::Char('p'),KeyModifiers::CONTROL);key(&mut app,KeyCode::Char('q'),KeyModifiers::CONTROL);}
+            assert!(app.quit);assert!(!app.error,"{}",app.status);let db=Database::open(&app.store.directory).unwrap();assert_eq!(db.drafts(&original).unwrap()[0].entry.replace,"Before account change plus latest text");assert!(db.drafts(&Draft::identity(root.path()).unwrap()).unwrap().is_empty());app.quit_preserving().unwrap();
+        }
+    }
+    #[test]
+    fn quit_still_exits_after_storage_failure_without_claiming_latest_text_saved() {
+        let root=tempfile::tempdir().unwrap();let mut app=app(root.path());new_draft(&mut app,"Durable text");let db=Database::open(&app.store.directory).unwrap();db.connection.execute_batch("CREATE TRIGGER fail_exit BEFORE UPDATE ON tui_drafts BEGIN SELECT RAISE(ABORT,'disk failed'); END;").unwrap();app.handle(Event::Paste(" not durable".into()));key(&mut app,KeyCode::Char('q'),KeyModifiers::CONTROL);key(&mut app,KeyCode::Char('q'),KeyModifiers::NONE);assert!(app.quit);assert!(app.error);assert!(app.status.contains("NOT saved"));assert!(app.sync_status().contains("Latest changes NOT stored"));assert_eq!(db.drafts(&Value::Null).unwrap()[0].entry.replace,"Durable text");assert!(app.quit_preserving().is_err());
     }
 
 }

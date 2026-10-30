@@ -181,7 +181,6 @@ impl Sync {
                     let tokens = Self::response(self.client.post(format!("{server}/oauth/token")).json(&json!({"grant_type":"authorization_code","client_id":"typerelay-desktop","code":params.get("code"),"redirect_uri":redirect,"code_verifier":verifier})).send()?)?;
 					ensure!(!cancelled.load(Ordering::SeqCst),"Authentication cancelled");self.secret(&Credentials { server: server.into(), access_token: tokens["access_token"].as_str().context("Missing token")?.into(), refresh_token: tokens["refresh_token"].as_str().context("Missing token")?.into(), account:tokens["account"].as_str().map(str::to_owned), device:tokens["device"].as_str().map(str::to_owned) })?;
                     stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 37\r\nConnection: close\r\n\r\nTypeRelay connected. Close this tab.\n")?;
-                    println!("Connected. Enroll selected files with: typerelay enroll FILE.yml");
                     return Ok(());
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(100)),
