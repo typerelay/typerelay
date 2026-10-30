@@ -24,6 +24,7 @@ impl Database {
             CREATE TABLE IF NOT EXISTS outbox(seq INTEGER PRIMARY KEY AUTOINCREMENT,operation TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS recovery(id TEXT PRIMARY KEY,library TEXT,snippet TEXT,data TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS tui_drafts(id TEXT PRIMARY KEY,identity TEXT NOT NULL,data TEXT NOT NULL);
 			CREATE TABLE IF NOT EXISTS assets(id TEXT PRIMARY KEY,mime_type TEXT NOT NULL,size INTEGER NOT NULL,width INTEGER NOT NULL,height INTEGER NOT NULL,animated INTEGER NOT NULL DEFAULT 0,source_urls TEXT NOT NULL DEFAULT '[]',data BLOB NOT NULL,uploaded INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS snippet_assets(snippet TEXT NOT NULL,asset TEXT NOT NULL,PRIMARY KEY(snippet,asset));
             CREATE INDEX IF NOT EXISTS snippet_asset_asset ON snippet_assets(asset);")?;
@@ -240,12 +241,14 @@ impl Database {
         let mut statement = self.connection.prepare("SELECT name FROM libraries WHERE json_extract(data,'$.state')='active' ORDER BY name")?;
         Ok(statement.query_map([], |row| row.get(0))?.collect::<std::result::Result<_, _>>()?)
     }
+    pub fn editor_id(&self, id: &str) -> Result<OpenFile> { let name: String=self.connection.query_row("SELECT name FROM libraries WHERE id=?1",[id],|row|row.get(0))?; self.editor(&name) }
     pub fn editor(&self, name: &str) -> Result<OpenFile> {
         let (id, revision): (String, i64) = self.connection.query_row("SELECT id,version FROM libraries WHERE name=?1 AND json_extract(data,'$.state')='active'", [name], |row| Ok((row.get(0)?, row.get(1)?)))?;
         let records = self.records(&id)?;
         let entries = Self::entries(&records)?;
         let ids = records.iter().filter(|entry| entry["state"] == "active").map(|entry| entry["id"].as_str().unwrap().to_owned()).collect();
-        Ok(OpenFile { name: name.into(), entries, id, revision, ids })
+        let revisions = records.iter().filter(|entry| entry["state"] == "active").map(|entry| entry["revision"].as_i64().unwrap_or(0)).collect();
+        Ok(OpenFile { name: name.into(), entries, id, revision, ids, revisions })
     }
     fn name(value: &str) -> Result<String> { let name = value.trim(); ensure!(!name.is_empty() && name.len() <= 100 && !name.contains(['/', '\\', '\n', '\r']), "Use a library name without directories"); Ok(name.into()) }
     pub fn create(&self, name: &str) -> Result<OpenFile> {
@@ -272,8 +275,10 @@ impl Database {
     pub fn edit(&self, file: &OpenFile, index: Option<usize>, entry: Option<Match>) -> Result<OpenFile> {
         let transaction = if self.connection.is_autocommit() { Some(rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?) } else { None };
         self.editable(&file.id)?;
-        let current = self.editor(&file.name)?;
-        ensure!(current.revision == file.revision, "Library changed outside the TUI; draft kept. Reopen before saving");
+        let info = self.library(&file.id)?;
+        ensure!(info["state"] == "active", "Library is unavailable; draft kept");
+        let current = self.editor_id(&file.id)?;
+        if let Some(index) = index { self.check_target(file, index)?; }
         if let Some(index) = index { ensure!(index < file.ids.len(), "Snippet no longer exists"); }
         let mut library = self.library(&file.id)?;
         let id = index.map(|index| file.ids[index].clone()).unwrap_or_else(|| Uuid::new_v4().to_string());
@@ -291,11 +296,11 @@ impl Database {
             self.queue(&json!({"kind":"edit","library":file.id,"body":{"operation_id":Uuid::new_v4().to_string(),"base_revision":library["revision"],"changes":[{"id":id,"base_revision":base,"base":old,"value":value}]}}))?;
         }
         library["revision"] = json!(library["revision"].as_i64().unwrap_or(1) + 1);
-        self.put_library(&library, &file.name, self.synced(&file.id)?)?;
+        self.put_library(&library, &current.name, self.synced(&file.id)?)?;
         // Existing downloaded collisions stay paused instead of blocking unrelated edits.
         self.validated_snapshot()?;
         if let Some(transaction) = transaction { transaction.commit()?; }
-        self.editor(&file.name)
+        self.editor(&current.name)
     }
     pub fn destinations(&self, source: &str) -> Result<Vec<Value>> {
         let synced = self.synced(source)?;
@@ -318,15 +323,21 @@ impl Database {
     }
 	pub fn merge_destinations(&self,source:&str)->Result<Vec<Value>>{let library=self.library(source)?;ensure!(library["state"]=="active","Source library is unavailable");ensure!(library["permissions"]["manage"]==true,"Manage permission required to merge this library");let merging=self.pending_merges()?;ensure!(!merging.contains(source),"Library merge is pending");let synced=self.synced(source)?;let rows=self.libraries()?.into_iter().filter(|destination|{let id=destination["_id"].as_str().unwrap_or("");id!=source&&destination["state"]=="active"&&destination["permissions"]["edit"]==true&&!merging.contains(id)&&!(synced&&!self.synced(id).unwrap_or(false))}).collect();Ok(rows)}
 	pub fn merge(&self,source:&str,destination:&str)->Result<bool>{let transaction=rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?;ensure!(source!=destination,"Choose another library");let mut source_library=self.library(source)?;let destination_library=self.library(destination)?;ensure!(source_library["state"]=="active"&&destination_library["state"]=="active","Library is unavailable");ensure!(source_library["permissions"]["manage"]==true,"Manage permission required to merge this library");ensure!(destination_library["permissions"]["edit"]==true,"Destination library is read-only");ensure!(!self.pending_merge(source)?&&!self.pending_merge(destination)?,"A library merge is already pending");let records:Vec<Value>=self.records(source)?.into_iter().filter(|record|record["state"]=="active").collect();ensure!(!records.is_empty(),"Source library has no active snippets");ensure!(records.len()<=10000,"Library merge exceeds 10,000 snippets");let source_synced=self.synced(source)?;let destination_synced=self.synced(destination)?;ensure!(!source_synced||destination_synced,"Upload the destination before merging a synced library into it");let queued=source_synced||destination_synced;if !queued{let items=records.iter().map(|record|json!({"id":record["id"],"base_revision":record["revision"]})).collect::<Vec<_>>();self.batch_inner(source,Some(destination),&items,false)?;source_library=self.library(source)?;Self::mark_trash(&mut source_library,true);source_library["revision"]=json!(source_library["revision"].as_i64().unwrap_or(0)+1);self.connection.execute("UPDATE libraries SET data=?2,version=version+1 WHERE id=?1",params![source,source_library.to_string()])?;}else if !source_synced{let changes=records.iter().map(|record|json!({"id":record["id"],"base_revision":Value::Null,"base":Value::Null,"value":Self::sync_value(record)})).collect::<Vec<_>>();self.queue(&json!({"kind":"merge_local","library":destination,"source":source,"records":records,"body":{"operation_id":Uuid::new_v4().to_string(),"base_revision":destination_library["revision"],"changes":changes}}))?;}else{let items=records.iter().map(|record|json!({"id":record["id"],"base_revision":record["revision"]})).collect::<Vec<_>>();self.queue(&json!({"kind":"merge_synced","library":source,"source":source,"destination":destination,"records":records,"move_body":{"operation_id":Uuid::new_v4().to_string(),"action":"move","source_library":source,"destination_library":destination,"items":items},"trash_operation_id":Uuid::new_v4().to_string()}))?;}self.set_meta("last_failure",&json!(""))?;self.validate_transaction()?;transaction.commit()?;Ok(queued)}
+    fn check_target(&self, file: &OpenFile, index: usize) -> Result<Value> {
+        let id = file.ids.get(index).context("Snippet no longer exists")?;
+        let record = self.records(&file.id)?.into_iter().find(|row|row["id"]==*id && row["state"]=="active").context("Snippet moved or removed; review the draft or save as new")?;
+        ensure!(record["revision"].as_i64()==file.revisions.get(index).copied() && Self::entries(std::slice::from_ref(&record))?.first()==file.entries.get(index), "Snippet changed; review the current version or save the draft as new");
+        Ok(record)
+    }
     pub fn edit_move(&self, file: &OpenFile, index: usize, entry: Match, destination: &str) -> Result<OpenFile> {
-        let transaction = rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?;
-        let id = file.ids.get(index).context("Snippet missing")?;
-        let mut items = self.batch_items(file, std::slice::from_ref(id))?;
+        let transaction = if self.connection.is_autocommit() { Some(rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?) } else { None };
+        let record = self.check_target(file, index)?;
+        let mut items = vec![json!({"id":record["id"],"base_revision":record["revision"]})];
         items[0]["value"] = entry.value();
         self.batch_inner(&file.id, Some(destination), &items, true)?;
         self.validate_transaction()?;
-        transaction.commit()?;
-        self.editor(&file.name)
+        if let Some(transaction) = transaction { transaction.commit()?; }
+        self.editor_id(&file.id)
     }
     fn batch_inner(&self, source: &str, destination: Option<&str>, items: &[Value], enqueue: bool) -> Result<()> {
         ensure!(!items.is_empty() && items.len() <= 10000, "Select snippets first");
@@ -404,6 +415,7 @@ impl Database {
         Ok(result)
     }
     fn scrub(&self, library: &str, snippet: Option<&str>) -> Result<()> {
+        self.connection.execute("DELETE FROM tui_drafts WHERE (json_extract(data,'$.file.id')=?1 AND (?2 IS NULL OR json_extract(data,'$.file.ids[0]')=?2)) OR (json_extract(data,'$.origin_library')=?1 AND (?2 IS NULL OR json_extract(data,'$.origin_snippet')=?2))", params![library,snippet])?;
         for mut record in self.records(library)? {
             if snippet.is_some_and(|id| record["id"] != id) { continue; }
             let id=record["id"].as_str().unwrap_or("");
@@ -478,15 +490,18 @@ impl Database {
                 for record in self.records(&id)? { if record["state"] == "trashed" && Self::expired(&record) { self.scrub(&id, record["id"].as_str())?; } }
             }
         }
-		let cutoff=(Utc::now()-Duration::days(30)).timestamp();self.connection.execute("DELETE FROM assets WHERE created_at<=?1 AND NOT EXISTS(SELECT 1 FROM snippet_assets WHERE asset=assets.id) AND NOT EXISTS(SELECT 1 FROM base_snippets WHERE data LIKE '%'||assets.id||'%') AND NOT EXISTS(SELECT 1 FROM outbox WHERE operation LIKE '%'||assets.id||'%') AND NOT EXISTS(SELECT 1 FROM recovery WHERE data LIKE '%'||assets.id||'%')",[cutoff])?;
+		let cutoff=(Utc::now()-Duration::days(30)).timestamp();self.connection.execute("DELETE FROM assets WHERE created_at<=?1 AND NOT EXISTS(SELECT 1 FROM snippet_assets WHERE asset=assets.id) AND NOT EXISTS(SELECT 1 FROM base_snippets WHERE data LIKE '%'||assets.id||'%') AND NOT EXISTS(SELECT 1 FROM outbox WHERE operation LIKE '%'||assets.id||'%') AND NOT EXISTS(SELECT 1 FROM recovery WHERE data LIKE '%'||assets.id||'%') AND NOT EXISTS(SELECT 1 FROM tui_drafts WHERE data LIKE '%'||assets.id||'%')",[cutoff])?;
         transaction.commit()?;
         Ok(())
     }
     pub fn export(&self, name: &str, destination: &Path) -> Result<()> {
         let file = self.editor(name)?;
-        let manifest = Bridge::export(&file.entries)?;
+        self.export_entries(name, &file.entries, destination)
+    }
+    pub fn export_entries(&self, name: &str, entries: &[Match], destination: &Path) -> Result<()> {
+        let manifest = Bridge::export(entries)?;
         if !destination.to_string_lossy().ends_with(".typerelay.zip") { return Paths::atomic_write(destination, manifest.as_bytes(), true); }
-        let ids: std::collections::BTreeSet<String> = file.entries.iter().flat_map(|entry| entry.value()["content"]["assets"].as_array().cloned().unwrap_or_default()).filter_map(|id| id.as_str().map(str::to_owned)).collect();
+        let ids: std::collections::BTreeSet<String> = entries.iter().flat_map(|entry| entry.value()["content"]["assets"].as_array().cloned().unwrap_or_default()).filter_map(|id| id.as_str().map(str::to_owned)).collect();
         ensure!(ids.len() <= 998 && manifest.len() <= 16 * 1048576, "Bundle exceeds import limits");
         let mut metadata = serde_json::Map::new();
         let mut total = manifest.len();
@@ -592,8 +607,11 @@ impl Database {
     }
     pub fn remap(&self, old: &str, new: &str) -> Result<()> {
         if old == new { return Ok(()); }
-        self.connection.execute("UPDATE libraries SET id=?2 WHERE id=?1", params![old,new])?;
+        self.connection.execute("UPDATE libraries SET id=?2,data=json_set(data,'$._id',?2) WHERE id=?1", params![old,new])?;
         self.connection.execute("UPDATE snippets SET library=?2 WHERE library=?1", params![old,new])?;
+        self.connection.execute("UPDATE tui_drafts SET data=json_set(data,'$.origin_library',?2) WHERE json_extract(data,'$.origin_library')=?1",params![old,new])?;
+        self.connection.execute("UPDATE tui_drafts SET data=json_set(data,'$.file.id',?2) WHERE json_extract(data,'$.file.id')=?1",params![old,new])?;
+        self.connection.execute("UPDATE tui_drafts SET data=json_set(data,'$.destination',?2) WHERE json_extract(data,'$.destination')=?1",params![old,new])?;
         self.connection.execute("UPDATE base_libraries SET id=?2 WHERE id=?1", params![old,new])?;
         self.connection.execute("UPDATE base_snippets SET library=?2 WHERE library=?1", params![old,new])?;
         self.connection.execute("UPDATE usage_events SET event=json_set(event,'$.library',?2) WHERE json_extract(event,'$.library')=?1", params![old,new])?;
@@ -1122,8 +1140,11 @@ mod tests {
     fn atomic_import_duplicate_rejection_and_stale_editor_keep_data() {
         let fixture = Fixture::new(); let db = fixture.db();
         let file = db.create("Personal").unwrap();
-        let saved = db.edit(&file, None, Some(Fixture::entry("hi", "One\nTwo\t\n"))).unwrap();
-        assert!(db.edit(&file, None, Some(Fixture::entry("old", "Stale"))).is_err());
+        db.edit(&file, None, Some(Fixture::entry("hi", "One\nTwo\t\n"))).unwrap();
+        let saved = db.edit(&file, None, Some(Fixture::entry("old", "Unrelated addition"))).unwrap();
+        let stale = saved.clone();
+        let saved = db.edit(&saved, Some(0), Some(Fixture::entry("hi", "New version"))).unwrap();
+        assert!(db.edit(&stale, Some(0), Some(Fixture::entry("hi", "Stale"))).is_err());
         assert!(db.import("Collision", "matches: [{trigger: unique, replace: A}, {trigger: hi, replace: B}]").is_err());
         assert_eq!(db.names().unwrap(), vec!["Personal"]);
         assert_eq!(db.editor("Personal").unwrap().entries, saved.entries);

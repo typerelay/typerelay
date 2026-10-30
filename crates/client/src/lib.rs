@@ -37,3 +37,5 @@ pub mod panel_ipc;
 pub mod templates;
 pub mod clipboard_payload;
 pub mod assets;
+
+pub mod drafts;

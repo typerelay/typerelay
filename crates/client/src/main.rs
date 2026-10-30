@@ -107,7 +107,7 @@ impl Cli {
         let root = typerelay_client::editor::Paths::config_dir()?;
         match self.command {
             Commands::Connect { server, no_browser } => { let server = server.unwrap_or(typerelay_client::settings::SettingsStore::open(root.join("settings.yml"))?.settings.sync_url); typerelay_client::sync::Sync::new(root.clone(), root.join("snippets"))?.connect(&server, !no_browser, false)?; println!("Connected to {server}."); },
-            Commands::Enroll { filename } => typerelay_client::sync::Sync::new(root.clone(), root.join("snippets"))?.enroll(&filename)?,
+            Commands::Enroll { filename } => { typerelay_client::sync::Sync::new(root.clone(), root.join("snippets"))?.enroll(&filename)?; println!("Library enrolled; changes queued for sync."); },
             Commands::Sync => { println!("Synchronizing…"); typerelay_client::sync::Sync::new(root.clone(), root.join("snippets"))?.cycle()?; println!("{}", std::fs::read_to_string(root.join("sync/status"))?); },
             Commands::Import { format } => match format {
                 ImportFormat::Espanso { source, destination } => config::FileStore::import(&source, &destination)?,

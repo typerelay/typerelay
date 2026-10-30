@@ -114,18 +114,23 @@ impl FileStore {
     }
 
     pub fn import(source: &Path, destination: &Path) -> Result<()> {
+        let (imported, warnings)=Self::convert_espanso(source,destination)?;
+        for warning in &warnings { eprintln!("{warning}"); }
+        println!("Imported {imported} static snippets with bare abbreviations; skipped {}. Source unchanged.",warnings.len());
+        Ok(())
+    }
+    pub fn convert_espanso(source: &Path, destination: &Path) -> Result<(usize,Vec<String>)> {
         let document: LegacyDocument = serde_saphyr::from_str(std::str::from_utf8(&Self::read(source)?)?)?;
         let mut matches = Vec::new();
-        let mut skipped = 0;
+        let mut warnings = Vec::new();
         for (index, entry) in document.matches.into_iter().enumerate() {
-            let Some(trigger) = entry.trigger else { eprintln!("Skipped entry {}: missing simple trigger", index + 1); skipped += 1; continue; };
-            let Some(replace) = entry.replace else { eprintln!("Skipped entry {}: missing static replacement", index + 1); skipped += 1; continue; };
+            let Some(trigger) = entry.trigger else { warnings.push(format!("Skipped entry {}: missing simple trigger",index+1)); continue; };
+            let Some(replace) = entry.replace else { warnings.push(format!("Skipped entry {}: missing static replacement",index+1)); continue; };
             let normalized = trigger.trim_start_matches([';', ':', ',']).to_owned();
             let invalid = Snapshot::new(vec![Snippet { trigger: normalized.clone(), replacement: replace.clone() }]).is_err();
             let supported_options = entry.extra.iter().all(|(key, value)| key == "force_mode" && value.as_str() == Some("clipboard"));
             if invalid || !supported_options {
-                eprintln!("Skipped entry {}: unsupported content or options", index + 1);
-                skipped += 1;
+                warnings.push(format!("Skipped entry {}: unsupported content or options",index+1));
                 continue;
             }
             matches.push(Match { variables: Default::default(), trigger: normalized, replace, ..Match::default() });
@@ -139,8 +144,7 @@ impl FileStore {
         let mut file = options.open(destination).context("Destination must not already exist")?;
         file.write_all(yaml.as_bytes())?;
         file.sync_all()?;
-        println!("Imported {} static snippets with bare abbreviations; skipped {skipped}. Source unchanged.", output.matches.len());
-        Ok(())
+        Ok((output.matches.len(),warnings))
     }
 }
 

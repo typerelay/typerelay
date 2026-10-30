@@ -157,9 +157,9 @@ impl Sync {
         let mut authorize = url::Url::parse(&format!("{server}/oauth/authorize"))?;
         authorize.query_pairs_mut().extend_pairs([("client_id", "typerelay-desktop"), ("redirect_uri", &redirect), ("code_challenge", &challenge), ("code_challenge_method", "S256"), ("state", &state), ("device_name", if app_callback { "TypeRelay desktop" } else { "TypeRelay CLI / TUI" }), ("client_type", if app_callback { "desktop" } else { "cli" })]);
         if matches!(std::env::consts::OS, "macos" | "windows" | "linux") { authorize.query_pairs_mut().append_pair("os", std::env::consts::OS); }
-        println!("Open this URL in your browser:\n{authorize}");
+        if !open_browser { println!("Open this URL in your browser:\n{authorize}"); }
         #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))] let _ = open_browser;
-        #[cfg(target_os = "linux")] { if open_browser { let _ = std::process::Command::new("xdg-open").arg(authorize.as_str()).spawn(); } }
+        #[cfg(target_os = "linux")] { if open_browser { std::process::Command::new("xdg-open").arg(authorize.as_str()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn()?; } }
         #[cfg(target_os = "macos")] { if open_browser { std::process::Command::new("open").arg(authorize.as_str()).spawn()?; } }
         #[cfg(target_os = "windows")] { if open_browser { std::process::Command::new("rundll32.exe").args(["url.dll,FileProtocolHandler", authorize.as_str()]).spawn()?; } }
         let deadline = Instant::now() + Duration::from_secs(300);
@@ -194,7 +194,6 @@ impl Sync {
         let _lock = self.lock()?;
         self.credentials()?;
         Database::open(&self.directory)?.enroll(name)?;
-        println!("Library enrolled; changes queued for sync.");
         Ok(())
     }
 	pub fn resolve_conflict(&self,id:&str,choice:&str,value:Option<Value>)->Result<()> {
