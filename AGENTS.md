@@ -4,6 +4,7 @@
 - Keep shared agent instructions in `AGENTS.md` as the source of truth for every agent. Agent-specific instruction files should reference it instead of duplicating rules.
 - Be extremely concise. Prefer the simplest solution; follow explicit requirements and verify uncertain facts.
 - Use fish-compatible commands. Reuse existing code; do not duplicate code, extend services, or add global functions.
+- When interacting with Cloudflare, use the `cf` CLI unless the project has a Wrangler configuration file.
 - Keep ordinary documentation out of the repository root; agent instruction files are exceptions.
 - Respect the task's planning and approval gate. Planning is read-only; wait for explicit approval before implementation.
 - Keep model selection and subagent configuration in the task prompt. Give agents bounded ownership, the absolute worktree path, and the expected branch. Report missing tools or access as blockers.
@@ -36,7 +37,7 @@
 
 ## Code and UI conventions
 - Use `pnpm`. Keep log statements and variable declarations on single lines; collapse unnecessarily wrapped calls and conditions.
-- Use `objectid` for ObjectID fields in Mongoose models. Use `.lean()` for queries unless the returned document must be saved. `secondaryPreferred` is never the explanation for MongoDB writes failing. Never use primary reads (`.read('primary')`, `primaryQuery`, or `readPreference: 'primary'`), including to fix stale data after a write; merge the write result into the follow-up read instead. Typesense cannot filter empty strings.
+- Use `objectid` for ObjectID fields in Mongoose models. Use `.lean()` for queries unless the returned document must be saved. Mongoose read preference is set per model with the schema `read` option (`{ 'read': 'secondaryPreferred' }`); ordinary reads must inherit schema defaults without query or connection read preferences or primary-read helpers, and never treat replica lag or secondary reads as the cause of a bug. In this repository, transaction reads chain `.session(session).read('primary')` on one line. For optional sessions, wrap the query in `Support.transactionRead(query, session)`; it applies that exception only when `session?.inTransaction()` is true, and supplied inactive sessions keep the schema default. Follow each repository's transaction implementation rather than requiring this chaining pattern across repositories. To use data just written, use the write result instead of reading again. Typesense cannot filter empty strings.
 - Pug uses tabs, not spaces. Use `span`/`div` for text, never `|`. Render frontend HTML through Pug templates in `views/ajax`, not JavaScript strings.
 - Forms: save/submit right, cancel/abort left; no placeholders; use `-sm` controls except checkboxes/radios. Vertically center controls in rows; `form-check-input` uses `h-20px w-30px`.
 - Headers: page `h1`, section `h2`, subsection `h3`, title `h6`. Spacing: main elements `mb-5`, fields `mb-3`, buttons `mx-3`/`ms-3`/`me-3`.

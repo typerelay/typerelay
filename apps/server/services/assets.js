@@ -51,8 +51,8 @@ export class Assets {
 	}
 	// shortcut: concurrent first saves may overshoot the quota slightly, enforce atomically with an account counter if that matters.
 	static async admit(ctx, id, session) {
-		if (await SnippetAsset.exists({ account: ctx.account, id }).session(session)) return;
-		const [used] = await SnippetAsset.aggregate([{ $match: { account: new mongoose.Types.ObjectId(ctx.account) } }, { $group: { _id: null, count: { $sum: 1 }, bytes: { $sum: '$size' } } }]).session(session);
+		if (await SnippetAsset.exists({ account: ctx.account, id }).session(session).read('primary')) return;
+		const [used] = await SnippetAsset.aggregate([{ $match: { account: new mongoose.Types.ObjectId(ctx.account) } }, { $group: { _id: null, count: { $sum: 1 }, bytes: { $sum: '$size' } } }]).session(session).read('primary');
 		Support.assert(!used || (used.count < Assets.quota.assets && used.bytes < Assets.quota.bytes), `Image storage is full (${Assets.quota.assets} images or ${Assets.quota.bytes / 1048576} MiB per account); remove unused images or snippets first`, 413);
 	}
 	// Merges into the capped list in one update; $addToSet cannot bound the array.
@@ -73,16 +73,16 @@ export class Assets {
 	}
 	static async visible(ctx, ids, session = null) {
 		Support.assert(Array.isArray(ids) && ids.every(id => typeof id === 'string' && /^[a-f0-9]{64}$/.test(id)), 'Invalid asset IDs', 400);
-		const libraries = await Library.find({ account: ctx.account, state: { $ne: 'purged' } }).session(session).lean();
+		const libraries = await Support.transactionRead(Library.find({ account: ctx.account, state: { $ne: 'purged' } }).session(session).lean(), session);
 		const readable = new Set(libraries.filter(library => Support.access(ctx, library).read).map(library => String(library._id)));
 		const editable = new Set(libraries.filter(library => Support.access(ctx, library).edit).map(library => String(library._id)));
 		const allowed = new Set();
-		const snippets = await Snippet.find({ account: ctx.account, state: { $ne: 'purged' }, 'content.assets': { $in: ids } }).select('library content.assets').session(session).lean();
+		const snippets = await Support.transactionRead(Snippet.find({ account: ctx.account, state: { $ne: 'purged' }, 'content.assets': { $in: ids } }).select('library content.assets').session(session).lean(), session);
 		for (const snippet of snippets) for (const id of snippet.content.assets) { if (readable.has(String(snippet.library))) allowed.add(id); }
-		const conflicts = await Conflict.find({ account: ctx.account, resolved: false, $or: ['local', 'base', 'server'].map(key => ({ [key + '.content.assets']: { $in: ids } })) }).select('library resolved local.content.assets base.content.assets server.content.assets').session(session).lean();
+		const conflicts = await Support.transactionRead(Conflict.find({ account: ctx.account, resolved: false, $or: ['local', 'base', 'server'].map(key => ({ [key + '.content.assets']: { $in: ids } })) }).select('library resolved local.content.assets base.content.assets server.content.assets').session(session).lean(), session);
 		for (const conflict of conflicts) for (const value of [conflict.local, conflict.base, conflict.server]) for (const id of value?.content?.assets || []) { if (!conflict.resolved && editable.has(String(conflict.library))) allowed.add(id); }
 		// Uploading bytes grants temporary access; validation consumes the grant in the write transaction.
-		const staged = await SnippetAsset.find({ account: ctx.account, id: { $in: ids }, staged_by: ctx.user }).select('id').session(session).lean();
+		const staged = await Support.transactionRead(SnippetAsset.find({ account: ctx.account, id: { $in: ids }, staged_by: ctx.user }).select('id').session(session).lean(), session);
 		for (const asset of staged) allowed.add(asset.id);
 		return ids.filter(id => allowed.has(id));
 	}

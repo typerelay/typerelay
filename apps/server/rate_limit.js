@@ -27,7 +27,7 @@ export class ApiRateLimit {
 	}
 	static isUpload(request) {
 		if (ApiRateLimit.isBulkLibraryCreate(request)) return true;
-		return String(request.method || '').toUpperCase() === 'POST' && (/^\/imports\/[^/]+(?:\/preview)?$/.test(ApiRateLimit.getRequestPath(request)) || /^\/assets(?:\/remote)?$/.test(ApiRateLimit.getRequestPath(request)));
+		return String(request.method || '').toUpperCase() === 'POST' && (/^\/imports\/[^/]+(?:\/preview)?$/.test(ApiRateLimit.getRequestPath(request)) || /^\/assets(?:\/remote|\/[^/]+\/refresh)?$/.test(ApiRateLimit.getRequestPath(request)));
 	}
 	static isExpensive(request) {
 		const method = String(request.method || '').toUpperCase();
@@ -61,6 +61,13 @@ export class ApiRateLimit {
 				return response.status(429).json({ error: 'Rate limit exceeded. Please slow down and try again later.' });
 			},
 		});
+	}
+	// Sign-in, token exchange and SSO count separately, so an office signing in through SSO cannot lock out password sign-in or desktop pairing.
+	static authLimiters() {
+		const options = { windowMs: 900000, limit: 30, keyGenerator: request => RateLimitSupport.clientIp(request), passOnStoreError: true, message: { error: 'Too many sign-in attempts; try again later.' } };
+		// One SSO sign-in spans login, callback and finish; per-account buckets keep one tenant's office from exhausting another's.
+		const sso = rateLimit({ ...options, limit: 120, keyGenerator: request => RateLimitSupport.key('typerelay-sso', 'ip', RateLimitSupport.clientIp(request) + ':' + (request.params?.account || '')), store: ApiRateLimit.getStore('sso', 900000) });
+		return { auth: rateLimit({ ...options, store: ApiRateLimit.getStore('auth', 900000) }), token: ApiRateLimit.tokenLimiter(rateLimit({ ...options, store: ApiRateLimit.getStore('token', 900000) })), sso };
 	}
 	// Every client refreshes each 15 minutes; a per-token bucket keeps refreshes off the per-IP sign-in limit.
 	static tokenLimiter(authLimit) {

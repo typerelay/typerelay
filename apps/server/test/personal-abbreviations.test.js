@@ -79,7 +79,7 @@ test('concurrent changes create private explicit conflicts; default updates coll
 	const rows = (await Libraries.get(editor, library._id)).snippets;
 	assert.equal(rows.filter(row => row.abbreviation_collision).length, 2);
 	assert.equal(rows.find(row => row.id === id).replace, 'Shared expansion');
-	await mongoose.connection.transaction(async session => Libraries.purge(await Library.findById(library._id).session(session).lean(), await Snippet.findOne({ id }).session(session).lean(), session));
+	await mongoose.connection.transaction(async session => Libraries.purge(await Library.findById(library._id).session(session).read('primary').lean(), await Snippet.findOne({ id }).session(session).read('primary').lean(), session));
 	assert.equal(await PersonalAbbreviation.countDocuments({ snippet: id }), 0);
 });
 

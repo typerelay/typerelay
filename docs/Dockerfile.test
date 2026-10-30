@@ -1,4 +1,4 @@
-FROM node:24-bookworm-slim
+FROM node:lts-trixie-slim
 RUN apt-get update && apt-get install -y --no-install-recommends chromium && rm -rf /var/lib/apt/lists/*
 RUN npm install -g playwright-core@1.58.2
 WORKDIR /repo/docs

@@ -46,6 +46,8 @@ describe('API rate limits', () => {
 		assert.equal(ApiRateLimit.isUpload({ method: 'POST', originalUrl: '/api/v3/imports/yaml' }), true);
 		assert.equal(ApiRateLimit.isUpload({ method: 'POST', originalUrl: '/api/v3/libraries', body: { snippets: [{ id: 'one' }] } }), true);
 		assert.equal(ApiRateLimit.isUpload({ method: 'POST', originalUrl: '/api/v3/libraries', body: { name: 'Plain' } }), false);
+		assert.equal(ApiRateLimit.isUpload({ method: 'POST', originalUrl: '/api/v3/assets/one/refresh' }), true);
+		assert.equal(ApiRateLimit.isUpload({ method: 'POST', originalUrl: '/api/v3/assets/presence' }), false);
 		assert.equal(ApiRateLimit.isExpensive({ method: 'GET', originalUrl: '/api/v3/libraries/one/export' }), true);
 		assert.equal(ApiRateLimit.isExpensive({ method: 'POST', originalUrl: '/api/v3/trash/empty' }), true);
 		assert.equal(ApiRateLimit.isExpensive({ method: 'GET', originalUrl: '/api/v3/search' }), false);
@@ -107,6 +109,26 @@ describe('API rate limits', () => {
 			assert.equal(limited.status, 429);
 			assert.deepEqual(await limited.json(), { error: 'Too many token refreshes; try again later.' });
 			assert.equal((await post({ grant_type: 'authorization_code' })).status, 200);
+		} finally { await new Promise(resolve => server.close(resolve)); }
+	});
+	it('counts sign-in, token exchange and per-account SSO separately', async () => {
+		const { auth, token, sso } = ApiRateLimit.authLimiters();
+		const app = express();
+		app.use(express.json());
+		const ok = (request, response) => response.json({ ok: true });
+		app.post('/auth/login', auth, ok); app.post('/oauth/token', token, ok); app.get('/auth/sso/:account/login', sso, ok);
+		const server = app.listen(0, '127.0.0.1');
+		await new Promise(resolve => server.once('listening', resolve));
+		const base = `http://127.0.0.1:${server.address().port}`;
+		const post = path => fetch(base + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ grant_type: 'authorization_code' }) });
+		try {
+			for (let index = 0; index < 120; index++) assert.equal((await fetch(`${base}/auth/sso/a/login`)).status, 200);
+			assert.equal((await fetch(`${base}/auth/sso/a/login`)).status, 429);
+			assert.equal((await fetch(`${base}/auth/sso/b/login`)).status, 200);
+			for (let index = 0; index < 30; index++) assert.equal((await post('/oauth/token')).status, 200);
+			assert.equal((await post('/oauth/token')).status, 429);
+			for (let index = 0; index < 30; index++) assert.equal((await post('/auth/login')).status, 200);
+			assert.equal((await post('/auth/login')).status, 429);
 		} finally { await new Promise(resolve => server.close(resolve)); }
 	});
 	it('keys the v2 upload bucket on the authenticated user, then credential, then IP', async () => {

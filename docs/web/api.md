@@ -49,7 +49,7 @@ Changes to separate snippet IDs merge. Divergent changes to one ID retain local/
 - `POST /api/v2/team/invitations {email}`: admin/owner; seven-day email-bound invite.
 - `DELETE /api/v2/team/invitations/:id`: admin/owner revokes a pending invitation.
 - `POST /api/v2/team/accept {operation_id,token}`: signed-in matching email.
-- `PATCH /api/v2/team/members/:id {operation_id,role?}`: owner changes admin/member role; omitted role removes member. Owners cannot be removed; admins cannot alter other admins.
+- `PATCH /api/v2/team/members/:id {operation_id,role?}`: owner changes admin/member role; omitted role removes member and revokes their devices, access tokens and OAuth grants for the account. Owners cannot be removed; admins cannot alter other admins.
 - `POST /api/v2/team/groups {operation_id,name,users[]}`, `PATCH /api/v2/team/groups/:id {operation_id,name,users[],deleted?}`: admin/owner.
 - `PATCH /api/v2/profile {name}`, `PATCH /api/v2/account {name}` (admin/owner).
 - `GET /api/v2/devices`: own connected devices in this account.

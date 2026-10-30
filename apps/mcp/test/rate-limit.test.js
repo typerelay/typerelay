@@ -17,6 +17,7 @@ beforeEach(() => {
 	McpRateLimit.storeFactory = () => undefined;
 	McpRateLimit.requestLimiters.clear();
 	McpRateLimit.memoryCounters.clear();
+	McpRateLimit.memorySweepSize = 1000;
 	McpRateLimit.memoryConcurrency.clear();
 });
 afterEach(() => {
@@ -112,5 +113,12 @@ describe('MCP rate limits', () => {
 		assert.equal(ran, true);
 		assert.equal(ordinary.isError, undefined);
 		assert.equal(McpRateLimit.memoryConcurrency.size, 0);
+	});
+	it('sweeps expired memory counters once the fallback map grows', () => {
+		for (let index = 0; index < 999; index++) McpRateLimit.memoryCounters.set('expired-' + index, { count: 1, resetAt: Date.now() - 1 });
+		McpRateLimit.counter('live', 60000);
+		assert.equal(McpRateLimit.memoryCounters.size, 1000);
+		McpRateLimit.counter('next', 60000);
+		assert.deepEqual([...McpRateLimit.memoryCounters.keys()], ['live', 'next']);
 	});
 });

@@ -27,6 +27,7 @@ import androidx.core.view.WindowInsetsCompat
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.text.BreakIterator
 
 class SnippetKeyboard: InputMethodService() {
 	private enum class KeyboardMode { TYPING, SEARCH, PREVIEW, FIELD_EDITING }
@@ -148,11 +149,13 @@ class SnippetKeyboard: InputMethodService() {
 		ViewCompat.requestApplyInsets(root)
 	}
 	private fun erase() {
-		if (mode == KeyboardMode.SEARCH || mode == KeyboardMode.FIELD_EDITING) { val field = activeField ?: search; val start = field.selectionStart.coerceAtLeast(0); if (start > 0) { val previous = Character.offsetByCodePoints(field.text, start, -1); field.text.delete(previous, start) }; return }
+		if (mode == KeyboardMode.SEARCH || mode == KeyboardMode.FIELD_EDITING) { val field = activeField ?: search; val start = field.selectionStart.coerceAtLeast(0); if (start > 0) { field.text.delete(previousGrapheme(field.text, start), start) }; return }
 		val connection = currentInputConnection ?: return
-		if (!connection.getSelectedText(0).isNullOrEmpty()) connection.commitText("", 1) else connection.deleteSurroundingTextInCodePoints(1, 0)
+		if (!connection.getSelectedText(0).isNullOrEmpty()) connection.commitText("", 1) else { val before = connection.getTextBeforeCursor(32, 0); if (before.isNullOrEmpty()) connection.deleteSurroundingTextInCodePoints(1, 0) else connection.deleteSurroundingText(before.length - previousGrapheme(before, before.length), 0) }
 		updateMatches()
 	}
+	// Code points split emoji such as 👍🏽, 🇺🇸 and 👩‍💻; delete one user-perceived character.
+	private fun previousGrapheme(text: CharSequence, end: Int) = BreakIterator.getCharacterInstance().run { setText(text.toString()); preceding(end).coerceAtLeast(0) }
 	private fun drawKeys() {
 		keys.removeAllViews()
 		val rows = if (numbers) listOf("1234567890", "@#%&*()-+=", ".,!?/:;_'\"") else listOf("qwertyuiop", "asdfghjkl", "zxcvbnm")

@@ -185,7 +185,9 @@ impl Mobile {
     fn keyboard_matches(snapshot: &Value, request: &Value) -> Result<Value> {
         let mode = Self::text(request, "mode")?;
         ensure!(mode == "typing" || mode == "search", "Unknown keyboard match mode");
-        let input = Self::text(request, if mode == "typing" { "context" } else { "query" })?;
+        let mut input = Self::text(request, if mode == "typing" { "context" } else { "query" })?;
+        // Typing context is the last 128 graphemes, which can exceed 512 bytes; only its tail matters.
+        if mode == "typing" { let mut start = input.len().saturating_sub(512); while !input.is_char_boundary(start) { start += 1; } input = &input[start..]; }
         ensure!(input.len() <= 512, "Keyboard match input is too long");
         let fragment = if mode == "typing" {
             let start = input.char_indices().rev().take_while(|(_, character)| character.is_ascii_alphanumeric() || *character == '-').last().map(|(index, _)| index).unwrap_or(input.len());

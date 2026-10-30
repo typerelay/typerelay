@@ -200,7 +200,7 @@ impl RichText {
                     all_assets.extend(assets);
                     full_text.push_str(&text);
                     full_html.push_str(&html);
-					full_rtf.push_str(rtf.trim_start_matches("{\\rtf1\\ansi\\deff0\\uc1 ").trim_end_matches('}'));
+					full_rtf.push_str(rtf.strip_prefix("{\\rtf1\\ansi\\deff0\\uc1 ").and_then(|body|body.strip_suffix('}')).unwrap_or(&rtf));
 					steps.push(RichStep::Content { markdown, text, html, rtf, characters:count });
                 }
             }
@@ -220,6 +220,12 @@ mod tests {
     use super::*;
     fn render(markdown: &str) -> RichRendered { RichText::render(RichRequest { markdown: markdown.into(), ..Default::default() }).unwrap() }
     #[test] fn cursor_is_text_only(){assert!(RichText::render(RichRequest { markdown:"Hello {{cursor:here}}".into(),variables:BTreeMap::new(),values:BTreeMap::new(),now_ms:0,offset_minutes:0,preview:false,assets:BTreeMap::new() }).is_err());}
+    #[test]
+    fn combined_rtf_keeps_trailing_braces_balanced() {
+        let balanced=|rtf:&str|{let(mut depth,mut escaped)=(0i32,false);for character in rtf.chars(){if escaped{escaped=false;}else if character=='\\'{escaped=true;}else if character=='{'{depth+=1;}else if character=='}'{depth-=1;assert!(depth>=0,"{rtf}");}}depth==0};
+        let value=render("<div>Literal {x}</div>");assert!(value.rtf.ends_with("\\{x\\}}"),"{}",value.rtf);assert!(balanced(&value.rtf));
+        let value=render("# Heading\n\n<img src=\"data:image/png;base64,AA==\">");assert!(value.rtf.ends_with("{\\pict\\pngblip 00}}"),"{}",value.rtf);assert!(balanced(&value.rtf));
+    }
     #[test]
     fn renders_gfm_and_plain_projection() {
 		let value = render("# Heading\n\n- **One**\n- ~~Two~~\n\n| A | B |\n|---|---|\n| C | D |\n\n++Under++\n\n<p style=\"text-align:center\">Centered</p>");

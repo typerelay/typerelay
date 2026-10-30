@@ -60,7 +60,7 @@ typerelay sync
 
 Search, expansion and editing continue without a network connection. Each change and its stable operation ID are committed to SQLite together, then retried unchanged. Temporary network and server failures leave the queue intact.
 
-When a server rejects a stale or unauthorized operation, TypeRelay keeps recoverable local content in its recovery store, removes the rejected queue item and refreshes authoritative state. This includes edits rejected because a library is gone (HTTP 410). The TUI sync status reports the failure. Permanently purged server content cannot be restored locally. Before a detached library is reconciled after reconnecting, TypeRelay creates a SQLite backup under the local `backups` directory.
+When a server rejects a stale or unauthorized operation, TypeRelay keeps recoverable local content in its recovery store, removes the rejected queue item and refreshes authoritative state. This includes edits rejected because a library is gone (HTTP 410) and invalid edits the server cannot accept (HTTP 400 or 422), such as rich text whose images exceed the size limit, so later changes continue to sync. The TUI sync status reports the failure. Permanently purged server content cannot be restored locally. Before a detached library is reconciled after reconnecting, TypeRelay creates a SQLite backup under the local `backups` directory.
 
 ## Recover rejected edits
 

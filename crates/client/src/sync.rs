@@ -16,9 +16,9 @@ impl std::fmt::Display for ServerError {
 }
 impl std::error::Error for ServerError {}
 impl ServerError {
-    fn rejected(error: &anyhow::Error, batch: bool) -> bool {
-        let status = error.downcast_ref::<Self>().map(|error|error.status);
-        matches!(status, Some(403 | 404 | 409 | 410)) || (batch && matches!(status, Some(400 | 422)))
+    fn rejected(error: &anyhow::Error) -> bool {
+        // 400/422 never succeed on retry; keeping them queued would block every later operation.
+        matches!(error.downcast_ref::<Self>().map(|error|error.status), Some(400 | 403 | 404 | 409 | 410 | 422))
     }
 }
 
@@ -211,7 +211,7 @@ impl Sync {
         if receipt["found"] == true {
             if let Some(library) = receipt.get("library") { db.reconcile_legacy(name, library, pending["source"].as_str().context("Missing legacy submission")?, &receipt["versions"])?; }
             else if let Some(remote_id) = receipt["library_id"].as_str() {
-                let transaction = db.connection.unchecked_transaction()?;
+                let transaction = rusqlite::Transaction::new_unchecked(&db.connection,rusqlite::TransactionBehavior::Immediate)?;
                 db.remap(&file.id, remote_id)?;
                 transaction.commit()?;
                 db.apply(&receipt, None)?;
@@ -253,8 +253,8 @@ impl Sync {
                 Ok(result) => db.apply(&result, Some((seq, &operation)))?,
                 Err(error) => {
                     let message = error.to_string();
-                    if ServerError::rejected(&error, matches!(operation["kind"].as_str(),Some("batch"|"merge_local"|"merge_synced"|"personal"))) {
-                        let transaction = db.connection.unchecked_transaction()?;
+                    if ServerError::rejected(&error) {
+                        let transaction = rusqlite::Transaction::new_unchecked(&db.connection,rusqlite::TransactionBehavior::Immediate)?;
 						if !matches!(operation["kind"].as_str(),Some("merge_local"|"merge_synced")) { db.recover_operation(&operation, &message)?; }
                         db.connection.execute("DELETE FROM outbox WHERE seq=?1", [seq])?;
                         db.set_meta("last_failure", &json!(message))?;
@@ -287,7 +287,7 @@ impl Sync {
         let mut credentials=self.credentials().ok();
         if let Some(value)=credentials.as_mut(){let _=self.request(value,reqwest::Method::DELETE,"connection",None);}
         let db = Database::open(&self.directory)?;
-        let transaction = db.connection.unchecked_transaction()?;
+        let transaction = rusqlite::Transaction::new_unchecked(&db.connection,rusqlite::TransactionBehavior::Immediate)?;
         let libraries:Vec<String>=db.libraries()?.into_iter().filter_map(|library|library["_id"].as_str().map(str::to_owned)).filter(|id|db.synced(id).unwrap_or(false)).collect();
         db.connection.execute("UPDATE libraries SET synced=0", [])?;
         for (seq, operation) in db.pending()? { if !matches!(operation["kind"].as_str(),Some("merge_local"|"merge_synced")){db.recover_operation(&operation,"Disconnected before the change was synced")?;}db.connection.execute("DELETE FROM outbox WHERE seq=?1", [seq])?; }
@@ -342,7 +342,7 @@ impl Sync {
 mod tests {
     use super::*;
     #[test]
-    fn gone_edit_is_recovered_and_fresh_assets_download_before_apply() {
+    fn rejected_edit_is_recovered_and_fresh_assets_download_before_apply() {
         let root=tempfile::tempdir().unwrap(); let directory=root.path().join("snippets"); let db=Database::open(&directory).unwrap();
         let id="0123456789abcdef01234567"; let snippet="snippet-0000000001";
         let library=json!({"_id":id,"name":"Mine","revision":1,"state":"active","permissions":{"read":true,"edit":true,"manage":true},"records":[{"id":snippet,"trigger":"one","title":"","content":{"version":1,"type":"plain_text","text":"One"},"revision":1,"state":"active","position":0}]});
@@ -357,12 +357,12 @@ mod tests {
                 let (mut stream,_)=listener.accept().unwrap(); stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap(); let mut headers=Vec::new(); let mut byte=[0];
                 while !headers.ends_with(b"\r\n\r\n") {stream.read_exact(&mut byte).unwrap();headers.push(byte[0]);}
                 let headers=String::from_utf8(headers).unwrap(); let length=headers.lines().find_map(|line|line.to_lowercase().strip_prefix("content-length: ").and_then(|length|length.parse::<usize>().ok())).unwrap_or(0);stream.read_exact(&mut vec![0;length]).unwrap();
-                let (status,mime,body)=match index {0=>("200 OK","application/json",initial.to_string().into_bytes()),1=>{assert!(headers.starts_with("POST /api/v2/libraries/"));("410 Gone","application/json",json!({"error":"Library is gone"}).to_string().into_bytes())},3=>{assert!(headers.starts_with("GET /api/v2/assets/"));("200 OK","image/png",bytes.clone())},_=>("200 OK","application/json",fresh.to_string().into_bytes())};
+                let (status,mime,body)=match index {0=>("200 OK","application/json",initial.to_string().into_bytes()),1=>{assert!(headers.starts_with("POST /api/v2/libraries/"));("422 Unprocessable Entity","application/json",json!({"error":"Rich text images exceed 8 MiB"}).to_string().into_bytes())},3=>{assert!(headers.starts_with("GET /api/v2/assets/"));("200 OK","image/png",bytes.clone())},_=>("200 OK","application/json",fresh.to_string().into_bytes())};
                 write!(stream,"HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",body.len()).unwrap();stream.write_all(&body).unwrap();
             }
         });
         let sync=Sync::new(root.path().into(),directory.clone()).unwrap(); sync.secret(&Credentials{server,access_token:"access".into(),refresh_token:"".into(),account:None,device:None}).unwrap();
-        sync.cycle().unwrap();worker.join().unwrap();let db=Database::open(&directory).unwrap();assert!(db.pending().unwrap().is_empty());assert!(db.asset(&asset).unwrap().is_some());let rows=db.recovery().unwrap();assert_eq!(rows[0]["data"]["value"]["content"]["text"],"Keep this edit");assert!(rows[0]["reason"].as_str().unwrap().contains("410"));assert_eq!(db.meta("cursor").unwrap(),Some(json!(2)));
+        sync.cycle().unwrap();worker.join().unwrap();let db=Database::open(&directory).unwrap();assert!(db.pending().unwrap().is_empty());assert!(db.asset(&asset).unwrap().is_some());let rows=db.recovery().unwrap();assert_eq!(rows[0]["data"]["value"]["content"]["text"],"Keep this edit");assert!(rows[0]["reason"].as_str().unwrap().contains("422"));assert_eq!(db.meta("cursor").unwrap(),Some(json!(2)));
     }
     #[test]
     fn personal_offline_reconnect_preserves_conflicts_and_recovers_rejected_values() {
@@ -411,9 +411,10 @@ mod tests {
     }
     #[test]
     fn transport_failures_never_discard_queued_operations() {
-        assert!(!ServerError::rejected(&anyhow::anyhow!("connection refused at http://127.0.0.1:40901"), true));
-        assert!(!ServerError::rejected(&ServerError { status: 503, message: "Try again".into() }.into(), true));
-        assert!(ServerError::rejected(&ServerError { status: 409, message: "Selection changed".into() }.into(), true));
+        assert!(!ServerError::rejected(&anyhow::anyhow!("connection refused at http://127.0.0.1:40901")));
+        assert!(!ServerError::rejected(&ServerError { status: 503, message: "Try again".into() }.into()));
+        assert!(ServerError::rejected(&ServerError { status: 409, message: "Selection changed".into() }.into()));
+        assert!(ServerError::rejected(&ServerError { status: 410, message: "Library is gone".into() }.into()));
     }
     #[test]
     fn failed_cycles_back_off_before_the_pending_fast_path() {

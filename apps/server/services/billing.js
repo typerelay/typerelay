@@ -3,6 +3,7 @@ import { AccountAccess } from './account_access.js';
 import pug from 'pug';
 import { randomBytes } from 'node:crypto';
 import { Account, Device, Library, Member, Snippet, Ticket, User } from '../model/index.js';
+import { Support } from './support.js';
 
 export class Billing {
 	static catalogName = 'typerelay_2026';
@@ -73,7 +74,7 @@ export class Billing {
 	}
 
 	static async account(id, session = null, secrets = false) {
-		let query = Account.findById(id).session(session || null);
+		let query = Support.transactionRead(Account.findById(id).session(session || null), session);
 		if (secrets) query = query.select('+billing.stripe_customer_id +billing.stripe_subscription_id +billing.stripe_free_subscription_id +billing.scheduled_change.schedule_id +billing.checkout.session_id +white_label.cloudflare_hostname_id +white_label.logo.storage_key +white_label.favicon.storage_key +white_label.login_logo.storage_key');
 		const account = await query.lean();
 		if (account) AccountAccess.assert(account);
@@ -103,13 +104,13 @@ export class Billing {
 	}
 
 	static async usage(accountId, session = null) {
-		const activeLibraries = await Library.find({ account: accountId, state: 'active' }).select('_id').session(session || null).lean();
+		const activeLibraries = await Support.transactionRead(Library.find({ account: accountId, state: 'active' }).select('_id').session(session || null).lean(), session);
 		const [snippets, people, invitations, machines] = await Promise.all([
 			Snippet.countDocuments({ account: accountId, library: { $in: activeLibraries.map(library => library._id) }, state: 'active' }).session(session || null),
 			Member.countDocuments({ account: accountId }).session(session || null),
 			Ticket.countDocuments({ account: accountId, kind: 'invite', expires: { $gt: new Date() } }).session(session || null),
 			Device.countDocuments({ account: accountId, revoked: false, client_type: { $ne: 'browser' } }).session(session || null),
-		]);
+		].map(query => Support.transactionRead(query, session)));
 		return { libraries: activeLibraries.length, snippets, people, invitations, machines };
 	}
 
@@ -121,7 +122,7 @@ export class Billing {
 		const capacity = Billing.seatCapacity(account, entitlements);
 		if (!capacity) return true;
 		// Retained memberships can outlive a paid plan. Keep the owner and earliest members within the effective capacity.
-		const position = await Member.countDocuments({ account: account._id, $or: [{ role: 'owner' }, { role: { $ne: 'owner' }, _id: { $lte: member._id } }] }).session(session || null);
+		const position = await Support.transactionRead(Member.countDocuments({ account: account._id, $or: [{ role: 'owner' }, { role: { $ne: 'owner' }, _id: { $lte: member._id } }] }).session(session || null), session);
 		return position <= capacity;
 	}
 
@@ -140,7 +141,7 @@ export class Billing {
 	static async assertDeviceEnrollment(ctx, session = null, client = 'typerelay-desktop') {
 		if (client === 'typerelay-browser') return;
 		if (!ctx.entitlements.limits.machines) return;
-		const count = await Device.countDocuments({ account: ctx.account, user: ctx.user, revoked: false, client_type: { $ne: 'browser' } }).session(session || null);
+		const count = await Support.transactionRead(Device.countDocuments({ account: ctx.account, user: ctx.user, revoked: false, client_type: { $ne: 'browser' } }).session(session || null), session);
 		Billing.assertLimit(ctx, 'machines', count, 1);
 	}
 
@@ -148,7 +149,7 @@ export class Billing {
 		if (device.client_type === 'browser') return;
 		if (!ctx.entitlements.limits.machines) return;
 		if (ctx.entitlements.machine_override) return;
-		const primary = await Device.findOne({ account: ctx.account, user: ctx.user, revoked: false, client_type: { $ne: 'browser' } }).sort({ createdAt: 1, _id: 1 }).select('_id').session(session || null).lean();
+		const primary = await Support.transactionRead(Device.findOne({ account: ctx.account, user: ctx.user, revoked: false, client_type: { $ne: 'browser' } }).sort({ createdAt: 1, _id: 1 }).select('_id').session(session || null).lean(), session);
 		if (!primary || String(primary._id) === String(device._id || device)) return;
 		throw Billing.error(403, 'Free allows one connected machine', 'plan_limit', { resource: 'machines', limit: 1, upgrade_url: '/#settings-subscription' });
 	}
@@ -328,7 +329,8 @@ export class Billing {
 		if (account) await AccountAccess.acquire(account._id);
 		if (String(checkout.customer?.id || checkout.customer) !== String(account.billing?.stripe_customer_id) || String(checkout.client_reference_id) !== String(account._id)) throw Billing.error(409, 'Checkout ownership mismatch', 'billing_mismatch');
 		const subscription = await stripe.subscriptions.retrieve(checkout.subscription.id || checkout.subscription);
-		await Billing.applySubscription(account, subscription, { stripe });
+		// The webhook may apply this subscription first and bump billing.revision; that outcome is a success.
+		try { await Billing.applySubscription(account, subscription, { stripe }); } catch (error) { if (error.code !== 'billing_changed' || (await Billing.account(account._id, null, true)).billing?.stripe_subscription_id !== subscription.id) throw error; }
 		await Billing.cancelFreeSubscription(account, { stripe });
 		return account;
 	}

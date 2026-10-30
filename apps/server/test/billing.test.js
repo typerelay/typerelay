@@ -418,6 +418,18 @@ test('open Checkout reserves trial seats, is reused, and releases capacity only 
 	assert.equal(Billing.seatCapacity(await Billing.account(account._id)), 5);
 });
 
+test('checkout success accepts a subscription the webhook already applied', async t => {
+	const account = await Account.create({ name: 'Webhook first', billing: { stripe_customer_id: 'cus_first' } });
+	const owner = await User.create({ email: `${randomUUID()}@example.test`, name: 'Webhook owner' });
+	await Member.create({ account: account._id, user: owner._id, role: 'owner' });
+	const stripe = { checkout: { sessions: { retrieve: async () => ({ status: 'complete', mode: 'subscription', subscription: 'sub_first', customer: 'cus_first', client_reference_id: String(account._id), metadata: { account_id: String(account._id) } }) } }, subscriptions: { retrieve: async id => ({ id }) } };
+	let winner = 'sub_first';
+	t.mock.method(Billing, 'applySubscription', async () => { await Account.updateOne({ _id: account._id }, { $set: { 'billing.stripe_subscription_id': winner } }); throw Billing.error(409, 'Billing changed; refresh and retry', 'billing_changed'); });
+	assert.equal(String((await Billing.reconcileCheckout('cs_first', owner._id, { stripe }))._id), String(account._id));
+	winner = 'sub_other';
+	await assert.rejects(Billing.reconcileCheckout('cs_first', owner._id, { stripe }), error => error.code === 'billing_changed');
+});
+
 test('an applied renewal change releases its Stripe schedule and clears local pending state', async () => {
 	const account = await Account.create({ name: 'Applied renewal', plan: 'team', billing: { stripe_customer_id: 'cus_renew', stripe_subscription_id: 'sub_renew', status: 'active', seat_quantity: 5, scheduled_change: { plan: 'pro', seat_quantity: 2, schedule_id: 'sched_renew' } } });
 	const subscription = { id: 'sub_renew', customer: 'cus_renew', status: 'active', schedule: 'sched_renew', metadata: Billing.metadata(account, 'pro'), items: { data: [{ id: 'si_renew', price: { id: 'price_pro' }, quantity: 2 }] } };

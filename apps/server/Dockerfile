@@ -8,7 +8,7 @@ COPY apps/desktop/helpers ./apps/desktop/helpers
 RUN cargo build --release --locked --bins
 RUN rustup target add wasm32-unknown-unknown && cargo build --release --locked -p typerelay-template-wasm --target wasm32-unknown-unknown
 
-FROM node:24-bookworm-slim AS workspace-dependencies
+FROM node:lts-trixie-slim AS workspace-dependencies
 RUN npm install -g pnpm@12.0.0
 WORKDIR /opt/typerelay
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml README.md ./
@@ -43,7 +43,8 @@ COPY --from=rust /src/target/wasm32-unknown-unknown/release/typerelay_template_w
 ENV NODE_ENV=development
 CMD ["pnpm", "exec", "vite", "--host", "0.0.0.0", "--port", "5174", "--strictPort"]
 
-FROM node:24-bookworm-slim AS production
+FROM node:lts-trixie-slim AS production
+RUN npm install -g pnpm@12.0.0
 RUN apt-get update && apt-get install -y --no-install-recommends libxkbcommon0 && rm -rf /var/lib/apt/lists/*
 ARG APP_VERSION=development
 ENV APP_VERSION=${APP_VERSION}

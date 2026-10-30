@@ -105,9 +105,9 @@ export class Security {
 		await mongoose.connection.transaction(async session => {
 			const ticket = await Ticket.findOneAndDelete({ hash: Support.hash(Support.text(req.body.token, 256)), kind: 'email-change', 'data.user': req.session.user, expires: { $gt: new Date() } }, { session }).lean();
 			Support.assert(ticket, 'Email link expired or already used', 400);
-			const user = await User.findById(req.session.user).session(session).lean();
+			const user = await User.findById(req.session.user).session(session).read('primary').lean();
 			Support.assert(user.email === ticket.data.old && (user.auth_version || 0) === ticket.data.version, 'Email link no longer valid');
-			Support.assert(!await User.exists({ email: ticket.email }).session(session), 'Email address unavailable', 409);
+			Support.assert(!await User.exists({ email: ticket.email }).session(session).read('primary'), 'Email address unavailable', 409);
 			await User.updateOne({ _id: user._id }, { $set: { email: ticket.email } }, { session });
 			await Ticket.deleteMany({ email: user.email, kind: { $in: ['login', 'password-reset', 'email-change'] } }, { session });
 		});
@@ -130,7 +130,7 @@ export class Security {
 		await mongoose.connection.transaction(async session => {
 			const ticket = await Ticket.findOneAndDelete({ hash: Support.hash(Support.text(req.body.token, 256)), kind: 'password-reset', expires: { $gt: new Date() } }, { session }).lean();
 			Support.assert(ticket, 'Reset link expired or already used');
-			const user = await User.findById(ticket.data.user).session(session).lean();
+			const user = await User.findById(ticket.data.user).session(session).read('primary').lean();
 			Support.assert(user && user.email === ticket.email && (user.auth_version || 0) === ticket.data.version, 'Reset link no longer valid');
 			result = await Security.resetPassword(user._id, session);
 			await Ticket.deleteMany({ email: user.email, kind: 'login' }, { session });
@@ -337,11 +337,11 @@ export class Security {
 			return res.render('sso-message', { title: 'SSO test successful', message: 'Your identity provider verified your administrator identity. Return to Single sign-on settings to enable SSO or update its policy.', destination: `/?account=${account._id}#settings-sso` });
 		}
 		const user = await AccountAccess.write(account._id, async session => {
-			const current = await Account.findById(account._id).session(session).lean();
+			const current = await Account.findById(account._id).session(session).read('primary').lean();
 			Security.checkSso(current, data.revision);
 			let user = await User.findOneAndUpdate({ email: data.email, 'deletion.requested_at': null }, { $inc: { activity_sequence: 1 } }, { session, returnDocument: 'after' }).lean();
-			Support.assert(user || !await User.exists({ email: data.email }).session(session), 'Account deletion is in progress', 403);
-			if (!user || !await Member.exists({ account: account._id, user: user._id }).session(session)) {
+			Support.assert(user || !await User.exists({ email: data.email }).session(session).read('primary'), 'Account deletion is in progress', 403);
+			if (!user || !await Member.exists({ account: account._id, user: user._id }).session(session).read('primary')) {
 				Support.assert(current.sso.provision, 'Ask an administrator to add you to this account', 403);
 				// Existing TypeRelay users join only by accepting a team invitation; the IdP admin can also mint invites, so neither alone may claim them.
 				if (user) throw new Fault(403, 'This email already has a TypeRelay account. Accept the team invitation from your email first, then sign in with SSO.', 'sso_invite_required');
@@ -384,19 +384,19 @@ export class Security {
 			res.redirect(error.details.login_url + '?return_to=' + encodeURIComponent(req.session.return_to));
 		}
 	}
-	static mount(app, limit) {
+	static mount(app, limit, ssoLimit = limit) {
 		app.use('/auth', (req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
-		app.post('/auth/sso/start', limit, async (req, res) => {
+		app.post('/auth/sso/start', ssoLimit, async (req, res) => {
 			let id = Support.text(req.body.account, 2048);
 			if (!/^[a-f0-9]{24}$/.test(id)) { let url; try { url = new URL(id); } catch { throw new Fault(400, 'Enter the SSO sign-in link from your administrator'); } id = url.pathname.match(/^\/auth\/sso\/([a-f0-9]{24})\/login$/)?.[1]; }
 			const account = await Security.ssoAccount(Support.id(id));
 			Support.assert(Security.ssoActive(account), 'SSO is not available for this account', 403);
 			res.json({ redirect: Security.ssoUrls(account).login + '?return_to=' + encodeURIComponent(Security.ssoDestination(req.session.return_to, account._id)) });
 		});
-		app.get('/auth/sso/finish', limit, Security.ssoFinish);
-		app.get('/auth/sso/:account/login', limit, Security.ssoBegin);
-		app.post('/auth/sso/:account/callback', limit, Security.ssoCallback);
-		app.get('/auth/sso/:account/metadata', limit, async (req, res) => { const account = await Security.ssoAccount(req.params.account, true); Billing.assertCapability({ entitlements: Billing.entitlements(account) }, 'sso', 'SSO requires Pro or Team'); Support.assert(account.sso?.certificate, 'Save the identity provider configuration first'); res.type('application/xml').send(Security.saml(account).generateServiceProviderMetadata(null, null)); });
+		app.get('/auth/sso/finish', ssoLimit, Security.ssoFinish);
+		app.get('/auth/sso/:account/login', ssoLimit, Security.ssoBegin);
+		app.post('/auth/sso/:account/callback', ssoLimit, Security.ssoCallback);
+		app.get('/auth/sso/:account/metadata', ssoLimit, async (req, res) => { const account = await Security.ssoAccount(req.params.account, true); Billing.assertCapability({ entitlements: Billing.entitlements(account) }, 'sso', 'SSO requires Pro or Team'); Support.assert(account.sso?.certificate, 'Save the identity provider configuration first'); res.type('application/xml').send(Security.saml(account).generateServiceProviderMetadata(null, null)); });
 		app.get('/auth/sso/:account/recovery', limit, (req, res) => res.render('sso-recovery', { account: Support.id(req.params.account), signedIn: Boolean(req.session.user && !req.session.sso) }));
 		app.post('/auth/sso/:account/recovery', limit, async (req, res) => res.json(await Security.ssoRecover(req)));
 		app.get('/login', (req, res) => res.render('login'));

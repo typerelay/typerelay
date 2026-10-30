@@ -90,7 +90,7 @@ test('active snippets sort by update timestamp, retaining legacy order without t
 	assert.equal(Snippet.schema.options.timestamps, true);
 	const original = Snippet.find;
 	const entries = [{ id: 'legacy', state: 'active' }, { id: 'older', state: 'active', updatedAt: new Date('2026-09-01') }, { id: 'latest', state: 'active', updatedAt: new Date('2026-09-16') }, { id: 'trash', state: 'trashed', updatedAt: new Date('2026-09-17') }, { id: 'legacy2', state: 'active' }];
-	Snippet.find = () => ({ sort() { return this; }, session() { return this; }, lean: async () => entries });
+	Snippet.find = () => ({ sort() { return this; }, session() { return this; }, read() { return this; }, lean: async () => entries });
 	try {
 		const result = await Libraries.hydrate({ _id: 'one' });
 		assert.deepEqual(result.snippets.map(snippet => snippet.id), ['latest', 'older', 'legacy', 'legacy2']);

@@ -10,7 +10,7 @@ import { Library, Snippet, Conflict, SnippetAsset } from '../model/index.js';
 
 function assetQueries(t, assets) {
 	const calls = { queries: 0, streamed: 0, closed: 0 };
-	const query = rows => { calls.queries++; return { select() { return this; }, session() { return this; }, lean() { return this; }, then(resolve) { return Promise.resolve(rows).then(resolve); }, cursor(options) { assert.equal(options.batchSize, 16); return { async *[Symbol.asyncIterator]() { for (const row of rows) { calls.streamed++; yield row; } }, async close() { calls.closed++; } }; } }; };
+	const query = rows => { calls.queries++; return { select() { return this; }, session() { return this; }, read() { return this; }, lean() { return this; }, then(resolve) { return Promise.resolve(rows).then(resolve); }, cursor(options) { assert.equal(options.batchSize, 16); return { async *[Symbol.asyncIterator]() { for (const row of rows) { calls.streamed++; yield row; } }, async close() { calls.closed++; } }; } }; };
 	for (const model of [Library, Snippet, Conflict]) t.mock.method(model, 'find', () => query([]));
 	t.mock.method(SnippetAsset, 'find', filter => { assert.equal(filter.account, 'account'); const rows = filter.id.$in.map(id => assets.get(id)).filter(Boolean); return query(filter.staged_by ? rows.map(asset => ({ id: asset.id })) : rows); });
 	return calls;

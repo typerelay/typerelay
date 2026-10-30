@@ -55,6 +55,8 @@ fn keyboard_matches_bare_abbreviations_without_expanding_ambiguous_text() {
     assert!(typing("hello ")["matches"].as_array().unwrap().is_empty());
     let unique = json!({"libraries":[{"_id":"one","records":[{"id":"only","trigger":"xeod","title":"End-of-day update","content":{"text":"Update"}}]}]});
     assert_eq!(Mobile::keyboard_matches(&unique, &json!({"mode":"typing","context":"Hello XEOD"})).unwrap()["exact"]["id"], "only");
+    assert_eq!(Mobile::keyboard_matches(&unique, &json!({"mode":"typing","context":format!("{} xeod", "नमस्ते👩‍💻".repeat(32))})).unwrap()["exact"]["id"], "only");
+    assert!(Mobile::keyboard_matches(&unique, &json!({"mode":"search","query":"👍🏽".repeat(65)})).is_err());
 }
 
 #[test]
@@ -230,9 +232,11 @@ fn mobile_sync_retries_a_lost_server_response_without_persisting_credentials() {
             let (mut stream, _) = match listener.accept() { Ok(value) => value, Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => { std::thread::sleep(Duration::from_millis(5)); continue; }, Err(error) => panic!("{error}") };
             stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
             let mut bytes = Vec::new(); let mut byte = [0];
-            while !bytes.ends_with(b"\r\n\r\n") { stream.read_exact(&mut byte).unwrap(); bytes.push(byte[0]); }
+            // Skip connections that close early or come from other local programs probing ports.
+            while !bytes.ends_with(b"\r\n\r\n") { if stream.read_exact(&mut byte).is_err() { break; } bytes.push(byte[0]); }
+            if !bytes.ends_with(b"\r\n\r\n") { continue; }
             let headers = String::from_utf8(bytes).unwrap().to_lowercase();
-            assert!(headers.contains("authorization: bearer test-access"));
+            if !headers.contains("authorization: bearer test-access") { continue; }
             assert!(headers.contains("x-typerelay-sync-protocol: 6"));
             let size = headers.lines().find_map(|line|line.strip_prefix("content-length: ")).map(|size|size.parse::<usize>().unwrap()).unwrap_or(0);
             let mut body = vec![0; size]; stream.read_exact(&mut body).unwrap(); requests += 1;

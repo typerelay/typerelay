@@ -83,7 +83,7 @@ services:
       service: base
     user: root
     environment: *env
-    command: [corepack, pnpm, --dir, /opt/typerelay, --filter, "@typerelay/server", install, --frozen-lockfile]
+    command: [pnpm, --dir, /opt/typerelay, --filter, "@typerelay/server", install, --frozen-lockfile]
     restart: "no"
 
   app:
@@ -147,7 +147,7 @@ services:
         condition: service_completed_successfully
   docs:
     profiles: [tools]
-    image: node:24-bookworm-slim
+    image: node:lts-trixie-slim
     working_dir: /repo
     user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
     environment:
@@ -174,7 +174,7 @@ services:
         condition: service_healthy
   mcp-tools:
     profiles: [tools]
-    image: node:24-bookworm-slim
+    image: node:lts-trixie-slim
     working_dir: /repo
     user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
     environment:

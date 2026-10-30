@@ -36,7 +36,7 @@ The recipient opens the link, signs in with the same email address, and confirms
 
 ## Remove or change a member
 
-The owner can change a member between Member and Admin. Owners and admins can remove ordinary members; admins cannot change or remove other admins. Removing a member also removes them from every group and revokes their connected devices for that account.
+The owner can change a member between Member and Admin. Owners and admins can remove ordinary members; admins cannot change or remove other admins. Removing a member also removes them from every group and revokes their connected devices, personal access tokens and OAuth grants for that account.
 
 On the removed person’s next successful desktop sync, shared libraries they can no longer read are removed from active search and expansion. Unsent edits are retained in local recovery instead of being uploaded to a library they no longer have permission to change.
 

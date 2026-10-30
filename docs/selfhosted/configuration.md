@@ -28,7 +28,7 @@ Set `TYPERELAY_GHOST_CONTENT_API_KEY` to enable the What's new drawer and synchr
 
 ## Email delivery
 
-Working SMTP is required for account creation, Magic Link sign-in, password recovery, email changes and team invitations. Configure at least one server in `SMTP_SERVERS` before enabling sign-up or inviting users. Multiple entries are used round-robin; each may override `from`, otherwise `SMTP_FROM` is used. Port 465 defaults to TLS; other ports default to STARTTLS-style non-implicit TLS unless `secure` is set explicitly.
+Working SMTP is required for account creation, Magic Link sign-in, password recovery, email changes and team invitations. Configure at least one server in `SMTP_SERVERS` before enabling sign-up or inviting users. Multiple entries are used round-robin; if a server fails, TypeRelay tries each remaining server once before reporting the failure. Each entry may override `from`, otherwise `SMTP_FROM` is used. Port 465 defaults to TLS; other ports default to STARTTLS-style non-implicit TLS unless `secure` is set explicitly.
 
 TypeRelay does not provide a production mail catcher or silently treat an SMTP failure as delivery. Verify a real sign-up, Magic Link, reset and invitation after deployment. If an invitation request reports an SMTP failure, refresh **Settings → My team** and revoke any pending invitation before retrying so it does not continue consuming a seat.
 

@@ -1,4 +1,4 @@
-FROM node:24-bookworm-slim AS workspace-dependencies
+FROM node:lts-trixie-slim AS workspace-dependencies
 RUN npm install -g pnpm@12.0.0
 WORKDIR /repo
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
@@ -14,7 +14,7 @@ COPY apps/mcp ./apps/mcp
 COPY apps/server/observability ./apps/server/observability
 RUN pnpm --filter @typerelay/mcp deploy --prod /opt/deploy/mcp
 
-FROM node:24-bookworm-slim
+FROM node:lts-trixie-slim
 WORKDIR /repo/apps/mcp
 COPY --from=workspace-dependencies /opt/deploy/mcp ./
 COPY apps/server/api/catalog.js apps/server/api/openapi.js /repo/apps/server/api/
