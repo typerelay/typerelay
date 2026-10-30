@@ -98,7 +98,7 @@ impl App {
     }
     pub(super) fn show_drafts(&mut self) -> Result<()> {
         self.check_identity()?;let rows=Draft::available(&self.store.directory,Database::open(&self.store.directory)?.drafts(&self.identity)?)?;
-        self.draft_gate=!rows.is_empty();self.workflow=Some(Workflow::drafts(rows));
+        self.draft_gate = !rows.is_empty();self.workflow=Some(Workflow::drafts(rows));
         if !self.draft_gate { self.workflow=None;self.screen=Screen::Files;self.reload_files()?;self.message("All drafts resolved",false); }
         Ok(())
     }

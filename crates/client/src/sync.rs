@@ -85,7 +85,7 @@ impl Sync {
 			credentials.account=tokens["account"].as_str().map(str::to_owned).or(credentials.account.take());credentials.device=tokens["device"].as_str().map(str::to_owned).or(credentials.device.take());
             self.secret(credentials)?;
 			}
-			lock.unlock()?;
+			fs2::FileExt::unlock(&lock)?;
             response = send(credentials)?;
         }
         Self::response(response)

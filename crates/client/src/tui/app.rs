@@ -138,7 +138,7 @@ impl App {
         if self.writing.as_ref().is_some_and(|(_,base,_,_)|self.screen!=Screen::Edit||*base!=self.draft()){self.cancel_writing();changed=true;}
         let written=self.writing.as_ref().and_then(|(_,_,_,receiver)|receiver.try_recv().ok());
         if let Some(result)=written {let(_,base,_,_)=self.writing.take().unwrap();match result.and_then(|proposal|{typerelay_client::native_ai::NativeAi::validate_proposal(&base,&proposal)?;Ok(proposal)}){Ok(proposal) if proposal.replace==base.replace||(base.kind=="plain_text"&&proposal.replace.trim()==base.replace.trim())=>self.message("No changes suggested.",false),Ok(proposal)=>{self.writing_undo.push((self.expansion.clone(),proposal.replace.clone()));self.expansion=Self::text(&proposal.replace);self.rich_preview=false;self.message("Text refined.",false);},Err(error)=>self.message(format!("Refinement failed: {error}"),true)}changed=true;}
-        if changed { if let Err(error)=self.persist_draft(false) { self.message(format!("Draft NOT saved: {error}"),true); } }
+        if changed && let Err(error)=self.persist_draft(false) { self.message(format!("Draft NOT saved: {error}"),true); }
         if let Some(dialog)=&mut self.ai_dialog{return dialog.tick()||changed;}
         if !matches!(self.screen,Screen::Files|Screen::Browse){return changed;}
         let query=if self.screen==Screen::Browse{Self::value(&self.search)}else{Self::value(&self.global_search)};

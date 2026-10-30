@@ -117,7 +117,7 @@ mod tests {
     #[test]
     fn draft_images_survive_cleanup_and_export_but_purge_scrubs_draft() {
         let root=tempfile::tempdir().unwrap();let db=Database::open(root.path()).unwrap();let file=db.import("Local","matches: [{replace: Original}]").unwrap();let id="a".repeat(64);db.put_asset(&json!({"id":id,"mime_type":"image/png","width":1,"height":1,"source_urls":[]}),b"image",false).unwrap();db.connection.execute("UPDATE assets SET created_at=0",[]).unwrap();
-        let draft=Draft::new(&file,Some(0),Match{kind:"rich_text".into(),replace:format!("<img src=\"typerelay-asset:{id}\" alt=\"Kept\">"),..Default::default()},None);db.put_draft(&Value::Null,&draft,None).unwrap();db.cleanup().unwrap();assert!(db.asset(&id).unwrap().is_some());let output=root.path().join("draft.typerelay.zip");db.export_entries("Draft",&[draft.entry.clone()],&output).unwrap();assert!(output.exists());
+        let draft=Draft::new(&file,Some(0),Match{kind:"rich_text".into(),replace:format!("<img src=\"typerelay-asset:{id}\" alt=\"Kept\">"),..Default::default()},None);db.put_draft(&Value::Null,&draft,None).unwrap();db.cleanup().unwrap();assert!(db.asset(&id).unwrap().is_some());let output=root.path().join("draft.typerelay.zip");db.export_entries("Draft",std::slice::from_ref(&draft.entry),&output).unwrap();assert!(output.exists());
         db.edit(&file,Some(0),None).unwrap();db.empty(&db.trash().unwrap()).unwrap();assert!(db.drafts(&Value::Null).unwrap().is_empty());assert!(db.put_draft(&Value::Null,&draft,None).is_err());assert!(db.save_draft(&Value::Null,&draft,true).is_err());db.cleanup().unwrap();assert!(db.asset(&id).unwrap().is_none());
     }
     #[test]
