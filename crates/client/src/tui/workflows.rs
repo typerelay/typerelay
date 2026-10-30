@@ -120,7 +120,9 @@ impl App {
         let value=[&data["value"],&data["record"],&data["item"]["value"],data].into_iter().find(|value|value["content"].is_object()).context("This recovery contains an operation; export it before dismissal")?;
         Database::entries(&[json!({"state":"active","trigger":value["trigger"],"title":value["title"],"content":value["content"]})])?.into_iter().next().context("No recoverable snippet")
     }
-    pub(super) fn current_name(&self) -> Result<String> { if self.screen==Screen::Files {self.file_state.selected().and_then(|i|i.checked_sub(1)).and_then(|i|self.files.get(i)).map(|file|file.name.clone())}else{self.file.as_ref().map(|file|file.name.clone())}.context("Select a library first") }
+    pub(super) fn current_library(&self) -> Result<(String,String)> { if self.screen==Screen::Files {self.file_state.selected().and_then(|i|i.checked_sub(1)).and_then(|i|self.files.get(i)).map(|file|(file.id.clone(),file.name.clone()))}else{self.file.as_ref().map(|file|(file.id.clone(),file.name.clone()))}.context("Select a library first") }
+    pub(super) fn current_name(&self) -> Result<String> { Ok(self.current_library()?.1) }
+    fn recovery_has_assets(row: &Value) -> bool { Self::recovered_entry(row).is_ok_and(|entry|entry.value()["content"]["assets"].as_array().is_some_and(|assets|!assets.is_empty())) }
     pub(super) fn cancel_operation(&mut self) { if let Some((cancelled,_))=&self.operation { cancelled.store(true,std::sync::atomic::Ordering::SeqCst); } }
     pub(super) fn operation_tick(&mut self) -> bool {
         let result=self.operation.as_ref().and_then(|(_,receiver)|receiver.try_recv().ok());
@@ -156,7 +158,7 @@ impl App {
             Action::Enroll=>{let name=self.current_name()?;self.start_operation(action,json!({"name":name}))?;},
             Action::ImportYaml|Action::ImportBundle=>self.workflow=Some(Workflow::form(action,&[("Source path",String::new()),("New library name",String::new())],Value::Null)),
             Action::ImportEspanso=>self.workflow=Some(Workflow::form(action,&[("Espanso source path",String::new()),("New YAML destination path",String::new())],Value::Null)),
-            Action::Export=>{let name=self.current_name()?;self.workflow=Some(Workflow::form(action,&[("Destination path (.yml or .typerelay.zip)",String::new())],json!({"name":name})));},
+            Action::Export=>{let(id,name)=self.current_library()?;self.workflow=Some(Workflow::form(action,&[("Destination path (.yml or .typerelay.zip)",String::new())],json!({"id":id,"name":name})));},
             Action::MigrateCheck|Action::Migrate=>self.workflow=Some(Workflow::form(action,&[("Legacy YAML file or directory",String::new())],Value::Null)),
             Action::Language|Action::Indent=>{
                 anyhow::ensure!(self.screen==Screen::Edit&&self.code,"Open a code snippet first");let mut view=Workflow::new(Mode::Choose(action),action.label());
@@ -178,10 +180,10 @@ impl App {
             Action::ImportYaml=>{db.import(&values[1],&std::fs::read_to_string(first)?)?;},
             Action::ImportBundle=>{db.import_bundle(&values[1],std::path::Path::new(first))?;},
             Action::ImportEspanso=>{let(imported,warnings)=typerelay_client::config::FileStore::convert_espanso(std::path::Path::new(first),std::path::Path::new(&values[1]))?;self.workflow=Some(Workflow::message("Espanso converted",format!("{imported} static snippets converted. {} skipped. Import the new YAML to create a library.\n{}",warnings.len(),warnings.join("\n"))));return Ok(());},
-            Action::Export=>db.export(context["name"].as_str().context("Library required")?,std::path::Path::new(first))?,
+            Action::Export=>{let file=db.editor_id(context["id"].as_str().context("Library required")?)?;db.export_entries(&file.name,&file.entries,std::path::Path::new(first))?;},
             Action::DraftExport=>{
                 if !context["draft"].is_null() {let draft:Draft=serde_json::from_value(context["draft"].clone())?;self.verify_draft(&draft)?;db.export_entries(&draft.file.name,&[draft.entry],std::path::Path::new(first))?;}
-                else {anyhow::ensure!(db.recovery()?.iter().any(|row|row["id"]==context["recovery"]["id"]),"Recovery removed; reopen Recovery");Paths::atomic_write(std::path::Path::new(first),serde_json::to_string_pretty(&context["recovery"])?.as_bytes(),true)?;let id=context["recovery"]["id"].as_str().context("Recovery ID missing")?;db.set_meta(&format!("tui_recovery_preserved:{id}"),&json!(true))?;}
+                else {anyhow::ensure!(db.recovery()?.iter().any(|row|row["id"]==context["recovery"]["id"]),"Recovery removed; reopen Recovery");if Self::recovery_has_assets(&context["recovery"]) {anyhow::ensure!(first.ends_with(".typerelay.zip"),"Export a .typerelay.zip bundle to preserve images");db.export_entries(context["recovery"]["library_name"].as_str().unwrap_or("Recovery"),&[Self::recovered_entry(&context["recovery"])?],std::path::Path::new(first))?;}else{Paths::atomic_write(std::path::Path::new(first),serde_json::to_string_pretty(&context["recovery"])?.as_bytes(),true)?;}let id=context["recovery"]["id"].as_str().context("Recovery ID missing")?;db.set_meta(&format!("tui_recovery_preserved:{id}"),&json!(true))?;}
             },
             Action::DraftDestination=>{
                 let destination=db.editor(first)?;db.editable(&destination.id)?;
@@ -262,8 +264,8 @@ impl App {
                         }
                     },
                     Mode::Recovery=>{anyhow::ensure!(Database::open(&self.store.directory)?.recovery()?.iter().any(|current|current["id"]==row["id"]),"Recovery removed; reopen Recovery");match code.unwrap() {
-                        KeyCode::Char('c')=>{typerelay_client::clipboard::PasteJob::copy_text(serde_json::to_string_pretty(&row["data"])?)?;Database::open(&self.store.directory)?.set_meta(&format!("tui_recovery_preserved:{}",row["id"].as_str().context("Missing ID")?),&json!(true))?;self.message("Recovery copied; d explicitly dismisses",false);},
-                        KeyCode::Char('e')=>self.workflow=Some(Workflow::form(Action::DraftExport,&[("New JSON export path",String::new())],json!({"recovery":row}))),
+                        KeyCode::Char('c')=>{typerelay_client::clipboard::PasteJob::copy_text(serde_json::to_string_pretty(&row["data"])?)?;if Self::recovery_has_assets(&row) {self.message("Recovery copied without images; export a .typerelay.zip bundle to preserve them",true);}else{Database::open(&self.store.directory)?.set_meta(&format!("tui_recovery_preserved:{}",row["id"].as_str().context("Missing ID")?),&json!(true))?;self.message("Recovery copied; d explicitly dismisses",false);}},
+                        KeyCode::Char('e')=>{let label=if Self::recovery_has_assets(&row) {"New .typerelay.zip path (preserves images)"}else{"New JSON export path"};self.workflow=Some(Workflow::form(Action::DraftExport,&[(label,String::new())],json!({"recovery":row})));},
                         KeyCode::Char('r')|KeyCode::Enter=>{
                             self.ensure_idle()?;let entry=Self::recovered_entry(&row)?;let file=Database::open(&self.store.directory)?.editor(&self.current_name()?)?;let mut draft=Draft::new(&file,None,entry,None);draft.origin_library=row["library"].as_str().unwrap_or(&file.id).into();draft.origin_snippet=row["snippet"].as_str().map(str::to_owned);let db=Database::open(&self.store.directory)?;db.put_draft(&self.identity,&draft,None)?;db.set_meta(&format!("tui_recovery_preserved:{}",row["id"].as_str().context("Missing ID")?),&json!(true))?;self.draft_gate=true;self.resume_draft(draft)?;
                         },
@@ -353,7 +355,7 @@ mod tests {
     }
     #[test]
     fn commands_filter_import_export_validate_and_code_controls_use_services() {
-        let root=tempfile::tempdir().unwrap();let mut app=app(root.path());let yaml=root.path().join("in.yml");std::fs::write(&yaml,"matches: [{replace: Imported}]").unwrap();app.submit_form(Action::ImportYaml,vec![yaml.to_string_lossy().into(),"Imported".into()],Value::Null).unwrap();app.file=Some(app.store.open("Imported").unwrap());let bundle=root.path().join("out.typerelay.zip");app.submit_form(Action::Export,vec![bundle.to_string_lossy().into()],json!({"name":"Imported"})).unwrap();assert!(bundle.exists());app.command(Action::Validate).unwrap();assert!(app.workflow.as_ref().unwrap().text.contains("Valid: 0"));app.workflow=None;app.screen=Screen::Browse;app.snippets_state.select(Some(0));app.edit(false).unwrap();app.code=true;
+        let root=tempfile::tempdir().unwrap();let mut app=app(root.path());let yaml=root.path().join("in.yml");std::fs::write(&yaml,"matches: [{replace: Imported}]").unwrap();app.submit_form(Action::ImportYaml,vec![yaml.to_string_lossy().into(),"Imported".into()],Value::Null).unwrap();app.file=Some(app.store.open("Imported").unwrap());let bundle=root.path().join("out.typerelay.zip");app.submit_form(Action::Export,vec![bundle.to_string_lossy().into()],json!({"id":app.file.as_ref().unwrap().id.clone()})).unwrap();assert!(bundle.exists());app.command(Action::Validate).unwrap();assert!(app.workflow.as_ref().unwrap().text.contains("Valid: 0"));app.workflow=None;app.screen=Screen::Browse;app.snippets_state.select(Some(0));app.edit(false).unwrap();app.code=true;
         key(&mut app,KeyCode::Char('p'),KeyModifiers::CONTROL);app.handle(Event::Paste("code language".into()));assert_eq!(app.workflow.as_ref().unwrap().rows.len(),1);key(&mut app,KeyCode::Enter,KeyModifiers::NONE);app.workflow.as_mut().unwrap().state.select(Some(4));key(&mut app,KeyCode::Enter,KeyModifiers::NONE);assert_eq!(app.language,"rust");app.command(Action::Indent).unwrap();app.workflow.as_mut().unwrap().state.select(Some(1));key(&mut app,KeyCode::Enter,KeyModifiers::NONE);app.editor_focus=1;app.expansion=App::text("");key(&mut app,KeyCode::Tab,KeyModifiers::NONE);assert_eq!(App::value(&app.expansion),"  ");
     }
     #[test]
@@ -425,4 +427,23 @@ mod tests {
         assert!(!app.error,"{}",app.status);assert_eq!(app.screen,Screen::Browse);assert_eq!(app.selected_ids,[file.ids[0].clone(),file.ids[1].clone()].into());assert_eq!(app.selection_anchor.as_deref(),Some(file.ids[1].as_str()));app.selection_anchor=Some("removed".into());app.retain_selection();assert!(app.selection_anchor.is_none());
     }
 
+    #[test]
+    fn recovery_with_images_requires_bundle_export_before_dismissal() {
+        use base64::Engine as _;use sha2::Digest as _;
+        let root=tempfile::tempdir().unwrap();let mut app=app(root.path());let db=Database::open(&app.store.directory).unwrap();let png=base64::engine::general_purpose::STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=").unwrap();let id=format!("{:x}",sha2::Sha256::digest(&png));
+        db.put_asset(&json!({"id":id.clone(),"mime_type":"image/png","size":png.len(),"width":1,"height":1,"animated":false,"source_urls":[]}),&png,false).unwrap();
+        db.recover("library",Some("snippet"),&json!({"value":{"trigger":"img","content":{"version":2,"type":"rich_text","markdown":format!("![](typerelay-asset:{id})"),"assets":[id.clone()]}}}),"Access revoked").unwrap();
+        app.show_recovery().unwrap();key(&mut app,KeyCode::Char('c'),KeyModifiers::NONE);key(&mut app,KeyCode::Char('d'),KeyModifiers::NONE);key(&mut app,KeyCode::Char('y'),KeyModifiers::NONE);assert!(app.error);assert_eq!(db.recovery().unwrap().len(),1);key(&mut app,KeyCode::Esc,KeyModifiers::NONE);
+        app.show_recovery().unwrap();key(&mut app,KeyCode::Char('e'),KeyModifiers::NONE);let json_path=root.path().join("recovery.json");app.handle(Event::Paste(json_path.to_string_lossy().into()));key(&mut app,KeyCode::Enter,KeyModifiers::NONE);assert!(app.error);assert!(!json_path.exists());key(&mut app,KeyCode::Esc,KeyModifiers::NONE);
+        app.show_recovery().unwrap();key(&mut app,KeyCode::Char('d'),KeyModifiers::NONE);key(&mut app,KeyCode::Char('y'),KeyModifiers::NONE);assert_eq!(db.recovery().unwrap().len(),1);key(&mut app,KeyCode::Esc,KeyModifiers::NONE);
+        app.show_recovery().unwrap();key(&mut app,KeyCode::Char('e'),KeyModifiers::NONE);let bundle=root.path().join("recovery.typerelay.zip");app.handle(Event::Paste(bundle.to_string_lossy().into()));key(&mut app,KeyCode::Enter,KeyModifiers::NONE);assert!(bundle.exists());
+        let target=tempfile::tempdir().unwrap();assert!(Database::open(target.path()).unwrap().import_bundle("Restored",&bundle).unwrap().entries.len()==1);assert!(Database::open(target.path()).unwrap().asset(&id).unwrap().is_some());
+        app.show_recovery().unwrap();key(&mut app,KeyCode::Char('d'),KeyModifiers::NONE);key(&mut app,KeyCode::Char('y'),KeyModifiers::NONE);assert!(db.recovery().unwrap().is_empty());
+    }
+    #[test]
+    fn export_form_keeps_original_library_after_rename_and_name_reuse() {
+        let root=tempfile::tempdir().unwrap();let mut app=app(root.path());let db=Database::open(&app.store.directory).unwrap();let original=db.import("Alpha","matches: [{trigger: a, replace: Original}]").unwrap();app.file=Some(original.clone());app.screen=Screen::Browse;
+        app.command(Action::Export).unwrap();db.connection.execute("UPDATE libraries SET name='Renamed' WHERE id=?1",[&original.id]).unwrap();db.import("Alpha","matches: [{trigger: b, replace: Impostor}]").unwrap();
+        let output=root.path().join("out.yml");app.handle(Event::Paste(output.to_string_lossy().into()));key(&mut app,KeyCode::Enter,KeyModifiers::NONE);let exported=std::fs::read_to_string(&output).unwrap();assert!(exported.contains("Original")&&!exported.contains("Impostor"));
+    }
 }

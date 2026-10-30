@@ -68,6 +68,8 @@ Open **Desktop Settings → Sync → Recovered edits** to read the saved content
 
 In the TUI, choose **Recovery (F12)** outside the editor. Use the arrow or Page Up/Page Down keys to read the records, Ctrl+C to copy all records, and Esc to return. The view is read-only.
 
+If a recovered snippet contains images, TUI JSON copy does not allow dismissal; export a `.typerelay.zip` bundle, which includes the image data, before dismissing.
+
 The CLI prints the same records as JSON:
 
 ```fish

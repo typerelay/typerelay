@@ -241,14 +241,20 @@ impl Database {
         let mut statement = self.connection.prepare("SELECT name FROM libraries WHERE json_extract(data,'$.state')='active' ORDER BY name")?;
         Ok(statement.query_map([], |row| row.get(0))?.collect::<std::result::Result<_, _>>()?)
     }
-    pub fn editor_id(&self, id: &str) -> Result<OpenFile> { let name: String=self.connection.query_row("SELECT name FROM libraries WHERE id=?1",[id],|row|row.get(0))?; self.editor(&name) }
+    pub fn editor_id(&self, id: &str) -> Result<OpenFile> {
+        let (id, name, revision): (String, String, i64) = self.connection.query_row("SELECT id,name,version FROM libraries WHERE id=?1 AND json_extract(data,'$.state')='active'", [id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+        self.open_file(id, name, revision)
+    }
     pub fn editor(&self, name: &str) -> Result<OpenFile> {
         let (id, revision): (String, i64) = self.connection.query_row("SELECT id,version FROM libraries WHERE name=?1 AND json_extract(data,'$.state')='active'", [name], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        self.open_file(id, name.into(), revision)
+    }
+    fn open_file(&self, id: String, name: String, revision: i64) -> Result<OpenFile> {
         let records = self.records(&id)?;
         let entries = Self::entries(&records)?;
         let ids = records.iter().filter(|entry| entry["state"] == "active").map(|entry| entry["id"].as_str().unwrap().to_owned()).collect();
         let revisions = records.iter().filter(|entry| entry["state"] == "active").map(|entry| entry["revision"].as_i64().unwrap_or(0)).collect();
-        Ok(OpenFile { name: name.into(), entries, id, revision, ids, revisions })
+        Ok(OpenFile { name, entries, id, revision, ids, revisions })
     }
     fn name(value: &str) -> Result<String> { let name = value.trim(); ensure!(!name.is_empty() && name.len() <= 100 && !name.contains(['/', '\\', '\n', '\r']), "Use a library name without directories"); Ok(name.into()) }
     pub fn create(&self, name: &str) -> Result<OpenFile> {
@@ -1350,4 +1356,13 @@ mod tests {
         drop(db); let db=Database::open(root.path()).unwrap(); db.set_meta("staged",&json!({"large":true})).unwrap(); drop(db); assert!(Database::open(root.path()).unwrap().meta("staged").unwrap().is_none());
     }
 
+    #[test]
+    fn editor_id_returns_original_library_after_rename_and_name_reuse() {
+        let root=tempfile::tempdir().unwrap(); let db=Database::open(root.path()).unwrap();
+        let original=db.import("Alpha","matches: [{trigger: a, replace: Original}]").unwrap();
+        db.connection.execute("UPDATE libraries SET name='Renamed' WHERE id=?1",[&original.id]).unwrap();
+        let other=db.import("Alpha","matches: [{trigger: b, replace: Other}]").unwrap();
+        let opened=db.editor_id(&original.id).unwrap(); assert_eq!(opened.id,original.id); assert_eq!(opened.name,"Renamed"); assert_eq!(opened.entries[0].replace,"Original");
+        assert_eq!(db.editor_id(&other.id).unwrap().entries[0].replace,"Other"); assert!(db.editor_id("missing").is_err());
+    }
 }
