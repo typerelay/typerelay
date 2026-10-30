@@ -13,12 +13,12 @@ impl Dialog {
     fn operation(&mut self, request: Value) { if self.pending.is_some() { return; } let root = self.root.clone(); let id = request["id"].as_str().unwrap_or("").to_owned(); let (sender, receiver) = mpsc::channel(); std::thread::spawn(move || { let _ = sender.send(NativeAi::request(&root,request)); }); self.pending = Some((id,receiver)); self.message = "Working…".into(); }
     pub fn tick(&mut self) -> bool {
         let mut changed = false;
-        if let Some((_,receiver)) = &self.pending { if let Ok(result) = receiver.try_recv() { self.pending = None; match result { Ok(_) => self.message = "Done".into(), Err(error) => self.message = error.to_string() } changed = true; } }
+        if let Some((_,receiver)) = &self.pending && let Ok(result) = receiver.try_recv() { self.pending = None; match result { Ok(_) => self.message = "Done".into(), Err(error) => self.message = error.to_string() } changed = true; }
         if self.status_rx.is_none() && self.checked.elapsed() >= Duration::from_secs(1) { let root = self.root.clone(); let (sender,receiver) = mpsc::channel(); std::thread::spawn(move || { let _ = sender.send(NativeAi::request(&root,json!({"op":"status"}))); }); self.status_rx = Some(receiver); self.checked = Instant::now(); }
-        if let Some(receiver) = &self.status_rx { if let Ok(result) = receiver.try_recv() { match result { Ok(status) => self.status = status, Err(error) => self.message = error.to_string() } self.status_rx = None; changed = true; } } changed
+        if let Some(receiver) = &self.status_rx && let Ok(result) = receiver.try_recv() { match result { Ok(status) => self.status = status, Err(error) => self.message = error.to_string() } self.status_rx = None; changed = true; } changed
     }
     pub fn event(&mut self, event: Event) -> Option<Outcome> {
-        if let Event::Mouse(mouse)=&event {if mouse.kind==MouseEventKind::Down(MouseButton::Left){if let Some((_,code))=self.buttons.iter().find(|(area,_)|area.contains(Position::new(mouse.column,mouse.row))){return self.event(Event::Key(KeyEvent::new(*code,KeyModifiers::NONE)));}}}
+        if let Event::Mouse(mouse)=&event&& mouse.kind==MouseEventKind::Down(MouseButton::Left)&& let Some((_,code))=self.buttons.iter().find(|(area,_)|area.contains(Position::new(mouse.column,mouse.row))){return self.event(Event::Key(KeyEvent::new(*code,KeyModifiers::NONE)));}
 
         if let Event::Key(key) = &event {
             if key.code == KeyCode::Esc { self.cancel(); return Some(Outcome::Close); }

@@ -13,7 +13,8 @@ fn main()->Result<()> {
         ("refine","Hi {{name}}, cant make the meeting today sorry lets reschedule.","template",true)
     ] {
         let original=Match{replace:text.into(),kind:kind.into(),title:"Cancellation".into(),trigger:"cancel-meeting".into(),..Default::default()};let start=std::time::Instant::now();let result=NativeAi::author(&root,&original,action,&uuid::Uuid::new_v4().to_string())?;
-        if must_change{ensure!(result.replace!=text,"Model echoed the input for {action}");}if text.contains("write a message to cancel"){ensure!(result.replace.to_lowercase().contains("cancel")&&!result.replace.to_lowercase().contains("like to write"),"Create returned a request instead of a message");}
+        if must_change{ensure!(result.replace!=text,"Model echoed the input for {action}");}
+        if text.contains("write a message to cancel"){ensure!(result.replace.to_lowercase().contains("cancel")&&!result.replace.to_lowercase().contains("like to write"),"Create returned a request instead of a message");}
         ensure!(!result.replace.to_lowercase().contains("i need a canned response")&&!result.replace.to_lowercase().contains("i need a text that"),"Model restated request");
         ensure!(result.title==original.title&&result.trigger==original.trigger&&result.variables==original.variables,"Metadata changed");println!("{}",serde_json::json!({"action":action,"seconds":start.elapsed().as_secs_f64(),"unchanged":result.replace==text,"text":result.replace}));
     }

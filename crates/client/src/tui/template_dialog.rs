@@ -27,7 +27,7 @@ impl Dialog {
     }
     pub fn event(&mut self,event:Event)->Option<Outcome>{match self.handle(event){Ok(value)=>value,Err(error)=>{self.error=error.to_string();None}}}
     fn handle(&mut self,event:Event)->Result<Option<Outcome>>{
-        if let Event::Mouse(mouse)=&event{if mouse.kind==MouseEventKind::Down(MouseButton::Left){if let Some((_,code,modifiers))=self.buttons.iter().find(|(area,_,_)|area.contains(Position::new(mouse.column,mouse.row))){return self.handle(Event::Key(KeyEvent::new(*code,*modifiers)));}}}
+        if let Event::Mouse(mouse)=&event&& mouse.kind==MouseEventKind::Down(MouseButton::Left)&& let Some((_,code,modifiers))=self.buttons.iter().find(|(area,_,_)|area.contains(Position::new(mouse.column,mouse.row))){return self.handle(Event::Key(KeyEvent::new(*code,*modifiers)));}
 
         let key=match event { Event::Key(key)=>key,Event::Paste(text)=>{if !self.choosing&&self.index<self.inputs.len(){let label=self.labels[self.index].as_str();if self.fill||matches!(label,"Name"|"Label"|"Default"){let multiline=if self.fill{self.template.variables[&self.names[self.index]].multiline}else{label=="Default"&&self.variable.multiline};let text=text.replace("\r\n","\n");ensure!(multiline||!text.contains('\n'),"Enable multiline before pasting multiple lines");self.inputs[self.index].insert_str(text);}}return Ok(None)},_=>return Ok(None)};if key.kind==KeyEventKind::Release{return Ok(None)};
         if key.code==KeyCode::Esc{return Ok(Some(Outcome::Cancel))}

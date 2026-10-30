@@ -8,6 +8,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::borrow::Cow;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 
+type PendingImage=(usize,Vec<Event<'static>>,usize,Option<std::ops::Range<usize>>);
+
 const ASSET_PREFIX: &str = "typerelay-asset:";
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -97,7 +99,7 @@ impl RichText {
         })
     }
 
-    pub fn images_json(input:&str)->String{let result=(||->Result<serde_json::Value,String>{let markdown:String=serde_json::from_str(input).map_err(|error|error.to_string())?;if markdown.len()>16*1048576{return Err("Image preparation exceeds 16 MiB".into());}let mut images=Vec::new();let mut image:Option<(usize,Vec<Event<'static>>,usize,Option<std::ops::Range<usize>>)>=None;let code=Self::code_spans(&markdown);let mut block=None;let mut parser=Parser::new_ext(&markdown,Self::options()).into_offset_iter();let events:Vec<_>=parser.by_ref().collect();let definitions=parser.reference_definitions();let titles=Regex::new(r#"(?s)\s+((?:\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|\((?:\\.|[^)\\])*\)))\s*\)?$"#).unwrap();
+    pub fn images_json(input:&str)->String{let result=(||->Result<serde_json::Value,String>{let markdown:String=serde_json::from_str(input).map_err(|error|error.to_string())?;if markdown.len()>16*1048576{return Err("Image preparation exceeds 16 MiB".into());}let mut images=Vec::new();let mut image:Option<PendingImage>=None;let code=Self::code_spans(&markdown);let mut block=None;let mut parser=Parser::new_ext(&markdown,Self::options()).into_offset_iter();let events:Vec<_>=parser.by_ref().collect();let definitions=parser.reference_definitions();let titles=Regex::new(r#"(?s)\s+((?:\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|\((?:\\.|[^)\\])*\)))\s*\)?$"#).unwrap();
         for(event,range)in events{match event{
             Event::Start(Tag::HtmlBlock)=>block=Some(range.start),Event::End(TagEnd::HtmlBlock)=>block=None,
             Event::Start(Tag::Image{ref id,..})=>if let Some((_,events,depth,_))=&mut image{events.push(event.into_static());*depth+=1;}else{let definition=definitions.get(id).map(|definition|definition.span.clone());image=Some((range.start,vec![event.into_static()],1,definition));},

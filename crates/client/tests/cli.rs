@@ -25,8 +25,7 @@ fn mutations_report_results_and_sync_errors_do_not_claim_success() {
     let yaml = temp.path().join("converted.yml");
     let bundle = temp.path().join("library.typerelay.zip");
     let other_device = temp.path().join("other-device");
-    fs::write(&source, "matches:\n- trigger: ':hello'\n  replace: Hello\n".replace("\n", "
-")).unwrap();
+    fs::write(&source, "matches:\n- trigger: ':hello'\n  replace: Hello\n".replace("\n", "\r\n")).unwrap();
     for (args, expected) in [
         (vec!["import", "espanso", source.to_str().unwrap(), yaml.to_str().unwrap()], "Imported"),
         (vec!["import", "yaml", yaml.to_str().unwrap(), "--name", "Example"], "Imported"),

@@ -119,7 +119,8 @@ impl Detector {
         }
         self.capture.context=Some(frame.context.clone());
         self.capture.accepted=matches!(&frame.edit,Edit::Text(text) if !text.is_empty()&&!self.capture.composing)||matches!(&frame.edit,Edit::Commit(text)|Edit::Replace{text,..} if !text.is_empty()&&frame.source!=CaptureSource::Keyboard);
-        if self.capture.accepted{self.stats.text_events+=1;}if matches!(frame.edit,Edit::Enter|Edit::Boundary){self.stats.boundaries+=1;}
+        if self.capture.accepted{self.stats.text_events+=1;}
+        if matches!(frame.edit,Edit::Enter|Edit::Boundary){self.stats.boundaries+=1;}
         match frame.edit {
             Edit::CompositionStart=>{self.capture.composing=true;return completed;},
             Edit::CompositionEnd|Edit::CompositionCancel=>{self.capture.composing=false;return completed;},
@@ -136,7 +137,8 @@ impl Detector {
         if let Some(text)=self.event(event,settings,epoch,now){completed.push(text);}completed
     }
     pub fn accepted_input(&self)->bool{self.capture.accepted}
-    pub fn idle(&mut self,now_ms:i64)->Option<String> {if self.capture.composing{return None;}if !self.paused&&self.last_ms>0&&now_ms-self.last_ms>=5000 {self.paused=true;return self.complete();}None}
+    pub fn idle(&mut self,now_ms:i64)->Option<String> {if self.capture.composing{return None;}
+    if !self.paused&&self.last_ms>0&&now_ms-self.last_ms>=5000 {self.paused=true;return self.complete();}None}
     pub fn quiet(&self,now_ms:i64)->bool {self.last_input_ms>0&&now_ms-self.last_input_ms>=5000}
     fn touch(&mut self,at:i64){if !self.dirty{self.changed_from=at;}else{self.changed_from=self.changed_from.min(at);}self.dirty=true;self.passage_revision+=1;}
     fn trim_passage(&mut self){while self.pending.chars().count()>4096{let covered=self.passage_base+4096;self.analyze();let cut=self.pending.char_indices().nth(1024).map_or(self.pending.len(),|(index,_)|index);self.pending.drain(..cut);self.passage_base+=1024;self.reported=self.reported.saturating_sub(cut);self.report_start=self.report_start.saturating_sub(cut);self.dirty=true;self.changed_from=covered;self.passage_revision+=1;}}

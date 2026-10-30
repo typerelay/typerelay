@@ -199,7 +199,8 @@ impl App {
         }
     }
     fn message(&mut self, text: impl Into<String>, error: bool) { self.status = text.into(); self.error = error; }
-    fn filtered(&self) -> Vec<usize> { if Self::value(&self.search).trim().is_empty(){return self.file.as_ref().map(|file|file.search("")).unwrap_or_default();}if !self.search_done||self.search_query!=Self::value(&self.search)||self.search_scope.as_deref()!=self.file.as_ref().map(|file|file.id.as_str()){return Vec::new();}self.search_hits.clone() }
+    fn filtered(&self) -> Vec<usize> { if Self::value(&self.search).trim().is_empty(){return self.file.as_ref().map(|file|file.search("")).unwrap_or_default();}
+    if !self.search_done||self.search_query!=Self::value(&self.search)||self.search_scope.as_deref()!=self.file.as_ref().map(|file|file.id.as_str()){return Vec::new();}self.search_hits.clone() }
     fn selected(&self) -> Option<usize> { self.filtered().get(self.snippets_state.selected().unwrap_or(0)).copied() }
     fn apply(&mut self, destination: Destination) -> Result<()> {
         self.cancel_writing();
@@ -445,7 +446,7 @@ impl App {
         }
     }
     fn record_copy(&self, characters: usize) {
-        if let Some((library,snippet))=&self.copy_identity { if let Err(error)=typerelay_client::database::Database::open(&self.store.directory).and_then(|db|db.usage(library,snippet,"copy","terminal",characters)) { eprintln!("TypeRelay usage could not be queued: {error}"); } }
+        if let Some((library,snippet))=&self.copy_identity && let Err(error)=typerelay_client::database::Database::open(&self.store.directory).and_then(|db|db.usage(library,snippet,"copy","terminal",characters)) { eprintln!("TypeRelay usage could not be queued: {error}"); }
     }
     fn copy_current(&mut self) -> Result<()> {
         if self.screen==Screen::Recovery { typerelay_client::clipboard::PasteJob::copy_text(Self::value(&self.recovery_text))?; self.message("Copied recovery records",false); return Ok(()); }
@@ -724,7 +725,7 @@ impl App {
                     return Ok(());
                 }
 				if self.screen==Screen::Files&&!self.global_active()&&self.merge_button.contains(position){return self.request_merge();}
-                if self.screen==Screen::Browse{if let Some(index)=self.selection_buttons.iter().position(|area|area.contains(position)){self.search_focused=false;let(code,modifiers)=[(KeyCode::Char(' '),KeyModifiers::NONE),(KeyCode::Char('a'),KeyModifiers::CONTROL),(KeyCode::Char('d'),KeyModifiers::CONTROL),(KeyCode::Enter,KeyModifiers::NONE)][index];return self.handle_inner(Event::Key(KeyEvent::new(code,modifiers)));}}
+                if self.screen==Screen::Browse&& let Some(index)=self.selection_buttons.iter().position(|area|area.contains(position)){self.search_focused=false;let(code,modifiers)=[(KeyCode::Char(' '),KeyModifiers::NONE),(KeyCode::Char('a'),KeyModifiers::CONTROL),(KeyCode::Char('d'),KeyModifiers::CONTROL),(KeyCode::Enter,KeyModifiers::NONE)][index];return self.handle_inner(Event::Key(KeyEvent::new(code,modifiers)));}
                 if self.screen == Screen::Browse && let Some(index) = self.bulk_buttons.iter().position(|area|area.contains(position)) {
                     return if index == 0 { self.request_move() } else { self.request_delete() };
                 }
@@ -733,11 +734,12 @@ impl App {
                     if self.list_area.contains(position) { let index = usize::from(mouse.row.saturating_sub(self.list_area.y + 1)) + self.trash_state.offset(); if index < self.trash_rows.len() { self.trash_state.select(Some(index)); } return Ok(()); }
                 }
                 if self.screen==Screen::Settings&&self.model_button.contains(position){return self.handle_inner(Event::Key(KeyEvent::new(KeyCode::Char('g'),KeyModifiers::CONTROL)));}
-                if self.screen==Screen::Edit{if let Some(index)=self.editor_buttons.iter().position(|area|area.contains(position)){self.editor_focus=index+5;return self.handle_inner(Event::Key(KeyEvent::new(KeyCode::F([8,9,11,12,4][index]),KeyModifiers::NONE)));}}
-                if self.screen==Screen::Edit{if let Some(index)=self.writing_buttons.iter().position(|area|area.contains(position)){self.editor_focus=index+3;return self.write_action(index);}}
+                if self.screen==Screen::Edit&& let Some(index)=self.editor_buttons.iter().position(|area|area.contains(position)){self.editor_focus=index+5;return self.handle_inner(Event::Key(KeyEvent::new(KeyCode::F([8,9,11,12,4][index]),KeyModifiers::NONE)));}
+                if self.screen==Screen::Edit&& let Some(index)=self.writing_buttons.iter().position(|area|area.contains(position)){self.editor_focus=index+3;return self.write_action(index);}
                 if let Some(index) = self.toolbar.iter().position(|area| area.contains(position)) { return self.toolbar_action(index); }
 				if self.save_area.contains(position) { return if self.screen==Screen::Image{self.image()}else{self.save()}; }
-				if self.cancel_area.contains(position) {if self.writing.is_some(){self.cancel_writing();return Ok(());}if self.screen==Screen::Image{self.screen=Screen::Edit;return Ok(());}return self.leave(if self.screen == Screen::NewFile || self.screen == Screen::Edit && self.global_edit { Destination::Files } else { Destination::Browse }); }
+				if self.cancel_area.contains(position) {if self.writing.is_some(){self.cancel_writing();return Ok(());}
+				if self.screen==Screen::Image{self.screen=Screen::Edit;return Ok(());}return self.leave(if self.screen == Screen::NewFile || self.screen == Screen::Edit && self.global_edit { Destination::Files } else { Destination::Browse }); }
                 if let Some(index) = self.field_areas.iter().position(|area| area.contains(position)) {
 					if self.screen == Screen::Browse { self.search_focused = true; }else if self.screen == Screen::Files { self.global_search_focused = true; }else if self.screen==Screen::Image{self.image_focus=index;} else { self.editor_focus = index; }
                 }

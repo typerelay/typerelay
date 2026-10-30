@@ -755,7 +755,8 @@ impl Database {
 		let mut merged_source=None;
         if let Some(rows)=response["personal_abbreviations"].as_array() {
             let mut stored=self.meta("personal_abbreviations")?.and_then(|value|value.as_array().cloned()).unwrap_or_default();
-            for row in rows { let purged:bool=self.connection.query_row("SELECT EXISTS(SELECT 1 FROM snippets WHERE id=?1 AND json_extract(data,'$.state')='purged')",[row["snippet"].as_str().unwrap_or("")],|row|row.get(0))?; if purged { continue; } if let Some(old)=stored.iter_mut().find(|old|old["snippet"]==row["snippet"]) { if old["revision"].as_i64().unwrap_or(0)<=row["revision"].as_i64().unwrap_or(0) { *old=row.clone(); } } else { stored.push(row.clone()); } }
+            for row in rows { let purged:bool=self.connection.query_row("SELECT EXISTS(SELECT 1 FROM snippets WHERE id=?1 AND json_extract(data,'$.state')='purged')",[row["snippet"].as_str().unwrap_or("")],|row|row.get(0))?; if purged { continue; }
+            if let Some(old)=stored.iter_mut().find(|old|old["snippet"]==row["snippet"]) { if old["revision"].as_i64().unwrap_or(0)<=row["revision"].as_i64().unwrap_or(0) { *old=row.clone(); } } else { stored.push(row.clone()); } }
             self.set_meta("personal_abbreviations", &json!(stored))?;
         }
         if response["capabilities"]["personal_abbreviations"]==1 { self.set_meta("personal_capability", &json!(1))?; }

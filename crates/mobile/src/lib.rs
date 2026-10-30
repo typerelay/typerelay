@@ -273,12 +273,14 @@ impl Mobile {
         let result = std::panic::catch_unwind(|| -> Result<Value> { ensure!(request.len() <= 12 * 1048576, "Request too large"); Self::dispatch(Path::new(directory), Path::new(shared), &serde_json::from_str(request)?) });
         match result { Ok(Ok(value)) => json!({"data":value}), Ok(Err(error)) => json!({"error":error.to_string(),"status":error.downcast_ref::<ServerError>().map(|error|error.status)}), Err(_) => json!({"error":"Native operation failed"}) }.to_string()
     }
+    /// # Safety
     /// Pointers must be valid NUL-terminated UTF-8 strings, owned by the caller for this call.
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn typerelay_mobile_call(directory: *const c_char, shared: *const c_char, request: *const c_char) -> *mut c_char {
         let read = |pointer| unsafe { CStr::from_ptr(pointer) }.to_string_lossy().into_owned();
         CString::new(Self::call(&read(directory), &read(shared), &read(request))).unwrap().into_raw()
     }
+    /// # Safety
     /// Release exactly once, using a pointer returned by typerelay_mobile_call.
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn typerelay_mobile_free(pointer: *mut c_char) { if !pointer.is_null() { drop(unsafe { CString::from_raw(pointer) }); } }
