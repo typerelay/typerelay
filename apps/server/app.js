@@ -115,9 +115,8 @@ export class Server {
 		});
 		Admin.mount(app);
 		app.use(AdminSettings.middleware);
-		const authLimit = rateLimit({ windowMs: 900000, limit: 30, keyGenerator: req => RateLimitSupport.clientIp(req), store: ApiRateLimit.getStore('auth', 900000), passOnStoreError: true, message: { error: 'Too many sign-in attempts; try again later.' } });
-		const tokenLimit = ApiRateLimit.tokenLimiter(authLimit);
-		Security.mount(app, authLimit);
+		const { auth: authLimit, token: tokenLimit, sso: ssoLimit } = ApiRateLimit.authLimiters();
+		Security.mount(app, authLimit, ssoLimit);
 		await PublicApi.mount(app, authLimit, tokenLimit);
 		app.post('/auth/login', authLimit, async (req, res) => { await Auth.login(req.body.email, null, { origin: req.boundAccount ? Server.requestOrigin(req) : Auth.origin, account: req.boundAccount, return_to: req.session.return_to && (req.session.return_to.startsWith('/oauth/authorize?') || req.session.return_to.startsWith('/account/delete')) ? req.session.return_to : undefined }); res.json({ message: 'Check your email for a sign-in link.' }); });
 		app.get('/auth/callback', async (req, res) => {
@@ -219,7 +218,7 @@ export class Server {
 		app.get('/api/v2/statistics/export', async (req, res) => res.type('text/csv').attachment('typerelay-statistics.csv').send(Statistics.csv(await Statistics.report(req.ctx, req.query))));
 		app.patch('/api/v2/statistics/preferences', async (req, res) => res.json(await Statistics.preferences(req.ctx, req.body.scope, req.body)));
 
-		// Same bucket and threshold as the /api/v3 upload limiter.
+		// Same store and threshold as the /api/v3 upload limiter; v2 keys per user, v3 per credential because it limits before authentication.
 		const uploadLimit = ApiRateLimit.createLimiter('api-upload', ApiRateLimit.getConfig().uploadPerMinute, undefined, ApiRateLimit.getUserKey);
 		// Only a library created with snippets or YAML can fetch images in bulk; sync, poll and plain edits stay unlimited.
 		const bulkCreateLimit = ApiRateLimit.createLimiter('api-upload', ApiRateLimit.getConfig().uploadPerMinute, request => !ApiRateLimit.isBulkLibraryCreate(request), ApiRateLimit.getUserKey);

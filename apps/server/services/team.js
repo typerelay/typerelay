@@ -1,6 +1,6 @@
 import { AdminSettings } from './admin_settings.js';
 import { AccountAccess } from './account_access.js';
-import { Member, Group, User, Ticket, Account, Device } from '../model/index.js';
+import { Member, Group, User, Ticket, Account, Device, Integration, IntegrationToken } from '../model/index.js';
 import { Support } from './support.js';
 import { Auth } from './auth.js';
 import { Billing } from './billing.js';
@@ -58,7 +58,7 @@ export class Team {
 	static async accept(ctx, token, session) {
 		const user = await User.findById(ctx.user).session(session).read('primary').lean();
 		Support.assert(user && !user.deletion?.requested_at, 'Account deletion requested', 409);
-		const ticket = await Ticket.findOneAndDelete({ hash: Support.hash(token), kind: 'invite', email: user.email, expires: { $gt: new Date() } }, { session }).lean();
+		const ticket = await Ticket.findOneAndDelete({ hash: Support.hash(Support.text(token, 256)), kind: 'invite', email: user.email, expires: { $gt: new Date() } }, { session }).lean();
 		Support.assert(ticket, 'Invitation invalid, expired, or for another email');
 		const account = await Account.findById(ticket.account).session(session).read('primary').lean();
 		AccountAccess.assert(account);
@@ -79,6 +79,8 @@ export class Team {
 			await Member.deleteOne({ _id: target._id }, { session });
 			await Group.updateMany({ account: ctx.account }, { $pull: { users: target.user } }, { session });
 			await Device.updateMany({ account: ctx.account, user: target.user }, { $set: { revoked: true } }, { session });
+			const grants = await Integration.find({ account: ctx.account, user: target.user, revoked: false }).select('_id').session(session).read('primary').lean();
+			await Integration.updateMany({ _id: { $in: grants.map(grant => grant._id) } }, { $set: { revoked: true } }, { session }); await IntegrationToken.deleteMany({ grant: { $in: grants.map(grant => grant._id) } }, { session });
 		}
 		await Support.change(ctx.account, null, 'membership', session);
 		return { member: id, role: body.role || null };

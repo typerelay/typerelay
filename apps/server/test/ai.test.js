@@ -280,6 +280,11 @@ test('two-call managed search counts once and BYO works after the managed allowa
 	} finally { await Ai.save(null, 'installation', { daily_limit: installation.daily_limit }, true); process.env.TYPERELAY_HOSTED_EDITION = 'false'; process.env.BILLING_ENABLED = 'false'; }
 });
 
+test('search scoring lowercases each candidate once and keeps title and text weights', () => {
+	const lowered = Ai.lowered({ title: 'Hello', trigger: 'HI', name: 'Lib', text: 'Foo BAR' });
+	assert.deepEqual(lowered, { title: 'hello hi lib', text: 'foo bar' });
+	assert.equal(Ai.score(lowered, ['hello', 'bar', 'zzz'], { hello: 2 }), 11);
+});
 test('AI search ranks existing authorized snippets and transient local records only', async () => {
 	const owner = await Fixture.context(); const account = await Account.findById(owner.account).lean(); const member = await Fixture.context('member', account); await Fixture.configure(member);
 	const shared = await Library.create({ account: owner.account, creator: owner.user, name: 'Shared', shared: true, members: [member.user], state: 'active', revision: 1 });

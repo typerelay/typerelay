@@ -384,19 +384,19 @@ export class Security {
 			res.redirect(error.details.login_url + '?return_to=' + encodeURIComponent(req.session.return_to));
 		}
 	}
-	static mount(app, limit) {
+	static mount(app, limit, ssoLimit = limit) {
 		app.use('/auth', (req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
-		app.post('/auth/sso/start', limit, async (req, res) => {
+		app.post('/auth/sso/start', ssoLimit, async (req, res) => {
 			let id = Support.text(req.body.account, 2048);
 			if (!/^[a-f0-9]{24}$/.test(id)) { let url; try { url = new URL(id); } catch { throw new Fault(400, 'Enter the SSO sign-in link from your administrator'); } id = url.pathname.match(/^\/auth\/sso\/([a-f0-9]{24})\/login$/)?.[1]; }
 			const account = await Security.ssoAccount(Support.id(id));
 			Support.assert(Security.ssoActive(account), 'SSO is not available for this account', 403);
 			res.json({ redirect: Security.ssoUrls(account).login + '?return_to=' + encodeURIComponent(Security.ssoDestination(req.session.return_to, account._id)) });
 		});
-		app.get('/auth/sso/finish', limit, Security.ssoFinish);
-		app.get('/auth/sso/:account/login', limit, Security.ssoBegin);
-		app.post('/auth/sso/:account/callback', limit, Security.ssoCallback);
-		app.get('/auth/sso/:account/metadata', limit, async (req, res) => { const account = await Security.ssoAccount(req.params.account, true); Billing.assertCapability({ entitlements: Billing.entitlements(account) }, 'sso', 'SSO requires Pro or Team'); Support.assert(account.sso?.certificate, 'Save the identity provider configuration first'); res.type('application/xml').send(Security.saml(account).generateServiceProviderMetadata(null, null)); });
+		app.get('/auth/sso/finish', ssoLimit, Security.ssoFinish);
+		app.get('/auth/sso/:account/login', ssoLimit, Security.ssoBegin);
+		app.post('/auth/sso/:account/callback', ssoLimit, Security.ssoCallback);
+		app.get('/auth/sso/:account/metadata', ssoLimit, async (req, res) => { const account = await Security.ssoAccount(req.params.account, true); Billing.assertCapability({ entitlements: Billing.entitlements(account) }, 'sso', 'SSO requires Pro or Team'); Support.assert(account.sso?.certificate, 'Save the identity provider configuration first'); res.type('application/xml').send(Security.saml(account).generateServiceProviderMetadata(null, null)); });
 		app.get('/auth/sso/:account/recovery', limit, (req, res) => res.render('sso-recovery', { account: Support.id(req.params.account), signedIn: Boolean(req.session.user && !req.session.sso) }));
 		app.post('/auth/sso/:account/recovery', limit, async (req, res) => res.json(await Security.ssoRecover(req)));
 		app.get('/login', (req, res) => res.render('login'));

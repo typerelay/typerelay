@@ -329,7 +329,8 @@ export class Billing {
 		if (account) await AccountAccess.acquire(account._id);
 		if (String(checkout.customer?.id || checkout.customer) !== String(account.billing?.stripe_customer_id) || String(checkout.client_reference_id) !== String(account._id)) throw Billing.error(409, 'Checkout ownership mismatch', 'billing_mismatch');
 		const subscription = await stripe.subscriptions.retrieve(checkout.subscription.id || checkout.subscription);
-		await Billing.applySubscription(account, subscription, { stripe });
+		// The webhook may apply this subscription first and bump billing.revision; that outcome is a success.
+		try { await Billing.applySubscription(account, subscription, { stripe }); } catch (error) { if (error.code !== 'billing_changed' || (await Billing.account(account._id, null, true)).billing?.stripe_subscription_id !== subscription.id) throw error; }
 		await Billing.cancelFreeSubscription(account, { stripe });
 		return account;
 	}

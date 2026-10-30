@@ -6,6 +6,7 @@ export class McpRateLimit {
 	static concurrencyTtlMs = 5 * 60 * 1000;
 	static requestLimiters = new Map();
 	static memoryCounters = new Map();
+	static memorySweepSize = 1000;
 	static memoryConcurrency = new Map();
 	static memoryFallbackLogged = false;
 	static storeFactory;
@@ -79,6 +80,8 @@ export class McpRateLimit {
 	}
 	static counter(key, windowMs) {
 		const now = Date.now();
+		// Sweep expired keys only when the map doubles, so lookups stay O(1) on average.
+		if (McpRateLimit.memoryCounters.size >= McpRateLimit.memorySweepSize) { for (const [entry, value] of McpRateLimit.memoryCounters) if (value.resetAt <= now) McpRateLimit.memoryCounters.delete(entry); McpRateLimit.memorySweepSize = Math.max(1000, McpRateLimit.memoryCounters.size * 2); }
 		let counter = McpRateLimit.memoryCounters.get(key);
 		if (!counter || counter.resetAt <= now) { counter = { count: 0, resetAt: now + windowMs }; McpRateLimit.memoryCounters.set(key, counter); }
 		return counter;

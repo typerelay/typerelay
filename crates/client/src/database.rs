@@ -117,7 +117,7 @@ impl Database {
 		if matched.is_empty(){return Ok(());}
 		let backup=self.directory.parent().context("Missing configuration directory")?.join("backups").join(format!("reconnect-{}",Uuid::new_v4()));
 		fs::create_dir_all(&backup)?;self.connection.backup(rusqlite::MAIN_DB,backup.join("typerelay.sqlite"),None)?;
-		let transaction=self.connection.unchecked_transaction()?;
+		let transaction=rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?;
 		let mut moved=std::collections::BTreeSet::new();
 		if provenance {let mut bases=std::collections::BTreeMap::new();let mut locals=std::collections::BTreeMap::new();for library in &matched{let exists:bool=self.connection.query_row("SELECT EXISTS(SELECT 1 FROM base_libraries WHERE id=?1)",[library],|row|row.get(0))?;if !exists{continue;}let mut statement=self.connection.prepare("SELECT data FROM base_snippets WHERE library=?1")?;for text in statement.query_map([library],|row|row.get::<_,String>(0))?.collect::<std::result::Result<Vec<_>,_>>()?{let record:Value=serde_json::from_str(&text)?;if let Some(id)=record["id"].as_str(){bases.insert(id.to_owned(),(library.clone(),record));}}for record in self.records(library)?{if let Some(id)=record["id"].as_str(){locals.insert(id.to_owned(),(library.clone(),record));}}}for (id,(source,base)) in &bases{let Some((destination,local))=locals.get(id).filter(|(_,record)|Self::sync_value(record).is_some())else{continue;};if source==destination{continue;}let mut item=json!({"id":id,"base_revision":base["revision"]});if Self::sync_value(base)!=Self::sync_value(local){item["value"]=Self::sync_value(local).unwrap();}self.queue(&json!({"kind":"batch","library":source,"records":[base],"body":{"operation_id":Uuid::new_v4().to_string(),"action":"move","source_library":source,"destination_library":destination,"items":[item]}}))?;moved.insert(id.clone());}}
 		for id in &matched {
@@ -202,7 +202,7 @@ impl Database {
         Ok(self.personal_state()?.remove(id).unwrap_or(json!({"snippet":id,"trigger":null,"revision":0,"conflicts":[]})))
     }
     pub fn personal_edit(&self, library: &str, id: &str, trigger: Option<&str>, base_revision: i64, conflict: Option<&str>) -> Result<()> {
-        let transaction = self.connection.unchecked_transaction()?;
+        let transaction = rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?;
         self.editable(library)?;
         let info = self.library(library)?;
         ensure!(info["shared"]==true && info["state"]=="active" && self.synced(library)?, "An active shared library is required");
@@ -250,7 +250,7 @@ impl Database {
     fn name(value: &str) -> Result<String> { let name = value.trim(); ensure!(!name.is_empty() && name.len() <= 100 && !name.contains(['/', '\\', '\n', '\r']), "Use a library name without directories"); Ok(name.into()) }
     pub fn create(&self, name: &str) -> Result<OpenFile> {
         let name = Self::name(name)?;
-        let transaction = self.connection.unchecked_transaction()?;
+        let transaction = rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?;
         let id = Uuid::new_v4().to_string();
         self.put_library(&json!({"_id":id,"name":name,"state":"active","revision":1,"permissions":{"read":true,"edit":true,"manage":true}}), &name, false)?;
         self.validate_transaction()?;
@@ -270,7 +270,7 @@ impl Database {
 	pub fn delete_asset(&self,id:&str)->Result<()> {self.connection.execute("DELETE FROM assets WHERE id=?1",[id])?;Ok(())}
 	pub fn pending_asset_ids(&self)->Result<Vec<String>> {let mut statement=self.connection.prepare("SELECT DISTINCT asset.value FROM outbox, json_tree(outbox.operation, '$.body') content, json_each(content.value, '$.assets') asset WHERE content.key='content' AND content.type='object' ORDER BY asset.value")?;Ok(statement.query_map([],|row|row.get(0))?.collect::<std::result::Result<Vec<_>,_>>()?)}
     pub fn edit(&self, file: &OpenFile, index: Option<usize>, entry: Option<Match>) -> Result<OpenFile> {
-        let transaction = if self.connection.is_autocommit() { Some(self.connection.unchecked_transaction()?) } else { None };
+        let transaction = if self.connection.is_autocommit() { Some(rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?) } else { None };
         self.editable(&file.id)?;
         let current = self.editor(&file.name)?;
         ensure!(current.revision == file.revision, "Library changed outside the TUI; draft kept. Reopen before saving");
@@ -310,16 +310,16 @@ impl Database {
         }).collect()
     }
     pub fn batch(&self, source: &str, destination: Option<&str>, items: &[Value]) -> Result<()> {
-        let transaction = self.connection.unchecked_transaction()?;
+        let transaction = rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?;
         self.batch_inner(source, destination, items, true)?;
         self.validate_transaction()?;
         transaction.commit()?;
         Ok(())
     }
 	pub fn merge_destinations(&self,source:&str)->Result<Vec<Value>>{let library=self.library(source)?;ensure!(library["state"]=="active","Source library is unavailable");ensure!(library["permissions"]["manage"]==true,"Manage permission required to merge this library");let merging=self.pending_merges()?;ensure!(!merging.contains(source),"Library merge is pending");let synced=self.synced(source)?;let rows=self.libraries()?.into_iter().filter(|destination|{let id=destination["_id"].as_str().unwrap_or("");id!=source&&destination["state"]=="active"&&destination["permissions"]["edit"]==true&&!merging.contains(id)&&!(synced&&!self.synced(id).unwrap_or(false))}).collect();Ok(rows)}
-	pub fn merge(&self,source:&str,destination:&str)->Result<bool>{let transaction=self.connection.unchecked_transaction()?;ensure!(source!=destination,"Choose another library");let mut source_library=self.library(source)?;let destination_library=self.library(destination)?;ensure!(source_library["state"]=="active"&&destination_library["state"]=="active","Library is unavailable");ensure!(source_library["permissions"]["manage"]==true,"Manage permission required to merge this library");ensure!(destination_library["permissions"]["edit"]==true,"Destination library is read-only");ensure!(!self.pending_merge(source)?&&!self.pending_merge(destination)?,"A library merge is already pending");let records:Vec<Value>=self.records(source)?.into_iter().filter(|record|record["state"]=="active").collect();ensure!(!records.is_empty(),"Source library has no active snippets");ensure!(records.len()<=10000,"Library merge exceeds 10,000 snippets");let source_synced=self.synced(source)?;let destination_synced=self.synced(destination)?;ensure!(!source_synced||destination_synced,"Upload the destination before merging a synced library into it");let queued=source_synced||destination_synced;if !queued{let items=records.iter().map(|record|json!({"id":record["id"],"base_revision":record["revision"]})).collect::<Vec<_>>();self.batch_inner(source,Some(destination),&items,false)?;source_library=self.library(source)?;Self::mark_trash(&mut source_library,true);source_library["revision"]=json!(source_library["revision"].as_i64().unwrap_or(0)+1);self.connection.execute("UPDATE libraries SET data=?2,version=version+1 WHERE id=?1",params![source,source_library.to_string()])?;}else if !source_synced{let changes=records.iter().map(|record|json!({"id":record["id"],"base_revision":Value::Null,"base":Value::Null,"value":Self::sync_value(record)})).collect::<Vec<_>>();self.queue(&json!({"kind":"merge_local","library":destination,"source":source,"records":records,"body":{"operation_id":Uuid::new_v4().to_string(),"base_revision":destination_library["revision"],"changes":changes}}))?;}else{let items=records.iter().map(|record|json!({"id":record["id"],"base_revision":record["revision"]})).collect::<Vec<_>>();self.queue(&json!({"kind":"merge_synced","library":source,"source":source,"destination":destination,"records":records,"move_body":{"operation_id":Uuid::new_v4().to_string(),"action":"move","source_library":source,"destination_library":destination,"items":items},"trash_operation_id":Uuid::new_v4().to_string()}))?;}self.set_meta("last_failure",&json!(""))?;self.validate_transaction()?;transaction.commit()?;Ok(queued)}
+	pub fn merge(&self,source:&str,destination:&str)->Result<bool>{let transaction=rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?;ensure!(source!=destination,"Choose another library");let mut source_library=self.library(source)?;let destination_library=self.library(destination)?;ensure!(source_library["state"]=="active"&&destination_library["state"]=="active","Library is unavailable");ensure!(source_library["permissions"]["manage"]==true,"Manage permission required to merge this library");ensure!(destination_library["permissions"]["edit"]==true,"Destination library is read-only");ensure!(!self.pending_merge(source)?&&!self.pending_merge(destination)?,"A library merge is already pending");let records:Vec<Value>=self.records(source)?.into_iter().filter(|record|record["state"]=="active").collect();ensure!(!records.is_empty(),"Source library has no active snippets");ensure!(records.len()<=10000,"Library merge exceeds 10,000 snippets");let source_synced=self.synced(source)?;let destination_synced=self.synced(destination)?;ensure!(!source_synced||destination_synced,"Upload the destination before merging a synced library into it");let queued=source_synced||destination_synced;if !queued{let items=records.iter().map(|record|json!({"id":record["id"],"base_revision":record["revision"]})).collect::<Vec<_>>();self.batch_inner(source,Some(destination),&items,false)?;source_library=self.library(source)?;Self::mark_trash(&mut source_library,true);source_library["revision"]=json!(source_library["revision"].as_i64().unwrap_or(0)+1);self.connection.execute("UPDATE libraries SET data=?2,version=version+1 WHERE id=?1",params![source,source_library.to_string()])?;}else if !source_synced{let changes=records.iter().map(|record|json!({"id":record["id"],"base_revision":Value::Null,"base":Value::Null,"value":Self::sync_value(record)})).collect::<Vec<_>>();self.queue(&json!({"kind":"merge_local","library":destination,"source":source,"records":records,"body":{"operation_id":Uuid::new_v4().to_string(),"base_revision":destination_library["revision"],"changes":changes}}))?;}else{let items=records.iter().map(|record|json!({"id":record["id"],"base_revision":record["revision"]})).collect::<Vec<_>>();self.queue(&json!({"kind":"merge_synced","library":source,"source":source,"destination":destination,"records":records,"move_body":{"operation_id":Uuid::new_v4().to_string(),"action":"move","source_library":source,"destination_library":destination,"items":items},"trash_operation_id":Uuid::new_v4().to_string()}))?;}self.set_meta("last_failure",&json!(""))?;self.validate_transaction()?;transaction.commit()?;Ok(queued)}
     pub fn edit_move(&self, file: &OpenFile, index: usize, entry: Match, destination: &str) -> Result<OpenFile> {
-        let transaction = self.connection.unchecked_transaction()?;
+        let transaction = rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?;
         let id = file.ids.get(index).context("Snippet missing")?;
         let mut items = self.batch_items(file, std::slice::from_ref(id))?;
         items[0]["value"] = entry.value();
@@ -424,7 +424,7 @@ impl Database {
         Ok(())
     }
     pub fn trash_action(&self, target: &Value, action: &str) -> Result<()> {
-        let transaction = self.connection.unchecked_transaction()?;
+        let transaction = rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?;
         self.trash_action_inner(target, action)?;
         if action == "restore" {
             let records = self.records(target["library"].as_str().unwrap())?;
@@ -460,13 +460,13 @@ impl Database {
         Ok(())
     }
     pub fn empty(&self, targets: &[Value]) -> Result<()> {
-        let transaction = self.connection.unchecked_transaction()?;
+        let transaction = rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?;
         for target in targets { self.trash_action_inner(target, "purge")?; }
         transaction.commit()?;
         Ok(())
     }
     pub fn cleanup(&self) -> Result<()> {
-        let transaction = self.connection.unchecked_transaction()?;
+        let transaction = rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?;
         for mut library in self.libraries()? {
             let id = library["_id"].as_str().unwrap().to_owned();
             if self.synced(&id)? { continue; }
@@ -522,7 +522,7 @@ impl Database {
         let document: Document = serde_saphyr::from_str(&manifest)?;
         Bridge::validate(&document.matches)?;
         let ids: std::collections::BTreeSet<String> = document.matches.iter().flat_map(|entry| entry.value()["content"]["assets"].as_array().cloned().unwrap_or_default()).filter_map(|id| id.as_str().map(str::to_owned)).collect();
-        let transaction = self.connection.unchecked_transaction()?;
+        let transaction = rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?;
         for id in ids {
             let mut bytes = Vec::new();
             archive.by_name(&format!("assets/{id}"))?.take(2 * 1048576 + 1).read_to_end(&mut bytes)?;
@@ -545,7 +545,7 @@ impl Database {
     pub fn import(&self, name: &str, source: &str) -> Result<OpenFile> {
         let parsed = Bridge::execute(crate::bridge::Request { yaml: Some(source.into()), matches: None, export: false, edits: vec![] })?;
         let name = Self::name(name)?;
-        let transaction = if self.connection.is_autocommit() { Some(self.connection.unchecked_transaction()?) } else { None };
+        let transaction = if self.connection.is_autocommit() { Some(rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?) } else { None };
         let id = Uuid::new_v4().to_string();
         self.put_library(&json!({"_id":id,"name":name,"state":"active","revision":1,"permissions":{"read":true,"edit":true,"manage":true}}), &name, false)?;
         for (position, entry) in parsed.matches.iter().enumerate() { self.put_record(&id, &json!({"id":Uuid::new_v4().to_string(),"trigger":entry.value()["trigger"],"title":entry.title,"content":entry.value()["content"],"position":position,"revision":1,"state":"active"}))?; }
@@ -555,7 +555,7 @@ impl Database {
     }
 
     pub fn enroll(&self, name: &str) -> Result<()> {
-        let transaction = self.connection.unchecked_transaction()?;
+        let transaction = rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?;
         let file = self.editor(name)?;
 		ensure!(!self.pending_merge(&file.id)?,"Library merge is pending");
         ensure!(!self.synced(&file.id)?, "Library already enrolled");
@@ -725,7 +725,7 @@ impl Database {
         Ok(())
     }
     pub fn apply(&self, response: &Value, ack: Option<(i64, &Value)>) -> Result<()> {
-        let transaction = self.connection.unchecked_transaction()?;
+        let transaction = rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?;
 		let mut merged_source=None;
         if let Some(rows)=response["personal_abbreviations"].as_array() {
             let mut stored=self.meta("personal_abbreviations")?.and_then(|value|value.as_array().cloned()).unwrap_or_default();
@@ -802,7 +802,7 @@ impl Database {
         let current = self.editor(name)?;
         let submitted: Document = serde_saphyr::from_str(source)?;
         let id = remote["_id"].as_str().context("Missing remote library")?;
-        let transaction = self.connection.unchecked_transaction()?;
+        let transaction = rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?;
         self.remap(&current.id, id)?;
         for (seq, operation) in self.pending()? { if operation["library"] == id { self.connection.execute("DELETE FROM outbox WHERE seq=?1", [seq])?; } }
         let baseline = remote["records"].as_array().context("Missing remote records")?;
@@ -854,7 +854,7 @@ impl Database {
         fs::create_dir_all(&backup)?;
         for (path, bytes, _) in &originals { Paths::atomic_write(&backup.join(path.file_name().unwrap()), bytes, true)?; }
         if legacy_path.exists() { Paths::atomic_write(&backup.join("state.json"), &fs::read(&legacy_path)?, true)?; }
-        let transaction = self.connection.unchecked_transaction()?;
+        let transaction = rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?;
         if self.meta("storage_version")?.is_some() { transaction.commit()?; return Ok(()); }
         let mut imported = std::collections::BTreeSet::new();
         for (path, _, document) in &originals {

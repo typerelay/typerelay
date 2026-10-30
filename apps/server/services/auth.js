@@ -58,10 +58,16 @@ export class Auth {
 	}
 	static async sendMail(message) {
 		const servers = Auth.smtpServers();
-		const server = Auth.nextSmtpServer(servers);
-		const key = `${server.name}:${server.host}:${server.port}:${server.user}`;
-		if (!Auth.smtpTransports.has(key)) Auth.smtpTransports.set(key, nodemailer.createTransport({ host: server.host, port: server.port, secure: server.secure, auth: server.user ? { user: server.user, pass: server.pass } : undefined }));
-		return Auth.smtpTransports.get(key).sendMail({ ...message, from: server.from });
+		const start = Auth.smtpIndex; Auth.nextSmtpServer(servers);
+		let failure;
+		// Round-robin picks the first server; on failure each remaining server gets one attempt.
+		for (let attempt = 0; attempt < servers.length; attempt++) {
+			const server = servers[(start + attempt) % servers.length];
+			const key = `${server.name}:${server.host}:${server.port}:${server.user}`;
+			if (!Auth.smtpTransports.has(key)) Auth.smtpTransports.set(key, nodemailer.createTransport({ host: server.host, port: server.port, secure: server.secure, auth: server.user ? { user: server.user, pass: server.pass } : undefined }));
+			try { return await Auth.smtpTransports.get(key).sendMail({ ...message, from: server.from }); } catch (error) { failure = error; console.warn(`SMTP ${server.name} failed: ${error.message}`); }
+		}
+		throw failure;
 	}
 	static async login(email, name, options = {}) {
 		email = Support.text(email, 254).toLowerCase();

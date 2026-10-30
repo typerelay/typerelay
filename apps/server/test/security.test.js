@@ -110,6 +110,18 @@ test('SMTP_SERVERS uses the shared authenticated multi-server format', () => {
 	assert.equal(Auth.nextSmtpServer(servers).name, 'one');
 	assert.throws(() => Auth.smtpServers({ SMTP_SERVERS: '{}' }), /non-empty JSON array/);
 });
+test('SMTP delivery fails over to each remaining server once', async () => {
+	const saved = process.env.SMTP_SERVERS; const tried = [];
+	process.env.SMTP_SERVERS = JSON.stringify([{ name: 'a', host: 'a.test' }, { name: 'b', host: 'b.test' }, { name: 'c', host: 'c.test' }]);
+	for (const name of ['a', 'b', 'c']) Auth.smtpTransports.set(`${name}:${name}.test:587:`, { sendMail: async mail => { tried.push(name); if (name !== 'a') throw new Error(name + ' down'); return { accepted: [mail.to] }; } });
+	try {
+		Auth.smtpIndex = 1;
+		assert.deepEqual(await Auth.sendMail({ to: 'one@example.test' }), { accepted: ['one@example.test'] });
+		assert.deepEqual(tried, ['b', 'c', 'a']); assert.equal(Auth.smtpIndex, 2);
+		tried.length = 0; Auth.smtpIndex = 1; Auth.smtpTransports.set('a:a.test:587:', { sendMail: async () => { tried.push('a'); throw new Error('a down'); } });
+		await assert.rejects(Auth.sendMail({ to: 'two@example.test' }), /a down/); assert.deepEqual(tried, ['b', 'c', 'a']);
+	} finally { for (const name of ['a', 'b', 'c']) Auth.smtpTransports.delete(`${name}:${name}.test:587:`); saved === undefined ? delete process.env.SMTP_SERVERS : process.env.SMTP_SERVERS = saved; }
+});
 test('confirmed hosted signups notify Type Relay through a durable retrying outbox', async () => {
 	const email = randomUUID() + '@example.test';
 	await Auth.login(email, 'Hosted Owner');

@@ -2,7 +2,7 @@ import { TestDatabase } from './database.js';
 import { test, before, after, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID, createHash } from 'node:crypto';
-import { mongoose, User, Account, Member, Library, Group, Device, Conflict, Snippet, SnippetAsset, MigrationBackup, Change, Operation } from '../model/index.js';
+import { mongoose, User, Account, Member, Library, Group, Device, Conflict, Snippet, SnippetAsset, MigrationBackup, Change, Operation, Integration, IntegrationToken } from '../model/index.js';
 import { Support, Yaml } from '../services/support.js';
 import { Libraries } from '../services/libraries.js';
 import { Assets } from '../services/assets.js';
@@ -198,6 +198,17 @@ test('membership administration cannot escalate admin to owner or touch owner', 
 	await assert.rejects(Libraries.mutate(Fixture.admin, randomUUID(), {}, (ctx, session) => Team.member(ctx, String(owner._id), {}, session)), /Cannot change/);
 });
 
+test('removing a member revokes their integration grants and invite acceptance rejects a missing token', async () => {
+	const removed = await Fixture.user('member', Fixture.account);
+	const [pat, oauth] = await Integration.create([{ account: Fixture.account, user: removed.user, kind: 'pat', hash: randomUUID() }, { account: Fixture.account, user: removed.user, kind: 'oauth', refresh: randomUUID() }]);
+	await IntegrationToken.create({ grant: oauth._id, hash: randomUUID() });
+	const member = await Member.findOne({ user: removed.user, account: Fixture.account }).lean();
+	await Libraries.mutate(Fixture.owner, randomUUID(), {}, (ctx, session) => Team.member(ctx, String(member._id), {}, session));
+	assert.deepEqual((await Integration.find({ _id: { $in: [pat._id, oauth._id] } }).lean()).map(grant => grant.revoked), [true, true]);
+	assert.equal(await IntegrationToken.countDocuments({ grant: oauth._id }), 0);
+	await assert.rejects(mongoose.connection.transaction(session => Team.accept({ user: removed.user }, undefined, session)), error => error.status === 400);
+});
+
 test('Trash restores IDs, keeps independent snippet trash, and removes canonical YAML storage', async () => {
 	const ctx = await Fixture.user('owner', (await Account.create({ name: 'Trash isolated' }))._id);
 	let { library } = await Fixture.create(ctx);
@@ -345,6 +356,17 @@ test('batch moves preserve IDs/order, update both libraries and retry idempotent
 	assert.ok(first.libraries.every(row => row.revision === 2));
 	await assert.rejects(Fixture.upload(ctx, source, [Fixture.change(source.snippets[0], 'Stale edit')]), /moved/);
 	assert.equal(await Snippet.countDocuments({ account: ctx.account, id: source.snippets[0].id }), 1);
+});
+test('incremental sync reports a departure only from the library a snippet last left', async () => {
+	const ctx = await Fixture.user('owner', (await Account.create({ name: 'Departures' }))._id);
+	const a = (await Fixture.create(ctx)).library; const b = (await Fixture.create(ctx, 'matches: [{trigger: other, replace: Other}]')).library;
+	const move = async (from, to) => { const snippet = (await Libraries.get(ctx, from)).snippets.find(row => row.trigger === 'hello'); const body = { action: 'move', source_library: from, destination_library: to, items: [{ id: snippet.id, base_revision: snippet.revision }] }; await Libraries.mutate(ctx, randomUUID(), body, (actor, session) => Libraries.batch(actor, body, session)); return snippet.id; };
+	const start = (await Libraries.download(ctx, 0)).cursor;
+	const id = await move(a._id, b._id);
+	const away = await Libraries.download(ctx, start);
+	assert.deepEqual(away.departures, [{ library: a._id, id }]);
+	await move(b._id, a._id);
+	assert.deepEqual((await Libraries.download(ctx, away.cursor)).departures, [{ library: b._id, id }]);
 });
 test('batch collision, stale revision and missing destination permission fail atomically', async () => {
 	const account = await Account.create({ name: 'Atomic moves' });

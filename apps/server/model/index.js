@@ -83,6 +83,7 @@ const accountSchema = new mongoose.Schema({
 accountSchema.index({ 'white_label.hostname': 1 }, { name: 'white_label_verified_hostname', unique: true, partialFilterExpression: { 'white_label.hostname': { $type: 'string', $gt: '' }, 'white_label.dns_verified_at': { $type: 'date' } } });
 accountSchema.index({ 'billing.helpmonks_sequence.status': 1, 'billing.helpmonks_sequence.next_attempt_at': 1 });
 accountSchema.index({ 'deletion.requested_at': 1, 'deletion.stage': 1 });
+for (const field of ['stripe_customer_id', 'stripe_subscription_id']) accountSchema.index({ ['billing.' + field]: 1 }, { sparse: true });
 const Account = mongoose.model('Account', accountSchema);
 const membership = new mongoose.Schema({ account: objectid, user: objectid, role: { type: String, enum: ['owner', 'admin', 'member'] } }, { 'read': 'secondaryPreferred' });
 membership.index({ account: 1, user: 1 }, { unique: true });

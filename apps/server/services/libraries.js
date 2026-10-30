@@ -85,7 +85,9 @@ export class Libraries {
 	static view(ctx, library) { return { ...library, _id: String(library._id), deleted: library.state !== 'active', permissions: Support.access(ctx, library) }; }
 	static async hydrate(library, session, records = null) {
 		const entries = records || await Support.transactionRead(Snippet.find({ library: library._id, state: { $ne: 'purged' } }).sort({ position: 1, id: 1 }).session(session || null).lean(), session);
-		return { ...library, snippets: entries.filter(entry => entry.state === 'active').sort((a, b) => (new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0))).map(Libraries.entry), records: entries.map(Libraries.entry) };
+		const rendered = entries.map(Libraries.entry);
+		// Copies keep personalize() from writing personal fields onto records.
+		return { ...library, snippets: rendered.filter(entry => entry.state === 'active').sort((a, b) => (new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0))).map(entry => ({ ...entry })), records: rendered };
 	}
 	static async raw(ctx, id, session) {
 		const library = await Support.transactionRead(Library.findOne({ _id: Support.id(id), account: ctx.account }).session(session || null).lean(), session);
@@ -101,7 +103,8 @@ export class Libraries {
 		const libraries = await Support.transactionRead(Library.find({ account: ctx.account, state: 'active' }).session(session || null).lean(), session);
 		const visible = libraries.filter(library => Support.access(ctx, library).read);
 		const records = await Support.transactionRead(Snippet.find({ library: { $in: visible.map(library => library._id) }, state: { $ne: 'purged' } }).sort({ position: 1, id: 1 }).session(session || null).lean(), session);
-		return Libraries.personalize(ctx, await Promise.all(visible.map(async library => Libraries.view(ctx, await Libraries.hydrate(library, session, records.filter(record => Support.equal(record.library, library._id)))))), session);
+		const grouped = Map.groupBy(records, record => String(record.library));
+		return Libraries.personalize(ctx, await Promise.all(visible.map(async library => Libraries.view(ctx, await Libraries.hydrate(library, session, grouped.get(String(library._id)) || [])))), session);
 	}
 	static async validate(entries, ctx = null, session = null) {
 		const values = entries.map(Libraries.value);
@@ -390,7 +393,8 @@ export class Libraries {
 		if (stored.library_ids) {
 			const libraries = (await Support.transactionRead(Library.find({ _id: { $in: stored.library_ids }, account: ctx.account }).session(session || null).lean(), session)).filter(library => Support.access(ctx, library).read);
 			const records = await Support.transactionRead(Snippet.find({ library: { $in: libraries.map(library => library._id) }, state: { $ne: 'purged' } }).sort({ position: 1, id: 1 }).session(session || null).lean(), session);
-			result.libraries = await Promise.all(stored.library_ids.flatMap(id => { const library = libraries.find(library => Support.equal(library._id, id)); return library ? [Libraries.hydrate(library, session, records.filter(record => Support.equal(record.library, library._id))).then(value => Libraries.view(ctx, value))] : []; }));
+			const grouped = Map.groupBy(records, record => String(record.library));
+			result.libraries = await Promise.all(stored.library_ids.flatMap(id => { const library = libraries.find(library => Support.equal(library._id, id)); return library ? [Libraries.hydrate(library, session, grouped.get(String(library._id)) || []).then(value => Libraries.view(ctx, value))] : []; }));
 		}
 		if (stored.library_id) {
 			const raw = await Support.transactionRead(Library.findOne({ _id: stored.library_id, account: ctx.account }).session(session).lean(), session);
@@ -482,7 +486,7 @@ export class Libraries {
 		const baseAssets = [...new Set(body.changes.flatMap(change => { const ids = change.base?.content?.assets || []; Support.assert(Array.isArray(ids), 'Invalid conflict base assets', 422); return ids; }))];
 		Support.assert(!baseAssets.length || (await Assets.visible(ctx, baseAssets, session)).length === baseAssets.length, 'Conflict base references an inaccessible image asset', 422);
 		await Libraries.validateAssets(values.filter((value, index) => value && !failures[index]).map(value => Libraries.value(value)), ctx, session);
-		const writes = []; const conflictRows = [];
+		const writes = []; const conflictRows = []; const lastPosition = library.records.reduce((maximum, entry) => Math.max(maximum, entry.position ?? -1), -1);
 		for (const [index, change] of body.changes.entries()) {
 			Support.assert(typeof change.id === 'string' && /^[a-zA-Z0-9_-]{16,128}$/.test(change.id) && !seen.has(change.id), 'Invalid or repeated snippet ID');
 			seen.add(change.id);
@@ -499,7 +503,7 @@ export class Libraries {
 			}
 			if (!server && !local) continue;
 			if (local) {
-				writes.push({ updateOne: { filter: { library: library._id, id: change.id }, update: { $set: { account: ctx.account, ...local, state: 'active', revision: (server?.revision || 0) + 1 }, ...(!server ? { $setOnInsert: { position: library.records.reduce((maximum, entry) => Math.max(maximum, entry.position ?? -1), -1) + seen.size } } : {}) }, upsert: !server } });
+				writes.push({ updateOne: { filter: { library: library._id, id: change.id }, update: { $set: { account: ctx.account, ...local, state: 'active', revision: (server?.revision || 0) + 1 }, ...(!server ? { $setOnInsert: { position: lastPosition + seen.size } } : {}) }, upsert: !server } });
 			} else {
 				const now = new Date();
 				writes.push({ updateOne: { filter: { _id: server._id }, update: { $set: Libraries.trashFields(ctx.user, now), $inc: { revision: 1 } } } });
@@ -742,7 +746,8 @@ export class Libraries {
 			const permissions = changes.some(change => change.kind === 'membership');
 			const selected = visible.filter(library => cursor === 0 || permissions || changed.has(String(library._id)));
 			const records = await Snippet.find({ library: { $in: selected.map(library => library._id) }, state: { $ne: 'purged' } }).sort({ position: 1, id: 1 }).session(session).read('primary').lean();
-			const libraries = await Promise.all(selected.map(async library => Libraries.view(ctx, await Libraries.hydrate(library, session, records.filter(record => Support.equal(record.library, library._id))))));
+			const grouped = Map.groupBy(records, record => String(record.library));
+			const libraries = await Promise.all(selected.map(async library => Libraries.view(ctx, await Libraries.hydrate(library, session, grouped.get(String(library._id)) || []))));
 			const purges = cursor === 0 ? {} : { purge_sequence: { $gt: cursor, $lte: account.sequence } };
 			// Every purge writes a change, so an incremental sync without changes has no tombstones to send.
 			const quiet = cursor > 0 && !changes.length;
