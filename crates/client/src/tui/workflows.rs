@@ -91,19 +91,21 @@ impl App {
         let saved=Database::open(&self.store.directory)?.save_draft(&self.identity,draft,as_new)?;
         self.original_entry=Some(draft.entry.clone());self.file=Some(saved);self.editing=None;self.move_destination=None;self.draft_record=None;self.draft_lock=None;
         self.screen=if std::mem::take(&mut self.global_edit){Screen::Files}else{Screen::Browse};
-        self.reload_files()?;self.rebuild_global_hits();self.snippets_state.select(Some(0));self.selected_ids.clear();self.selection_anchor=None;
+        self.reload_files()?;self.rebuild_global_hits();self.snippets_state.select(Some(0));self.retain_selection();
         self.message("Saved locally. Enrolled-library changes are queued for background sync.",false);
         if self.draft_gate { self.show_drafts()?; }
         Ok(())
     }
     pub(super) fn show_drafts(&mut self) -> Result<()> {
+        // An active resumed draft keeps navigation gated until it is saved or discarded.
+        if self.draft_record.is_some() {self.draft_gate=true;return Ok(());}
         self.check_identity()?;let rows=Draft::available(&self.store.directory,Database::open(&self.store.directory)?.drafts(&self.identity)?)?;
         self.draft_gate = !rows.is_empty();self.workflow=Some(Workflow::drafts(rows));
         if !self.draft_gate { self.workflow=None;self.screen=Screen::Files;self.reload_files()?;self.message("All drafts resolved",false); }
         Ok(())
     }
     pub(super) fn resume_draft(&mut self, draft: Draft) -> Result<()> {
-        self.check_identity()?;let lock=Draft::claim(&self.store.directory,&draft.id)?;
+        self.ensure_idle()?;self.check_identity()?;let lock=Draft::claim(&self.store.directory,&draft.id)?;
         anyhow::ensure!(Database::open(&self.store.directory)?.drafts(&self.identity)?.iter().any(|row|row.id==draft.id&&row.updated_at==draft.updated_at),"Draft changed; reopen Drafts");
         self.file=Some(draft.file.clone());self.editing=(!draft.file.ids.is_empty()).then_some(0);self.original_entry=draft.file.entries.first().cloned();
         self.title=Self::text(&draft.entry.title);self.trigger=Self::text(&draft.entry.trigger);self.expansion=Self::text(&draft.entry.replace);self.language=draft.entry.language.clone();self.variables=draft.entry.variables.clone();self.code=draft.entry.kind=="code";self.rich=draft.entry.kind=="rich_text";self.template=draft.entry.kind=="template";self.rich_preview=false;self.move_destination=draft.destination.clone();self.editor_focus=1;self.screen=Screen::Edit;self.workflow=None;self.draft_record=Some(draft);self.draft_lock=Some(lock);self.writing_undo.clear();self.message("Draft resumed. Commands: save as new, destination, code settings, or export.",false);Ok(())
@@ -132,8 +134,8 @@ impl App {
     pub(super) fn start_operation(&mut self, action: Action, context: Value) -> Result<()> {
         self.check_identity()?;
         anyhow::ensure!(self.operation.is_none(),"An operation is running; use Cancel operation in Commands (esc)");
-        let root=self.settings.config_dir().to_path_buf();let directory=self.store.directory.clone();let cancelled=std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));let signal=cancelled.clone();let(sender,receiver)=std::sync::mpsc::channel();
-        std::thread::spawn(move||{let result=(||{let identity=Draft::identity(&root)?;let sync=Sync::new(root,directory.clone())?;match action {Action::Connect=>sync.connect_cancellable(context["server"].as_str().context("Server URL required")?,true,false,&signal)?,Action::Disconnect=>sync.disconnect()?,Action::Enroll=>sync.enroll(context["name"].as_str().context("Library required")?)?,Action::Conflicts|Action::MergeConflict=>sync.resolve_conflict(context["id"].as_str().context("Conflict required")?,context["choice"].as_str().context("Choice required")?,context.get("value").cloned())?,_=>anyhow::bail!("Unsupported operation")};if let Some(draft)=context.get("draft"){let draft:Draft=serde_json::from_value(draft.clone())?;Database::open(&directory)?.discard_draft(&identity,&draft)?;}Ok(format!("{} complete",action.label()))})();let _=sender.send(result);});
+        let root=self.settings.config_dir().to_path_buf();let expected=self.identity.clone();let directory=self.store.directory.clone();let cancelled=std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));let signal=cancelled.clone();let(sender,receiver)=std::sync::mpsc::channel();
+        std::thread::spawn(move||{let result=(||{let identity=Draft::identity(&root)?;let sync=Sync::new(root,directory.clone())?;match action {Action::Connect=>sync.connect_cancellable(context["server"].as_str().context("Server URL required")?,true,false,&signal)?,Action::Disconnect=>sync.disconnect()?,Action::Enroll=>sync.enroll(context["name"].as_str().context("Library required")?)?,Action::Conflicts|Action::MergeConflict=>sync.resolve_conflict_as(Some(&expected),context["id"].as_str().context("Conflict required")?,context["choice"].as_str().context("Choice required")?,context.get("value").cloned())?,_=>anyhow::bail!("Unsupported operation")};if let Some(draft)=context.get("draft"){let draft:Draft=serde_json::from_value(draft.clone())?;Database::open(&directory)?.discard_draft(&identity,&draft)?;}Ok(format!("{} complete",action.label()))})();let _=sender.send(result);});
         self.operation=Some((cancelled,receiver));self.workflow=None;if matches!(action,Action::Connect|Action::Disconnect|Action::MergeConflict){self.screen=Screen::Files;}self.message("Operation running · ctrl+p, esc cancels browser authentication · terminal remains responsive",false);Ok(())
     }
     pub(super) fn command(&mut self, action: Action) -> Result<()> {
@@ -194,7 +196,7 @@ impl App {
             _=>(),
         }
         self.workflow=None;self.refresh();self.message(format!("{} complete",action.label()),false);
-        if self.draft_gate && self.screen!=Screen::Edit {self.show_drafts()?;}
+        if self.draft_gate && self.effective_screen()!=Screen::Edit {self.show_drafts()?;}
         Ok(())
     }
     pub(super) fn workflow_event(&mut self, event: Event) -> Result<()> {
@@ -212,7 +214,7 @@ impl App {
         if code==Some(KeyCode::Esc) {
             if self.operation.is_some() {self.cancel_operation();self.message("Authentication cancellation requested",false);}
             if matches!(view.mode,Mode::Drafts) {self.workflow=Some(view);return Ok(());}
-            if self.draft_gate && self.screen!=Screen::Edit {self.show_drafts()?;}return Ok(());
+            if self.draft_gate && self.effective_screen()!=Screen::Edit {self.show_drafts()?;}return Ok(());
         }
         // Keep the view on every operation failure; users can retry, cancel, or quit.
         self.workflow=Some(view);
@@ -238,7 +240,7 @@ impl App {
                     else if context["id"].is_string() {return self.start_operation(Action::Conflicts,context);}
                 }
             },
-            Mode::Message=>{if matches!(code,Some(KeyCode::Down|KeyCode::PageDown)){self.workflow.as_mut().unwrap().scroll=self.workflow.as_ref().unwrap().scroll.saturating_add(3);}else if matches!(code,Some(KeyCode::Up|KeyCode::PageUp)){self.workflow.as_mut().unwrap().scroll=self.workflow.as_ref().unwrap().scroll.saturating_sub(3);}else if code==Some(KeyCode::Enter) {self.workflow=None;if self.draft_gate&&self.screen!=Screen::Edit{self.show_drafts()?;}}},
+            Mode::Message=>{if matches!(code,Some(KeyCode::Down|KeyCode::PageDown)){self.workflow.as_mut().unwrap().scroll=self.workflow.as_ref().unwrap().scroll.saturating_add(3);}else if matches!(code,Some(KeyCode::Up|KeyCode::PageUp)){self.workflow.as_mut().unwrap().scroll=self.workflow.as_ref().unwrap().scroll.saturating_sub(3);}else if code==Some(KeyCode::Enter) {self.workflow=None;if self.draft_gate&&self.effective_screen()!=Screen::Edit{self.show_drafts()?;}}},
             _=>{
                 if matches!(code,Some(KeyCode::PageUp|KeyCode::PageDown)){let view=self.workflow.as_mut().unwrap();view.scroll=if code==Some(KeyCode::PageUp){view.scroll.saturating_sub(3)}else{view.scroll.saturating_add(3)};return Ok(());}
                 if matches!(code,Some(KeyCode::Up|KeyCode::Down)) {let view=self.workflow.as_mut().unwrap();let index=view.state.selected().unwrap_or(0);let next=if matches!(code,Some(KeyCode::Up|KeyCode::PageUp)){index.saturating_sub(1)}else{(index+1).min(view.rows.len().saturating_sub(1))};view.state.select(Some(next));view.scroll=0;return Ok(());}
@@ -263,14 +265,14 @@ impl App {
                         KeyCode::Char('c')=>{typerelay_client::clipboard::PasteJob::copy_text(serde_json::to_string_pretty(&row["data"])?)?;Database::open(&self.store.directory)?.set_meta(&format!("tui_recovery_preserved:{}",row["id"].as_str().context("Missing ID")?),&json!(true))?;self.message("Recovery copied; d explicitly dismisses",false);},
                         KeyCode::Char('e')=>self.workflow=Some(Workflow::form(Action::DraftExport,&[("New JSON export path",String::new())],json!({"recovery":row}))),
                         KeyCode::Char('r')|KeyCode::Enter=>{
-                            let entry=Self::recovered_entry(&row)?;let file=Database::open(&self.store.directory)?.editor(&self.current_name()?)?;let mut draft=Draft::new(&file,None,entry,None);draft.origin_library=row["library"].as_str().unwrap_or(&file.id).into();draft.origin_snippet=row["snippet"].as_str().map(str::to_owned);let db=Database::open(&self.store.directory)?;db.put_draft(&self.identity,&draft,None)?;db.set_meta(&format!("tui_recovery_preserved:{}",row["id"].as_str().context("Missing ID")?),&json!(true))?;self.draft_gate=true;self.resume_draft(draft)?;
+                            self.ensure_idle()?;let entry=Self::recovered_entry(&row)?;let file=Database::open(&self.store.directory)?.editor(&self.current_name()?)?;let mut draft=Draft::new(&file,None,entry,None);draft.origin_library=row["library"].as_str().unwrap_or(&file.id).into();draft.origin_snippet=row["snippet"].as_str().map(str::to_owned);let db=Database::open(&self.store.directory)?;db.put_draft(&self.identity,&draft,None)?;db.set_meta(&format!("tui_recovery_preserved:{}",row["id"].as_str().context("Missing ID")?),&json!(true))?;self.draft_gate=true;self.resume_draft(draft)?;
                         },
                         KeyCode::Char('d')=>{let mut view=Workflow::new(Mode::Confirm,"Dismiss preserved recovery? y confirms · esc cancels");view.context=json!({"recovery":row["id"]});self.workflow=Some(view);},_=>(),
                     }
                     },
                     Mode::Conflicts=>match code.unwrap() {
                         KeyCode::Char('l'|'s')=>{let mut view=Workflow::new(Mode::Confirm,"Resolve conflict with selected version? y confirms · esc cancels");view.context=json!({"id":row["_id"],"choice":if code==Some(KeyCode::Char('l')){"local"}else{"server"}});self.workflow=Some(view);},
-                        KeyCode::Char('m')=>{let value=["local","server","base"].iter().find_map(|key|row.get(*key).filter(|value|value["content"].is_object())).context("Conflict has no remaining version to merge")?;let entry=Self::recovered_entry(&json!({"data":value}))?;let db=Database::open(&self.store.directory)?;let file=db.editor_id(row["library"].as_str().context("Conflict library unavailable")?)?;let index=file.ids.iter().position(|id|row["snippet"]==*id);let mut draft=Draft::new(&file,index,entry,None);draft.conflict=row["_id"].as_str().map(str::to_owned);db.put_draft(&self.identity,&draft,None)?;self.draft_gate=true;self.resume_draft(draft)?;},_=>(),
+                        KeyCode::Char('m')=>{self.ensure_idle()?;let value=["local","server","base"].iter().find_map(|key|row.get(*key).filter(|value|value["content"].is_object())).context("Conflict has no remaining version to merge")?;let entry=Self::recovered_entry(&json!({"data":value}))?;let db=Database::open(&self.store.directory)?;let file=db.editor_id(row["library"].as_str().context("Conflict library unavailable")?)?;let index=file.ids.iter().position(|id|row["snippet"]==*id);let mut draft=Draft::new(&file,index,entry,None);draft.conflict=row["_id"].as_str().map(str::to_owned);db.put_draft(&self.identity,&draft,None)?;self.draft_gate=true;self.resume_draft(draft)?;},_=>(),
                     },_=>(),
                 }
             }
@@ -398,6 +400,29 @@ mod tests {
     #[test]
     fn quit_still_exits_after_storage_failure_without_claiming_latest_text_saved() {
         let root=tempfile::tempdir().unwrap();let mut app=app(root.path());new_draft(&mut app,"Durable text");let db=Database::open(&app.store.directory).unwrap();db.connection.execute_batch("CREATE TRIGGER fail_exit BEFORE UPDATE ON tui_drafts BEGIN SELECT RAISE(ABORT,'disk failed'); END;").unwrap();app.handle(Event::Paste(" not durable".into()));key(&mut app,KeyCode::Char('q'),KeyModifiers::CONTROL);key(&mut app,KeyCode::Char('q'),KeyModifiers::NONE);assert!(app.quit);assert!(app.error);assert!(app.status.contains("NOT saved"));assert!(app.sync_status().contains("Latest changes NOT stored"));assert_eq!(db.drafts(&Value::Null).unwrap()[0].entry.replace,"Durable text");assert!(app.quit_preserving().is_err());
+    }
+    #[test]
+    fn merge_resolution_rejects_changed_connection_before_sending() {
+        let root=tempfile::tempdir().unwrap();std::fs::create_dir(root.path().join("sync")).unwrap();let path=root.path().join("sync/credentials.json");std::fs::write(&path,json!({"server":"https://one.invalid","account":"one","access_token":"a","refresh_token":"r"}).to_string()).unwrap();let mut app=app(root.path());let db=Database::open(&app.store.directory).unwrap();let file=db.import("Local","matches: [{replace: Server}]").unwrap();let local=Match{replace:"Local".into(),..Default::default()}.value();db.set_meta("conflicts",&json!([{"_id":"conflict","library":file.id,"snippet":file.ids[0],"local":local,"server":file.entries[0].value(),"base":local}])).unwrap();
+        app.command(Action::Conflicts).unwrap();key(&mut app,KeyCode::Char('m'),KeyModifiers::NONE);app.expansion=App::text("Private merge");app.persist_draft(true).unwrap();let expected=app.identity.clone();std::fs::write(&path,json!({"server":"https://two.invalid","account":"two","access_token":"b","refresh_token":"s"}).to_string()).unwrap();
+        let error=Sync::new(root.path().to_path_buf(),app.store.directory.clone()).unwrap().resolve_conflict_as(Some(&expected),"conflict","merged",Some(app.draft().value())).unwrap_err();assert_eq!(error.to_string(),"Connection changed; nothing was sent");assert_eq!(db.drafts(&expected).unwrap()[0].entry.replace,"Private merge");assert_eq!(db.editor("Local").unwrap().entries[0].replace,"Server");
+    }
+    #[test]
+    fn closing_commands_over_quit_confirmation_keeps_resumed_draft_gated() {
+        let root=tempfile::tempdir().unwrap();let mut first=app(root.path());new_draft(&mut first,"Recovered draft");drop(first);let mut app=app(root.path());let db=Database::open(&app.store.directory).unwrap();key(&mut app,KeyCode::Enter,KeyModifiers::NONE);let id=app.draft_record.as_ref().unwrap().id.clone();
+        key(&mut app,KeyCode::Char('q'),KeyModifiers::CONTROL);assert_eq!(app.screen,Screen::Confirm);key(&mut app,KeyCode::Char('p'),KeyModifiers::CONTROL);key(&mut app,KeyCode::Esc,KeyModifiers::NONE);assert!(app.draft_gate);assert!(app.workflow.is_none());assert_eq!(app.effective_screen(),Screen::Edit);assert_eq!(app.draft_record.as_ref().unwrap().id,id);
+        key(&mut app,KeyCode::Esc,KeyModifiers::NONE);assert_eq!(app.screen,Screen::Edit);key(&mut app,KeyCode::F(1),KeyModifiers::NONE);assert_eq!(app.screen,Screen::Confirm);assert_eq!(App::value(&app.expansion),"Recovered draft");assert_eq!(db.drafts(&Value::Null).unwrap()[0].entry.replace,"Recovered draft");
+    }
+    #[test]
+    fn pending_connection_operation_rejects_draft_and_recovery_resume() {
+        let root=tempfile::tempdir().unwrap();let mut first=app(root.path());new_draft(&mut first,"Waiting draft");drop(first);let mut app=app(root.path());let db=Database::open(&app.store.directory).unwrap();let(_sender,receiver)=std::sync::mpsc::channel();app.operation=Some((std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),receiver));
+        key(&mut app,KeyCode::Enter,KeyModifiers::NONE);assert!(app.error);assert!(app.status.contains("active connection operation"));assert!(app.draft_record.is_none());assert_ne!(app.screen,Screen::Edit);assert!(app.workflow.is_some());
+        db.recover("library",Some("snippet"),&json!({"value":{"content":{"version":1,"type":"plain_text","text":"Rejected"}}}),"Access revoked").unwrap();app.file=Some(app.store.open("Local").unwrap());app.screen=Screen::Browse;app.show_recovery().unwrap();key(&mut app,KeyCode::Char('r'),KeyModifiers::NONE);assert!(app.status.contains("active connection operation"));assert!(app.draft_record.is_none());assert_eq!(db.drafts(&Value::Null).unwrap().len(),1);
+    }
+    #[test]
+    fn saving_keeps_surviving_batch_selections() {
+        let root=tempfile::tempdir().unwrap();let mut app=app(root.path());let db=Database::open(&app.store.directory).unwrap();let file=db.import("Local","matches: [{replace: A},{replace: B},{replace: C}]").unwrap();app.file=Some(file.clone());app.screen=Screen::Browse;app.selected_ids=[file.ids[0].clone(),file.ids[1].clone(),"removed".into()].into();app.selection_anchor=Some(file.ids[1].clone());app.snippets_state.select(Some(2));app.edit(false).unwrap();app.expansion=App::text("C edited");key(&mut app,KeyCode::Char('s'),KeyModifiers::CONTROL);
+        assert!(!app.error,"{}",app.status);assert_eq!(app.screen,Screen::Browse);assert_eq!(app.selected_ids,[file.ids[0].clone(),file.ids[1].clone()].into());assert_eq!(app.selection_anchor.as_deref(),Some(file.ids[1].as_str()));app.selection_anchor=Some("removed".into());app.retain_selection();assert!(app.selection_anchor.is_none());
     }
 
 }

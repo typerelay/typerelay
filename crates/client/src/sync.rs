@@ -191,8 +191,10 @@ impl Sync {
         Database::open(&self.directory)?.enroll(name)?;
         Ok(())
     }
-	pub fn resolve_conflict(&self,id:&str,choice:&str,value:Option<Value>)->Result<()> {
-		ensure!(["local","server","merged"].contains(&choice),"Choose a conflict resolution");let _lock=self.lock()?;let mut credentials=self.credentials()?;let db=Database::open(&self.directory)?;let conflicts=db.meta("conflicts")?.and_then(|value|value.as_array().cloned()).unwrap_or_default();let conflict=conflicts.iter().find(|conflict|conflict["_id"]==id).context("Conflict no longer exists")?;let library_id=conflict["library"].as_str().context("Missing conflict library")?;let library=db.library(library_id)?;
+	pub fn resolve_conflict(&self,id:&str,choice:&str,value:Option<Value>)->Result<()> { self.resolve_conflict_as(None,id,choice,value) }
+	/// `expected` pins the account/server identity the caller reviewed; a mismatch fails before any request.
+	pub fn resolve_conflict_as(&self,expected:Option<&Value>,id:&str,choice:&str,value:Option<Value>)->Result<()> {
+		ensure!(["local","server","merged"].contains(&choice),"Choose a conflict resolution");let _lock=self.lock()?;if let Some(expected)=expected{ensure!(crate::drafts::Draft::identity(&self.root)?==*expected,"Connection changed; nothing was sent");}let mut credentials=self.credentials()?;let db=Database::open(&self.directory)?;let conflicts=db.meta("conflicts")?.and_then(|value|value.as_array().cloned()).unwrap_or_default();let conflict=conflicts.iter().find(|conflict|conflict["_id"]==id).context("Conflict no longer exists")?;let library_id=conflict["library"].as_str().context("Missing conflict library")?;let library=db.library(library_id)?;
 		if choice=="merged"{let value=value.as_ref().context("Enter the merged record")?;Database::entries(&[json!({"state":"active","trigger":value["trigger"],"title":value["title"],"content":value["content"]})])?;}
 		let result=self.request(&mut credentials,reqwest::Method::POST,&format!("conflicts/{id}"),Some(&json!({"operation_id":Uuid::new_v4().to_string(),"base_revision":library["revision"],"choice":choice,"value":value})))?;db.apply(&result,None)?;let fresh=self.request(&mut credentials,reqwest::Method::GET,"sync?cursor=0",None)?;self.download_assets(&credentials,&db,&fresh)?;db.apply(&fresh,None)?;Ok(())
 	}

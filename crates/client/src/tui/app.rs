@@ -184,6 +184,8 @@ impl App {
         let index = order.iter().position(|field| *field == self.editor_focus).unwrap_or(0);
         self.editor_focus = order[(index + if backwards { order.len() - 1 } else { 1 }) % order.len()];
     }
+    pub(super) fn ensure_idle(&self) -> Result<()> { anyhow::ensure!(self.operation.is_none(),"Finish or cancel the active connection operation before editing"); Ok(()) }
+    fn retain_selection(&mut self) { let Some(file) = &self.file else { return; }; self.selected_ids.retain(|id|file.ids.contains(id)); if self.selection_anchor.as_ref().is_some_and(|id|!file.ids.contains(id)) { self.selection_anchor = None; } }
     fn effective_screen(&self) -> Screen { if self.screen == Screen::Confirm { self.confirm_from } else { self.screen } }
 	fn html(value:&str)->String{value.replace('&',"&amp;").replace('<',"&lt;").replace('>',"&gt;").replace('"',"&quot;")}
 	fn preview_image(&self)->Result<Option<ratatui_image::protocol::Protocol>>{let content=self.draft().value()["content"].clone();let Some(id)=content["assets"].as_array().and_then(|ids|ids.first()).and_then(|id|id.as_str())else{return Ok(None)};let(_,bytes)=typerelay_client::database::Database::open(&self.store.directory)?.asset(id)?.context("Rich-text image is unavailable")?;let image=image::load_from_memory(&bytes)?;#[allow(deprecated)]let mut picker=ratatui_image::picker::Picker::from_fontsize(ratatui_image::FontSize::new(8,16));let environment=std::env::var("TERM").unwrap_or_default().to_lowercase();if environment.contains("kitty"){picker.set_protocol_type(ratatui_image::picker::ProtocolType::Kitty);}else if std::env::var_os("ITERM_SESSION_ID").is_some(){picker.set_protocol_type(ratatui_image::picker::ProtocolType::Iterm2);}else if environment.contains("sixel"){picker.set_protocol_type(ratatui_image::picker::ProtocolType::Sixel);}Ok(Some(picker.new_protocol(image,ratatui::layout::Size::new(40,10),ratatui_image::Resize::Fit(None))?))}
@@ -261,7 +263,7 @@ impl App {
         }
     }
     fn edit(&mut self, new: bool) -> Result<()> {
-        anyhow::ensure!(self.operation.is_none(),"Finish or cancel the active connection operation before editing");
+        self.ensure_idle()?;
         self.settings.reload()?;
         self.move_destination = None;
         let file = self.file.as_ref().context("Choose a file first")?;
@@ -775,7 +777,7 @@ impl App {
         else if self.screen == Screen::Files { let _ = self.reload_files(); }
         else if self.screen == Screen::Browse && let Some(file) = &self.file {
             match self.store.open(&file.name) {
-                Ok(current) => { if typerelay_client::database::Database::open(&self.store.directory).and_then(|db|db.editable(&current.id)).is_err() { self.selected_ids.clear(); self.selection_anchor = None; } self.selected_ids.retain(|id|current.ids.contains(id)); if self.selection_anchor.as_ref().is_some_and(|id|!current.ids.contains(id)) { self.selection_anchor = None; } self.file = Some(current);self.rebuild_global_hits(); }
+                Ok(current) => { if typerelay_client::database::Database::open(&self.store.directory).and_then(|db|db.editable(&current.id)).is_err() { self.selected_ids.clear(); self.selection_anchor = None; } self.file = Some(current); self.retain_selection(); self.rebuild_global_hits(); }
                 Err(_) => { self.file = None; let _ = self.apply(Destination::Files); }
             }
         }
