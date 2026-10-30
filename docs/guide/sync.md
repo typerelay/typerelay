@@ -66,7 +66,7 @@ When a server rejects a stale or unauthorized operation, TypeRelay keeps recover
 
 Open **Desktop Settings → Sync → Recovered edits** to read the saved content and rejection reason. Choose **Copy** before dismissing an item. Dismiss removes only that recovery record from this device.
 
-In the TUI, choose **Recovery (F12)** outside the editor. Use the arrow or Page Up/Page Down keys to read the records, Ctrl+C to copy all records, and Esc to return. The view is read-only.
+In the TUI, choose **Recovery (F12)** outside the editor. Use the arrow or Page Up/Page Down keys to read the records, `r` to resume one as a draft, `c` to copy, `e` to export, `d` to dismiss a preserved record, and Esc to return.
 
 If a recovered snippet contains images, TUI JSON copy does not allow dismissal; export a `.typerelay.zip` bundle, which includes the image data, before dismissing.
 
