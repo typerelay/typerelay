@@ -33,7 +33,7 @@ Text snippets insert their content literally. Multiline content, Unicode, tabs, 
 
 Code snippets also insert literally and retain a language name for web-editor highlighting. The language does not execute or format the content. The web editor can insert literal tabs or configured spaces while editing; saved existing whitespace is not reformatted. Unknown language names remain stored and display without specialized highlighting.
 
-In the TUI, code-mode Tab inserts a literal tab and Enter continues the current line’s exact leading tabs/spaces. Language selection and indentation preferences are web-only; the TUI preserves existing language metadata.
+In the TUI, choose Code language and Code indentation from Commands. Tab inserts the selected indentation, and Enter continues the current line’s exact leading tabs or spaces. Existing whitespace stays unchanged. The TUI does not provide syntax highlighting.
 
 ## Rich text
 

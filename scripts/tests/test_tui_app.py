@@ -84,11 +84,10 @@ class TuiAppTests(unittest.TestCase):
             self.fail(f"{error}: {output[-2000:]!r}")
 
     def drafts(self):
-        try:
-            with contextlib.closing(sqlite3.connect(self.directory / "typerelay.sqlite")) as db:
-                return [json.loads(row[0]) for row in db.execute("SELECT data FROM tui_drafts")]
-        except sqlite3.OperationalError:
-            return []
+        with contextlib.closing(sqlite3.connect(self.directory / "typerelay.sqlite")) as db:
+            if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='tui_drafts'").fetchone():
+                return []
+            return [json.loads(row[0]) for row in db.execute("SELECT data FROM tui_drafts")]
 
     def test_killed_editor_recovers_and_saves_once(self):
         process, master = self.launch()
