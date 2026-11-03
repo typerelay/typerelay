@@ -1,5 +1,5 @@
 .text-center.mb-5
-	p.mb-1 TypeRelay for iOS and Android is available in public beta.
+	p.mb-1 TypeRelay for Android is available on Google Play. iOS is available through TestFlight.
 	p.text-muted.mb-0 Scan a QR code or open the app for your device directly.
 
 .row.g-4
@@ -34,7 +34,7 @@
 						line(x1="9" y1="9" x2="9.01" y2="9")
 						line(x1="15" y1="9" x2="15.01" y2="9")
 				h3.h5.mb-1 Android
-				p.text-muted.small.mb-4 Available through Google Play testing
-				.mobile-beta-qr.mb-4(role="img" aria-label="QR code for Google Play testing")!= model.android.qrcode
+				p.text-muted.small.mb-4 Available on Google Play
+				.mobile-beta-qr.mb-4(role="img" aria-label="QR code for Google Play")!= model.android.qrcode
 				a.btn.btn-primary.btn-sm.w-100(href=model.android.url target="_blank" rel="noopener noreferrer" data-track="mobile_beta_android_click")
 					span Open Google Play

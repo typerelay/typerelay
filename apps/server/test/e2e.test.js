@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { execFile, spawn } from 'node:child_process';
 import { JSDOM } from 'jsdom';
+import QRCode from 'qrcode';
 import { randomUUID, createHash } from 'node:crypto';
 import { mongoose, Account, Member, User, Device, Ticket, Library, Conflict } from '../model/index.js';
 import { Support } from '../services/support.js';
@@ -144,14 +145,16 @@ test('top navigation opens the public mobile apps modal with QR codes', async ()
 		dom.window.eval(source);
 		const client = dom.window.testClient; client.account = Fixture.account;
 		const body = document.querySelector('#mobile-apps-modal-body');
+		const qrSvg = await QRCode.toString('https://play.google.com/store/apps/details?id=com.typerelay.mobile', { type: 'svg', margin: 1, width: 180 });
+		assert.ok((await (await Fixture.request('/api/v2/mobile-apps')).text()).includes(qrSvg));
 		await client.mobileApps();
 		assert.equal(body.dataset.loaded, 'true');
-		assert.match(body.textContent, /TypeRelay for iOS and Android is available in public beta\./);
+		assert.match(body.textContent, /TypeRelay for Android is available on Google Play\. iOS is available through TestFlight\./);
 		assert.match(body.textContent, /Scan a QR code or open the app for your device directly\./);
 		assert.equal(body.querySelector('[aria-label="QR code for Apple TestFlight"] svg') !== null, true);
-		assert.equal(body.querySelector('[aria-label="QR code for Google Play testing"] svg') !== null, true);
+		assert.equal(body.querySelector('[aria-label="QR code for Google Play"] svg') !== null, true);
 		assert.equal(body.querySelector('[data-track="mobile_beta_ios_click"]').href, 'https://testflight.apple.com/join/Q4Tw4DMh');
-		assert.equal(body.querySelector('[data-track="mobile_beta_android_click"]').href, 'https://play.google.com/apps/testing/com.typerelay.mobile');
+		assert.equal(body.querySelector('[data-track="mobile_beta_android_click"]').href, 'https://play.google.com/store/apps/details?id=com.typerelay.mobile');
 		await client.mobileApps();
 		assert.equal(mobileRequests, 1, 'Loaded mobile details must be reused without a section or page reload');
 	} finally { dom.window.close(); }

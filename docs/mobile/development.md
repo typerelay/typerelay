@@ -19,6 +19,10 @@ Saved snippets show a Trash action beside Save only when their library grants ed
 
 Edit `version_mobile` and numeric `build_mobile` in the root `package.json`. Android and iOS share these values; the child mobile package has no release version. Android Gradle reads and validates the root values directly. `pnpm mobile:build`, `pnpm mobile:sync`, and both `pnpm native:*` entrypoints prepare all iOS app and keyboard Debug/Release settings. Commit the prepared Xcode metadata with the root change. Xcode checks the metadata before building and rejects stale values. To check it without building, run `node apps/mobile/scripts/version.mjs --check`. Apple builds, signing, archives, and uploads remain manual.
 
+## Public installation
+
+Install TypeRelay for Android from [Google Play](https://play.google.com/store/apps/details?id=com.typerelay.mobile). The iOS app is available through [TestFlight](https://testflight.apple.com/join/Q4Tw4DMh).
+
 ## Build
 
 Requirements: Node 24, pnpm, Rust, Xcode for iOS; Android SDK 36, Java 21 and NDK 28.2.13676358 for Android. Native build scripts install the required Rust targets. Set `ANDROID_HOME` and `ANDROID_NDK_HOME` when using nondefault SDK paths.
