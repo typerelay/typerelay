@@ -47,18 +47,29 @@ export class Auth {
   if (!pending || Date.now() - pending.created > 300000 || url.searchParams.getAll('state').length !== 1 || url.searchParams.get('state') !== pending.state) throw new Error('Sign-in expired or state mismatch. Sign in again.');
   if (url.searchParams.has('error')) throw new Error('Sign-in was cancelled.');
   if (url.searchParams.getAll('code').length !== 1) throw new Error('Missing sign-in code');
+  Auth.assert(version); if (!Preview.enabled) await Browser.close().catch(() => undefined); Auth.assert(version);
   const tokens = await Auth.tokenRequest(pending.server, { grant_type: 'authorization_code', client_id: Auth.client, redirect_uri: Auth.callback, code_verifier: pending.verifier, code: url.searchParams.get('code')! }, version);
   let connectedVersion: number;
   try { connectedVersion = await Auth.write(version, async () => {
-   await Native.call('bind', { server: pending.server, account: tokens.account, ...(Preview.enabled ? { access_token: tokens.access_token } : {}) });
-   Auth.assert(version); await SecureStorage.set('server', pending.server); Auth.assert(version);
-   await SecureStorage.set('tokens', tokens as any); Auth.assert(version);
-   await SecureStorage.remove('pending'); Auth.assert(version);
-   Auth.tokens = tokens; Auth.server = pending.server; Auth.refresh = null; return ++Auth.version;
+   const previousServer = Auth.server; const previousTokens = Auth.tokens;
+   try {
+    await Native.call('bind', { server: pending.server, account: tokens.account, ...(Preview.enabled ? { access_token: tokens.access_token } : {}) });
+    Auth.assert(version); await SecureStorage.set('server', pending.server); Auth.assert(version);
+    await SecureStorage.set('tokens', tokens as any); Auth.assert(version);
+    await SecureStorage.remove('pending'); Auth.assert(version);
+    Auth.tokens = tokens; Auth.server = pending.server; Auth.refresh = null; return ++Auth.version;
+   } catch (error) {
+    if (version === Auth.version) {
+     if (previousTokens) await SecureStorage.set('tokens', previousTokens as any); else await SecureStorage.remove('tokens'); Auth.assert(version);
+     if (previousServer) await SecureStorage.set('server', previousServer); else await SecureStorage.remove('server'); Auth.assert(version);
+     await SecureStorage.remove('pending'); Auth.assert(version);
+    }
+    throw error;
+   }
   }); } catch (error) { await Auth.revoke(pending.server, tokens).catch(() => undefined); throw error; }
-  Auth.assert(connectedVersion); await Browser.close().catch(() => undefined); return connectedVersion;
+  Auth.assert(connectedVersion); return connectedVersion;
  }
- static async tokenRequest(server: string, body: Record<string,string>, version = Auth.version) { const result = await (Preview.enabled ? Preview.request('/oauth/token', 'POST', body) : CapacitorHttp.post({ url: `${server}/oauth/token`, headers: { 'Content-Type': 'application/json' }, data: body, disableRedirects: true })); Auth.assert(version); if (result.status !== 200) { if (result.status === 401 && body.grant_type === 'refresh_token') await Auth.write(version, () => Native.call('suspend')); throw new Error(result.data?.error || 'Sign-in failed'); } return { ...result.data, obtained_at: Date.now() } as Tokens; }
+ static async tokenRequest(server: string, body: Record<string,string>, version = Auth.version) { const result = await (Preview.enabled ? Preview.request('/oauth/token', 'POST', body) : CapacitorHttp.post({ url: `${server}/oauth/token`, headers: { 'Content-Type': 'application/json' }, data: body, disableRedirects: true })); if (version !== Auth.version && result.status === 200 && body.grant_type === 'authorization_code') await Auth.revoke(server, result.data as Tokens).catch(() => undefined); Auth.assert(version); if (result.status !== 200) { if (result.status === 401 && body.grant_type === 'refresh_token') await Auth.write(version, () => Native.call('suspend')); throw new Error(result.data?.error || 'Sign-in failed'); } return { ...result.data, obtained_at: Date.now() } as Tokens; }
  static async save(tokens: Tokens, version = Auth.version) { await Auth.write(version, async () => { await SecureStorage.set('tokens', tokens as any); Auth.assert(version); Auth.tokens = tokens; }); }
 
  static async access(force = false) {

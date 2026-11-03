@@ -71,7 +71,9 @@ On NadaMini, backend development uses `dbh-run`. Run `dbh-run urls` for the curr
 
 - Browser authorization: public client `typerelay-mobile`, S256 PKCE, state verification, exact callback `com.typerelay.mobile://oauth/callback`. Both warm and cold callbacks are handled.
 - Device metadata: `client_type=mobile`; `os=ios|android`. Authorization codes and mobile refresh tokens are bound to the mobile client. Existing desktop callbacks and legacy desktop refresh requests remain supported.
+- Accepted OAuth callbacks dismiss the native authentication browser before token exchange and native binding, so finalization errors appear in the app. Failed finalization attempts to revoke the new grant and restores prior credentials without deleting drafts. Start sign-in again to retry. Browser preview never closes a native browser.
 - Credentials stay in Capacitor secure storage. Rust receives only an access token during synchronization; it never writes mobile refresh credentials into SQLite, the filesystem, or keyboard snapshots.
+- iOS storage keeps the private `Application Support/TypeRelay` directory and App Group `keyboard.json`, `assets`, and `usage` paths. Backup exclusion and `completeUntilFirstUserAuthentication` protection apply only to app-owned directories and files, including atomic replacements. The system-owned App Group root is left untouched. Existing data stays in place.
 - SQLite stores local edits and outbox operations transactionally. Mobile save receipts make native callback retries idempotent, including creates. Existing sync protocol 6 handles server retries and conflicts.
 - Unsaved editor drafts persist locally. A changed snippet cannot silently overwrite a newer local revision; **Save as new** preserves both versions. Recovered edits can be restored into an editable library.
 - Account/server binding prevents cached libraries being mixed with another sign-in. Signing out explicitly removes local drafts, outbox, snapshots and cached images. Reconnecting the same account retains them.
@@ -81,7 +83,7 @@ On NadaMini, backend development uses `dbh-run`. Run `dbh-run urls` for the curr
 
 The containing app publishes an atomic snapshot. Its generation is derived from content rather than SQLite connection-local counters. Keyboard insertion checks the generation again, rejecting stale selections. Revoked libraries are removed on the next successful sync; a rejected refresh token suspends the keyboard snapshot. Offline devices cannot learn about server revocation immediately.
 
-iOS reads the App Group snapshot without requesting Full Access. The extension never opens the app database or performs network requests. Its keys type into the destination app; an exact, unique bare abbreviation expands immediately. Partial or ambiguous abbreviations appear above the keys. The left magnifier opens an empty snippet search, while All opens an unfiltered list; both keep the keys available and show Back above single-line abbreviation — expansion previews. Direct insertion uses plain text; secure fields and apps rejecting third-party keyboards use the system keyboard. Physical-device verification of read-only App Group access is required.
+iOS reads the App Group snapshot without requesting Full Access. The extension never opens the app database, writes shared files or performs network requests. iOS keyboard insertions do not contribute to usage statistics because shared-container writes require Full Access. Copies from the main app still count. See [Apple’s keyboard access rules](https://developer.apple.com/documentation/uikit/configuring-open-access-for-a-custom-keyboard). Its keys type into the destination app; an exact, unique bare abbreviation expands immediately. Partial or ambiguous abbreviations appear above the keys. The left magnifier opens an empty snippet search, while All opens an unfiltered list; both keep the keys available and show Back above single-line abbreviation — expansion previews. Direct insertion uses plain text; secure fields and apps rejecting third-party keyboards use the system keyboard. Physical-device verification of read-only App Group access is required.
 
 Android uses an `InputMethodService`. Ordinary keys commit to the destination field, while the shared local matcher reads only bounded text before the cursor. A unique exact bare abbreviation expands immediately; a tapped suggestion replaces the typed fragment. The left magnifier opens an empty snippet search, while All opens an unfiltered list; both keep the keys available and show Back above single-line abbreviation — expansion previews. Formatted text is offered through `commitText`; destination apps may discard formatting. Images are separate explicit insertions using `commitContent`, advertised MIME types, and temporary URI grants. Unsupported destinations retain a plain-text option. Password fields have no snippet matching or expansion.
 
@@ -94,10 +96,13 @@ The app uses React subscriptions with Pug-rendered fragments, including the exis
 ## Verification
 
 ```fish
+node --test apps/mobile/test/auth.test.mjs apps/mobile/test/ios-storage.test.mjs
 cargo test -p typerelay-mobile -p typerelay-client --lib
 pnpm run mobile:build
 dbh-run compose -- exec -e APP_URL=http://localhost:3040 -e API_RATE_LIMIT_ENABLED=false app node --test --test-force-exit --test-name-pattern 'mobile|desktop PKCE|device enrollment|PKCE account binding' test/sync.test.js
 ```
+
+The Swift storage check compiles the production bridge with a native-call stand-in on macOS. It checks root metadata, existing data, atomic snapshot replacements, storage errors and restricted keyboard calls. It cannot establish iOS file protection or signed App Group access. Authentication regressions exercise browser dismissal, bind failures, credential rollback, retries and sign-out races.
 
 The new native tests cover durable offline edits, acknowledgement replay, transactional rollback, stale selections, account isolation, suspended/revoked snapshots, assets, template validation and queued conflict resolution. OAuth tests cover callback restrictions, PKCE, client isolation, metadata, code replay and refresh rotation.
 

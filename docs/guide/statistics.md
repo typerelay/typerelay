@@ -13,7 +13,7 @@ Personal statistics cover your own usage of synchronized libraries. Owners and a
 
 A successful abbreviation expansion, picker/keyboard insertion, or explicit snippet copy counts as one **Use**. Reports combine these actions into one count. Previews, searches, cancellations, rejected insertions, and internal clipboard preparation do not count. Operating systems do not always confirm that another application accepted text; TypeRelay records completion of the platform insertion operation.
 
-Statistics begin with updated clients. Previous usage cannot be reconstructed. Devices queue counts offline and upload after reconnecting. Mobile keyboard usage uploads when the containing TypeRelay app next runs and synchronizes. Copies cannot confirm that content was subsequently pasted.
+Statistics begin with updated clients. Previous usage cannot be reconstructed. Devices queue counts offline and upload after reconnecting. Android keyboard usage uploads when the containing TypeRelay app next runs and synchronizes. The iOS keyboard does not record usage because it has read-only access to shared storage without Full Access. Copies from the main iOS app still count. Copies cannot confirm that content was subsequently pasted.
 
 ## Savings estimates
 
