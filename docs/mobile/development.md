@@ -59,6 +59,8 @@ dbh-run exec -- python3 scripts/setup-mobile-dbh.py n
 dbh-run compose -- up -d app mobile
 ```
 
+Development Compose connects the preview backend to `http://app.typerelay.local:3040` through an alias on the app's default network. Token exchange, identity checks, Rust sync and asset downloads all use this backend. The `.local` hostname passes the existing platform-host check; the bare `app` service name does not. Outside Compose, the preview backend defaults to `http://localhost:3040`. `MOBILE_API_ORIGIN` remains the public sign-in origin. Production custom-domain verification is unchanged.
+
 The route setup command adds the named development Caddy mobile route, keeps a backup, validates the configuration and reloads the running development proxy. The mobile source is mounted for hot reload.
 
 The browser runs the actual mobile UI. Its development-only web bridge calls the same Rust SQLite/outbox/rendering code in the mobile container. Preview caches are isolated by authenticated user, account and browser ID. Browser OAuth uses only the explicitly configured `TYPERELAY_MOBILE_PREVIEW_URL` callback; production rejects this callback. Native builds retain their original secure-storage and callback paths. The preview uses the browser implementation of the storage plugin, like Mailtwine; sign out after testing on a shared browser.
