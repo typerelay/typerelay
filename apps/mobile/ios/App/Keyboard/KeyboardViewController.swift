@@ -248,7 +248,6 @@ final class KeyboardViewController: UIInputViewController {
             textDocumentProxy.insertText(rendered["text"] as? String ?? "")
             if let cursor = rendered["cursor"] as? [String: Any], let backward = cursor["backward_utf16"] as? Int { textDocumentProxy.adjustTextPosition(byCharacterOffset: -backward) }
             changingHost = false
-            _ = try? TypeRelayCore.execute(["action": "keyboard_usage", "generation": snapshot["generation"] ?? "", "library": selectionLibrary, "id": selection?["id"] ?? "", "kind": "insert", "characters": max(0, ((rendered["characters"] as? Int) ?? (rendered["text"] as? String ?? "").unicodeScalars.count) - anchorFragment.unicodeScalars.count)], keyboard: true)
             values.removeAll(); selection = nil; field = nil; showTyping()
         } catch { changingHost = false; showPreview(message: error.localizedDescription) }
     }

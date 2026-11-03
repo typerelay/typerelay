@@ -50,6 +50,7 @@ impl Cli {
                 dirty = true;
             }
         }
+        app.quit_preserving()?;
         Ok(())
     }
 }

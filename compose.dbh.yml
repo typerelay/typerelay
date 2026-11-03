@@ -21,6 +21,8 @@ services:
     volumes: *dbh-ca-volumes
     networks:
       default:
+        aliases:
+          - app.typerelay.local
       dbh_proxy:
         aliases:
           - "${DBH_PROFILE}-typerelay-app"

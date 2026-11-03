@@ -19,6 +19,10 @@ Saved snippets show a Trash action beside Save only when their library grants ed
 
 Edit `version_mobile` and numeric `build_mobile` in the root `package.json`. Android and iOS share these values; the child mobile package has no release version. Android Gradle reads and validates the root values directly. `pnpm mobile:build`, `pnpm mobile:sync`, and both `pnpm native:*` entrypoints prepare all iOS app and keyboard Debug/Release settings. Commit the prepared Xcode metadata with the root change. Xcode checks the metadata before building and rejects stale values. To check it without building, run `node apps/mobile/scripts/version.mjs --check`. Apple builds, signing, archives, and uploads remain manual.
 
+## Public installation
+
+Install TypeRelay for Android from [Google Play](https://play.google.com/store/apps/details?id=com.typerelay.mobile). The iOS app is available through [TestFlight](https://testflight.apple.com/join/Q4Tw4DMh).
+
 ## Build
 
 Requirements: Node 24, pnpm, Rust, Xcode for iOS; Android SDK 36, Java 21 and NDK 28.2.13676358 for Android. Native build scripts install the required Rust targets. Set `ANDROID_HOME` and `ANDROID_NDK_HOME` when using nondefault SDK paths.
@@ -59,6 +63,8 @@ dbh-run exec -- python3 scripts/setup-mobile-dbh.py n
 dbh-run compose -- up -d app mobile
 ```
 
+Development Compose connects the preview backend to `http://app.typerelay.local:3040` through an alias on the app's default network. Token exchange, identity checks, Rust sync and asset downloads all use this backend. The `.local` hostname passes the existing platform-host check; the bare `app` service name does not. Outside Compose, the preview backend defaults to `http://localhost:3040`. `MOBILE_API_ORIGIN` remains the public sign-in origin. Production custom-domain verification is unchanged.
+
 The route setup command adds the named development Caddy mobile route, keeps a backup, validates the configuration and reloads the running development proxy. The mobile source is mounted for hot reload.
 
 The browser runs the actual mobile UI. Its development-only web bridge calls the same Rust SQLite/outbox/rendering code in the mobile container. Preview caches are isolated by authenticated user, account and browser ID. Browser OAuth uses only the explicitly configured `TYPERELAY_MOBILE_PREVIEW_URL` callback; production rejects this callback. Native builds retain their original secure-storage and callback paths. The preview uses the browser implementation of the storage plugin, like Mailtwine; sign out after testing on a shared browser.
@@ -71,7 +77,9 @@ On NadaMini, backend development uses `dbh-run`. Run `dbh-run urls` for the curr
 
 - Browser authorization: public client `typerelay-mobile`, S256 PKCE, state verification, exact callback `com.typerelay.mobile://oauth/callback`. Both warm and cold callbacks are handled.
 - Device metadata: `client_type=mobile`; `os=ios|android`. Authorization codes and mobile refresh tokens are bound to the mobile client. Existing desktop callbacks and legacy desktop refresh requests remain supported.
+- Accepted OAuth callbacks dismiss the native authentication browser before token exchange and native binding, so finalization errors appear in the app. Failed finalization attempts to revoke the new grant and restores prior credentials without deleting drafts. Start sign-in again to retry. Browser preview never closes a native browser.
 - Credentials stay in Capacitor secure storage. Rust receives only an access token during synchronization; it never writes mobile refresh credentials into SQLite, the filesystem, or keyboard snapshots.
+- iOS storage keeps the private `Application Support/TypeRelay` directory and App Group `keyboard.json`, `assets`, and `usage` paths. Existing app-owned metadata is repaired once per app process. Protected directories exclude their children from backup and give new files `completeUntilFirstUserAuthentication` protection. Operations that publish atomic snapshot replacements protect the new snapshot explicitly. The system-owned App Group root is left untouched. Existing data stays in place. Reset bypasses cache metadata repair so Rust can revoke keyboard visibility before cleanup; the revoked snapshot is protected even if cleanup fails.
 - SQLite stores local edits and outbox operations transactionally. Mobile save receipts make native callback retries idempotent, including creates. Existing sync protocol 6 handles server retries and conflicts.
 - Unsaved editor drafts persist locally. A changed snippet cannot silently overwrite a newer local revision; **Save as new** preserves both versions. Recovered edits can be restored into an editable library.
 - Account/server binding prevents cached libraries being mixed with another sign-in. Signing out explicitly removes local drafts, outbox, snapshots and cached images. Reconnecting the same account retains them.
@@ -81,7 +89,7 @@ On NadaMini, backend development uses `dbh-run`. Run `dbh-run urls` for the curr
 
 The containing app publishes an atomic snapshot. Its generation is derived from content rather than SQLite connection-local counters. Keyboard insertion checks the generation again, rejecting stale selections. Revoked libraries are removed on the next successful sync; a rejected refresh token suspends the keyboard snapshot. Offline devices cannot learn about server revocation immediately.
 
-iOS reads the App Group snapshot without requesting Full Access. The extension never opens the app database or performs network requests. Its keys type into the destination app; an exact, unique bare abbreviation expands immediately. Partial or ambiguous abbreviations appear above the keys. The left magnifier opens an empty snippet search, while All opens an unfiltered list; both keep the keys available and show Back above single-line abbreviation — expansion previews. Direct insertion uses plain text; secure fields and apps rejecting third-party keyboards use the system keyboard. Physical-device verification of read-only App Group access is required.
+iOS reads the App Group snapshot without requesting Full Access. The extension never opens the app database, writes shared files or performs network requests. iOS keyboard insertions do not contribute to usage statistics because shared-container writes require Full Access. Copies from the main app still count. See [Apple’s keyboard access rules](https://developer.apple.com/documentation/uikit/configuring-open-access-for-a-custom-keyboard). Its keys type into the destination app; an exact, unique bare abbreviation expands immediately. Partial or ambiguous abbreviations appear above the keys. The left magnifier opens an empty snippet search, while All opens an unfiltered list; both keep the keys available and show Back above single-line abbreviation — expansion previews. Direct insertion uses plain text; secure fields and apps rejecting third-party keyboards use the system keyboard. Physical-device verification of read-only App Group access is required.
 
 Android uses an `InputMethodService`. Ordinary keys commit to the destination field, while the shared local matcher reads only bounded text before the cursor. A unique exact bare abbreviation expands immediately; a tapped suggestion replaces the typed fragment. The left magnifier opens an empty snippet search, while All opens an unfiltered list; both keep the keys available and show Back above single-line abbreviation — expansion previews. Formatted text is offered through `commitText`; destination apps may discard formatting. Images are separate explicit insertions using `commitContent`, advertised MIME types, and temporary URI grants. Unsupported destinations retain a plain-text option. Password fields have no snippet matching or expansion.
 
@@ -94,10 +102,13 @@ The app uses React subscriptions with Pug-rendered fragments, including the exis
 ## Verification
 
 ```fish
+node --test apps/mobile/test/auth.test.mjs apps/mobile/test/ios-storage.test.mjs
 cargo test -p typerelay-mobile -p typerelay-client --lib
 pnpm run mobile:build
 dbh-run compose -- exec -e APP_URL=http://localhost:3040 -e API_RATE_LIMIT_ENABLED=false app node --test --test-force-exit --test-name-pattern 'mobile|desktop PKCE|device enrollment|PKCE account binding' test/sync.test.js
 ```
+
+The Swift storage check compiles the production bridge with a native-call stand-in on macOS. It checks root metadata, existing data, atomic snapshot replacements, storage errors, restricted keyboard calls, reset failures and repeated asset/render calls without recursive metadata work. It cannot establish iOS file protection or signed App Group access. Authentication regressions exercise browser dismissal, bind failures, credential rollback, retries and sign-out races.
 
 The new native tests cover durable offline edits, acknowledgement replay, transactional rollback, stale selections, account isolation, suspended/revoked snapshots, assets, template validation and queued conflict resolution. OAuth tests cover callback restrictions, PKCE, client isolation, metadata, code replay and refresh rotation.
 

@@ -68,7 +68,7 @@ cleanup_release_worktree() {
 	fi
 
 	if [ -e "$release_worktree/.git" ]; then
-		git worktree remove --force "$release_worktree" >/dev/null 2>&1 || true
+		git worktree remove "$release_worktree" >/dev/null 2>&1 || true
 	elif [ -d "$release_worktree" ]; then
 		rmdir "$release_worktree" >/dev/null 2>&1 || true
 	fi

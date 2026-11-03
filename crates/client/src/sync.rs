@@ -85,7 +85,7 @@ impl Sync {
 			credentials.account=tokens["account"].as_str().map(str::to_owned).or(credentials.account.take());credentials.device=tokens["device"].as_str().map(str::to_owned).or(credentials.device.take());
             self.secret(credentials)?;
 			}
-			lock.unlock()?;
+			fs2::FileExt::unlock(&lock)?;
             response = send(credentials)?;
         }
         Self::response(response)
@@ -105,16 +105,12 @@ impl Sync {
         ensure!(size > 0 && size <= 2 * 1048576, "Invalid asset size");
         let sources = metadata["source_urls"].as_array();
         ensure!(metadata["source_urls"].is_null() || sources.is_some_and(|sources| sources.iter().all(Value::is_string)), "Invalid asset sources");
-        if let Some((mut cached, bytes)) = db.asset(id)? {
-            if bytes.len() != size as usize {
-                // A cache whose stored bytes disagree with server metadata is dropped and re-downloaded with hash verification, not allowed to stall every cycle.
-                db.delete_asset(id)?;
-            } else {
-                if sources.is_none_or(|sources| sources.iter().all(|source| cached["source_urls"].as_array().is_some_and(|values| values.contains(source)))) { return Ok(()); }
-                cached["source_urls"] = metadata["source_urls"].clone();
-                return db.put_asset(&cached, &bytes, true);
-            }
+        if let Some((mut cached, bytes)) = db.asset(id)? && bytes.len() == size as usize {
+            if sources.is_none_or(|sources| sources.iter().all(|source| cached["source_urls"].as_array().is_some_and(|values| values.contains(source)))) { return Ok(()); }
+            cached["source_urls"] = metadata["source_urls"].clone();
+            return db.put_asset(&cached, &bytes, true);
         }
+        // Keep the existing cache until replacement bytes pass size and hash verification.
         let mut bytes = Vec::new();
         self.asset_request(credentials, reqwest::Method::GET, id, None, None)?.take(2 * 1048576 + 1).read_to_end(&mut bytes)?;
         ensure!(bytes.len() == size as usize, "Asset size mismatch");
@@ -157,9 +153,9 @@ impl Sync {
         let mut authorize = url::Url::parse(&format!("{server}/oauth/authorize"))?;
         authorize.query_pairs_mut().extend_pairs([("client_id", "typerelay-desktop"), ("redirect_uri", &redirect), ("code_challenge", &challenge), ("code_challenge_method", "S256"), ("state", &state), ("device_name", if app_callback { "TypeRelay desktop" } else { "TypeRelay CLI / TUI" }), ("client_type", if app_callback { "desktop" } else { "cli" })]);
         if matches!(std::env::consts::OS, "macos" | "windows" | "linux") { authorize.query_pairs_mut().append_pair("os", std::env::consts::OS); }
-        println!("Open this URL in your browser:\n{authorize}");
+        if !open_browser { println!("Open this URL in your browser:\n{authorize}"); }
         #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))] let _ = open_browser;
-        #[cfg(target_os = "linux")] { if open_browser { let _ = std::process::Command::new("xdg-open").arg(authorize.as_str()).spawn(); } }
+        #[cfg(target_os = "linux")] { if open_browser { std::process::Command::new("xdg-open").arg(authorize.as_str()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn()?; } }
         #[cfg(target_os = "macos")] { if open_browser { std::process::Command::new("open").arg(authorize.as_str()).spawn()?; } }
         #[cfg(target_os = "windows")] { if open_browser { std::process::Command::new("rundll32.exe").args(["url.dll,FileProtocolHandler", authorize.as_str()]).spawn()?; } }
         let deadline = Instant::now() + Duration::from_secs(300);
@@ -181,7 +177,6 @@ impl Sync {
                     let tokens = Self::response(self.client.post(format!("{server}/oauth/token")).json(&json!({"grant_type":"authorization_code","client_id":"typerelay-desktop","code":params.get("code"),"redirect_uri":redirect,"code_verifier":verifier})).send()?)?;
 					ensure!(!cancelled.load(Ordering::SeqCst),"Authentication cancelled");self.secret(&Credentials { server: server.into(), access_token: tokens["access_token"].as_str().context("Missing token")?.into(), refresh_token: tokens["refresh_token"].as_str().context("Missing token")?.into(), account:tokens["account"].as_str().map(str::to_owned), device:tokens["device"].as_str().map(str::to_owned) })?;
                     stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 37\r\nConnection: close\r\n\r\nTypeRelay connected. Close this tab.\n")?;
-                    println!("Connected. Enroll selected files with: typerelay enroll FILE.yml");
                     return Ok(());
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(100)),
@@ -194,11 +189,12 @@ impl Sync {
         let _lock = self.lock()?;
         self.credentials()?;
         Database::open(&self.directory)?.enroll(name)?;
-        println!("Library enrolled; changes queued for sync.");
         Ok(())
     }
-	pub fn resolve_conflict(&self,id:&str,choice:&str,value:Option<Value>)->Result<()> {
-		ensure!(["local","server","merged"].contains(&choice),"Choose a conflict resolution");let _lock=self.lock()?;let mut credentials=self.credentials()?;let db=Database::open(&self.directory)?;let conflicts=db.meta("conflicts")?.and_then(|value|value.as_array().cloned()).unwrap_or_default();let conflict=conflicts.iter().find(|conflict|conflict["_id"]==id).context("Conflict no longer exists")?;let library_id=conflict["library"].as_str().context("Missing conflict library")?;let library=db.library(library_id)?;
+	pub fn resolve_conflict(&self,id:&str,choice:&str,value:Option<Value>)->Result<()> { self.resolve_conflict_as(None,id,choice,value) }
+	/// `expected` pins the account/server identity the caller reviewed; a mismatch fails before any request.
+	pub fn resolve_conflict_as(&self,expected:Option<&Value>,id:&str,choice:&str,value:Option<Value>)->Result<()> {
+		ensure!(["local","server","merged"].contains(&choice),"Choose a conflict resolution");let _lock=self.lock()?;if let Some(expected)=expected{ensure!(crate::drafts::Draft::identity(&self.root)?==*expected,"Connection changed; nothing was sent");}let mut credentials=self.credentials()?;let db=Database::open(&self.directory)?;let conflicts=db.meta("conflicts")?.and_then(|value|value.as_array().cloned()).unwrap_or_default();let conflict=conflicts.iter().find(|conflict|conflict["_id"]==id).context("Conflict no longer exists")?;let library_id=conflict["library"].as_str().context("Missing conflict library")?;let library=db.library(library_id)?;
 		if choice=="merged"{let value=value.as_ref().context("Enter the merged record")?;Database::entries(&[json!({"state":"active","trigger":value["trigger"],"title":value["title"],"content":value["content"]})])?;}
 		let result=self.request(&mut credentials,reqwest::Method::POST,&format!("conflicts/{id}"),Some(&json!({"operation_id":Uuid::new_v4().to_string(),"base_revision":library["revision"],"choice":choice,"value":value})))?;db.apply(&result,None)?;let fresh=self.request(&mut credentials,reqwest::Method::GET,"sync?cursor=0",None)?;self.download_assets(&credentials,&db,&fresh)?;db.apply(&fresh,None)?;Ok(())
 	}

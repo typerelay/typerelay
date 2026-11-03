@@ -20,7 +20,7 @@ export class PreviewServer {
  }
  static json(res, status, data) { if (res.headersSent) return; res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(data)); }
  static async body(req) { let length = 0; const chunks = []; for await (const chunk of req) { length += chunk.length; if (length > 12 * 1048576) throw Object.assign(new Error('Request too large'), { status: 413 }); chunks.push(chunk); } return chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : {}; }
- static backend() { return process.env.MOBILE_API_URL || 'http://app:3040'; }
+ static backend() { return process.env.MOBILE_API_URL || 'http://localhost:3040'; }
  static async handle(req, res, path) {
   if (path === '/assets/generated/template.wasm') { res.setHeader('Content-Type', 'application/wasm'); res.end(await readFile('/usr/local/share/typerelay/template.wasm')); return; }
   if (req.headers.origin && req.headers.origin !== new URL(process.env.MOBILE_PREVIEW_ORIGIN).origin) return PreviewServer.json(res, 403, { error: 'Invalid preview origin' });

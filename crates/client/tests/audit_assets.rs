@@ -140,6 +140,8 @@ fn cached_image_sync_merges_sources_without_fetching_or_rewriting_unchanged_byte
     assert_eq!(db.connection.total_changes(), changes);
     metadata["source_urls"] = json!([17]); assert!(sync.download_asset(&credentials, &db, &metadata).is_err());
     metadata["source_urls"] = json!([]); metadata["size"] = json!(original.len() + 1); assert!(sync.download_asset(&credentials, &db, &metadata).is_err());
+    let (preserved_metadata, preserved_bytes) = db.asset(&id).unwrap().unwrap();
+    assert_eq!(preserved_bytes, original); assert_eq!(preserved_metadata, merged); assert_eq!(db.connection.total_changes(), changes);
     db.import("Images", &json!({"matches":[{"trigger":"image","type":"rich_text","replace":format!("![](typerelay-asset:{id})")}]}).to_string()).unwrap();
     let bundle = root.path().join("merged.typerelay.zip"); db.export("Images", &bundle).unwrap();
     let mut archive = zip::ZipArchive::new(fs::File::open(bundle).unwrap()).unwrap(); let mut text = String::new(); archive.by_name("bundle.json").unwrap().read_to_string(&mut text).unwrap();

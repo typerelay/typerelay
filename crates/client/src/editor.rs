@@ -30,8 +30,8 @@ impl Paths {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct OpenFile { pub name: String, pub entries: Vec<Match>, pub id: String, pub revision: i64, pub ids: Vec<String> }
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct OpenFile { pub name: String, pub entries: Vec<Match>, pub id: String, pub revision: i64, pub ids: Vec<String>, pub revisions: Vec<i64> }
 impl OpenFile {
     pub fn search(&self, query: &str) -> Vec<usize> {
         let query = query.to_lowercase();

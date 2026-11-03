@@ -60,7 +60,7 @@ services:
     environment:
       NODE_ENV: development
       TYPERELAY_MOBILE_PREVIEW: "true"
-      MOBILE_API_URL: http://app:3040
+      MOBILE_API_URL: http://app.typerelay.local:3040
       MOBILE_API_ORIGIN: "${APP_URL:-http://localhost:3040}"
       MOBILE_PREVIEW_ORIGIN: "${TYPERELAY_MOBILE_PREVIEW_URL:-http://localhost:5174}"
       __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: mobile.typerelay.orb.local
@@ -90,6 +90,10 @@ services:
     extends:
       file: ./compose.base.yml
       service: base
+    networks:
+      default:
+        aliases:
+          - app.typerelay.local
     ports:
       - "127.0.0.1:3040:3040"
     environment:

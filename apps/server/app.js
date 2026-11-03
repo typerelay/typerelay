@@ -36,7 +36,7 @@ import { fileURLToPath } from 'node:url';
 import QRCode from 'qrcode';
 
 export const IOS_BETA_URL = 'https://testflight.apple.com/join/Q4Tw4DMh';
-export const ANDROID_BETA_URL = 'https://play.google.com/apps/testing/com.typerelay.mobile';
+export const ANDROID_STORE_URL = 'https://play.google.com/store/apps/details?id=com.typerelay.mobile';
 
 export class Server {
 	static async start() {
@@ -305,9 +305,9 @@ export class Server {
 		app.get('/api/v2/mobile-apps', async (req, res) => {
 			const [iosQrcode, androidQrcode] = await Promise.all([
 				QRCode.toString(IOS_BETA_URL, { type: 'svg', margin: 1, width: 180 }),
-				QRCode.toString(ANDROID_BETA_URL, { type: 'svg', margin: 1, width: 180 }),
+				QRCode.toString(ANDROID_STORE_URL, { type: 'svg', margin: 1, width: 180 }),
 			]);
-			res.render('ajax/mobile_apps_modal', { model: { ios: { url: IOS_BETA_URL, qrcode: iosQrcode }, android: { url: ANDROID_BETA_URL, qrcode: androidQrcode } } });
+			res.render('ajax/mobile_apps_modal', { model: { ios: { url: IOS_BETA_URL, qrcode: iosQrcode }, android: { url: ANDROID_STORE_URL, qrcode: androidQrcode } } });
 		});
 		app.get('/api/v2/libraries', async (req, res) => res.json(await Libraries.list(req.ctx)));
 		app.post('/api/v2/import/:format/preview', uploadLimit, async (req, res) => { const preview = await Libraries.previewImport(req.params.format, req.body); res.json({ ...preview, html: pug.renderFile('./views/ajax/snippetslab.pug', preview) }); });
