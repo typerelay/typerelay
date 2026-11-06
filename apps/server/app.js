@@ -123,7 +123,7 @@ export class Server {
 			res.set('Referrer-Policy', 'no-referrer');
 			const login = await Auth.consume(req.query.token, true);
 			if (login.return_to) req.session.return_to = login.return_to;
-			const result = await Security.establish(req, login.user);
+			const result = await Security.establish(req, login.createdUser ?? login.user);
 			if (login.signup_account && Auth.adsEnabled(req) && req.session.user) {
 				req.session.signupConversion = { account: login.signup_account, redirect: result.redirect };
 				await new Promise((resolve, reject) => req.session.save(error => error ? reject(error) : resolve()));

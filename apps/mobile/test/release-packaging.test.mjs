@@ -110,7 +110,7 @@ describe('mobile release packaging', () => {
 		assert.match(ios, /UIImage\(systemName: "magnifyingglass"\)/);
 		assert.match(ios, /showSearch\(browse: false\)/);
 		assert.match(ios, /showSearch\(browse: true\)/);
-		assert.match(ios, /query\.isEmpty && !browseAll/);
+		assert.match(ios, /!query\.isEmpty \|\| browseAll/);
 		assert.match(ios, /searchPanel\.isHidden = false; strip\.isHidden = true/);
 		assert.match(ios, /if textDocumentProxy\.isSecureTextEntry.*strip\.isHidden = true/);
 		assert.match(ios, /searchHeader\.addArrangedSubview\(searchBack\)/);

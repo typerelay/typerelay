@@ -56,10 +56,10 @@ before(async () => {
 	mock.method(Billing, 'initializeAccount', async () => {});
 	mock.method(SignupNotifications, 'create', async () => null);
 	mock.method(StarterContent, 'create', async () => {});
-	mock.method(User, 'updateOne', async () => {});
+	mock.method(User, 'updateOne', async filter => ({ matchedCount: Number(!!Fixture.user && String(Fixture.user._id) === String(filter._id) && !Fixture.user.deletion?.requested_at) }));
 	mock.method(User, 'findOne', () => Fixture.query(Fixture.user));
 	mock.method(User, 'findById', () => Fixture.query(Fixture.user));
-	mock.method(User, 'create', async rows => [Fixture.user = { ...rows[0], _id: 'synthetic-user' }]);
+	mock.method(User, 'create', async rows => [Fixture.user = new User(rows[0])]);
 	mock.method(Account, 'create', async rows => [Fixture.account = { ...rows[0], _id: 'synthetic-account', is_active: true }]);
 	mock.method(Account, 'findOne', () => Fixture.query(Fixture.account));
 	mock.method(Account, 'updateOne', async (query, update) => { if (!Fixture.account.acquisition.dispatched_at) Fixture.account.acquisition.dispatched_at = update.$set['acquisition.dispatched_at']; });
@@ -116,7 +116,9 @@ test('signup carries attribution through confirmation, strips tokens, and acknow
 	assert.equal(submitted.status, 200, submitted.text);
 	assert.equal(Fixture.account, null, 'submitting signup must not create a conversion');
 	assert.deepEqual(Fixture.ticket.data.acquisition, { gclid: 'synthetic-click', utm_source: 'google' });
+	const reread = mock.method(User, 'findById', () => Fixture.query(null));
 	const callback = await Fixture.http('/auth/callback?token=synthetic-email-token');
+	reread.mock.restore();
 	assert.equal(callback.headers.location, '/auth/confirmed');
 	assert.equal(callback.headers['referrer-policy'], 'no-referrer');
 	const id = Fixture.account.acquisition.transaction_id;
