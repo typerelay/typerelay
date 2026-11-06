@@ -28,9 +28,11 @@ export class Security {
 		return { password, hash: await bcrypt.hash(password, 12) };
 	}
 	static browserSession(req) { Support.assert((!req.ctx || (!req.ctx.device && req.ctx.user === req.session.user)) && req.session.user, 'Sign in to change security settings', 401); Support.assert(!req.session.sso, 'Sign in with password, Magic Link or passkey to change personal security settings', 403); }
-	static async establish(req, id, verifiedFactor = false, sso = null) {
-		const user = await User.findById(id).lean();
-		Support.assert(user && !user.deletion?.requested_at, 'Sign-in unavailable: account deletion requested', 401);
+	static async establish(req, identity, verifiedFactor = false, sso = null) {
+		const user = identity instanceof User ? identity : await User.findById(identity).lean();
+		Support.assert(user, 'Sign-in unavailable', 401);
+		const id = user._id;
+		Support.assert(!user.deletion?.requested_at, 'Sign-in unavailable: account deletion requested', 401);
 		const destination = req.session.return_to || '/';
 		await new Promise((resolve, reject) => req.session.regenerate(error => error ? reject(error) : resolve()));
 		req.session.csrf = Support.token();
@@ -40,7 +42,8 @@ export class Security {
 			req.session.pending_factor = { user: String(id), version: user.auth_version || 0, expires: Date.now() + 300000, sso };
 			result = { requires2FA: true, csrf: req.session.csrf, redirect: '/auth/two-factor' };
 		} else {
-			await User.updateOne({ _id: id }, { $set: { last_login: new Date() } });
+			const login = await User.updateOne({ _id: id, 'deletion.requested_at': null }, { $set: { last_login: new Date() } });
+			Support.assert(login.matchedCount === 1, 'Sign-in unavailable', 401);
 			req.session.user = String(id);
 			req.session.auth_version = user.auth_version || 0;
 			req.session.auth_at = Date.now();

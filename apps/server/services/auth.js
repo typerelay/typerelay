@@ -117,7 +117,7 @@ export class Auth {
 		if (account) await Billing.initializeAccount(account, user).catch(error => console.error(`Stripe setup failed for new TypeRelay account: ${error.message}`));
 		if (signupNotification) { const sendMail = Auth.mail.sendMail; void SignupNotifications.deliver(signupNotification._id, message => sendMail(message)).catch(error => console.error(`Type Relay signup notification deferred: ${error.message}`)); }
 		const result = { user: String(user._id), return_to: returnTo ? Auth.continuation(returnTo) : undefined, ...(account?.acquisition ? { signup_account: String(account._id) } : {}) };
-		return details ? result : result.user;
+		return details ? { ...result, ...(account ? { createdUser: user } : {}) } : result.user;
 	}
 	static redirect(uri, client = 'typerelay-desktop') {
 		let url;
