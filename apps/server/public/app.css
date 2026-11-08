@@ -90,6 +90,8 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .auth-page .form-label { color: var(--auth-text); font-weight: 600; }
 .auth-page .form-control, .auth-page .form-select { border-color: var(--auth-line); border-radius: .375rem; background-color: #fff; color: var(--auth-text); font-size: .875rem; }
 .auth-page .form-control:focus, .auth-page .form-select:focus { border-color: var(--auth-teal-deep); box-shadow: 0 0 0 .25rem rgb(47 191 163 / 30%); }
+/* iOS zooms into focused inputs below 1rem. */
+@media (max-width: 61.99875rem) { .auth-page .form-control, .auth-page .form-select { font-size: 1rem; } }
 .auth-page .btn { border-radius: .375rem; }
 .auth-page .btn-primary { --bs-btn-bg: var(--auth-teal); --bs-btn-color: var(--auth-ink); --bs-btn-border-color: var(--auth-ink); --bs-btn-hover-bg: var(--auth-teal-bright); --bs-btn-hover-color: var(--auth-ink); --bs-btn-hover-border-color: var(--auth-ink); --bs-btn-active-bg: var(--auth-teal-deep); --bs-btn-active-color: #fff; --bs-btn-active-border-color: var(--auth-ink); --bs-btn-disabled-bg: var(--auth-teal); --bs-btn-disabled-color: var(--auth-ink); --bs-btn-disabled-border-color: var(--auth-ink); border-width: .125rem; box-shadow: .125rem .125rem 0 0 var(--auth-ink); font-weight: 600; }
 .auth-page .btn-primary:active { box-shadow: none; transform: translate(.125rem, .125rem); }

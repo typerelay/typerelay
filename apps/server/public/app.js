@@ -1,6 +1,7 @@
 import { Statistics } from './statistics.js';
 import { ProductNews } from './product-updates.js';
 import { TrialCountdown } from './trial-countdown.js';
+import { EmailConfirmation } from './email-confirmation.js';
 import { TemplateEditor, TemplateFill } from './template-editor.js';
 import { Abbreviation } from './abbreviation.js';
 import { RichTextRuntime } from './rich-text-runtime.js';
@@ -36,6 +37,7 @@ class TypeRelay {
 		this.statistics = new Statistics(this);
 		this.templateEditor = new TemplateEditor(this); this.templateFill = new TemplateFill(this);
 		this.trialCountdown = new TrialCountdown(this);
+		this.emailConfirmation = new EmailConfirmation(this);
 		document.querySelectorAll('.library').forEach(node => this.libraries.set(node.dataset.id, JSON.parse(node.dataset.record)));
 		document.addEventListener('input', event => { if ((['trigger', 'personal-trigger'].includes(event.target.id) || event.target.hasAttribute('data-import-trigger')) && !event.isComposing) Abbreviation.field(event.target); });
 		document.addEventListener('compositionend', event => { if (event.target.id === 'trigger') Abbreviation.field(event.target); });

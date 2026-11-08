@@ -10,7 +10,7 @@ import { SignupNotifications } from './signup_notifications.js';
 import { Auth } from './auth.js';
 
 export class Scheduler {
-	static start({ CronClass = Cron, cleanup = () => Libraries.cleanup(), expireTrials = () => Billing.runTrialExpiry(), enrollTrialUsers = () => Helpmonks.enrollTrialUsers(), reconcileSignupNotifications = () => SignupNotifications.reconcile(message => Auth.mail.sendMail(message)), reconcileWhiteLabel = () => WhiteLabel.reconcile(), purgeAccounts = () => AdminAccounts.recover(), syncProductUpdates = () => ProductUpdates.syncProductUpdates(), productUpdatesEnabled = ProductUpdates.enabled(), logger = console } = {}) {
+	static start({ CronClass = Cron, cleanup = () => Libraries.cleanup(), expireTrials = () => Billing.runTrialExpiry(), enrollTrialUsers = () => Helpmonks.enrollTrialUsers(), reconcileSignupNotifications = () => SignupNotifications.reconcile(message => Auth.mail.sendMail(message)), reconcileWhiteLabel = () => WhiteLabel.reconcile(), purgeAccounts = () => AdminAccounts.recover(), expireUnconfirmed = () => AdminAccounts.expireUnconfirmed(), syncProductUpdates = () => ProductUpdates.syncProductUpdates(), productUpdatesEnabled = ProductUpdates.enabled(), logger = console } = {}) {
 		let running = false;
 		const cleanupJob = new CronClass('30 2 * * *', { protect: true }, async () => {
 			if (running) return;
@@ -38,6 +38,7 @@ export class Scheduler {
 			try { const summary = await reconcileWhiteLabel(); if (summary.checked) logger.log(`White-label reconciliation complete: checked ${summary.checked}, updated ${summary.updated}, failed ${summary.failed}`); } catch (error) { recordException(error); logger.error(`White-label reconciliation failed: ${error.message}`); }
 		});
 		const deletionJob = new CronClass('* * * * *', { protect: true }, async () => { try { await purgeAccounts(); } catch (error) { recordException(error); logger.error('Account deletion recovery failed'); } });
+		const unconfirmedJob = new CronClass('*/15 * * * *', { protect: true }, async () => { try { const summary = await expireUnconfirmed(); if (summary.checked) logger.log(`Unconfirmed signup cleanup complete: deleted ${summary.deleted}, kept ${summary.kept}`); } catch (error) { recordException(error); logger.error(`Unconfirmed signup cleanup failed: ${error.message}`); } });
 		let productUpdatesJob = null;
 		if (productUpdatesEnabled) {
 			let syncing = false;
@@ -49,6 +50,6 @@ export class Scheduler {
 			productUpdatesJob = new CronClass('*/15 * * * *', { protect: true }, sync);
 			void sync();
 		}
-		return { cleanupJob, trialJob, helpmonksJob, signupNotificationJob, whiteLabelJob, deletionJob, productUpdatesJob };
+		return { cleanupJob, trialJob, helpmonksJob, signupNotificationJob, whiteLabelJob, deletionJob, unconfirmedJob, productUpdatesJob };
 	}
 }

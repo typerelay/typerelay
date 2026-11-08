@@ -27,6 +27,8 @@ export class Security {
 		Support.assert(password.length >= 8, 'Password must be at least 8 characters');
 		return { password, hash: await bcrypt.hash(password, 12) };
 	}
+	// Until the address is confirmed, whoever signed up must not add credentials or send email to others.
+	static async assertConfirmed(user, action) { Support.assert(!await User.exists({ _id: user, email_confirm_by: { $ne: null } }), 'Confirm your email address before ' + action, 403); }
 	static browserSession(req) { Support.assert((!req.ctx || (!req.ctx.device && req.ctx.user === req.session.user)) && req.session.user, 'Sign in to change security settings', 401); Support.assert(!req.session.sso, 'Sign in with password, Magic Link or passkey to change personal security settings', 403); }
 	static async establish(req, identity, verifiedFactor = false, sso = null) {
 		const user = identity instanceof User ? identity : await User.findById(identity).lean();
@@ -67,8 +69,10 @@ export class Security {
 	}
 	static async verifyCode(user, code) {
 		Support.assert(typeof code === 'string' && /^\d{6}$/.test(code), 'Enter a six-digit authentication code');
-		Support.assert(user?.totp_secret && verifySync({ secret: user.totp_secret, token: code }).valid, 'Invalid authentication code', 401);
-		const step = Math.floor(Date.now() / 30000);
+		const check = user?.totp_secret ? verifySync({ secret: user.totp_secret, token: code, epochTolerance: 30 }) : { valid: false };
+		Support.assert(check.valid, 'Invalid authentication code', 401);
+		// Store the matched step so a next-window code cannot be replayed once that window starts.
+		const step = check.timeStep;
 		const result = await User.updateOne({ _id: user._id, $or: [{ totp_step: { $lt: step } }, { totp_step: { $exists: false } }] }, { $set: { totp_step: step } });
 		Support.assert(result.modifiedCount === 1, 'Code already used; wait for the next code', 401);
 	}
@@ -111,7 +115,7 @@ export class Security {
 			const user = await User.findById(req.session.user).session(session).read('primary').lean();
 			Support.assert(user.email === ticket.data.old && (user.auth_version || 0) === ticket.data.version, 'Email link no longer valid');
 			Support.assert(!await User.exists({ email: ticket.email }).session(session).read('primary'), 'Email address unavailable', 409);
-			await User.updateOne({ _id: user._id }, { $set: { email: ticket.email } }, { session });
+			await User.updateOne({ _id: user._id }, { $set: { email: ticket.email }, $unset: { email_confirm_by: 1 } }, { session });
 			await Ticket.deleteMany({ email: user.email, kind: { $in: ['login', 'password-reset', 'email-change'] } }, { session });
 		});
 		return { redirect: '/' };
@@ -405,6 +409,7 @@ export class Security {
 		app.get('/login', (req, res) => res.render('login'));
 		app.get('/signup', (req, res) => {
 			if (req.boundAccount) return res.redirect(new URL('/signup', Auth.origin).toString());
+			if (typeof req.query.return_to === 'string' && req.query.return_to.startsWith('/oauth/authorize?')) { try { req.session.return_to = Auth.continuation(req.query.return_to); } catch { delete req.session.return_to; } }
 			if (Auth.adsEnabled(req)) {
 				const attribution = Auth.attribution(req.query);
 				if (Object.keys(attribution).length) req.session.signupAttribution = { ...attribution, captured_at: Date.now() };
@@ -414,8 +419,20 @@ export class Security {
 		app.post('/auth/signup', limit, async (req, res) => {
 			Support.assert(Security.signupEnabled(), 'Signup is disabled', 403); Support.assert(!req.boundAccount, 'Create accounts at app.typerelay.com', 403);
 			const acquisition = Auth.adsEnabled(req) && req.session.signupAttribution?.captured_at > Date.now() - 30 * 86400000 ? Auth.attribution(req.session.signupAttribution) : undefined;
-			await Auth.login(Security.email(req.body.email), req.body.name, { acquisition });
+			const email = Security.email(req.body.email);
+			const user = await Auth.signup(email, req.body.name, acquisition);
+			// Existing addresses never get instant access; they receive the usual sign-in link instead.
+			if (user) return res.json(await Security.establish(req, user));
+			await Auth.login(email, req.body.name, { acquisition, return_to: req.session.return_to?.startsWith('/oauth/authorize?') ? req.session.return_to : undefined });
 			res.json({ message: 'Check your email to finish creating your account.' });
+		});
+		// The link opens a confirmation form so mail scanners that prefetch links cannot confirm an address.
+		app.get('/auth/confirm-email', (req, res) => { res.set('Referrer-Policy', 'no-referrer'); res.render('auth', { kind: 'confirm-signup', token: req.query.token }); });
+		app.post('/auth/confirm-email', limit, async (req, res) => {
+			const result = await Auth.confirmSignup(req.body.token);
+			if (req.session.user !== result.user) return res.json({ confirmed: true });
+			if (result.signup_account && Auth.adsEnabled(req)) { req.session.signupConversion = { account: result.signup_account, redirect: '/' }; await new Promise((resolve, reject) => req.session.save(error => error ? reject(error) : resolve())); return res.json({ redirect: '/auth/confirmed' }); }
+			res.json({ redirect: '/' });
 		});
 		app.post('/auth/password', limit, async (req, res) => res.json(await Security.passwordLogin(req)));
 		app.get('/auth/two-factor', (req, res) => res.render('auth', { kind: 'factor' }));
@@ -438,7 +455,7 @@ export class Security {
 		app.put('/api/v2/sso', async (req, res) => res.json(await Security.saveSso(req)));
 		app.post('/api/v2/sso/recovery-code', async (req, res) => res.json(await Security.ssoRecoveryCode(req)));
 		app.get('/api/v2/sso/logs', async (req, res) => { await Security.ssoAdmin(req, false); const logs = await SsoLog.find({ account: req.ctx.account, expires: { $gt: new Date() } }).sort({ createdAt: -1, _id: -1 }).limit(50).lean(); res.json({ html: pug.renderFile('./views/ajax/sso-logs.pug', { logs }) }); });
-		app.use('/api/v2/security', limit, (req, res, next) => { if (req.method !== 'GET') Security.browserSession(req); res.setHeader('Cache-Control', 'no-store'); next(); });
+		app.use('/api/v2/security', limit, async (req, res, next) => { if (req.method !== 'GET') { Security.browserSession(req); await Security.assertConfirmed(req.ctx.user, 'changing security settings'); } res.setHeader('Cache-Control', 'no-store'); next(); });
 		app.get('/api/v2/security', async (req, res) => {
 			const user = await User.findById(req.ctx.user).lean();
 			res.json({ totp_enabled: user.totp_enabled, keys: await Passkey.find({ user: user._id }).select('_id name').lean() });
@@ -459,8 +476,9 @@ export class Security {
 		app.post('/api/v2/security/totp/confirm', async (req, res) => {
 			const pending = req.session.totp_setup;
 			Support.assert(pending?.expires > Date.now(), 'Setup expired; start again');
-			Support.assert(typeof req.body.code === 'string' && /^\d{6}$/.test(req.body.code) && verifySync({ secret: pending.secret, token: req.body.code }).valid, 'Invalid authentication code');
-			const result = await User.updateOne({ _id: req.ctx.user, totp_enabled: { $ne: true } }, { $set: { totp_secret: pending.secret, totp_enabled: true }, $unset: { totp_step: 1 } });
+			const check = typeof req.body.code === 'string' && /^\d{6}$/.test(req.body.code) ? verifySync({ secret: pending.secret, token: req.body.code, epochTolerance: 30 }) : { valid: false };
+			Support.assert(check.valid, 'Invalid authentication code');
+			const result = await User.updateOne({ _id: req.ctx.user, totp_enabled: { $ne: true } }, { $set: { totp_secret: pending.secret, totp_enabled: true, totp_step: check.timeStep } });
 			Support.assert(result.modifiedCount === 1, 'Two-factor authentication is already enabled');
 			delete req.session.totp_setup;
 			res.json({ enabled: true });

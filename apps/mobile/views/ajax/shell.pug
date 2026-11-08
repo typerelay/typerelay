@@ -14,6 +14,8 @@ main.mobile-app#workspace
 					label.mobile-field(for="server")
 						span Server URL
 						input#server(type="url" required value="https://app.typerelay.com" autocomplete="url" autocapitalize="none" spellcheck="false")
+			button.secondary-button.wide#create-account(type="button")
+				span Create account
 			p#preview-notice.preview-notice(hidden) Browser preview uses your development account. Native keyboard behavior requires the installed app.
 	section#signed-in(hidden)
 		section.mobile-screen#snippets-screen(data-screen="snippets")
@@ -40,6 +42,12 @@ main.mobile-app#workspace
 							small Continue your unsaved snippet
 					button.notice-dismiss#discard-draft(type="button" aria-label="Discard draft")
 						span.material-symbols-outlined close
+				div.notice-card.warning#email-confirmation(hidden)
+					span.material-symbols-outlined mark_email_unread
+					span
+						strong Confirm your email
+						small Check your email to confirm your email address. Unconfirmed accounts are deleted after 24 hours.
+					button.btn-sm#email-confirmation-resend(type="button") Resend
 				button.notice-card.warning#conflicts(type="button" hidden)
 					span.material-symbols-outlined difference
 					span

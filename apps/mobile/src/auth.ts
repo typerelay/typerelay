@@ -12,6 +12,7 @@ export class Auth {
  static tokens: Tokens | null = null;
  static refresh: Promise<Tokens> | null = null;
  static completing: Promise<void> | null = null;
+ static handle: (url: string) => Promise<void> = async () => undefined;
  static completed = new Set<string>();
  static version = 0;
  static writes: Promise<unknown> = Promise.resolve();
@@ -22,7 +23,7 @@ export class Auth {
   await SecureStorage.setKeyPrefix('typerelay_mobile_');
   Auth.server = await SecureStorage.get('server') as string || '';
   Auth.tokens = await SecureStorage.get('tokens') as Tokens | null;
-  const handle = async (url: string) => { if (!Auth.isCallback(url) || Auth.completed.has(url)) return; if (!Auth.completing) { const completion = Auth.complete(url).then(async version => { Auth.assert(version); Auth.completed.add(url); await onLogin(); }).finally(() => { if (Auth.completing === completion) Auth.completing = null; }); Auth.completing = completion; } return Auth.completing; };
+  const handle = Auth.handle = async (url: string) => { if (!Auth.isCallback(url) || Auth.completed.has(url)) return; if (!Auth.completing) { const completion = Auth.complete(url).then(async version => { Auth.assert(version); Auth.completed.add(url); await onLogin(); }).finally(() => { if (Auth.completing === completion) Auth.completing = null; }); Auth.completing = completion; } return Auth.completing; };
   if (Preview.enabled) { if (Auth.tokens) await Auth.access().catch(async error => { Auth.onError(error); await Auth.clear(); }); if (Auth.isCallback(location.href)) { await handle(location.href).catch(Auth.onError); history.replaceState(null, '', import.meta.env.BASE_URL); } return; }
   await App.addListener('appUrlOpen', event => { void handle(event.url).catch(Auth.onError); });
   const launch = await App.getLaunchUrl();
@@ -33,21 +34,22 @@ export class Auth {
  static normalize(value: string) { const url = new URL(value); if ((url.protocol !== 'https:' && !(Preview.enabled && url.protocol === 'http:' && url.origin === Preview.origin)) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw new Error('Enter an HTTPS server origin without a path.'); return url.origin; }
  static random() { return Auth.base64(crypto.getRandomValues(new Uint8Array(48))); }
  static base64(bytes: Uint8Array) { return btoa(String.fromCharCode(...bytes)).replaceAll('+','-').replaceAll('/','_').replace(/=+$/,''); }
- static async begin(value: string) {
+ static async begin(value: string, signup = false) {
   const version = Auth.version; const server = Auth.normalize(value); if (Preview.enabled && server !== Preview.origin) throw new Error('Use the configured development server.'); const verifier = Auth.random(); const state = Auth.random();
   const challenge = Auth.base64(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))));
   await Auth.write(version, () => SecureStorage.set('pending', { server, verifier, state, created: Date.now() }));
   const params = new URLSearchParams({ client_id: Auth.client, redirect_uri: Auth.callback, response_type: 'code', code_challenge_method: 'S256', code_challenge: challenge, state, client_type: 'mobile', os: Capacitor.getPlatform(), device_name: `TypeRelay ${Capacitor.getPlatform()}` });
-  if (Preview.enabled) location.assign(`${server}/oauth/authorize?${params}`); else await Browser.open({ url: `${server}/oauth/authorize?${params}` });
+  const url = signup ? `${server}/signup?${new URLSearchParams({ return_to: `/oauth/authorize?${params}` })}` : `${server}/oauth/authorize?${params}`;
+  if (Preview.enabled) location.assign(url); else if (Capacitor.getPlatform() === 'ios') { const result = await Native.plugin.authenticate({ url, scheme: 'com.typerelay.mobile' }); if (result.url) await Auth.handle(result.url); } else await Browser.open({ url });
  }
  static async complete(value: string) {
   const version = Auth.version;
   if (!Auth.isCallback(value)) throw new Error('Invalid sign-in callback');
   const url = new URL(value); const pending = await SecureStorage.get('pending') as any;
-  if (!pending || Date.now() - pending.created > 300000 || url.searchParams.getAll('state').length !== 1 || url.searchParams.get('state') !== pending.state) throw new Error('Sign-in expired or state mismatch. Sign in again.');
+  if (!pending || Date.now() - pending.created > 900000 || url.searchParams.getAll('state').length !== 1 || url.searchParams.get('state') !== pending.state) throw new Error('Sign-in expired or state mismatch. Sign in again.');
   if (url.searchParams.has('error')) throw new Error('Sign-in was cancelled.');
   if (url.searchParams.getAll('code').length !== 1) throw new Error('Missing sign-in code');
-  Auth.assert(version); if (!Preview.enabled) await Browser.close().catch(() => undefined); Auth.assert(version);
+  Auth.assert(version); if (!Preview.enabled) await (Capacitor.getPlatform() === 'ios' ? Native.plugin.cancelAuthentication() : Browser.close()).catch(() => undefined); Auth.assert(version);
   const tokens = await Auth.tokenRequest(pending.server, { grant_type: 'authorization_code', client_id: Auth.client, redirect_uri: Auth.callback, code_verifier: pending.verifier, code: url.searchParams.get('code')! }, version);
   let connectedVersion: number;
   try { connectedVersion = await Auth.write(version, async () => {

@@ -194,6 +194,8 @@ export class Server {
 			res.locals.whiteLabel = WhiteLabel.public(account);
 			const usage = await Billing.usage(account._id);
 			const profile = await User.findById(ctx.user).lean();
+			// Email confirmed on another device: count the signup conversion on the next page load here.
+			if (Auth.adsEnabled(req) && ctx.role === 'owner' && !req.session.signupConversion && !profile.email_confirm_by) { const tracked = await Account.findOneAndUpdate({ _id: account._id, 'acquisition.transaction_id': { $exists: true }, 'acquisition.confirmed_at': { $gte: new Date(Date.now() - 3 * 86400000) }, 'acquisition.dispatched_at': null, 'acquisition.prompted_at': null }, { $set: { 'acquisition.prompted_at': new Date() } }, { returnDocument: 'after' }).select('+acquisition').lean(); if (tracked?.acquisition?.transaction_id) { req.session.signupConversion = { account: String(account._id), redirect: req.originalUrl }; await new Promise((resolve, reject) => req.session.save(error => error ? reject(error) : resolve())); return res.redirect('/auth/confirmed'); } }
 			await AdminSettings.application(req, res, profile, ctx);
 			res.render('app', { productUpdatesEnabled: ProductUpdates.eligible(req), news: req.path === '/news', product_updates: req.path === '/news' ? await ProductUpdates.listProductUpdates() : null, importFormats: Libraries.importFormats, accounts, account, ctx, libraries: await Libraries.list(ctx), team: await Team.list(ctx), profile, avatarStyles, ...Billing.locals(account, ctx, usage), whiteLabelEnabled: WhiteLabel.enabled(), whiteLabelSettings: Support.admin(ctx) ? WhiteLabel.domainSettings(account) : WhiteLabel.serialize(account) });
 		});
@@ -206,6 +208,8 @@ export class Server {
 			next();
 		});
 		if (process.env.NODE_ENV === 'development' && process.env.TYPERELAY_MOBILE_PREVIEW_URL) app.get('/api/v2/mobile-preview/identity', (req, res) => { Support.assert(req.ctx.device, 'Device sign-in required', 401); res.json({ user: req.ctx.user, account: req.ctx.account, device: req.ctx.device }); });
+		app.get('/api/v2/email-confirmation', async (req, res) => { const user = await User.findById(req.ctx.user).select('email email_confirm_by').lean(); res.json({ email: user.email, confirmed: !user.email_confirm_by, confirm_by: user.email_confirm_by || null }); });
+		app.post('/api/v2/email-confirmation', async (req, res) => { await Auth.sendConfirmation({ _id: req.ctx.user }); res.json({ message: 'Confirmation email sent. Check your inbox.' }); });
 		app.get('/api/v2/account-deletion', (req, res) => res.json({ url: Auth.origin + '/account/delete?user=' + encodeURIComponent(req.ctx.user) }));
 		PublicApi.mountSettings(app);
 		Ai.mount(app);

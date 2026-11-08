@@ -36,7 +36,7 @@ class AccountUI {
 	}
 	async submit(event) {
 		const form = event.target;
-		const routes = { 'password-login-form': '/auth/password', 'signup-form': '/auth/signup', 'forgot-form': '/auth/forgot-password', 'factor-form': '/auth/two-factor', 'redeem-reset-form': '/auth/reset-password', 'confirm-email-form': '/auth/email' };
+		const routes = { 'password-login-form': '/auth/password', 'signup-form': '/auth/signup', 'forgot-form': '/auth/forgot-password', 'factor-form': '/auth/two-factor', 'redeem-reset-form': '/auth/reset-password', 'confirm-email-form': '/auth/email', 'confirm-signup-form': '/auth/confirm-email' };
 		routes['sso-start-form'] = '/auth/sso/start';
 		if (form.id === 'sso-recover-form') routes[form.id] = '/auth/sso/' + form.dataset.account + '/recovery';
 		if (!routes[form.id] && !['totp-form', 'passkey-add-form', 'sso-settings-form'].includes(form.id)) return;
@@ -47,8 +47,8 @@ class AccountUI {
 			const fields = Object.fromEntries(new FormData(form));
 			if (routes[form.id]) {
 				const result = await client.request(routes[form.id], 'POST', fields);
-				const persistent = { 'signup-form': ['#signup-content', '#signup-confirmation'], 'forgot-form': ['#forgot-content', '#forgot-confirmation'] }[form.id];
-				if (persistent) {
+				const persistent = { 'signup-form': ['#signup-content', '#signup-confirmation'], 'forgot-form': ['#forgot-content', '#forgot-confirmation'], 'confirm-signup-form': ['#confirm-signup-content', '#confirm-signup-done'] }[form.id];
+				if (persistent && !result.redirect) {
 					document.querySelector(persistent[0]).classList.add('d-none');
 					document.querySelector(persistent[1]).classList.remove('d-none');
 				} else if (result.password) {

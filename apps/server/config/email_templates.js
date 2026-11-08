@@ -12,6 +12,12 @@ export const emailTemplates = {
 		html: '<p>Hi {{name}},</p>\n<p>Thanks for signing up for Type Relay! Please confirm your email address to start creating and syncing your snippets:</p>\n<p><a href="{{url}}">Confirm your account</a></p>\n<p>This link expires in 15 minutes and can only be used once. If you did not create an account, you can safely ignore this email.</p>',
 		variables: ['name', 'url'],
 	},
+	'email-confirmation': {
+		name: 'Confirm email address',
+		subject: 'Confirm your Type Relay email address',
+		html: '<p>Hi {{name}},</p>\n<p>Thanks for signing up for Type Relay! Please confirm your email address to keep your account:</p>\n<p><a href="{{url}}">Confirm your email address</a></p>\n<p>Accounts without a confirmed email address are deleted 24 hours after signup. If you did not create an account, you can safely ignore this email.</p>',
+		variables: ['name', 'url'],
+	},
 	'email-change': {
 		name: 'Verify email change',
 		subject: 'Confirm your Type Relay email address',

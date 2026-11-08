@@ -14,6 +14,7 @@ export class Team {
 	}
 	static async invite(ctx, email) {
 		Support.assert(Support.admin(ctx), 'Admin required', 403);
+		await Security.assertConfirmed(ctx.user, 'adding team members');
 		email = Support.text(email, 254).toLowerCase();
 		Support.assert(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email), 'Invalid email');
 		const token = Support.token();
@@ -30,6 +31,7 @@ export class Team {
 		Support.assert(Support.admin(ctx), 'Admin required', 403);
 		Billing.assertTeam(ctx);
 		Support.assert(typeof body.send_welcome_email === 'boolean', 'Choose whether to send an email');
+		await Security.assertConfirmed(ctx.user, 'adding team members');
 		const email = Security.email(body.email);
 		const result = await AccountAccess.write(ctx.account, async session => {
 			await Ticket.deleteMany({ account: ctx.account, kind: 'invite', email }, { session });

@@ -1,6 +1,6 @@
 extends auth-layout
 block head
-	- const authTitles = { signup: 'Sign Up', forgot: 'Forgot Password', factor: 'Two-Factor Authentication', reset: 'Password Reset', email: 'Confirm Email' }
+	- const authTitles = { 'confirm-signup': 'Confirm Email', signup: 'Sign Up', forgot: 'Forgot Password', factor: 'Two-Factor Authentication', reset: 'Password Reset', email: 'Confirm Email' }
 	title= (authTitles[kind] || 'Account') + ' — Type Relay'
 block content
 	if kind === 'signup'
@@ -64,6 +64,17 @@ block content
 				a.btn.btn-primary.btn-sm(href="/login") I copied it — continue to login
 		.mt-5
 			a(href="/login") Back to login
+	if kind === 'confirm-signup'
+		#confirm-signup-content
+			h1.h2.mb-2 Confirm your email address
+			p.text-muted.mb-5 Confirm this email address to keep your Type Relay account.
+			form#confirm-signup-form
+				input(type="hidden" name="token" value=token)
+				button.btn.btn-primary.btn-sm.w-100 Confirm email address
+		#confirm-signup-done.d-none
+			h1.h2.mb-2 Email address confirmed
+			p.text-muted.mb-3 Your Type Relay account is confirmed. You can return to the app.
+			a(href="/") Open Type Relay
 	if kind === 'email'
 		h1.h2.mb-2 Confirm your email address
 		p.text-muted.mb-5 Confirm this change to your Type Relay account.

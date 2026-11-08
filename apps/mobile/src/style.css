@@ -73,6 +73,7 @@ h1, h2, h3, p { margin: 0; }
 .notice-card { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 0.35rem; width: 100%; padding: 0.35rem; border: 0; border-radius: 0.85rem; background: var(--green-soft); color: #205d4a; text-align: left; }
 .notice-card.warning { background: #fff0dc; color: #7a4b16; }
 .notice-card.warning { grid-template-columns: auto 1fr auto; padding: 0.75rem; }
+.notice-card.warning > button { padding: 0.35rem 0.7rem; border: 0; border-radius: 0.6rem; background: #7a4b16; color: #fff; font-size: 0.75rem; cursor: pointer; }
 .notice-card.warning > span:nth-child(2) { display: grid; gap: 0.08rem; }
 .notice-main { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 0.7rem; padding: 0.4rem; border: 0; background: transparent; color: inherit; text-align: left; }
 .notice-main > span:nth-child(2) { display: grid; gap: 0.08rem; }

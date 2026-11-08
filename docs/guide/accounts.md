@@ -7,7 +7,13 @@ description: "Create a TypeRelay account, sign in with passwords, Magic Links or
 
 ## Create an account
 
-When public sign-up is enabled, choose **Create one**, enter your name and email address, then use the link in the email to finish. The link is single-use and expires after 15 minutes. The first verified sign-in creates your personal account and makes you its owner.
+When public sign-up is enabled, choose **Create one** and enter your name and email address. TypeRelay creates your personal account, makes you its owner, and signs you in right away.
+
+We also send a confirmation email. Until you confirm your email address, a banner at the top of the app reminds you; choose **Resend** to get a new email (at most once a minute). Open the link and choose **Confirm email address**. Accounts without a confirmed email address are deleted, with their data, 24 hours after signup. Until you confirm, you can use your snippets and connect the desktop and mobile apps, but you cannot add or invite team members, set a password, set up two-factor authentication or passkeys, create API tokens, or connect integrations. If you sign in with a Magic Link before confirming, that also confirms the address and, for safety, signs out other sessions and devices.
+
+If an account already exists for the email address, sign-up does not sign you in. Instead, we email a sign-in link to that address.
+
+In the TypeRelay mobile app, choose **Create account** on the sign-in screen. After you sign up, the app asks you to connect the device and then signs you in; the same confirmation banner appears above your snippets. On iOS, sign-in uses Safari's secure sign-in sheet, so saved passwords and an existing Safari session are available; iOS asks once to allow TypeRelay to use the TypeRelay website to sign in.
 
 Some self-hosted installations disable public sign-up. In that case, the sign-up page says it is disabled; an existing team administrator must invite you or the operator must enable sign-up.
 
@@ -19,7 +25,7 @@ Hosted custom/branded domains are account-specific: they do not show public sign
 - **Magic Link** — emails a 15-minute, single-use sign-in link. Request a new link if it expires or has already been used.
 - **Passkey** — available after registering a passkey under **Settings → Security**. Passkeys require a current browser, HTTPS or localhost, and user verification such as Touch ID, Windows Hello or a security key.
 
-If two-factor authentication is enabled, password and Magic Link sign-in continue to a six-digit authenticator-code step. A code can be used only once in its 30-second time window. A successful passkey sign-in already provides the required second factor.
+If two-factor authentication is enabled, password and Magic Link sign-in continue to a six-digit authenticator-code step. Codes from the previous or next 30-second window are also accepted to allow for small clock differences. Each code can be used only once. A successful passkey sign-in already provides the required second factor.
 
 ## Passwords and recovery
 

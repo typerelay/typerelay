@@ -100,3 +100,21 @@ test('a resumed stale draft saves as new without overwriting the original or dup
   assert.deepEqual(remote, { id: 'original', revision: 2, text: 'Remote version' });
  } finally { dom.window.close(); }
 });
+
+test('email confirmation banner follows the status and Resend posts once', async () => {
+ const dom = new JSDOM('<div id="email-confirmation" hidden><button id="email-confirmation-resend"></button></div>', { runScripts: 'outside-only' });
+ try {
+  const source = await readFile(new URL('../src/main.ts', import.meta.url), 'utf8');
+  const refresh = source.slice(source.indexOf(' static async refreshEmailConfirmation('), source.indexOf(' static subscribe')); const busy = source.slice(source.indexOf(' static async busy('), source.indexOf(' static subscribe'));
+  const handler = source.split('\n').find(line => line.includes("MobileApp.$('email-confirmation-resend').onclick")).replace(/^\s*MobileApp\.\$\('email-confirmation-resend'\)\.onclick = /, 'window.resend = ').replace(/ as HTMLButtonElement/, '');
+  const calls = []; let confirmed = false; const toasts = [];
+  dom.window.Auth = { tokens: {}, request: async (path, method) => { calls.push(method); return method === 'GET' ? { confirmed } : { message: 'Sent' }; } };
+  dom.window.Preview = { enabled: false };
+  dom.window.eval(stripTypeScriptTypes('window.MobileApp = class MobileApp { static $(id) { return document.getElementById(id); } static toast(message) { window.toasts.push(message); } static error(error) { throw error; } ' + refresh + busy + '}') + '\n' + stripTypeScriptTypes(handler.replace(/^\s+/, '')));
+  dom.window.toasts = toasts; const banner = dom.window.document.getElementById('email-confirmation');
+  await dom.window.MobileApp.refreshEmailConfirmation(); assert.equal(banner.hidden, false);
+  dom.window.resend(); await new Promise(resolve => setImmediate(resolve)); assert.deepEqual(calls, ['GET', 'POST']); assert.deepEqual(toasts, ['Sent']);
+  confirmed = true; await dom.window.MobileApp.refreshEmailConfirmation(); assert.equal(banner.hidden, true);
+  dom.window.Auth.tokens = null; confirmed = false; await dom.window.MobileApp.refreshEmailConfirmation(); assert.equal(banner.hidden, true);
+ } finally { dom.window.close(); }
+});

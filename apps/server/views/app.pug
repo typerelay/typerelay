@@ -1,6 +1,10 @@
 extends layout
 block content
 	#workspace(data-account=account._id data-user=ctx.user)
+		if profile.email_confirm_by
+			#email-confirmation-banner.alert.alert-warning.d-flex.align-items-center.justify-content-between.gap-3.mb-5(role="alert")
+				span Check your email to confirm your email address. Unconfirmed accounts are deleted after 24 hours.
+				button#email-confirmation-resend.btn.btn-sm.btn-warning(type="button") Resend
 		.row#workspace-content
 			aside.col-md-4
 				.library-controls.d-flex.align-items-center.gap-3.mb-3

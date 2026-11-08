@@ -8,10 +8,10 @@ const source = stripTypeScriptTypes(readFileSync(new URL('../src/auth.ts', impor
 const tick = () => new Promise(resolve => setImmediate(resolve));
 function fixture() {
  const storage = new Map([['pending', { server: 'https://old.test', state: 'expected', verifier: 'verifier', created: Date.now() }]]);
- const requests = []; const actions = []; const events = []; const revocations = [];
- const context = { Preview: { enabled: false }, SecureStorage: { get: async key => storage.get(key) ?? null, set: async (key, value) => storage.set(key, value), remove: async key => storage.delete(key) }, Native: { call: async action => { events.push(action); actions.push(action); } }, Browser: { close: async () => { events.push('close'); } }, CapacitorHttp: { post: () => new Promise(resolve => requests.push(resolve)), delete: async request => { revocations.push(request); return { status: 200 }; } }, URL, Date, console };
+ const requests = []; const actions = []; const events = []; const revocations = []; const opened = [];
+ const context = { Preview: { enabled: false }, SecureStorage: { get: async key => storage.get(key) ?? null, set: async (key, value) => storage.set(key, value), remove: async key => storage.delete(key) }, Native: { call: async action => { events.push(action); actions.push(action); }, plugin: { authenticate: async options => { opened.push(options); return {}; }, cancelAuthentication: async () => { events.push('cancel'); } } }, Capacitor: { getPlatform: () => 'android' }, Browser: { open: async options => { opened.push(options); }, close: async () => { events.push('close'); } }, CapacitorHttp: { post: () => new Promise(resolve => requests.push(resolve)), delete: async request => { revocations.push(request); return { status: 200 }; } }, URL, Date, console };
  vm.createContext(context); vm.runInContext(source, context);
- return Object.assign(context, { storage, requests, actions, events, revocations });
+ return Object.assign(context, { storage, requests, actions, events, revocations, opened });
 }
 const tokens = { access_token: 'access', refresh_token: 'refresh', account: 'old', expires_in: 900, obtained_at: 0 };
 const callback = 'com.typerelay.mobile://oauth/callback?state=expected&code=code';
@@ -148,7 +148,7 @@ test('duplicate accepted callbacks finalize and dismiss the browser only once', 
 });
 
 test('expired authorization leaves the browser open', async () => {
- const f = fixture(); f.storage.get('pending').created -= 300001;
+ const f = fixture(); f.storage.get('pending').created -= 900001;
  await assert.rejects(f.Auth.complete(callback), /expired/); assert.deepEqual(f.events, []); assert.equal(f.requests.length, 0);
 });
 
@@ -156,4 +156,22 @@ test('sign-out during browser dismissal prevents token exchange and binding', as
  const f = fixture(); let release; f.Browser.close = () => new Promise(resolve => { f.events.push('close'); release = resolve; });
  const login = assert.rejects(f.Auth.complete(callback), /Connection changed/); await tick(); await f.Auth.clear(); release(); await login;
  assert.deepEqual(f.events, ['close']); assert.equal(f.requests.length, 0); assert.equal(f.storage.has('tokens'), false);
+});
+
+test('iOS sign-in uses the authentication session and completes its callback', async () => {
+ const f = fixture(); Object.assign(f, { crypto: globalThis.crypto, btoa, Uint8Array, TextEncoder, URLSearchParams, Capacitor: { getPlatform: () => 'ios' } }); const handled = [];
+ f.Auth.handle = async url => { handled.push(url); }; f.Native.plugin.authenticate = async options => { f.opened.push(options); return { url: callback }; };
+ await f.Auth.begin('https://old.test');
+ assert.equal(f.opened[0].scheme, 'com.typerelay.mobile'); assert.match(f.opened[0].url, /^https:\/\/old\.test\/oauth\/authorize\?/); assert.deepEqual(handled, [callback]);
+});
+
+test('create account opens signup with the authorization continuation', async () => {
+ const f = fixture(); Object.assign(f, { crypto: globalThis.crypto, btoa, Uint8Array, TextEncoder, URLSearchParams });
+ await f.Auth.begin('https://old.test', true);
+ const url = new URL(f.opened[0].url); assert.equal(url.pathname, '/signup'); assert.match(url.searchParams.get('return_to'), /^\/oauth\/authorize\?.*client_id=typerelay-mobile/);
+});
+
+test('iOS completion dismisses the authentication session', async () => {
+ const f = fixture(); f.Capacitor.getPlatform = () => 'ios'; const pending = f.Auth.complete(callback); await tick(); f.requests[0]({ status: 200, data: tokens }); await pending;
+ assert.deepEqual(f.events, ['cancel', 'bind']);
 });

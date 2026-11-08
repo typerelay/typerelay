@@ -6,13 +6,14 @@ import { randomUUID, randomBytes, createHash, generateKeyPairSync, sign } from '
 import { readdir, readFile } from 'node:fs/promises';
 import { Encoder } from 'cbor-x';
 const cbor = new Encoder({ useRecords: false, useTag259ForMaps: false, tagUint8Array: false });
-import { generateSync } from 'otplib';
+import { generateSecret, generateSync } from 'otplib';
 import { JSDOM } from 'jsdom';
 import bcrypt from 'bcryptjs';
 import { mongoose, User, Account, Ticket, Member, Passkey, Device, SignupNotification, Integration, IntegrationToken, OAuthClient, Library, Snippet, SnippetAsset, Change } from '../model/index.js';
 import { Support } from '../services/support.js';
 import { Auth } from '../services/auth.js';
 import { Security } from '../services/security.js';
+import { AdminAccounts } from '../services/admin_accounts.js';
 import { SignupNotifications } from '../services/signup_notifications.js';
 import { Team } from '../services/team.js';
 import { Billing } from '../services/billing.js';
@@ -22,9 +23,9 @@ import { ApiRateLimit } from '../rate_limit.js';
 const limiterStores = [];
 
 class Browser {
-	cookie = ''; csrf = ''; account = '';
+	cookie = ''; csrf = ''; account = ''; ip = '';
 	async call(path, method = 'GET', body) {
-		const response = await fetch(Fixture.origin + path, { method, redirect: 'manual', headers: { Cookie: this.cookie, 'Content-Type': 'application/json', 'X-CSRF-Token': this.csrf, 'X-Account-Id': this.account }, body: body ? JSON.stringify(body) : undefined });
+		const response = await fetch(Fixture.origin + path, { method, redirect: 'manual', headers: { ...(this.ip ? { 'X-Forwarded-For': this.ip } : {}), Cookie: this.cookie, 'Content-Type': 'application/json', 'X-CSRF-Token': this.csrf, 'X-Account-Id': this.account }, body: body ? JSON.stringify(body) : undefined });
 		if (response.headers.get('set-cookie')) this.cookie = response.headers.get('set-cookie').split(';')[0];
 		return response;
 	}
@@ -55,9 +56,9 @@ class Fixture {
 		const browser = new Browser();
 		await browser.page();
 		const email = randomUUID() + '@example.test';
-		await browser.json('/auth/signup', 'POST', { name: 'Original Name', email });
-		const mail = Fixture.mails.findLast(mail => mail.to === email);
-		await browser.call(Fixture.mailUrl(mail).pathname + Fixture.mailUrl(mail).search);
+		assert.equal((await browser.json('/auth/signup', 'POST', { name: 'Original Name', email })).redirect, '/');
+		// Confirm directly: the shared sign-in limiter allows few requests per suite.
+		await User.updateOne({ email }, { $unset: { email_confirm_by: 1 } });
 		await browser.page();
 		return { browser, email, user: await User.findOne({ email }).lean() };
 	}
@@ -205,6 +206,57 @@ test('team admins directly add new or existing users without replacing existing 
 	assert.equal(linked.temporary_password, undefined); assert.equal(linked.member.profile.name, 'Existing User');
 	assert.ok(await bcrypt.compare(existingPassword.password, (await User.findById(existing._id).select('+password').lean()).password));
 });
+test('unconfirmed signups get access, confirm once through the form, and existing addresses get no session', async () => {
+	// A separate client address keeps these requests out of the suite's shared sign-in limit.
+	const browser = Object.assign(new Browser(), { ip: '203.0.113.10' }); await browser.page(); const email = randomUUID() + '@example.test';
+	assert.equal((await browser.json('/auth/signup', 'POST', { name: 'Pending', email })).redirect, '/');
+	await browser.page(); assert.ok(browser.account, 'signed in without confirming');
+	let user = await User.findOne({ email }).lean(); assert.ok(user.email_confirm_by > new Date(Date.now() + 86000000));
+	assert.deepEqual(await browser.json('/api/v2/email-confirmation', 'GET', null), { email, confirmed: false, confirm_by: user.email_confirm_by.toISOString() });
+	await browser.json('/api/v2/email-confirmation', 'POST', {}, 429);
+	await browser.json('/api/v2/team/invitations', 'POST', { email: randomUUID() + '@example.test' }, 403);
+	await browser.json('/api/v2/team/members', 'POST', { email: randomUUID() + '@example.test', name: 'Silent', send_welcome_email: false }, 403);
+	await browser.json('/api/v2/access-tokens', 'POST', { name: 'Early token' }, 403);
+	await browser.json('/api/v2/security/totp/setup', 'POST', {}, 403);
+	const link = Fixture.mailUrl(Fixture.mails.findLast(mail => mail.to === email && /Confirm your Type Relay email/.test(mail.subject)));
+	assert.equal(link.pathname, '/auth/confirm-email');
+	assert.equal((await browser.call(link.pathname + link.search)).status, 200); assert.ok((await User.findById(user._id).lean()).email_confirm_by, 'GET alone never confirms');
+	const confirmed = await Auth.confirmSignup(link.searchParams.get('token'));
+	assert.equal(confirmed.user, String(user._id)); assert.equal((await User.findById(user._id).lean()).email_confirm_by, undefined);
+	await assert.rejects(Auth.confirmSignup(link.searchParams.get('token')), /expired or already used/);
+	assert.equal((await browser.json('/api/v2/email-confirmation', 'GET', null)).confirmed, true);
+	await assert.rejects(Auth.sendConfirmation({ _id: user._id }), /already confirmed/);
+	const existing = Object.assign(new Browser(), { ip: '203.0.113.11' }); await existing.page();
+	assert.match((await existing.json('/auth/signup', 'POST', { name: 'Intruder', email })).message, /Check your email/);
+	await existing.page(); assert.equal(existing.account, '', 'an existing address never receives a session');
+	// A magic link proves the address and removes access whoever signed up first may have kept.
+	const squatter = Object.assign(new Browser(), { ip: '203.0.113.12' }); await squatter.page(); const pending = randomUUID() + '@example.test';
+	await squatter.json('/auth/signup', 'POST', { name: 'Squatter', email: pending }); await squatter.page();
+	await squatter.json('/api/v2/security/password', 'POST', {}, 403);
+	const before = (await User.findOne({ email: pending }).lean()).auth_version || 0;
+	await Auth.login(pending); const magic = Fixture.mailUrl(Fixture.mails.findLast(mail => mail.to === pending && /Sign in/.test(mail.subject)));
+	const owner = await Auth.consume(magic.searchParams.get('token'));
+	const claimed = await User.findById(owner).select('+password').lean();
+	assert.equal(claimed.email_confirm_by, undefined); assert.equal(claimed.password, undefined); assert.equal(claimed.auth_version, before + 1);
+	squatter.account = ''; await squatter.page(); assert.equal(squatter.account, '', 'the earlier session no longer works');
+});
+
+test('unconfirmed signups are purged silently after the deadline; confirmed and team users stay', async () => {
+	const make = async (label, confirmed) => { const user = await Auth.signup(randomUUID() + '@example.test', label, undefined); if (confirmed) await User.updateOne({ _id: user._id }, { $unset: { email_confirm_by: 1 } }); return user; };
+	const [expired, confirmed, joined, fresh] = [await make('Expired'), await make('Confirmed', true), await make('Joined'), await make('Fresh')];
+	const other = await Account.create({ name: 'Other team' }); await Member.create({ account: other._id, user: joined._id, role: 'member' });
+	await User.updateMany({ _id: { $in: [expired._id, joined._id] } }, { $set: { email_confirm_by: new Date(Date.now() - 1000) } });
+	const summary = await AdminAccounts.expireUnconfirmed();
+	assert.ok(summary.deleted >= 1 && summary.kept >= 1);
+	const marked = await User.findById(expired._id).lean(); assert.ok(marked.deletion.requested_at); assert.equal(marked.deletion.silent, true);
+	const owned = await Member.findOne({ user: expired._id, role: 'owner' }).lean(); assert.ok((await Account.findById(owned.account).lean()).deletion.requested_at);
+	assert.equal((await User.findById(joined._id).lean()).email_confirm_by, undefined, 'a user in another team keeps the account');
+	for (const user of [confirmed, fresh]) assert.equal((await User.findById(user._id).lean()).deletion?.requested_at, undefined);
+	for (let index = 0; index < 5 && await User.exists({ _id: expired._id }); index++) await AdminAccounts.recover();
+	assert.equal(await User.exists({ _id: expired._id }), null);
+	assert.equal(await Ticket.exists({ kind: 'deletion-complete', email: marked.email }), null, 'no deletion email for an unconfirmed address');
+});
+
 test('signup, generated password, password login, OAuth continuation and recovery', async () => {
 	const { browser, email, user } = await Fixture.account();
 	await browser.tokens();
@@ -323,6 +375,15 @@ test('profile name updates incrementally, email requires confirmation and cannot
 	assert.equal(form.querySelector('button').disabled, false);
 	dom.window.close();
 });
+test('TOTP accepts one adjacent window and records the matched step against replay', async () => {
+	const secret = generateSecret(); const user = await User.create({ email: 'totp-window-' + randomUUID() + '@example.test', totp_secret: secret, totp_enabled: true });
+	const now = Math.floor(Date.now() / 1000); const step = Math.floor(now / 30);
+	await Security.verifyCode({ _id: user._id, totp_secret: secret }, generateSync({ secret, epoch: now + 30 }));
+	assert.equal((await User.findById(user._id).select('+totp_step').lean()).totp_step, step + 1);
+	await assert.rejects(Security.verifyCode({ _id: user._id, totp_secret: secret }, generateSync({ secret, epoch: now })), /already used/);
+	await assert.rejects(Security.verifyCode({ _id: user._id, totp_secret: secret }, generateSync({ secret, epoch: now + 90 })), /Invalid authentication code/);
+});
+
 test('TOTP setup, password and magic-link challenges, invalid codes, replay prevention and disable', async () => {
 	const { browser, email, user } = await Fixture.account();
 	const password = (await browser.json('/api/v2/security/password')).password;
@@ -331,16 +392,19 @@ test('TOTP setup, password and magic-link challenges, invalid codes, replay prev
 	const code = generateSync({ secret: setup.secret });
 	await browser.json('/api/v2/security/totp/confirm', 'POST', { code });
 	assert.equal((await User.findById(user._id).lean()).totp_secret, undefined);
+	// Confirm records its step, so the setup code cannot be replayed at sign-in.
+	assert.equal(typeof (await User.findById(user._id).select('+totp_step').lean()).totp_step, 'number');
 	await browser.json('/api/v2/security/totp/setup', 'POST', {}, 400);
 	const login = new Browser(); await login.page();
 	const pending = await login.json('/auth/password', 'POST', { email, password });
 	assert.equal(pending.requires2FA, true);
 	assert.equal((await login.call('/api/v2/libraries')).status, 400);
 	await login.json('/auth/two-factor', 'POST', { code: 'abcdef' }, 400);
-	await login.json('/auth/two-factor', 'POST', { code });
+	const next = generateSync({ secret: setup.secret, epoch: Math.floor(Date.now() / 1000) + 30 });
+	await login.json('/auth/two-factor', 'POST', { code: next });
 	await login.page();
 	await login.tokens();
-	await login.json('/api/v2/security/totp/disable', 'POST', { code }, 401);
+	await login.json('/api/v2/security/totp/disable', 'POST', { code: next }, 401);
 	// Simulate a new time window without delaying the suite.
 	await User.updateOne({ _id: user._id }, { $unset: { totp_step: 1 } });
 	await login.json('/api/v2/security/totp/disable', 'POST', { code: generateSync({ secret: setup.secret }) });
@@ -602,7 +666,8 @@ test('security changes accept older browser sessions without an authentication t
 		assert.ok(setup.secret); assert.match(setup.qr, /^data:image/);
 		await browser.json('/api/v2/security/totp/confirm', 'POST', { code: generateSync({ secret: setup.secret }) });
 		assert.equal((await User.findById(user._id).lean()).totp_enabled, true);
-		await browser.json('/api/v2/security/totp/disable', 'POST', { code: generateSync({ secret: setup.secret }) });
+		await browser.json('/api/v2/security/totp/disable', 'POST', { code: generateSync({ secret: setup.secret }) }, 401);
+		await browser.json('/api/v2/security/totp/disable', 'POST', { code: generateSync({ secret: setup.secret, epoch: Math.floor(Date.now() / 1000) + 30 }) });
 		assert.equal((await User.findById(user._id).lean()).totp_enabled, false);
 		const password = await browser.json('/api/v2/security/password'); assert.ok(password.password);
 	}

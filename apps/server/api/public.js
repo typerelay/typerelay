@@ -102,7 +102,7 @@ export class PublicApi {
 		});
 	}
 	static mountSettings(app) {
-		app.use(['/api/v2/access-tokens', '/api/v2/oauth'], (req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
+		app.use(['/api/v2/access-tokens', '/api/v2/oauth'], async (req, res, next) => { if (req.method !== 'GET') await Security.assertConfirmed(req.ctx.user, 'creating API credentials'); res.set('Cache-Control', 'no-store'); next(); });
 		app.get('/api/v2/access-tokens', async (req, res) => {
 			const grants = await Integration.find({ user: req.ctx.user, account: req.ctx.account, kind: 'pat', revoked: false }).sort({ createdAt: 1 }).lean();
 			res.json(grants.map(grant => ({ id: String(grant._id), html: pug.renderFile('./views/ajax/access-token.pug', { grant }) })));

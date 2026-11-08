@@ -24,6 +24,7 @@ before(async () => {
 	mock.method(Account, 'find', () => ({ lean: async () => [{ _id: 'account', name: 'Synthetic account' }] }));
 	mock.method(User, 'findById', () => ({ lean: async () => ({ _id: 'user' }) }));
 	mock.method(User, 'updateOne', async () => ({ matchedCount: 1, modifiedCount: 1 }));
+	mock.method(User, 'exists', async () => null);
 	mock.method(Support, 'context', async () => ({ user: 'user', account: 'account' }));
 	mock.method(Billing, 'entitlements', () => ({ capabilities: { api: true } }));
 	mock.method(Billing, 'account', async () => ({ _id: 'account' }));
