@@ -9,6 +9,8 @@ description: "Create a TypeRelay account, sign in with passwords, Magic Links or
 
 When public sign-up is enabled, choose **Create one**, enter your name and email address, then use the link in the email to finish. The link is single-use and expires after 15 minutes. The first verified sign-in creates your personal account and makes you its owner.
 
+In the TypeRelay mobile app, choose **Create account** on the sign-in screen. After you open the email link, the app asks you to connect the device and then signs you in. On iOS, sign-in uses Safari's secure sign-in sheet, so saved passwords and an existing Safari session are available; iOS asks once to allow TypeRelay to use the TypeRelay website to sign in.
+
 Some self-hosted installations disable public sign-up. In that case, the sign-up page says it is disabled; an existing team administrator must invite you or the operator must enable sign-up.
 
 Hosted custom/branded domains are account-specific: they do not show public sign-up, and sign-in succeeds only for an existing member of that account. Create an account at the canonical TypeRelay hostname or accept an invitation first.
