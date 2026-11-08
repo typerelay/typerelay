@@ -148,7 +148,7 @@ test('duplicate accepted callbacks finalize and dismiss the browser only once', 
 });
 
 test('expired authorization leaves the browser open', async () => {
- const f = fixture(); f.storage.get('pending').created -= 300001;
+ const f = fixture(); f.storage.get('pending').created -= 900001;
  await assert.rejects(f.Auth.complete(callback), /expired/); assert.deepEqual(f.events, []); assert.equal(f.requests.length, 0);
 });
 

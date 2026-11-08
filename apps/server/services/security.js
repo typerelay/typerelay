@@ -405,7 +405,7 @@ export class Security {
 		app.get('/login', (req, res) => res.render('login'));
 		app.get('/signup', (req, res) => {
 			if (req.boundAccount) return res.redirect(new URL('/signup', Auth.origin).toString());
-			if (typeof req.query.return_to === 'string' && req.query.return_to.startsWith('/oauth/authorize?')) req.session.return_to = req.query.return_to;
+			if (typeof req.query.return_to === 'string' && req.query.return_to.startsWith('/oauth/authorize?')) { try { req.session.return_to = Auth.continuation(req.query.return_to); } catch { delete req.session.return_to; } }
 			if (Auth.adsEnabled(req)) {
 				const attribution = Auth.attribution(req.query);
 				if (Object.keys(attribution).length) req.session.signupAttribution = { ...attribution, captured_at: Date.now() };

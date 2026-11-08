@@ -46,7 +46,7 @@ export class Auth {
   const version = Auth.version;
   if (!Auth.isCallback(value)) throw new Error('Invalid sign-in callback');
   const url = new URL(value); const pending = await SecureStorage.get('pending') as any;
-  if (!pending || Date.now() - pending.created > 300000 || url.searchParams.getAll('state').length !== 1 || url.searchParams.get('state') !== pending.state) throw new Error('Sign-in expired or state mismatch. Sign in again.');
+  if (!pending || Date.now() - pending.created > 900000 || url.searchParams.getAll('state').length !== 1 || url.searchParams.get('state') !== pending.state) throw new Error('Sign-in expired or state mismatch. Sign in again.');
   if (url.searchParams.has('error')) throw new Error('Sign-in was cancelled.');
   if (url.searchParams.getAll('code').length !== 1) throw new Error('Missing sign-in code');
   Auth.assert(version); if (!Preview.enabled) await (Capacitor.getPlatform() === 'ios' ? Native.plugin.cancelAuthentication() : Browser.close()).catch(() => undefined); Auth.assert(version);
