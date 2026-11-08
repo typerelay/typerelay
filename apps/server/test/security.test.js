@@ -212,7 +212,7 @@ test('unconfirmed signups get access, confirm once through the form, and existin
 	assert.equal((await browser.json('/auth/signup', 'POST', { name: 'Pending', email })).redirect, '/');
 	await browser.page(); assert.ok(browser.account, 'signed in without confirming');
 	let user = await User.findOne({ email }).lean(); assert.ok(user.email_confirm_by > new Date(Date.now() + 86000000));
-	assert.deepEqual(await browser.json('/api/v2/email-confirmation'), { email, confirmed: false, confirm_by: user.email_confirm_by.toISOString() });
+	assert.deepEqual(await browser.json('/api/v2/email-confirmation', 'GET', null), { email, confirmed: false, confirm_by: user.email_confirm_by.toISOString() });
 	await browser.json('/api/v2/email-confirmation', 'POST', {}, 429);
 	await browser.json('/api/v2/team/invitations', 'POST', { email: randomUUID() + '@example.test' }, 403);
 	const link = Fixture.mailUrl(Fixture.mails.findLast(mail => mail.to === email && /Confirm your Type Relay email/.test(mail.subject)));
@@ -221,11 +221,11 @@ test('unconfirmed signups get access, confirm once through the form, and existin
 	const confirmed = await Auth.confirmSignup(link.searchParams.get('token'));
 	assert.equal(confirmed.user, String(user._id)); assert.equal((await User.findById(user._id).lean()).email_confirm_by, undefined);
 	await assert.rejects(Auth.confirmSignup(link.searchParams.get('token')), /expired or already used/);
-	assert.equal((await browser.json('/api/v2/email-confirmation')).confirmed, true);
+	assert.equal((await browser.json('/api/v2/email-confirmation', 'GET', null)).confirmed, true);
 	await assert.rejects(Auth.sendConfirmation({ _id: user._id }), /already confirmed/);
 	const existing = Object.assign(new Browser(), { ip: '203.0.113.11' }); await existing.page();
 	assert.match((await existing.json('/auth/signup', 'POST', { name: 'Intruder', email })).message, /Check your email/);
-	assert.equal((await existing.call('/api/v2/libraries')).status, 403, 'an existing address never receives a session');
+	await existing.page(); assert.equal(existing.account, '', 'an existing address never receives a session');
 	// A magic link proves the address too.
 	const pending = randomUUID() + '@example.test'; const created = await Auth.signup(pending, 'Magic', undefined);
 	await Auth.login(pending); const magic = Fixture.mailUrl(Fixture.mails.findLast(mail => mail.to === pending && /Sign in/.test(mail.subject)));

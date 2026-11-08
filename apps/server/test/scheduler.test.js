@@ -38,9 +38,9 @@ test('scheduler registers protected Trash, trial, Helpmonks, signup notification
 	await FakeCron.instances[4].callback();
 	await FakeCron.instances[5].callback();
 	assert.equal(purges, 1);
+	assert.deepEqual(logs, ['Trash cleanup complete: purged 2 libraries and 3 snippets; failed accounts 0', 'Trial lifecycle complete: downgraded 2 accounts to Free', 'Helpmonks trial sequence complete: enrolled 1, retrying 0, failed 0', 'Signup notifications complete: sent 1, retrying 0, failed 0', 'White-label reconciliation complete: checked 1, updated 1, failed 0']);
 	await FakeCron.instances[6].callback();
 	assert.ok(logs.includes('Unconfirmed signup cleanup complete: deleted 1, kept 1'));
-	assert.deepEqual(logs, ['Trash cleanup complete: purged 2 libraries and 3 snippets; failed accounts 0', 'Trial lifecycle complete: downgraded 2 accounts to Free', 'Helpmonks trial sequence complete: enrolled 1, retrying 0, failed 0', 'Signup notifications complete: sent 1, retrying 0, failed 0', 'White-label reconciliation complete: checked 1, updated 1, failed 0']);
 });
 
 test('scheduler logs cleanup failure and permits the next run', async () => {
