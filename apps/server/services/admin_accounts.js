@@ -163,17 +163,22 @@ export class AdminAccounts {
 	// Deletes signups that never confirmed their email; users who joined another team keep their account.
 	static async expireUnconfirmed(now = new Date()) {
 		const summary = { checked: 0, deleted: 0, kept: 0 };
-		for (const { _id } of await Models.User.find({ email_confirm_by: { $lte: now }, 'deletion.requested_at': null }).select('_id').limit(25).lean()) {
-			summary.checked++;
-			await Models.mongoose.connection.transaction(async session => {
-				const user = await Models.User.findOneAndUpdate({ _id, email_confirm_by: { $lte: now }, 'deletion.requested_at': null }, { $inc: { activity_sequence: 1 } }, { session, returnDocument: 'after' }).lean();
-				if (!user) return;
-				const memberships = await Models.Member.find({ user: _id }).session(session).read('primary').lean();
-				const solo = memberships.length === 1 && memberships[0].role === 'owner' && await Models.Member.countDocuments({ account: memberships[0].account }).session(session).read('primary') === 1;
-				if (!solo) { await Models.User.updateOne({ _id }, { $unset: { email_confirm_by: 1 } }, { session }); summary.kept++; return; }
-				await AdminAccounts.markUserDeletion(user, memberships, session, true);
-				summary.deleted++;
-			});
+		// Bounded batches keep one run short while still keeping up with bursts of signups.
+		for (let batch = 0; batch < 20; batch++) {
+			const users = await Models.User.find({ email_confirm_by: { $lte: now }, 'deletion.requested_at': null }).select('_id').limit(25).lean();
+			if (!users.length) break;
+			for (const { _id } of users) {
+				summary.checked++;
+				await Models.mongoose.connection.transaction(async session => {
+					const user = await Models.User.findOneAndUpdate({ _id, email_confirm_by: { $lte: now }, 'deletion.requested_at': null }, { $inc: { activity_sequence: 1 } }, { session, returnDocument: 'after' }).lean();
+					if (!user) return;
+					const memberships = await Models.Member.find({ user: _id }).session(session).read('primary').lean();
+					const solo = memberships.length === 1 && memberships[0].role === 'owner' && await Models.Member.countDocuments({ account: memberships[0].account }).session(session).read('primary') === 1;
+					if (!solo) { await Models.User.updateOne({ _id }, { $unset: { email_confirm_by: 1 } }, { session }); summary.kept++; return; }
+					await AdminAccounts.markUserDeletion(user, memberships, session, true);
+					summary.deleted++;
+				});
+			}
 		}
 		return summary;
 	}

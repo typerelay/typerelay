@@ -194,6 +194,8 @@ export class Server {
 			res.locals.whiteLabel = WhiteLabel.public(account);
 			const usage = await Billing.usage(account._id);
 			const profile = await User.findById(ctx.user).lean();
+			// Email confirmed on another device: count the signup conversion on the next page load here.
+			if (Auth.adsEnabled(req) && ctx.role === 'owner' && !req.session.signupConversion && !profile.email_confirm_by) { const tracked = await Account.findOne({ _id: account._id, 'acquisition.confirmed_at': { $ne: null }, 'acquisition.dispatched_at': null }).select('+acquisition').lean(); if (tracked?.acquisition?.transaction_id) { req.session.signupConversion = { account: String(account._id), redirect: req.originalUrl }; await new Promise((resolve, reject) => req.session.save(error => error ? reject(error) : resolve())); return res.redirect('/auth/confirmed'); } }
 			await AdminSettings.application(req, res, profile, ctx);
 			res.render('app', { productUpdatesEnabled: ProductUpdates.eligible(req), news: req.path === '/news', product_updates: req.path === '/news' ? await ProductUpdates.listProductUpdates() : null, importFormats: Libraries.importFormats, accounts, account, ctx, libraries: await Libraries.list(ctx), team: await Team.list(ctx), profile, avatarStyles, ...Billing.locals(account, ctx, usage), whiteLabelEnabled: WhiteLabel.enabled(), whiteLabelSettings: Support.admin(ctx) ? WhiteLabel.domainSettings(account) : WhiteLabel.serialize(account) });
 		});

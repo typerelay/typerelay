@@ -4,7 +4,7 @@ import { AdminSettings } from './admin_settings.js';
 import { AccountAccess } from './account_access.js';
 import { scopes } from '../api/catalog.js';
 import { createHash, randomUUID } from 'node:crypto';
-import { mongoose, User, Account, Member, Ticket, Device, Integration, IntegrationToken, OAuthClient } from '../model/index.js';
+import { mongoose, User, Account, Member, Ticket, Device, Integration, IntegrationToken, OAuthClient, Passkey } from '../model/index.js';
 import { Support } from './support.js';
 import { Security } from './security.js';
 import { Billing } from './billing.js';
@@ -109,8 +109,8 @@ export class Auth {
 				Support.assert(Security.signupEnabled(), 'Signup is disabled', 403);
 				({ user, account, notification: signupNotification } = await Auth.createSignup(ticket.email, ticket.data?.name, ticket.data?.acquisition, session, true));
 			} else if (user.email_confirm_by) {
-				// A used sign-in link also proves ownership of the email address.
-				({ account: confirmedAccount, notification: signupNotification } = await Auth.markConfirmed(user._id, user.email, session));
+				// A used sign-in link proves ownership; drop credentials whoever signed up may have added before confirmation.
+				({ account: confirmedAccount, notification: signupNotification } = await Auth.markConfirmed(user._id, user.email, session, true));
 			}
 		});
 		if (account) await Billing.initializeAccount(account, user).catch(error => console.error(`Stripe setup failed for new TypeRelay account: ${error.message}`));
@@ -166,9 +166,10 @@ export class Auth {
 		Auth.notifySignup(confirmed.notification);
 		return { user: ticket.data.user, ...(confirmed.account?.acquisition?.transaction_id ? { signup_account: String(confirmed.account._id) } : {}) };
 	}
-	static async markConfirmed(userId, email, session) {
-		const user = await User.findOneAndUpdate({ _id: userId, email, email_confirm_by: { $ne: null }, 'deletion.requested_at': null }, { $unset: { email_confirm_by: 1 } }, { session, returnDocument: 'after' }).lean();
+	static async markConfirmed(userId, email, session, reset = false) {
+		const user = await User.findOneAndUpdate({ _id: userId, email, email_confirm_by: { $ne: null }, 'deletion.requested_at': null }, reset ? { $unset: { email_confirm_by: 1, password: 1, totp_secret: 1, totp_step: 1 }, $set: { totp_enabled: false }, $inc: { auth_version: 1 } } : { $unset: { email_confirm_by: 1 } }, { session, returnDocument: 'after' }).lean();
 		if (!user) return {};
+		if (reset) { await Device.updateMany({ user: user._id }, { $set: { revoked: true } }, { session }); await Integration.updateMany({ user: user._id }, { $set: { revoked: true } }, { session }); await Passkey.deleteMany({ user: user._id }, { session }); }
 		await Ticket.deleteMany({ kind: 'email-confirm', 'data.user': String(user._id) }, { session });
 		const owner = await Member.findOne({ user: user._id, role: 'owner' }).sort({ _id: 1 }).session(session).read('primary').lean();
 		const account = owner ? await Account.findOne({ _id: owner.account, 'deletion.requested_at': null }).select('+acquisition').session(session).read('primary').lean() : null;
