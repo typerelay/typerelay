@@ -340,16 +340,19 @@ test('TOTP setup, password and magic-link challenges, invalid codes, replay prev
 	const code = generateSync({ secret: setup.secret });
 	await browser.json('/api/v2/security/totp/confirm', 'POST', { code });
 	assert.equal((await User.findById(user._id).lean()).totp_secret, undefined);
+	// Confirm records its step, so the setup code cannot be replayed at sign-in.
+	assert.equal(typeof (await User.findById(user._id).select('+totp_step').lean()).totp_step, 'number');
 	await browser.json('/api/v2/security/totp/setup', 'POST', {}, 400);
 	const login = new Browser(); await login.page();
 	const pending = await login.json('/auth/password', 'POST', { email, password });
 	assert.equal(pending.requires2FA, true);
 	assert.equal((await login.call('/api/v2/libraries')).status, 400);
 	await login.json('/auth/two-factor', 'POST', { code: 'abcdef' }, 400);
-	await login.json('/auth/two-factor', 'POST', { code });
+	const next = generateSync({ secret: setup.secret, epoch: Math.floor(Date.now() / 1000) + 30 });
+	await login.json('/auth/two-factor', 'POST', { code: next });
 	await login.page();
 	await login.tokens();
-	await login.json('/api/v2/security/totp/disable', 'POST', { code }, 401);
+	await login.json('/api/v2/security/totp/disable', 'POST', { code: next }, 401);
 	// Simulate a new time window without delaying the suite.
 	await User.updateOne({ _id: user._id }, { $unset: { totp_step: 1 } });
 	await login.json('/api/v2/security/totp/disable', 'POST', { code: generateSync({ secret: setup.secret }) });
@@ -611,7 +614,8 @@ test('security changes accept older browser sessions without an authentication t
 		assert.ok(setup.secret); assert.match(setup.qr, /^data:image/);
 		await browser.json('/api/v2/security/totp/confirm', 'POST', { code: generateSync({ secret: setup.secret }) });
 		assert.equal((await User.findById(user._id).lean()).totp_enabled, true);
-		await browser.json('/api/v2/security/totp/disable', 'POST', { code: generateSync({ secret: setup.secret }) });
+		await browser.json('/api/v2/security/totp/disable', 'POST', { code: generateSync({ secret: setup.secret }) }, 401);
+		await browser.json('/api/v2/security/totp/disable', 'POST', { code: generateSync({ secret: setup.secret, epoch: Math.floor(Date.now() / 1000) + 30 }) });
 		assert.equal((await User.findById(user._id).lean()).totp_enabled, false);
 		const password = await browser.json('/api/v2/security/password'); assert.ok(password.password);
 	}

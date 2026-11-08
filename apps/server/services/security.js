@@ -462,8 +462,9 @@ export class Security {
 		app.post('/api/v2/security/totp/confirm', async (req, res) => {
 			const pending = req.session.totp_setup;
 			Support.assert(pending?.expires > Date.now(), 'Setup expired; start again');
-			Support.assert(typeof req.body.code === 'string' && /^\d{6}$/.test(req.body.code) && verifySync({ secret: pending.secret, token: req.body.code, epochTolerance: 30 }).valid, 'Invalid authentication code');
-			const result = await User.updateOne({ _id: req.ctx.user, totp_enabled: { $ne: true } }, { $set: { totp_secret: pending.secret, totp_enabled: true }, $unset: { totp_step: 1 } });
+			const check = typeof req.body.code === 'string' && /^\d{6}$/.test(req.body.code) ? verifySync({ secret: pending.secret, token: req.body.code, epochTolerance: 30 }) : { valid: false };
+			Support.assert(check.valid, 'Invalid authentication code');
+			const result = await User.updateOne({ _id: req.ctx.user, totp_enabled: { $ne: true } }, { $set: { totp_secret: pending.secret, totp_enabled: true, totp_step: check.timeStep } });
 			Support.assert(result.modifiedCount === 1, 'Two-factor authentication is already enabled');
 			delete req.session.totp_setup;
 			res.json({ enabled: true });
