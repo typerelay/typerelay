@@ -76,7 +76,7 @@ export class MobileApp {
  static toast(message: string, icon: 'success' | 'error' = 'success') { void Swal.fire({ toast: true, position: 'top-end', icon, title: message, timer: 4000, showConfirmButton: false }); }
  static error(error: unknown) { MobileApp.toast(error instanceof Error ? error.message : String(error), 'error'); }
  static async busy(control: HTMLButtonElement, operation: () => Promise<void>) { control.disabled = true; try { await operation(); } catch (error) { MobileApp.error(error); } finally { control.disabled = false; } }
- static async refreshEmailConfirmation() { MobileApp.$('email-confirmation').hidden = !Auth.tokens || Preview.enabled || (await Auth.request('email-confirmation', 'GET')).confirmed; }
+ static async refreshEmailConfirmation() { MobileApp.$('email-confirmation').hidden = !Auth.tokens || (await Auth.request('email-confirmation', 'GET')).confirmed; }
  static subscribe = (listener: () => void) => { MobileApp.listeners.add(listener); return () => MobileApp.listeners.delete(listener); };
  static snapshot = () => MobileApp.state;
  static async load() { const state = await Native.call('state'); if (Auth.tokens && state.mobile_bridge_version !== 2) throw new Error('The mobile native bridge is out of date. Rebuild or update the mobile app.'); MobileApp.state = state; for (const listener of MobileApp.listeners) listener(); }
