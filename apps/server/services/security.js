@@ -27,6 +27,8 @@ export class Security {
 		Support.assert(password.length >= 8, 'Password must be at least 8 characters');
 		return { password, hash: await bcrypt.hash(password, 12) };
 	}
+	// Until the address is confirmed, whoever signed up must not add credentials or send email to others.
+	static async assertConfirmed(user, action) { Support.assert(!await User.exists({ _id: user, email_confirm_by: { $ne: null } }), 'Confirm your email address before ' + action, 403); }
 	static browserSession(req) { Support.assert((!req.ctx || (!req.ctx.device && req.ctx.user === req.session.user)) && req.session.user, 'Sign in to change security settings', 401); Support.assert(!req.session.sso, 'Sign in with password, Magic Link or passkey to change personal security settings', 403); }
 	static async establish(req, identity, verifiedFactor = false, sso = null) {
 		const user = identity instanceof User ? identity : await User.findById(identity).lean();
@@ -453,7 +455,7 @@ export class Security {
 		app.put('/api/v2/sso', async (req, res) => res.json(await Security.saveSso(req)));
 		app.post('/api/v2/sso/recovery-code', async (req, res) => res.json(await Security.ssoRecoveryCode(req)));
 		app.get('/api/v2/sso/logs', async (req, res) => { await Security.ssoAdmin(req, false); const logs = await SsoLog.find({ account: req.ctx.account, expires: { $gt: new Date() } }).sort({ createdAt: -1, _id: -1 }).limit(50).lean(); res.json({ html: pug.renderFile('./views/ajax/sso-logs.pug', { logs }) }); });
-		app.use('/api/v2/security', limit, (req, res, next) => { if (req.method !== 'GET') Security.browserSession(req); res.setHeader('Cache-Control', 'no-store'); next(); });
+		app.use('/api/v2/security', limit, async (req, res, next) => { if (req.method !== 'GET') { Security.browserSession(req); await Security.assertConfirmed(req.ctx.user, 'changing security settings'); } res.setHeader('Cache-Control', 'no-store'); next(); });
 		app.get('/api/v2/security', async (req, res) => {
 			const user = await User.findById(req.ctx.user).lean();
 			res.json({ totp_enabled: user.totp_enabled, keys: await Passkey.find({ user: user._id }).select('_id name').lean() });

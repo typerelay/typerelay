@@ -327,6 +327,7 @@ export class Auth {
 	}
 	static async approveIntegration(user, body, context = null) {
 		const { client, scopes } = await Auth.integrationRequest(body);
+		if (body.decision !== 'deny') await Security.assertConfirmed(user, 'connecting integrations');
 		if (body.decision === 'deny') { const redirect = new URL(body.redirect_uri); redirect.searchParams.set('error', 'access_denied'); redirect.searchParams.set('state', body.state); return redirect.href; }
 		const ctx = context || await Support.context(user, body.account);
 		Billing.assertApi(ctx);

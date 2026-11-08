@@ -216,6 +216,8 @@ test('unconfirmed signups get access, confirm once through the form, and existin
 	await browser.json('/api/v2/email-confirmation', 'POST', {}, 429);
 	await browser.json('/api/v2/team/invitations', 'POST', { email: randomUUID() + '@example.test' }, 403);
 	await browser.json('/api/v2/team/members', 'POST', { email: randomUUID() + '@example.test', name: 'Silent', send_welcome_email: false }, 403);
+	await browser.json('/api/v2/access-tokens', 'POST', { name: 'Early token' }, 403);
+	await browser.json('/api/v2/security/totp/setup', 'POST', {}, 403);
 	const link = Fixture.mailUrl(Fixture.mails.findLast(mail => mail.to === email && /Confirm your Type Relay email/.test(mail.subject)));
 	assert.equal(link.pathname, '/auth/confirm-email');
 	assert.equal((await browser.call(link.pathname + link.search)).status, 200); assert.ok((await User.findById(user._id).lean()).email_confirm_by, 'GET alone never confirms');
@@ -230,7 +232,7 @@ test('unconfirmed signups get access, confirm once through the form, and existin
 	// A magic link proves the address and removes access whoever signed up first may have kept.
 	const squatter = Object.assign(new Browser(), { ip: '203.0.113.12' }); await squatter.page(); const pending = randomUUID() + '@example.test';
 	await squatter.json('/auth/signup', 'POST', { name: 'Squatter', email: pending }); await squatter.page();
-	assert.ok((await squatter.json('/api/v2/security/password')).password);
+	await squatter.json('/api/v2/security/password', 'POST', {}, 403);
 	const before = (await User.findOne({ email: pending }).lean()).auth_version || 0;
 	await Auth.login(pending); const magic = Fixture.mailUrl(Fixture.mails.findLast(mail => mail.to === pending && /Sign in/.test(mail.subject)));
 	const owner = await Auth.consume(magic.searchParams.get('token'));

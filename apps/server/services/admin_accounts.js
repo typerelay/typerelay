@@ -169,7 +169,7 @@ export class AdminAccounts {
 			if (!users.length) break;
 			for (const { _id } of users) {
 				summary.checked++;
-				await Models.mongoose.connection.transaction(async session => {
+				try { await Models.mongoose.connection.transaction(async session => {
 					const user = await Models.User.findOneAndUpdate({ _id, email_confirm_by: { $lte: now }, 'deletion.requested_at': null }, { $inc: { activity_sequence: 1 } }, { session, returnDocument: 'after' }).lean();
 					if (!user) return;
 					const memberships = await Models.Member.find({ user: _id }).session(session).read('primary').lean();
@@ -177,7 +177,7 @@ export class AdminAccounts {
 					if (!solo) { await Models.User.updateOne({ _id }, { $unset: { email_confirm_by: 1 } }, { session }); summary.kept++; return; }
 					await AdminAccounts.markUserDeletion(user, memberships, session, true);
 					summary.deleted++;
-				});
+				}); } catch (error) { summary.failed = (summary.failed || 0) + 1; console.error(`Unconfirmed signup cleanup will retry: ${error.message}`); }
 			}
 		}
 		return summary;
