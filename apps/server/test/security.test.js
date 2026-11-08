@@ -6,7 +6,7 @@ import { randomUUID, randomBytes, createHash, generateKeyPairSync, sign } from '
 import { readdir, readFile } from 'node:fs/promises';
 import { Encoder } from 'cbor-x';
 const cbor = new Encoder({ useRecords: false, useTag259ForMaps: false, tagUint8Array: false });
-import { generateSync } from 'otplib';
+import { generateSecret, generateSync } from 'otplib';
 import { JSDOM } from 'jsdom';
 import bcrypt from 'bcryptjs';
 import { mongoose, User, Account, Ticket, Member, Passkey, Device, SignupNotification, Integration, IntegrationToken, OAuthClient, Library, Snippet, SnippetAsset, Change } from '../model/index.js';
@@ -323,6 +323,15 @@ test('profile name updates incrementally, email requires confirmation and cannot
 	assert.equal(form.querySelector('button').disabled, false);
 	dom.window.close();
 });
+test('TOTP accepts one adjacent window and records the matched step against replay', async () => {
+	const secret = generateSecret(); const user = await User.create({ email: 'totp-window-' + randomUUID() + '@example.test', totp_secret: secret, totp_enabled: true });
+	const now = Math.floor(Date.now() / 1000); const step = Math.floor(now / 30);
+	await Security.verifyCode({ _id: user._id, totp_secret: secret }, generateSync({ secret, epoch: now + 30 }));
+	assert.equal((await User.findById(user._id).select('+totp_step').lean()).totp_step, step + 1);
+	await assert.rejects(Security.verifyCode({ _id: user._id, totp_secret: secret }, generateSync({ secret, epoch: now })), /already used/);
+	await assert.rejects(Security.verifyCode({ _id: user._id, totp_secret: secret }, generateSync({ secret, epoch: now + 90 })), /Invalid authentication code/);
+});
+
 test('TOTP setup, password and magic-link challenges, invalid codes, replay prevention and disable', async () => {
 	const { browser, email, user } = await Fixture.account();
 	const password = (await browser.json('/api/v2/security/password')).password;

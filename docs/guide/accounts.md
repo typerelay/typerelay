@@ -21,7 +21,7 @@ Hosted custom/branded domains are account-specific: they do not show public sign
 - **Magic Link** — emails a 15-minute, single-use sign-in link. Request a new link if it expires or has already been used.
 - **Passkey** — available after registering a passkey under **Settings → Security**. Passkeys require a current browser, HTTPS or localhost, and user verification such as Touch ID, Windows Hello or a security key.
 
-If two-factor authentication is enabled, password and Magic Link sign-in continue to a six-digit authenticator-code step. A code can be used only once in its 30-second time window. A successful passkey sign-in already provides the required second factor.
+If two-factor authentication is enabled, password and Magic Link sign-in continue to a six-digit authenticator-code step. Codes from the previous or next 30-second window are also accepted to allow for small clock differences. Each code can be used only once. A successful passkey sign-in already provides the required second factor.
 
 ## Passwords and recovery
 
