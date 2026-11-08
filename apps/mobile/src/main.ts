@@ -76,6 +76,7 @@ export class MobileApp {
  static toast(message: string, icon: 'success' | 'error' = 'success') { void Swal.fire({ toast: true, position: 'top-end', icon, title: message, timer: 4000, showConfirmButton: false }); }
  static error(error: unknown) { MobileApp.toast(error instanceof Error ? error.message : String(error), 'error'); }
  static async busy(control: HTMLButtonElement, operation: () => Promise<void>) { control.disabled = true; try { await operation(); } catch (error) { MobileApp.error(error); } finally { control.disabled = false; } }
+ static async refreshEmailConfirmation() { MobileApp.$('email-confirmation').hidden = !Auth.tokens || Preview.enabled || (await Auth.request('email-confirmation', 'GET')).confirmed; }
  static subscribe = (listener: () => void) => { MobileApp.listeners.add(listener); return () => MobileApp.listeners.delete(listener); };
  static snapshot = () => MobileApp.state;
  static async load() { const state = await Native.call('state'); if (Auth.tokens && state.mobile_bridge_version !== 2) throw new Error('The mobile native bridge is out of date. Rebuild or update the mobile app.'); MobileApp.state = state; for (const listener of MobileApp.listeners) listener(); }
@@ -96,6 +97,7 @@ export class MobileApp {
   MobileApp.$('sync-status').textContent = `${state.pending} pending · ${state.conflicts.length} conflicts`;
   MobileApp.$('restore-draft').hidden = !state.draft;
   MobileApp.$('conflicts').hidden = !state.conflicts.length;
+  if (!Auth.tokens) MobileApp.$('email-confirmation').hidden = true;
   MobileApp.$('settings-pending').textContent = String(state.pending);
   MobileApp.$('settings-conflicts').textContent = String(state.conflicts.length);
   MobileApp.$('settings-server').textContent = Auth.server || 'Not signed in';
@@ -327,20 +329,22 @@ export class MobileApp {
   MobileApp.$('add').onclick = () => { MobileApp.switchScreen('snippets'); const library = MobileApp.state.libraries.find(library => library.permissions.edit && (!MobileApp.input('library').value || library._id === MobileApp.input('library').value)); if (!library) return MobileApp.toast('Choose an editable library. Create libraries in the web app.', 'error'); void MobileApp.openEditor(library).catch(MobileApp.error); };
   MobileApp.$('resume-draft').onclick = () => { const draft = MobileApp.state.draft; if (!draft) return; try { const library = MobileApp.library(draft.editing.library); void MobileApp.openEditor(library, library.records.find(item => item.id === draft.editing.id), draft).catch(MobileApp.error); } catch (error) { MobileApp.error(error); } };
   MobileApp.$('discard-draft').onclick = () => { void MobileApp.discardDraft().catch(MobileApp.error); };
+  MobileApp.$('email-confirmation-resend').onclick = () => { const button = MobileApp.$('email-confirmation-resend') as HTMLButtonElement; void MobileApp.busy(button, async () => { MobileApp.toast((await Auth.request('email-confirmation', 'POST')).message); }); };
   MobileApp.$('conflicts').onclick = () => { void MobileApp.showReview('conflicts').catch(MobileApp.error); }; MobileApp.$('recovery').onclick = () => { void MobileApp.showReview('recovery').catch(MobileApp.error); };
   MobileApp.$('trash').onclick = () => { void MobileApp.showTrash().catch(MobileApp.error); };
   MobileApp.$('settings-screen').addEventListener('click', event => { const link = (event.target as HTMLElement).closest<HTMLAnchorElement>('[data-external]'); if (!link) return; event.preventDefault(); void Browser.open({ url: link.href }); });
   MobileApp.$('snippets').onclick = event => { const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-use]'); if (!button) return; const article = button.closest<HTMLElement>('[data-record]')!; const library = MobileApp.library(article.dataset.library!); const snippet = library.records.find(snippet => snippet.id === article.dataset.record)!; void MobileApp.use(library, snippet).catch(MobileApp.error); };
   createRoot(MobileApp.$('controller')).render(createElement(Controller));
   Auth.onError = MobileApp.error;
-  await Auth.initialize(async () => { await MobileApp.load(); await MobileApp.sync(); });
+  await Auth.initialize(async () => { await MobileApp.load(); void MobileApp.refreshEmailConfirmation().catch(() => undefined); await MobileApp.sync(); });
   if (Auth.server || Preview.enabled) MobileApp.input('server').value = Auth.server || Preview.origin;
   if (Preview.enabled) { MobileApp.input('server').readOnly = true; MobileApp.$('preview-notice').hidden = false; }
   await MobileApp.load();
   await Network.addListener('networkStatusChange', status => { if (status.connected) void MobileApp.sync().catch(MobileApp.error); });
-  if (!Preview.enabled) await App.addListener('appStateChange', event => { MobileApp.active = event.isActive; if (event.isActive) void MobileApp.sync().catch(MobileApp.error); else void MobileApp.persistDraft().catch(MobileApp.error); });
+  if (!Preview.enabled) await App.addListener('appStateChange', event => { MobileApp.active = event.isActive; if (event.isActive) { void MobileApp.sync().catch(MobileApp.error); void MobileApp.refreshEmailConfirmation().catch(() => undefined); } else void MobileApp.persistDraft().catch(MobileApp.error); });
+  window.addEventListener('focus', () => { void MobileApp.refreshEmailConfirmation().catch(() => undefined); });
   setInterval(() => { if (MobileApp.active && Auth.tokens) void MobileApp.sync().catch(() => undefined); }, 30000);
-  void MobileApp.sync().catch(MobileApp.error);
+  void MobileApp.refreshEmailConfirmation().catch(() => undefined); void MobileApp.sync().catch(MobileApp.error);
  }
 }
 const Controller = () => { const state = useSyncExternalStore(MobileApp.subscribe, MobileApp.snapshot); useEffect(() => { MobileApp.reconcile(state); }, [state]); return null; };

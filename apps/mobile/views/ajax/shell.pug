@@ -42,6 +42,12 @@ main.mobile-app#workspace
 							small Continue your unsaved snippet
 					button.notice-dismiss#discard-draft(type="button" aria-label="Discard draft")
 						span.material-symbols-outlined close
+				div.notice-card.warning#email-confirmation(hidden)
+					span.material-symbols-outlined mark_email_unread
+					span
+						strong Confirm your email
+						small Check your email to confirm your email address. Unconfirmed accounts are deleted after 24 hours.
+					button.btn-sm#email-confirmation-resend(type="button") Resend
 				button.notice-card.warning#conflicts(type="button" hidden)
 					span.material-symbols-outlined difference
 					span
