@@ -113,7 +113,7 @@ export class Security {
 			const user = await User.findById(req.session.user).session(session).read('primary').lean();
 			Support.assert(user.email === ticket.data.old && (user.auth_version || 0) === ticket.data.version, 'Email link no longer valid');
 			Support.assert(!await User.exists({ email: ticket.email }).session(session).read('primary'), 'Email address unavailable', 409);
-			await User.updateOne({ _id: user._id }, { $set: { email: ticket.email } }, { session });
+			await User.updateOne({ _id: user._id }, { $set: { email: ticket.email }, $unset: { email_confirm_by: 1 } }, { session });
 			await Ticket.deleteMany({ email: user.email, kind: { $in: ['login', 'password-reset', 'email-change'] } }, { session });
 		});
 		return { redirect: '/' };
@@ -417,8 +417,20 @@ export class Security {
 		app.post('/auth/signup', limit, async (req, res) => {
 			Support.assert(Security.signupEnabled(), 'Signup is disabled', 403); Support.assert(!req.boundAccount, 'Create accounts at app.typerelay.com', 403);
 			const acquisition = Auth.adsEnabled(req) && req.session.signupAttribution?.captured_at > Date.now() - 30 * 86400000 ? Auth.attribution(req.session.signupAttribution) : undefined;
-			await Auth.login(Security.email(req.body.email), req.body.name, { acquisition, return_to: req.session.return_to?.startsWith('/oauth/authorize?') ? req.session.return_to : undefined });
+			const email = Security.email(req.body.email);
+			const user = await Auth.signup(email, req.body.name, acquisition);
+			// Existing addresses never get instant access; they receive the usual sign-in link instead.
+			if (user) return res.json(await Security.establish(req, user));
+			await Auth.login(email, req.body.name, { acquisition, return_to: req.session.return_to?.startsWith('/oauth/authorize?') ? req.session.return_to : undefined });
 			res.json({ message: 'Check your email to finish creating your account.' });
+		});
+		// The link opens a confirmation form so mail scanners that prefetch links cannot confirm an address.
+		app.get('/auth/confirm-email', (req, res) => { res.set('Referrer-Policy', 'no-referrer'); res.render('auth', { kind: 'confirm-signup', token: req.query.token }); });
+		app.post('/auth/confirm-email', limit, async (req, res) => {
+			const result = await Auth.confirmSignup(req.body.token);
+			if (req.session.user !== result.user) return res.json({ confirmed: true });
+			if (result.signup_account && Auth.adsEnabled(req)) { req.session.signupConversion = { account: result.signup_account, redirect: '/' }; await new Promise((resolve, reject) => req.session.save(error => error ? reject(error) : resolve())); return res.json({ redirect: '/auth/confirmed' }); }
+			res.json({ redirect: '/' });
 		});
 		app.post('/auth/password', limit, async (req, res) => res.json(await Security.passwordLogin(req)));
 		app.get('/auth/two-factor', (req, res) => res.render('auth', { kind: 'factor' }));

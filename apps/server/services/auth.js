@@ -96,6 +96,7 @@ export class Auth {
 		let user;
 		let account;
 		let signupNotification;
+		let confirmedAccount;
 		let returnTo;
 		await mongoose.connection.transaction(async session => {
 			const ticket = await Ticket.findOneAndDelete({ hash: Support.hash(Support.text(token, 256)), kind: 'login', expires: { $gt: new Date() } }, { session }).lean();
@@ -106,19 +107,76 @@ export class Auth {
 			if (ticket.data?.account) Support.assert(user && await Member.exists({ account: ticket.data.account, user: user._id }).session(session).read('primary'), 'Account access denied', 403);
 			if (!user) {
 				Support.assert(Security.signupEnabled(), 'Signup is disabled', 403);
-				[user] = await User.create([{ email: ticket.email, name: ticket.data?.name || ticket.email.split('@')[0] }], { session });
-				const acquisition = Auth.adsEnabled() ? { ...Auth.attribution(ticket.data?.acquisition), transaction_id: 'typerelay-signup-' + randomUUID(), confirmed_at: new Date() } : undefined;
-				[account] = await Account.create([{ name: user.name + '’s team', ...(acquisition ? { acquisition } : {}) }], { session });
-				await Member.create([{ account: account._id, user: user._id, role: 'owner' }], { session });
-				await StarterContent.create(account, user, session);
-				if (Billing.hosted()) signupNotification = await SignupNotifications.create(user, account, session);
+				({ user, account, notification: signupNotification } = await Auth.createSignup(ticket.email, ticket.data?.name, ticket.data?.acquisition, session, true));
+			} else if (user.email_confirm_by) {
+				// A used sign-in link also proves ownership of the email address.
+				({ account: confirmedAccount, notification: signupNotification } = await Auth.markConfirmed(user._id, user.email, session));
 			}
 		});
 		if (account) await Billing.initializeAccount(account, user).catch(error => console.error(`Stripe setup failed for new TypeRelay account: ${error.message}`));
-		if (signupNotification) { const sendMail = Auth.mail.sendMail; void SignupNotifications.deliver(signupNotification._id, message => sendMail(message)).catch(error => console.error(`Type Relay signup notification deferred: ${error.message}`)); }
-		const result = { user: String(user._id), return_to: returnTo ? Auth.continuation(returnTo) : undefined, ...(account?.acquisition ? { signup_account: String(account._id) } : {}) };
+		Auth.notifySignup(signupNotification);
+		const converted = account || confirmedAccount;
+		const result = { user: String(user._id), return_to: returnTo ? Auth.continuation(returnTo) : undefined, ...(converted?.acquisition?.transaction_id ? { signup_account: String(converted._id) } : {}) };
 		return details ? { ...result, ...(account ? { createdUser: user } : {}) } : result.user;
 	}
+	static async createSignup(email, name, acquisition, session, confirmed) {
+		const [user] = await User.create([{ email, name: name ? Support.text(name) : email.split('@')[0], ...(confirmed ? {} : { email_confirm_by: new Date(Date.now() + Auth.confirmWindow) }) }], { session });
+		const tracking = Auth.adsEnabled() ? { ...Auth.attribution(acquisition), transaction_id: 'typerelay-signup-' + randomUUID(), ...(confirmed ? { confirmed_at: new Date() } : {}) } : undefined;
+		const [account] = await Account.create([{ name: user.name + '’s team', ...(tracking ? { acquisition: tracking } : {}) }], { session });
+		await Member.create([{ account: account._id, user: user._id, role: 'owner' }], { session });
+		await StarterContent.create(account, user, session);
+		const notification = confirmed && Billing.hosted() ? await SignupNotifications.create(user, account, session) : null;
+		return { user, account, notification };
+	}
+	static confirmWindow = 86400000;
+	// Creates an unconfirmed account for a new email address; returns null when the address already exists.
+	static async signup(email, name, acquisition) {
+		let created;
+		try {
+			await mongoose.connection.transaction(async session => {
+				created = null;
+				if (await User.exists({ email }).session(session).read('primary')) return;
+				created = await Auth.createSignup(email, name, acquisition, session, false);
+			});
+		} catch (error) { if (error.code === 11000) return null; throw error; }
+		if (!created) return null;
+		await Billing.initializeAccount(created.account, created.user).catch(error => console.error(`Stripe setup failed for new TypeRelay account: ${error.message}`));
+		await Auth.sendConfirmation(created.user).catch(error => console.error(`Email confirmation message deferred: ${error.message}`));
+		return created.user;
+	}
+	static async sendConfirmation(user) {
+		const token = Support.token();
+		await mongoose.connection.transaction(async session => {
+			const current = await User.findOneAndUpdate({ _id: user._id, email_confirm_by: { $gt: new Date() }, 'deletion.requested_at': null }, { $inc: { activity_sequence: 1 } }, { session, returnDocument: 'after' }).lean();
+			Support.assert(current, 'Your email address is already confirmed', 409);
+			const recent = await Ticket.exists({ kind: 'email-confirm', 'data.user': String(current._id), _id: { $gt: mongoose.Types.ObjectId.createFromTime(Math.floor(Date.now() / 1000) - 60) } }).session(session).read('primary');
+			Support.assert(!recent, 'A confirmation email was just sent. Wait a minute before sending another.', 429);
+			await Ticket.create([{ hash: Support.hash(token), kind: 'email-confirm', email: current.email, data: { user: String(current._id) }, expires: current.email_confirm_by }], { session });
+			user = current;
+		});
+		await AdminSettings.send('email-confirmation', user.email, { url: Auth.origin + '/auth/confirm-email?token=' + token, name: user.name });
+	}
+	static async confirmSignup(token) {
+		let ticket, confirmed;
+		await mongoose.connection.transaction(async session => {
+			ticket = await Ticket.findOneAndDelete({ hash: Support.hash(Support.text(token, 256)), kind: 'email-confirm', expires: { $gt: new Date() } }, { session }).lean();
+			Support.assert(ticket, 'Link expired or already used. Sign in and send a new confirmation email.', 401);
+			confirmed = await Auth.markConfirmed(ticket.data.user, ticket.email, session);
+		});
+		Auth.notifySignup(confirmed.notification);
+		return { user: ticket.data.user, ...(confirmed.account?.acquisition?.transaction_id ? { signup_account: String(confirmed.account._id) } : {}) };
+	}
+	static async markConfirmed(userId, email, session) {
+		const user = await User.findOneAndUpdate({ _id: userId, email, email_confirm_by: { $ne: null }, 'deletion.requested_at': null }, { $unset: { email_confirm_by: 1 } }, { session, returnDocument: 'after' }).lean();
+		if (!user) return {};
+		await Ticket.deleteMany({ kind: 'email-confirm', 'data.user': String(user._id) }, { session });
+		const owner = await Member.findOne({ user: user._id, role: 'owner' }).sort({ _id: 1 }).session(session).read('primary').lean();
+		const account = owner ? await Account.findOne({ _id: owner.account, 'deletion.requested_at': null }).select('+acquisition').session(session).read('primary').lean() : null;
+		if (!account) return { user };
+		if (account.acquisition?.transaction_id) await Account.updateOne({ _id: account._id }, { $set: { 'acquisition.confirmed_at': new Date() } }, { session });
+		return { user, account, notification: Billing.hosted() ? await SignupNotifications.create(user, account, session) : null };
+	}
+	static notifySignup(notification) { if (notification) { const sendMail = Auth.mail.sendMail; void SignupNotifications.deliver(notification._id, message => sendMail(message)).catch(error => console.error(`Type Relay signup notification deferred: ${error.message}`)); } }
 	static redirect(uri, client = 'typerelay-desktop') {
 		let url;
 		try { url = new URL(uri); } catch { Support.assert(false, client === 'typerelay-mobile' ? 'Invalid mobile callback URL' : 'Invalid desktop callback URL'); }

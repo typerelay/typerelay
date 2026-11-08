@@ -42,6 +42,8 @@ export class Helpmonks {
 			if (!account) break;
 			summary.checked++;
 			try {
+				// Wait for the owner to confirm their email; a deferral does not use up an attempt.
+				if ((await Helpmonks.owner(account._id, options)).email_confirm_by) { await accountModel.updateOne({ _id: account._id }, { $inc: { 'billing.helpmonks_sequence.attempts': -1 } }); summary.deferred = (summary.deferred || 0) + 1; continue; }
 				const enroll = async () => Helpmonks.enroll(await Helpmonks.owner(account._id, options), config, options);
 				const contactId = options.accountModel ? await enroll() : await AccountAccess.run(account._id, enroll);
 				await accountModel.updateOne({ _id: account._id }, { $set: { 'billing.helpmonks_sequence.status': 'completed', 'billing.helpmonks_sequence.contact_id': contactId, 'billing.helpmonks_sequence.enrolled_at': now, 'billing.helpmonks_sequence.last_error': '' } });

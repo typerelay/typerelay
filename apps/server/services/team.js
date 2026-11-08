@@ -12,8 +12,11 @@ export class Team {
 		const users = await User.find({ _id: { $in: members.map(member => member.user) } }).lean();
 		return { invitations: Support.admin(ctx) ? await Ticket.find({ account: ctx.account, kind: 'invite', expires: { $gt: new Date() } }).select('_id email expires').lean() : [], members: members.map(member => ({ ...member, profile: users.find(user => Support.equal(user._id, member.user)) })), groups: await Group.find({ account: ctx.account }).lean() };
 	}
+	// Unconfirmed signups cannot send email to other people.
+	static async assertConfirmed(ctx) { Support.assert(!await User.exists({ _id: ctx.user, email_confirm_by: { $ne: null } }), 'Confirm your email address before inviting team members', 403); }
 	static async invite(ctx, email) {
 		Support.assert(Support.admin(ctx), 'Admin required', 403);
+		await Team.assertConfirmed(ctx);
 		email = Support.text(email, 254).toLowerCase();
 		Support.assert(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email), 'Invalid email');
 		const token = Support.token();
@@ -30,6 +33,7 @@ export class Team {
 		Support.assert(Support.admin(ctx), 'Admin required', 403);
 		Billing.assertTeam(ctx);
 		Support.assert(typeof body.send_welcome_email === 'boolean', 'Choose whether to send an email');
+		if (body.send_welcome_email) await Team.assertConfirmed(ctx);
 		const email = Security.email(body.email);
 		const result = await AccountAccess.write(ctx.account, async session => {
 			await Ticket.deleteMany({ account: ctx.account, kind: 'invite', email }, { session });
