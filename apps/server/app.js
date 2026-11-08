@@ -207,7 +207,7 @@ export class Server {
 		});
 		if (process.env.NODE_ENV === 'development' && process.env.TYPERELAY_MOBILE_PREVIEW_URL) app.get('/api/v2/mobile-preview/identity', (req, res) => { Support.assert(req.ctx.device, 'Device sign-in required', 401); res.json({ user: req.ctx.user, account: req.ctx.account, device: req.ctx.device }); });
 		app.get('/api/v2/email-confirmation', async (req, res) => { const user = await User.findById(req.ctx.user).select('email email_confirm_by').lean(); res.json({ email: user.email, confirmed: !user.email_confirm_by, confirm_by: user.email_confirm_by || null }); });
-		app.post('/api/v2/email-confirmation', authLimit, async (req, res) => { await Auth.sendConfirmation({ _id: req.ctx.user }); res.json({ message: 'Confirmation email sent. Check your inbox.' }); });
+		app.post('/api/v2/email-confirmation', async (req, res) => { await Auth.sendConfirmation({ _id: req.ctx.user }); res.json({ message: 'Confirmation email sent. Check your inbox.' }); });
 		app.get('/api/v2/account-deletion', (req, res) => res.json({ url: Auth.origin + '/account/delete?user=' + encodeURIComponent(req.ctx.user) }));
 		PublicApi.mountSettings(app);
 		Ai.mount(app);

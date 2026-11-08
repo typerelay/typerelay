@@ -26,7 +26,8 @@ class Fixture {
 	static ticket = null;
 	static cookie = '';
 	static owner = true;
-	static query(value) { const query = { lean: async () => value, session: () => query, read: () => query, select: () => query }; return query; }
+	static query(value) { const query = { lean: async () => value, session: () => query, read: () => query, select: () => query, sort: () => query }; return query; }
+	static thenable(value) { const query = Promise.resolve(value); query.session = () => query; query.read = () => query; return query; }
 	static async http(path, body, csrf, host = 'app.typerelay.com') {
 		return new Promise((resolve, reject) => {
 			const req = request({ hostname: '127.0.0.1', port: Fixture.server.address().port, path, method: body ? 'POST' : 'GET', headers: { Host: host, 'X-Forwarded-Proto': 'https', Cookie: Fixture.cookie, ...(body ? { 'Content-Type': 'application/json' } : {}), ...(csrf ? { 'X-CSRF-Token': csrf } : {}) } }, res => {
@@ -62,7 +63,12 @@ before(async () => {
 	mock.method(User, 'create', async rows => [Fixture.user = new User(rows[0])]);
 	mock.method(Account, 'create', async rows => [Fixture.account = { ...rows[0], _id: 'synthetic-account', is_active: true }]);
 	mock.method(Account, 'findOne', () => Fixture.query(Fixture.account));
-	mock.method(Account, 'updateOne', async (query, update) => { if (!Fixture.account.acquisition.dispatched_at) Fixture.account.acquisition.dispatched_at = update.$set['acquisition.dispatched_at']; });
+	mock.method(Account, 'updateOne', async (query, update) => { for (const [key, value] of Object.entries(update.$set)) { const field = key.replace('acquisition.', ''); if (!Fixture.account.acquisition[field]) Fixture.account.acquisition[field] = value; } });
+	mock.method(User, 'exists', () => Fixture.thenable(Fixture.user ? { _id: Fixture.user._id } : null));
+	mock.method(User, 'findOneAndUpdate', (filter, update) => { if (update.$unset?.email_confirm_by && Fixture.user) Fixture.user.email_confirm_by = undefined; return Fixture.query(Fixture.user); });
+	mock.method(Ticket, 'exists', () => Fixture.thenable(null));
+	mock.method(Ticket, 'deleteMany', async () => ({}));
+	mock.method(Member, 'findOne', () => Fixture.query(Fixture.owner ? { account: 'synthetic-account', user: Fixture.user?._id, role: 'owner' } : null));
 	mock.method(Member, 'create', async rows => rows);
 	mock.method(Member, 'exists', async () => Fixture.owner);
 	mock.method(Ticket, 'create', async rows => { Fixture.ticket = rows[0]; return rows; });
@@ -107,22 +113,24 @@ test('Ads are restricted to canonical hosted production and attribution is allow
 	assert.equal(Account.schema.path('acquisition').options.select, false);
 });
 
-test('signup carries attribution through confirmation, strips tokens, and acknowledges only the owner once', async () => {
+test('signup gives instant access and records the conversion only after email confirmation', async () => {
 	const signup = await Fixture.http('/signup?gclid=synthetic-click&utm_source=google&email=private%40example.test');
 	assert.equal(signup.status, 200);
 	const csrf = signup.text.match(/name="csrf-token" content="([^"]+)"/)[1];
 	assert.doesNotMatch(signup.text, /googletagmanager|signup-conversion\.js/);
 	const submitted = await Fixture.http('/auth/signup', { email: 'synthetic@example.test', name: 'Synthetic' }, csrf);
 	assert.equal(submitted.status, 200, submitted.text);
-	assert.equal(Fixture.account, null, 'submitting signup must not create a conversion');
-	assert.deepEqual(Fixture.ticket.data.acquisition, { gclid: 'synthetic-click', utm_source: 'google' });
-	const reread = mock.method(User, 'findById', () => Fixture.query(null));
-	const callback = await Fixture.http('/auth/callback?token=synthetic-email-token');
-	reread.mock.restore();
-	assert.equal(callback.headers.location, '/auth/confirmed');
-	assert.equal(callback.headers['referrer-policy'], 'no-referrer');
+	assert.equal(JSON.parse(submitted.text).redirect, '/', 'a new address is signed in immediately');
+	assert.ok(Fixture.user.email_confirm_by > new Date(Date.now() + 86000000));
 	const id = Fixture.account.acquisition.transaction_id;
 	assert.match(id, /^typerelay-signup-[a-f0-9-]+$/);
+	assert.deepEqual({ ...Fixture.account.acquisition, transaction_id: undefined }, { gclid: 'synthetic-click', utm_source: 'google', transaction_id: undefined }, 'no conversion before confirmation');
+	assert.equal(Fixture.ticket.kind, 'email-confirm');
+	const page = await Fixture.http('/auth/confirm-email?token=synthetic-email-token');
+	assert.equal(page.status, 200); assert.equal(page.headers['referrer-policy'], 'no-referrer'); assert.ok(Fixture.ticket, 'opening the link alone must not confirm');
+	const callback = await Fixture.http('/auth/confirm-email', { token: 'synthetic-email-token' }, page.text.match(/name="csrf-token" content="([^"]+)"/)[1]);
+	assert.equal(JSON.parse(callback.text).redirect, '/auth/confirmed');
+	assert.equal(Fixture.user.email_confirm_by, undefined);
 	assert.ok(Fixture.account.acquisition.confirmed_at instanceof Date);
 	const clean = await Fixture.http('/auth/confirmed?token=synthetic-email-token&email=private%40example.test');
 	assert.equal(clean.headers.location, '/auth/confirmed?gclid=synthetic-click');

@@ -13,6 +13,7 @@ import { mongoose, User, Account, Ticket, Member, Passkey, Device, SignupNotific
 import { Support } from '../services/support.js';
 import { Auth } from '../services/auth.js';
 import { Security } from '../services/security.js';
+import { AdminAccounts } from '../services/admin_accounts.js';
 import { SignupNotifications } from '../services/signup_notifications.js';
 import { Team } from '../services/team.js';
 import { Billing } from '../services/billing.js';
@@ -22,9 +23,9 @@ import { ApiRateLimit } from '../rate_limit.js';
 const limiterStores = [];
 
 class Browser {
-	cookie = ''; csrf = ''; account = '';
+	cookie = ''; csrf = ''; account = ''; ip = '';
 	async call(path, method = 'GET', body) {
-		const response = await fetch(Fixture.origin + path, { method, redirect: 'manual', headers: { Cookie: this.cookie, 'Content-Type': 'application/json', 'X-CSRF-Token': this.csrf, 'X-Account-Id': this.account }, body: body ? JSON.stringify(body) : undefined });
+		const response = await fetch(Fixture.origin + path, { method, redirect: 'manual', headers: { ...(this.ip ? { 'X-Forwarded-For': this.ip } : {}), Cookie: this.cookie, 'Content-Type': 'application/json', 'X-CSRF-Token': this.csrf, 'X-Account-Id': this.account }, body: body ? JSON.stringify(body) : undefined });
 		if (response.headers.get('set-cookie')) this.cookie = response.headers.get('set-cookie').split(';')[0];
 		return response;
 	}
@@ -55,9 +56,9 @@ class Fixture {
 		const browser = new Browser();
 		await browser.page();
 		const email = randomUUID() + '@example.test';
-		await browser.json('/auth/signup', 'POST', { name: 'Original Name', email });
-		const mail = Fixture.mails.findLast(mail => mail.to === email);
-		await browser.call(Fixture.mailUrl(mail).pathname + Fixture.mailUrl(mail).search);
+		assert.equal((await browser.json('/auth/signup', 'POST', { name: 'Original Name', email })).redirect, '/');
+		// Confirm directly: the shared sign-in limiter allows few requests per suite.
+		await User.updateOne({ email }, { $unset: { email_confirm_by: 1 } });
 		await browser.page();
 		return { browser, email, user: await User.findOne({ email }).lean() };
 	}
@@ -205,6 +206,49 @@ test('team admins directly add new or existing users without replacing existing 
 	assert.equal(linked.temporary_password, undefined); assert.equal(linked.member.profile.name, 'Existing User');
 	assert.ok(await bcrypt.compare(existingPassword.password, (await User.findById(existing._id).select('+password').lean()).password));
 });
+test('unconfirmed signups get access, confirm once through the form, and existing addresses get no session', async () => {
+	// A separate client address keeps these requests out of the suite's shared sign-in limit.
+	const browser = Object.assign(new Browser(), { ip: '203.0.113.10' }); await browser.page(); const email = randomUUID() + '@example.test';
+	assert.equal((await browser.json('/auth/signup', 'POST', { name: 'Pending', email })).redirect, '/');
+	await browser.page(); assert.ok(browser.account, 'signed in without confirming');
+	let user = await User.findOne({ email }).lean(); assert.ok(user.email_confirm_by > new Date(Date.now() + 86000000));
+	assert.deepEqual(await browser.json('/api/v2/email-confirmation'), { email, confirmed: false, confirm_by: user.email_confirm_by.toISOString() });
+	await browser.json('/api/v2/email-confirmation', 'POST', {}, 429);
+	await browser.json('/api/v2/team/invitations', 'POST', { email: randomUUID() + '@example.test' }, 403);
+	const link = Fixture.mailUrl(Fixture.mails.findLast(mail => mail.to === email && /Confirm your Type Relay email/.test(mail.subject)));
+	assert.equal(link.pathname, '/auth/confirm-email');
+	assert.equal((await browser.call(link.pathname + link.search)).status, 200); assert.ok((await User.findById(user._id).lean()).email_confirm_by, 'GET alone never confirms');
+	const confirmed = await Auth.confirmSignup(link.searchParams.get('token'));
+	assert.equal(confirmed.user, String(user._id)); assert.equal((await User.findById(user._id).lean()).email_confirm_by, undefined);
+	await assert.rejects(Auth.confirmSignup(link.searchParams.get('token')), /expired or already used/);
+	assert.equal((await browser.json('/api/v2/email-confirmation')).confirmed, true);
+	await assert.rejects(Auth.sendConfirmation({ _id: user._id }), /already confirmed/);
+	const existing = Object.assign(new Browser(), { ip: '203.0.113.11' }); await existing.page();
+	assert.match((await existing.json('/auth/signup', 'POST', { name: 'Intruder', email })).message, /Check your email/);
+	assert.equal((await existing.call('/api/v2/libraries')).status, 403, 'an existing address never receives a session');
+	// A magic link proves the address too.
+	const pending = randomUUID() + '@example.test'; const created = await Auth.signup(pending, 'Magic', undefined);
+	await Auth.login(pending); const magic = Fixture.mailUrl(Fixture.mails.findLast(mail => mail.to === pending && /Sign in/.test(mail.subject)));
+	await Auth.consume(magic.searchParams.get('token'));
+	assert.equal((await User.findById(created._id).lean()).email_confirm_by, undefined);
+});
+
+test('unconfirmed signups are purged silently after the deadline; confirmed and team users stay', async () => {
+	const make = async (label, confirmed) => { const user = await Auth.signup(randomUUID() + '@example.test', label, undefined); if (confirmed) await User.updateOne({ _id: user._id }, { $unset: { email_confirm_by: 1 } }); return user; };
+	const [expired, confirmed, joined, fresh] = [await make('Expired'), await make('Confirmed', true), await make('Joined'), await make('Fresh')];
+	const other = await Account.create({ name: 'Other team' }); await Member.create({ account: other._id, user: joined._id, role: 'member' });
+	await User.updateMany({ _id: { $in: [expired._id, joined._id] } }, { $set: { email_confirm_by: new Date(Date.now() - 1000) } });
+	const summary = await AdminAccounts.expireUnconfirmed();
+	assert.ok(summary.deleted >= 1 && summary.kept >= 1);
+	const marked = await User.findById(expired._id).lean(); assert.ok(marked.deletion.requested_at); assert.equal(marked.deletion.silent, true);
+	const owned = await Member.findOne({ user: expired._id, role: 'owner' }).lean(); assert.ok((await Account.findById(owned.account).lean()).deletion.requested_at);
+	assert.equal((await User.findById(joined._id).lean()).email_confirm_by, undefined, 'a user in another team keeps the account');
+	for (const user of [confirmed, fresh]) assert.equal((await User.findById(user._id).lean()).deletion?.requested_at, undefined);
+	for (let index = 0; index < 5 && await User.exists({ _id: expired._id }); index++) await AdminAccounts.recover();
+	assert.equal(await User.exists({ _id: expired._id }), null);
+	assert.equal(await Ticket.exists({ kind: 'deletion-complete', email: marked.email }), null, 'no deletion email for an unconfirmed address');
+});
+
 test('signup, generated password, password login, OAuth continuation and recovery', async () => {
 	const { browser, email, user } = await Fixture.account();
 	await browser.tokens();
