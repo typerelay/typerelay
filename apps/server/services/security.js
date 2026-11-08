@@ -405,6 +405,7 @@ export class Security {
 		app.get('/login', (req, res) => res.render('login'));
 		app.get('/signup', (req, res) => {
 			if (req.boundAccount) return res.redirect(new URL('/signup', Auth.origin).toString());
+			if (typeof req.query.return_to === 'string' && req.query.return_to.startsWith('/oauth/authorize?')) req.session.return_to = req.query.return_to;
 			if (Auth.adsEnabled(req)) {
 				const attribution = Auth.attribution(req.query);
 				if (Object.keys(attribution).length) req.session.signupAttribution = { ...attribution, captured_at: Date.now() };
@@ -414,7 +415,7 @@ export class Security {
 		app.post('/auth/signup', limit, async (req, res) => {
 			Support.assert(Security.signupEnabled(), 'Signup is disabled', 403); Support.assert(!req.boundAccount, 'Create accounts at app.typerelay.com', 403);
 			const acquisition = Auth.adsEnabled(req) && req.session.signupAttribution?.captured_at > Date.now() - 30 * 86400000 ? Auth.attribution(req.session.signupAttribution) : undefined;
-			await Auth.login(Security.email(req.body.email), req.body.name, { acquisition });
+			await Auth.login(Security.email(req.body.email), req.body.name, { acquisition, return_to: req.session.return_to?.startsWith('/oauth/authorize?') ? req.session.return_to : undefined });
 			res.json({ message: 'Check your email to finish creating your account.' });
 		});
 		app.post('/auth/password', limit, async (req, res) => res.json(await Security.passwordLogin(req)));
