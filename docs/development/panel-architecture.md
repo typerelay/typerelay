@@ -1,3 +1,8 @@
+---
+title: "TypeRelay desktop panel architecture"
+description: "Desktop panel search, native insertion, clipboard ownership, and verification across Linux, macOS, and Windows."
+---
+
 # TypeRelay desktop panel architecture
 
 Ctrl+Shift+Semicolon opens the panel. Left-click the T icon to search; right-click for Sync now, Settings, Check for updates and Quit. Closing the panel hides it; Quit stops only the panel, not Omarchy's expansion service. Settings controls the shortcut and launch at login, plus browser connection and explicitly selected local-library enrollment.
@@ -12,7 +17,7 @@ The panel uses a shared local Pug/JavaScript UI in Tauri. Linux reads Omarchy th
 
 The original window is captured before showing the panel. The background target cache is used only when the foreground belongs to the panel/tray itself. A failed capture from a different application never falls back to an unrelated earlier target. After restoring focus, the adapter verifies identity again. Native focus and keyboard APIs are not one atomic OS operation; external focus changes can still race with input, so each platform needs real application testing.
 
-Clipboard data is temporarily replaced, then restored only while TypeRelay's unique ownership marker remains. Linux preserves existing MIME types via the engine's helper. Windows materializes movable clipboard formats through OLE, then checks/restores while holding the clipboard lock; unreadable RDP clipboard data uses the documented replacement fallback. macOS checks the pasteboard marker. No source commands or variables are evaluated.
+Linux publishes the snippet once and leaves it on the clipboard until another copy replaces it. The relay and panel share the original request deadline. Before the helper reports readiness, the worker stops and reaps it if preparation is cancelled or reaches its two-second limit or the request deadline, whichever comes first. The compositor may already have received the selection request at that point. After readiness, the helper serves the clipboard independently of the paste job. macOS and Windows temporarily replace clipboard data and restore it only while they retain ownership. Windows materializes movable clipboard formats through OLE, then checks/restores while holding the clipboard lock; unreadable RDP clipboard data uses the documented replacement fallback. macOS checks the pasteboard marker. No source commands or variables are evaluated.
 
 ## Configuration and storage
 
@@ -43,6 +48,6 @@ Windows Notepad and PowerShell pass direct expansion plus keyboard and one-click
 3. Press Ctrl+Shift+Semicolon from a browser field, text editor, notes app and terminal. Search, use arrows, press Enter: exactly one insertion into the originating window. Test multiline text, tabs, Unicode and snippets without abbreviations.
 4. Open from a window on each monitor, including different display scales. Confirm centering and original-window restoration.
 5. Test Escape, outside-click dismissal, closed target windows, permission denial and shortcut conflicts. No insertion into another app after a reported failure.
-6. Copy rich text before insertion and check restoration afterward. Copy something new while insertion finishes and verify that newer copy survives. Unsupported clipboard formats must produce an error before replacement.
+6. On Linux, verify that clipboard-based insertion leaves the snippet on the clipboard and that completion or cancellation does not overwrite a later copy. On macOS and Windows, copy rich text before insertion and check restoration afterward. Copy something new while insertion finishes and verify that newer copy survives. Unsupported clipboard formats must produce an error before replacement on platforms that require preservation.
 7. Change shortcut; confirm the old one stops working. Toggle launch at login; restart the session. Launch again while running: only one instance. Uninstall: startup entry gone, snippet data preserved.
 8. Launch **TypeRelay TUI** from the macOS menu/Settings or Windows Start, edit a snippet, sync, and confirm the panel and web app show the same revision. Windows uninstall must remove the TUI shortcut while preserving the local database.

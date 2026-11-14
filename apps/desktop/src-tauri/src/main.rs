@@ -531,7 +531,7 @@ fn main() {
     if std::env::args().any(|a|a=="--quit") {if let Ok(root)=typerelay_client::panel_ipc::PanelIpc::directory()&& let Ok(socket)=std::os::unix::net::UnixDatagram::unbound(){let _=socket.send_to(b"quit",root.join("events.sock"));}return;}
 
     #[cfg(target_os="linux")]
-    if std::env::args().any(|a|a=="clipboard-serve") {let _=typerelay_client::clipboard::PasteJob::serve_restored();return;}
+    if std::env::args().any(|a|a=="clipboard-serve") {let _=typerelay_client::clipboard::PasteJob::serve_clipboard();return;}
 	let builder=tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app,args,_|{#[cfg(any(target_os="windows",target_os="macos"))]if observation::Observation::diagnostics_response(app,&args){return;}let callback=Runtime::receive_callback(&args);if args.iter().any(|arg|arg=="--uninstall"){let _=app.autolaunch().disable();Runtime::quit(app);}else if args.iter().any(|arg|arg=="--quit"){Runtime::quit(app);}else if args.iter().any(|arg|arg=="--tui"){if let Err(error)=platform::open_tui(){Runtime::notice(app,&error.to_string(),true);}}else if !callback&&!args.iter().any(|arg|arg=="--background"){Runtime::open(app,false);}})).plugin(tauri_plugin_deep_link::init()).plugin(tauri_plugin_autostart::Builder::new().args(["--background"]).build()).plugin(tauri_plugin_dialog::init()).plugin(tauri_plugin_updater::Builder::new().build());
     #[cfg(not(target_os="linux"))]
     let builder=builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());

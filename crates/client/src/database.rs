@@ -117,7 +117,7 @@ impl Database {
 		let matched:Vec<String>=ids.iter().filter_map(Value::as_str).filter(|id|remotes.iter().any(|remote|remote["_id"]==*id)).map(str::to_owned).collect();
 		if matched.is_empty(){return Ok(());}
 		let backup=self.directory.parent().context("Missing configuration directory")?.join("backups").join(format!("reconnect-{}",Uuid::new_v4()));
-		fs::create_dir_all(&backup)?;self.connection.backup(rusqlite::MAIN_DB,backup.join("typerelay.sqlite"),None)?;
+		fs::create_dir_all(&backup)?;self.connection.backup(rusqlite::MAIN_DB,backup.join("typerelay.sqlite"),rusqlite::backup::NO_PROGRESS)?;
 		let transaction=rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?;
 		let mut moved=std::collections::BTreeSet::new();
 		if provenance {let mut bases=std::collections::BTreeMap::new();let mut locals=std::collections::BTreeMap::new();for library in &matched{let exists:bool=self.connection.query_row("SELECT EXISTS(SELECT 1 FROM base_libraries WHERE id=?1)",[library],|row|row.get(0))?;if !exists{continue;}let mut statement=self.connection.prepare("SELECT data FROM base_snippets WHERE library=?1")?;for text in statement.query_map([library],|row|row.get::<_,String>(0))?.collect::<std::result::Result<Vec<_>,_>>()?{let record:Value=serde_json::from_str(&text)?;if let Some(id)=record["id"].as_str(){bases.insert(id.to_owned(),(library.clone(),record));}}for record in self.records(library)?{if let Some(id)=record["id"].as_str(){locals.insert(id.to_owned(),(library.clone(),record));}}}for (id,(source,base)) in &bases{let Some((destination,local))=locals.get(id).filter(|(_,record)|Self::sync_value(record).is_some())else{continue;};if source==destination{continue;}let mut item=json!({"id":id,"base_revision":base["revision"]});if Self::sync_value(base)!=Self::sync_value(local){item["value"]=Self::sync_value(local).unwrap();}self.queue(&json!({"kind":"batch","library":source,"records":[base],"body":{"operation_id":Uuid::new_v4().to_string(),"action":"move","source_library":source,"destination_library":destination,"items":[item]}}))?;moved.insert(id.clone());}}
@@ -1233,7 +1233,14 @@ mod tests {
 		db.apply(&json!({"libraries":[original],"accessible":[id]}),None).unwrap();db.connection.execute("UPDATE libraries SET synced=0 WHERE id=?1",[id]).unwrap();db.set_meta("detached",&json!({"server":"https://app.example.test","account":"account-one","libraries":[id]})).unwrap();
 		let file=db.editor("Mine").unwrap();db.edit(&file,Some(0),Some(Fixture::entry("one","Local one"))).unwrap();assert!(db.pending().unwrap().is_empty());
 		let remote=json!({"_id":id,"name":"Mine","revision":4,"state":"active","permissions":{"read":true,"edit":true,"manage":true},"records":[{"id":"snippet-0000000001","trigger":"one","title":"","content":{"version":1,"type":"plain_text","text":"One"},"revision":1,"state":"active","position":0},{"id":"snippet-0000000002","trigger":"two","title":"","content":{"version":1,"type":"plain_text","text":"Server two"},"revision":2,"state":"active","position":1}]});let response=json!({"libraries":[remote],"accessible":[id],"cursor":4});
-		db.reconcile_detached(&response,"https://app.example.test",Some("account-one")).unwrap();assert_eq!(db.pending().unwrap().len(),1);let backup=PathBuf::from(db.meta("last_reconnect_backup").unwrap().unwrap().as_str().unwrap());assert!(backup.join("typerelay.sqlite").is_file());
+		db.reconcile_detached(&response,"https://app.example.test",Some("account-one")).unwrap();assert_eq!(db.pending().unwrap().len(),1);let backup=PathBuf::from(db.meta("last_reconnect_backup").unwrap().unwrap().as_str().unwrap());
+		let restored=Database::open(&backup).unwrap();
+		let integrity:String=restored.connection.query_row("PRAGMA integrity_check",[],|row|row.get(0)).unwrap();
+		assert_eq!(integrity,"ok");
+		let entries=restored.editor("Mine").unwrap().entries;
+		assert_eq!(entries[0].replace,"Local one");
+		assert_eq!(entries[1].replace,"Two");
+		assert!(restored.pending().unwrap().is_empty());
 		db.apply(&response,None).unwrap();let entries=db.editor("Mine").unwrap().entries;assert_eq!(entries[0].replace,"Local one");assert_eq!(entries[1].replace,"Server two");
 	}
 	#[test]

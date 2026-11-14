@@ -273,6 +273,12 @@ impl Session {
         bail!("Unsupported replacement character")
     }
 
+    fn finish_clipboard_strokes(insertion: &mut VecDeque<Vec<InputEvent>>, sent: bool) -> bool {
+        let complete = sent && insertion.is_empty();
+        insertion.clear();
+        complete
+    }
+
     fn inject(expansion: &Expansion, terminal_paste: Option<bool>) -> Result<VecDeque<Vec<InputEvent>>> {
         let mut strokes = VecDeque::new();
         for _ in 0..expansion.erase { strokes.push_back(Self::stroke(KeyCode::KEY_BACKSPACE, false)); }
@@ -421,7 +427,7 @@ impl Session {
                         capture.reset();engine.feed(Input::Cancel); last_input=Instant::now();
                         if let Some(wait)=&mut template_wait {wait.deadline=Instant::now()+Duration::from_secs(5);}
                         match request.step {
-							typerelay_client::clipboard_payload::ClipboardStep::Payload(payload) if !payload.plain.is_empty()||payload.html.is_some()=>{let text=payload.plain.clone();let cursor=payload.cursor.clone();paste=Some(PasteState{job:PasteJob::start_payload(payload),expansion:Expansion{identity:None,template:None,erase:request.erase,text},target:Some(request.target),reply:Some(request.reply),generation:*input_generation,started:false,sent:false,cancelled:false,restore_space:false,confirm_enter:false,cursor,cursor_remaining:None});}
+							typerelay_client::clipboard_payload::ClipboardStep::Payload(payload) if !payload.plain.is_empty()||payload.html.is_some()=>{let text=payload.plain.clone();let cursor=payload.cursor.clone();paste=Some(PasteState{job:PasteJob::start_payload(payload, request.completion_deadline),expansion:Expansion{identity:None,template:None,erase:request.erase,text},target:Some(request.target),reply:Some(request.reply),generation:*input_generation,started:false,sent:false,cancelled:false,restore_space:false,confirm_enter:false,cursor,cursor_remaining:None});}
                             step => {
                                 if let Some(wait)=&mut template_wait {wait.started=true;}
                                 for _ in 0..request.erase { output.emit(&Self::stroke(KeyCode::KEY_BACKSPACE,false))?; }
@@ -449,7 +455,7 @@ impl Session {
                     thread::sleep(Duration::from_millis(1));continue;
                 } else {
                 match state.job.progress.try_recv() {
-                    Ok(Ok(Progress::Ready)) if !state.cancelled && Self::target()? == state.target && !context.changed(state.target.as_deref())? => {
+                    Ok(Ok(Progress::Ready)) if !state.cancelled && !state.job.timed_out() && Self::target()? == state.target && !context.changed(state.target.as_deref())? => {
                         let active = Hyprland::query("activewindow")?;
                         let terminal = Hyprland::is_terminal(&active);
                         insertion = Self::inject(&state.expansion, Some(terminal))?;
@@ -457,10 +463,18 @@ impl Session {
                         state.started = true;
                     }
                     Ok(Ok(Progress::Ready)) => { state.cancelled = true; state.job.cancel(); }
-                    Ok(Ok(Progress::Finished)) => { if let Some(cursor)=state.cursor.take()&&state.sent&&!state.cancelled {if state.generation!=*input_generation||Self::target()?!=state.target {state.cancelled=true;} else {match Hyprland::position_cursor(state.target.as_deref().unwrap_or_default(),&state.expansion.text,cursor.utf16,cursor_discovery,||Ok(Self::target()?==state.target&&!context.changed(state.target.as_deref())?)) {Ok(true)=>{if std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some(){eprintln!("Cursor positioned directly");}state.cursor_remaining=Some(0);continue;},Ok(false)=>{state.cursor_remaining=Some(cursor.backward_graphemes);continue;},Err(error)=>{eprintln!("Cursor positioning cancelled: {error:#}");state.cancelled=true;}}}} if state.confirm_enter&&state.sent&&!state.cancelled&&state.generation==*input_generation&&Self::target()?==state.target&&!context.changed(state.target.as_deref())? {output.emit(&Self::stroke(KeyCode::KEY_ENTER,false))?;} if state.sent && !state.cancelled && state.reply.is_none() { Self::record_usage(&state.expansion); } if let Some(reply) = state.reply.take() { let _ = reply.send(if state.sent && !state.cancelled { Ok(state.generation) } else { Err("Insertion cancelled; nothing retried".into()) }); } paste = None; continue; }
-                    Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    Ok(Ok(Progress::Finished)) => { state.sent = Self::finish_clipboard_strokes(&mut insertion, state.sent); if let Some(cursor)=state.cursor.take()&&state.sent&&!state.cancelled {if state.generation!=*input_generation||Self::target()?!=state.target {state.cancelled=true;} else {match Hyprland::position_cursor(state.target.as_deref().unwrap_or_default(),&state.expansion.text,cursor.utf16,cursor_discovery,||Ok(Self::target()?==state.target&&!context.changed(state.target.as_deref())?)) {Ok(true)=>{if std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some(){eprintln!("Cursor positioned directly");}state.cursor_remaining=Some(0);continue;},Ok(false)=>{state.cursor_remaining=Some(cursor.backward_graphemes);continue;},Err(error)=>{eprintln!("Cursor positioning cancelled: {error:#}");state.cancelled=true;}}}} if state.confirm_enter&&state.sent&&!state.cancelled&&state.generation==*input_generation&&Self::target()?==state.target&&!context.changed(state.target.as_deref())? {output.emit(&Self::stroke(KeyCode::KEY_ENTER,false))?;} if state.sent && !state.cancelled && state.reply.is_none() { Self::record_usage(&state.expansion); } if let Some(reply) = state.reply.take() { let _ = reply.send(if state.sent && !state.cancelled { Ok(state.generation) } else { Err("Insertion cancelled; nothing retried".into()) }); } paste = None; continue; }
+                    failure @ (Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
                         eprintln!("Clipboard paste failed; no automatic retry");
+                        if let Some(reply) = &state.reply {
+                            let message = match failure {
+                                Ok(Err(error)) if !state.started => format!("{error}; no automatic retry"),
+                                _ => "Clipboard paste failed; no automatic retry".into(),
+                            };
+                            let _ = reply.send(Err(message));
+                        }
                         if state.restore_space && state.reply.is_none() && !state.started && !state.cancelled && Self::target()? == state.target { for event in Self::stroke(KeyCode::KEY_SPACE, false) { output.emit(&[event])?; } }
+                        insertion.clear();
                         paste = None;
                         continue;
                     }
@@ -469,12 +483,12 @@ impl Session {
                 if state.job.timed_out() {
                     eprintln!("Clipboard paste timed out; releasing buffered typing");
                     state.job.cancel();
+                    if let Some(reply) = &state.reply { let _ = reply.send(Err("Clipboard paste timed out; no automatic retry".into())); }
                     insertion.clear();
                     paste = None;
                     continue;
                 }
                 if insertion.is_empty() {
-                    if state.started && !state.sent { state.job.pasted(); state.sent = true; }
                     thread::sleep(Duration::from_millis(1));
                     continue;
                 }
@@ -482,10 +496,14 @@ impl Session {
             }
             if !insertion.is_empty() {
                 if last_stroke.elapsed() >= Duration::from_millis(2) {
+                    if paste.as_ref().is_some_and(|state| state.job.timed_out()) { continue; }
                     if let Some(stroke) = insertion.pop_front() {
                         for event in stroke { output.emit(&[event])?; }
                     }
-                    if insertion.is_empty() && let Some(expansion)=usage.take() { Self::record_usage(&expansion); }
+                    if insertion.is_empty() {
+                        if let Some(state) = &mut paste { state.job.pasted(); state.sent = true; }
+                        if let Some(expansion) = usage.take() { Self::record_usage(&expansion); }
+                    }
                     last_stroke = Instant::now();
                 }
                 thread::sleep(Duration::from_millis(1));
@@ -585,6 +603,15 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn clipboard_finish_discards_any_unsent_strokes() {
+        let expansion = Expansion { identity:None, template:None, erase:2, text:"replacement".into() };
+        let mut insertion = Session::inject(&expansion, Some(false)).unwrap();
+        assert_eq!(insertion.len(), 3);
+        assert!(!Session::finish_clipboard_strokes(&mut insertion, false));
+        assert!(insertion.pop_front().is_none());
+        assert!(Session::finish_clipboard_strokes(&mut insertion, true));
+    }
     #[test]
     fn all_delimiters_match_and_repeated_or_modified_delimiters_cancel() {
         for key in [KeyCode::KEY_SPACE,KeyCode::KEY_ENTER,KeyCode::KEY_KPENTER] {

@@ -4,13 +4,13 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{io::{Read,Write}, collections::BTreeMap};
 use crate::clipboard_payload::ClipboardStep;
-use std::{fs, os::unix::{fs::PermissionsExt, net::{UnixDatagram,UnixListener,UnixStream}}, path::PathBuf, sync::{Arc, atomic::{AtomicBool, Ordering}, mpsc}, time::Duration};
+use std::{fs, os::unix::{fs::PermissionsExt, net::{UnixDatagram,UnixListener,UnixStream}}, path::PathBuf, sync::{Arc, atomic::{AtomicBool, Ordering}, mpsc}, time::{Duration, Instant}};
 
 #[derive(Serialize, Deserialize)]
 pub struct Request { pub hit: Hit, pub target: String, pub created_ms: u128, #[serde(default)] pub values: BTreeMap<String,String>, #[serde(default)] pub clock:Option<(i64,i32)>, #[serde(default)] pub generation:Option<u64>, #[serde(default)] pub erase: usize, #[serde(default)] pub prepare: bool, #[serde(default)] pub confirm_enter:bool }
 #[derive(Serialize,Deserialize)]
 pub struct Prompt { pub hit: Hit, pub target: String, pub erase: usize, pub generation:u64, pub created_ms:u128, #[serde(default)] pub confirm_enter:bool }
-pub struct Insertion { pub deadline: std::time::Instant, pub step: ClipboardStep, pub erase: usize, pub generation: Option<u64>, pub target: String, pub reply: mpsc::Sender<std::result::Result<u64, String>> }
+pub struct Insertion { pub deadline: Instant, pub completion_deadline: Instant, pub step: ClipboardStep, pub erase: usize, pub generation: Option<u64>, pub target: String, pub reply: mpsc::Sender<std::result::Result<u64, String>> }
 pub struct PanelPresence(PathBuf);
 impl Drop for PanelPresence { fn drop(&mut self) { let _=fs::remove_file(&self.0); } }
 #[derive(Clone,Default,Serialize,Deserialize)]
@@ -95,8 +95,10 @@ impl PanelIpc {
             Panel::content(&Paths::config_dir()?.join("snippets"),hit)?;
             let (reply, wait)=mpsc::channel();
             let marked=matches!(&step,ClipboardStep::Payload(payload) if payload.cursor.is_some());
-            tx.try_send(Insertion { deadline: std::time::Instant::now()+Duration::from_secs(2), step, erase: if index == 0 {erase} else {0}, generation:expected_generation, target:target.into(), reply }).context("Expansion service is busy")?;
-            expected_generation=Some((if marked{wait.recv().context("Insertion service stopped; no automatic retry")}else{wait.recv_timeout(Duration::from_secs(5)).context("Insertion timed out; no automatic retry")})?.map_err(anyhow::Error::msg)?);
+            let queued = Instant::now();
+            let completion_deadline = queued + Duration::from_secs(5);
+            tx.try_send(Insertion { deadline: queued + Duration::from_secs(2), completion_deadline, step, erase: if index == 0 {erase} else {0}, generation:expected_generation, target:target.into(), reply }).context("Expansion service is busy")?;
+            expected_generation=Some((if marked{wait.recv().context("Insertion service stopped; no automatic retry")}else{wait.recv_timeout(completion_deadline.saturating_duration_since(Instant::now())).context("Insertion timed out; no automatic retry")})?.map_err(anyhow::Error::msg)?);
         }
         if record_usage { Panel::record_usage(&Paths::config_dir()?.join("snippets"),hit,"insert","desktop",characters); }
         Ok(())

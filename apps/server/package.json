@@ -6,7 +6,7 @@
   "engines": {
     "node": ">=24"
   },
-  "packageManager": "pnpm@12.0.0",
+  "packageManager": "pnpm@12.18.0",
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning --import @typerelay/observability/register scripts/start.js",
     "stripe:provision": "node scripts/provision-stripe.js",

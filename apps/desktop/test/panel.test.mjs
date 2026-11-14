@@ -101,9 +101,9 @@ test('keyboard selection saves any device and preserves the settings form and se
  }finally{f.dom.window.close();}
 });
 
-test('search has no magnifier or reserved left icon space',async()=>{
+test('search has no magnifier, reserved left icon space or title bar shortcut badge',async()=>{
  const f=await Fixture.create();try{
-  const document=f.dom.window.document;assert.equal(document.querySelector('.search-icon'),null);f.panel.query.value='meeting';f.panel.query.focus();f.panel.render();assert.equal(document.querySelector('#clear-search').hidden,false);assert.equal(f.dom.window.getComputedStyle(f.panel.query).paddingLeft,'0.85rem');document.querySelector('#clear-search').click();assert.equal(document.querySelector('.search-icon'),null);assert.equal(document.activeElement,f.panel.query);
+  const {document,getComputedStyle}=f.dom.window;assert.equal(document.querySelector('.search-icon,.shortcut-key'),null);f.panel.query.value='meeting';f.panel.query.focus();f.panel.render();assert.equal(document.querySelector('#clear-search').hidden,false);assert.ok(Math.abs(parseFloat(getComputedStyle(f.panel.query).paddingLeft)-parseFloat(getComputedStyle(document.documentElement).fontSize)*0.85)<0.01);document.querySelector('#clear-search').click();assert.equal(document.querySelector('.search-icon'),null);assert.equal(document.activeElement,f.panel.query);
  }finally{f.dom.window.close();}
 });
 
@@ -351,6 +351,7 @@ for(const os of ['macos','windows','linux'])test(`${os} native sync events updat
 
 test('Sync settings retain synced libraries and reconcile only changed rows after sync',async()=>{
  const f=await Fixture.create();try{
+  await f.panel.settings(true);f.panel.settingsPage('sync');
   let rows=[{id:'remote',name:'mysnippets.yml',synced:true,snippets:67},{id:'local',name:'test',synced:false,snippets:2}];
   const original=f.panel.invoke;f.panel.invoke=async(name,args)=>name==='libraries'?structuredClone(rows):original(name,args);
   await f.panel.refreshLibraries();
@@ -512,15 +513,6 @@ test('desktop recovery list copies content and dismisses one item without reload
   assert.equal(f.calls.findLast(call=>call.name==='dismiss_recovery').args.id,'one');assert.equal(section.querySelector('[data-id="one"]'),null);assert.equal(section.querySelector('[data-id="two"]'),two);assert.match(document.querySelector('#recovery-count').textContent,/^1 rejected edit /);
  }finally{f.dom.window.close();}
 });
-
-test('search loupe is right aligned and title bar has no shortcut badge',async()=>{
- const f=await Fixture.create();try{
-  const style=f.dom.window.getComputedStyle(f.dom.window.document.querySelector('.search-icon'));
-  assert.equal(parseFloat(style.right),parseFloat(f.dom.window.getComputedStyle(f.dom.window.document.documentElement).fontSize)*0.85);assert.equal(style.left,'auto');
-  assert.equal(f.dom.window.document.querySelector('.shortcut-key'),null);
- }finally{f.dom.window.close();}
-});
-
 
 test('notification navigation opens the dedicated suggestions panel and Escape dismisses it',async()=>{
  const f=await Fixture.create();try{

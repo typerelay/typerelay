@@ -9,7 +9,7 @@ RUN cargo build --release --locked --bins
 RUN rustup target add wasm32-unknown-unknown && cargo build --release --locked -p typerelay-template-wasm --target wasm32-unknown-unknown
 
 FROM node:lts-trixie-slim AS workspace-dependencies
-RUN npm install -g pnpm@12.0.0
+RUN npm install -g pnpm@12.18.0
 WORKDIR /opt/typerelay
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml README.md ./
 COPY apps/server/package.json ./apps/server/package.json
@@ -44,7 +44,7 @@ ENV NODE_ENV=development
 CMD ["pnpm", "exec", "vite", "--host", "0.0.0.0", "--port", "5174", "--strictPort"]
 
 FROM node:lts-trixie-slim AS production
-RUN npm install -g pnpm@12.0.0
+RUN npm install -g pnpm@12.18.0
 RUN apt-get update && apt-get install -y --no-install-recommends libxkbcommon0 && rm -rf /var/lib/apt/lists/*
 ARG APP_VERSION=development
 ENV APP_VERSION=${APP_VERSION}

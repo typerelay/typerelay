@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Explicit live-desktop smoke test. Keep keyboard/mouse idle while this runs.
 
-Uses disposable GTK/browser/terminal windows; restores Espanso and prior focus.
+Uses disposable GTK/browser/terminal windows; leaves the last snippet on the clipboard.
+Restores Espanso and prior focus.
 Dependencies: Python GObject/GTK4, chromium, foot, temporary device ACLs.
 """
 import argparse
-import hashlib
 import http.server
 import json
 import os
@@ -157,8 +157,6 @@ class Smoke:
         espanso_status = subprocess.run(["espanso", "status"], capture_output=True, text=True) if shutil.which("espanso") else None
         espanso_running = espanso_status is not None and espanso_status.returncode == 0 and "is running" in espanso_status.stdout
         service = subprocess.run(["systemctl", "--user", "is-active", "typerelay"], capture_output=True).returncode == 0
-        clipboard = subprocess.run(["wl-paste", "--no-newline"], capture_output=True)
-        before_clipboard = (clipboard.returncode, hashlib.sha256(clipboard.stdout).hexdigest())
         server = None
         client = None
         with tempfile.TemporaryDirectory(prefix="typerelay-smoke-") as temporary:
@@ -199,9 +197,11 @@ class Smoke:
                 self.check(output, self.focus("TypeRelay Terminal Test"))
                 terminal.terminate()
                 terminal.wait(timeout=5)
-                clipboard = subprocess.run(["wl-paste", "--no-newline"], capture_output=True)
-                assert before_clipboard == (clipboard.returncode, hashlib.sha256(clipboard.stdout).hexdigest()), "Clipboard changed"
-                print("PASS clipboard unchanged", flush=True)
+                client.send_signal(signal.SIGINT)
+                client.wait(timeout=5)
+                clipboard = subprocess.check_output(["wl-paste", "--no-newline"], timeout=5)
+                assert clipboard == "First paragraph.\n\nSecond paragraph with a tab:\tCafé ☕\n".encode(), "Last snippet missing from clipboard"
+                print("PASS clipboard keeps last snippet after TypeRelay stops", flush=True)
             finally:
                 if client and client.poll() is None:
                     client.send_signal(signal.SIGINT)

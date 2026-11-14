@@ -96,7 +96,7 @@ Restart=on-failure
 RestartSec=3
 RestartPreventExitStatus=78
 KillSignal=SIGINT
-# The clipboard-restoration owner must survive stopping the main client.
+# The clipboard owner must survive stopping the main client.
 KillMode=process
 TimeoutStopSec=5
 NoNewPrivileges=true
