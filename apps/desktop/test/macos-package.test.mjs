@@ -23,10 +23,10 @@ test('macOS bundle stages the TUI for native and universal targets', async () =>
 	const css = await fs.readFile(path.join(root, 'apps/desktop/ui/panel.css'), 'utf8');
 	assert.match(css, /status-pill\{font-size:\.78rem;font-weight:650/);
 	assert.match(css, /status-pill\[data-allowed=true\]\{display:inline-block;color:#145c2e/);
-	assert.match(css, /shortcut-control\{width:21rem\}\.shortcut-control input\{width:13rem;flex:0 0 13rem\}/);
+	assert.match(css, /\.shortcut-control\{[^}]*flex-direction:column/);
 });
 
-test('macOS startup requests both permissions and offers settings and TUI launchers', async () => {
+test('macOS startup checks both permissions and offers settings and TUI launchers', async () => {
 	const main = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/main.rs'), 'utf8'); const shared = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/platform.rs'), 'utf8'); const platform = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/platform_macos.rs'), 'utf8'); const smoke = await fs.readFile(path.join(root, 'scripts/macos-typing-smoke.swift'), 'utf8'); const tray = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/tray.rs'), 'utf8');
 	assert.match(main, /Runtime::permissions\(\)/);
 	assert.doesNotMatch(main, /Runtime::permissions\(true\)/);
@@ -34,7 +34,7 @@ test('macOS startup requests both permissions and offers settings and TUI launch
 	assert.match(main, /--input-monitoring-status/);
 	assert.match(platform, /Enigo::new/);
 	assert.match(platform, /IOHIDCheckAccess/);
-	assert.doesNotMatch(platform, /IOHIDRequestAccess|CGRequestListenEventAccess|CGEventTapOptions::ListenOnly/);
+	assert.doesNotMatch(platform, /IOHIDRequestAccess|CGRequestListenEventAccess/);
 	assert.match(platform, /Privacy_Accessibility/);
 	assert.match(platform, /Privacy_ListenEvent/);
 	assert.match(main, /accessibility&&input_monitoring&&let Err\(error\)=Runtime::start_expansion/);
@@ -49,9 +49,7 @@ test('macOS startup requests both permissions and offers settings and TUI launch
 	assert.match(platform, /KeyCode::COMMAND,true/);
 	assert.match(platform, /KeyCode::COMMAND,false/);
 	assert.match(platform, /post_to_pid\(target\.pid\)/);
-	assert.match(platform, /CGEventTap::with_enabled/);
-	assert.match(platform, /CGEventTapOptions::Default/);
-	assert.match(platform, /CallbackResult::Drop/);
+	assert.match(platform, /impl ExpansionSession[^\n]*CGEventTap::with_enabled\([^\n]*CGEventTapOptions::Default[^\n]*CallbackResult::Drop/);
 	assert.match(main, /deferred\.finish\(&target\)/);
 	assert.match(platform, /CGEventTapLocation::HID/);
 	assert.match(platform, /CGEventType::KeyDown/);

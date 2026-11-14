@@ -25,7 +25,7 @@ test('excluded apps have a separate card within the same settings form without e
 
 test('app picker keeps drafts and stable rows, deduplicates identities, and cancels without saving',async()=>{
 	const f=await Fixture.create();try{
-		const document=f.dom.window.document;f.ui.setExclusions(['legacy-app'],{'legacy-app':'Legacy App'});const row=document.querySelector('#observation-exclusions').firstElementChild;const button=document.querySelector('#observation-choose-apps');button.focus();document.querySelector('#settings-view').scrollTop=40;document.querySelector('#observation-threshold').value='8';
+		const document=f.dom.window.document;document.querySelector('#settings-view').hidden=false;document.querySelector('#settings-suggestions').hidden=false;f.ui.setExclusions(['legacy-app'],{'legacy-app':'Legacy App'});const row=document.querySelector('#observation-exclusions').firstElementChild;const button=document.querySelector('#observation-choose-apps');button.focus();document.querySelector('#settings-view').scrollTop=40;document.querySelector('#observation-threshold').value='8';
 		f.panel.invoke=async(name,args)=>{f.calls.push({name,args});assert.equal(args.action,'pick-applications');return [{id:'Editor.exe',name:'My Editor'},{id:'EDITOR.EXE',name:'Duplicate'}];};await f.ui.chooseApps();
 		assert.equal(f.ui.exclusions.size,2);assert.equal(document.querySelector('#observation-exclusions').firstElementChild,row);assert.equal(document.activeElement,button);assert.equal(document.querySelector('#observation-threshold').value,'8');assert.equal(document.querySelector('#settings-view').scrollTop,40);assert.equal(f.calls.length,1);
 		f.panel.invoke=async()=>[];await f.ui.chooseApps();assert.equal(f.ui.exclusions.size,2);
@@ -54,7 +54,7 @@ test('late snapshots cannot overwrite exclusion edits and late picker results ca
 
 test('suggestion updates preserve node, draft, focus and scroll; stale events cannot resurrect deletions',async()=>{
 	const f=await Fixture.create();try{
-		f.ui.change(Fixture.change(Fixture.row()));const node=f.ui.list.firstElementChild;const button=node.querySelector('.suggestion-create');button.focus();f.ui.list.scrollTop=37;
+		f.dom.window.document.querySelector('#suggestions-view').hidden=false;f.ui.change(Fixture.change(Fixture.row()));const node=f.ui.list.firstElementChild;const button=node.querySelector('.suggestion-create');button.focus();f.ui.list.scrollTop=37;
 		f.ui.change(Fixture.change({...Fixture.row('one',6),count:5}));assert.equal(f.ui.list.firstElementChild,node);assert.equal(f.dom.window.document.activeElement,button);assert.equal(f.ui.list.scrollTop,37);
 		f.ui.change({epoch:1,change:{id:'one',revision:7,candidate:null}});f.ui.change(Fixture.change(Fixture.row('one',6)));assert.equal(f.ui.list.children.length,0);assert.equal(f.calls.length,0);
 	}finally{f.dom.window.close();}
@@ -88,7 +88,7 @@ test('an older initial snapshot cannot remove a newer event',async()=>{
 
 test('setup checks update in place, preserve drafts, and explain disabled VS Code accessibility',async()=>{
 	const f=await Fixture.create();try{
-		const document=f.dom.window.document;f.ui.change(Fixture.change(Fixture.row()));const candidate=f.ui.list.firstElementChild;document.querySelector('#suggestion-text').value='Keep my unfinished draft';
+		const document=f.dom.window.document;document.querySelector('#settings-view').hidden=false;document.querySelector('#settings-suggestions').hidden=false;document.querySelector('#observation-setup').open=true;f.ui.change(Fixture.change(Fixture.row()));const candidate=f.ui.list.firstElementChild;document.querySelector('#suggestion-text').value='Keep my unfinished draft';
 		const disabled={epoch:1,platform:'linux',enabled:true,notifications_enabled:true,status:'Waiting for a supported editable field',observed_app:null,vscode:'off'};
 		f.ui.setup(disabled);const check=document.querySelector('[data-id="typing"]');const button=document.querySelector('#observation-check');button.focus();
 		assert.match(document.querySelector('[data-id="vscode"]').textContent,/Accessibility is switched off/);assert.equal(document.querySelector('#observation-app-help').open,true);
@@ -110,7 +110,7 @@ test('setup shows macOS permission actions and test notification uses only the n
 
 test('dedicated suggestion list is replaced by the editor and cancel restores the same list',async()=>{
 	const f=await Fixture.create();try{
-		const document=f.dom.window.document;f.ui.change(Fixture.change(Fixture.row()));const card=f.ui.list.firstElementChild;
+		const document=f.dom.window.document;document.querySelector('#suggestions-view').hidden=false;f.ui.change(Fixture.change(Fixture.row()));const card=f.ui.list.firstElementChild;
 		assert.equal(card.querySelector('.suggestion-count'),null);assert.equal(card.querySelector('.suggestion-create').textContent,'Store as snippet');assert.equal(card.querySelector('.suggestion-ignore').textContent,'Never suggest again');assert.equal(card.querySelector('.suggestion-delete').textContent,'Delete');
 		f.panel.invoke=async(name,args)=>{f.calls.push({name,args});if(args.action==='libraries')return[{id:'local',name:'Local'}];throw Error('No surrounding reload allowed');};
 		await f.ui.edit('one');assert.equal(document.querySelector('#suggestion-review').hidden,true);assert.equal(document.querySelector('#suggestion-editor').hidden,false);assert.equal(document.activeElement.id,'suggestion-abbreviation');assert.equal(document.querySelector('#suggestion-title').required,false);assert.equal(document.querySelector('#suggestion-library').options.length,2);
