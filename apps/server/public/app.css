@@ -19,7 +19,7 @@ textarea { min-height: 12rem; white-space: pre-wrap; }
 #rich-editor .rich-raw-html { white-space: pre-wrap; border: .0625rem dashed var(--bs-border-color); padding: .5rem; }
 #rich-toolbar .active { color: var(--bs-primary); border-color: var(--bs-primary); }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
-.snippet { border-top: .0625rem solid #e7dfd2; padding: 1rem 0; }
+.snippet { --snippet-selection-width: 2.25rem; position: relative; border-top: .0625rem solid #e7dfd2; padding: 1rem 0; padding-inline-start: var(--snippet-selection-width); }
 .form-check-input { height: 1.25rem; width: 1.25rem; flex-shrink: 0; }
 
 #statistics-modal .statistics-filter-actions { padding-top: 1.7rem; }
@@ -157,7 +157,6 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 
 .snippet { cursor: pointer; }
 .snippet-expansion { font-size: .825rem; }
-.snippet > .snippet-expansion, .snippet > .rich-snippet-preview { margin-inline-start: 2.25rem; }
 .snippet .btn-sm { font-size: .7rem; padding: .1rem .35rem; line-height: 1.25; }
 .snippet:focus-visible { outline: .125rem solid #a15c40; outline-offset: .125rem; }
 
@@ -195,7 +194,9 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .bulk-actions [data-selection-toggle], .bulk-actions [data-selection-toggle]:hover, .bulk-actions [data-selection-toggle]:active { min-width: 0; min-height: 0; padding: 0; border-radius: .125rem; background: transparent; text-decoration: underline; font-weight: 600; vertical-align: baseline; }
 .bulk-actions[hidden] { display: none !important; }
 .snippet-controls { min-height: 3.5rem; flex-wrap: wrap; }
-.snippet-selection { min-width: 0; }
+.snippet-heading { min-width: 0; min-block-size: 1.25rem; }
+.snippet-selection { position: absolute; inset-block: 0; inset-inline-start: 0; inline-size: var(--snippet-selection-width); padding-block-start: 1rem; cursor: pointer; user-select: none; }
+.snippet-selection:has(input:disabled) { cursor: default; }
 
 .snippet-expansion { tab-size: 4; }
 

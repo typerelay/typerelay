@@ -591,7 +591,7 @@ class TypeRelay {
 			} else this.selectSnippet(input.dataset.selectSnippet, input.checked, event.shiftKey);
 			return;
 		}
-		if (event.target.closest('.snippet-selection label')) return;
+		if (event.target.closest('label.snippet-selection')) return;
 		const row = event.target.closest('.snippet[data-snippet]');
 		if (row && event.shiftKey && !event.target.closest('button,a,input')) { this.selectSnippet(row.dataset.snippet, !this.selectedSnippets.has(row.dataset.snippet), true); return; }
 		if (row && !event.target.closest('button,a,input,textarea,select,[contenteditable="true"]') && !window.getSelection()?.toString()) return this.editSnippet(this.libraries.get(this.selected), row.dataset.snippet);

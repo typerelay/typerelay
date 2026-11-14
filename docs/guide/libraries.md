@@ -26,7 +26,7 @@ Setting a library to shared without assigning members or groups makes it availab
 
 ## Move and copy content
 
-Select snippets with their checkboxes, then choose **Move** or **Trash**. Shift-click extends a selection. **Select all** applies to the visible library. A moved snippet keeps its identity and revision history but immediately inherits the destination library’s visibility and edit permissions. Both source and destination must be editable by you.
+Click anywhere in a snippet’s checkbox column to select it, then choose **Move** or **Trash**. Shift-click the checkbox column to select a range. **Select all** applies to the visible library. A moved snippet keeps its identity and revision history but immediately inherits the destination library’s visibility and edit permissions. Both source and destination must be editable by you.
 
 Use **Copy** on ordinary Text or Code snippets. Text and Rich text snippets with variables use **Fill and copy** so prompted values remain local. Search with `/`, Ctrl+K or Cmd+K to find library names, titles, abbreviations and expansion text across every library you can read.
 
