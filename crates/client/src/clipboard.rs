@@ -1,6 +1,6 @@
 //! Wayland clipboard publication, kept off the keyboard event loop.
 use anyhow::{Context, Result, bail};
-use std::{collections::BTreeMap, io::{Read, Write, BufRead}, os::unix::process::CommandExt, path::PathBuf, process::{Command, Stdio}, sync::{Arc, atomic::{AtomicBool, Ordering}, mpsc::{self, Receiver, Sender}}, thread, time::{Duration, Instant}};
+use std::{collections::BTreeMap, io::{self, Read, Write}, net::Shutdown, os::{fd::OwnedFd, unix::{net::UnixStream, process::CommandExt}}, process::{Command, Stdio}, sync::{Arc, atomic::{AtomicBool, Ordering}, mpsc::{self, Receiver, Sender}}, thread, time::{Duration, Instant}};
 use wl_clipboard_rs::copy::{MimeSource, MimeType, Options, Source};
 use crate::clipboard_payload::ClipboardPayload;
 
@@ -14,6 +14,45 @@ pub struct PasteJob {
     deadline: Instant,
 }
 
+struct ClipboardConnection<'a> {
+    socket: UnixStream,
+    cancelled: &'a AtomicBool,
+    deadline: Instant,
+}
+
+impl ClipboardConnection<'_> {
+    fn check(cancelled: &AtomicBool, deadline: Instant) -> io::Result<()> {
+        if cancelled.load(Ordering::SeqCst) || Instant::now() >= deadline {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "Clipboard preparation cancelled or timed out"));
+        }
+        Ok(())
+    }
+
+    fn retry<T>(&mut self, mut operation: impl FnMut(&mut UnixStream) -> io::Result<T>) -> io::Result<T> {
+        loop {
+            Self::check(self.cancelled, self.deadline)?;
+            match operation(&mut self.socket) {
+                Err(error) if matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut | io::ErrorKind::Interrupted) => continue,
+                result => return result,
+            }
+        }
+    }
+}
+
+impl Read for ClipboardConnection<'_> {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        self.retry(|socket| socket.read(bytes))
+    }
+}
+
+impl Write for ClipboardConnection<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.retry(|socket| socket.write(bytes))
+    }
+
+    fn flush(&mut self) -> io::Result<()> { self.socket.flush() }
+}
+
 impl PasteJob {
     pub fn copy_text(text: String) -> Result<()> {
         Self::copy_payload(ClipboardPayload::text(text))
@@ -23,7 +62,7 @@ impl PasteJob {
         let current = std::env::current_exe()?;
         let sibling = current.with_file_name("typerelay");
         let executable = if sibling.exists() { sibling } else if current.file_stem().is_some_and(|name| name == "typerelay-panel") { current } else { bail!("Install the matching typerelay binary before copying"); };
-        Self::publish_payload(payload, executable)
+        Self::publish_payload(payload, Command::new(executable), &AtomicBool::new(false), Instant::now() + Duration::from_secs(2))
     }
 
     fn payload_formats(payload: ClipboardPayload) -> BTreeMap<String, Vec<u8>> {
@@ -33,15 +72,28 @@ impl PasteJob {
         formats
     }
 
-    fn publish_payload(payload: ClipboardPayload, executable: PathBuf) -> Result<()> {
-        let mut child = Command::new(executable).arg("clipboard-serve").process_group(0).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()?;
+    fn publish_payload(payload: ClipboardPayload, mut command: Command, cancelled: &AtomicBool, deadline: Instant) -> Result<()> {
+        ClipboardConnection::check(cancelled, deadline)?;
+        let (socket, helper) = UnixStream::pair()?;
+        let interval = Some(Duration::from_millis(20));
+        socket.set_write_timeout(interval)?;
+        socket.set_read_timeout(interval)?;
+        let mut child = command.arg("clipboard-serve").process_group(0).stdin(OwnedFd::from(helper.try_clone()?)).stdout(OwnedFd::from(helper)).stderr(Stdio::null()).spawn()?;
+        // Close the parent's copies of the helper endpoint so child exit reaches the reader.
+        drop(command);
+        // Keep the socket open on failure until the helper is dead so EOF cannot start publication.
+        let mut connection = ClipboardConnection { socket, cancelled, deadline };
         let published = (|| -> Result<()> {
-            let mut input = child.stdin.take().context("Missing clipboard helper stdin")?;
-            serde_json::to_writer(&mut input, &Self::payload_formats(payload))?;
-            drop(input);
-            let mut response = String::new();
-            std::io::BufReader::new(child.stdout.take().context("Missing clipboard helper stdout")?).read_line(&mut response)?;
-            if response.trim() != "ready" { bail!("Clipboard helper failed"); }
+            {
+                let mut input = io::BufWriter::new(&mut connection);
+                serde_json::to_writer(&mut input, &Self::payload_formats(payload))?;
+                input.flush()?;
+            }
+            ClipboardConnection::check(cancelled, deadline)?;
+            connection.socket.shutdown(Shutdown::Write)?;
+            let mut response = [0; b"ready\n".len()];
+            connection.read_exact(&mut response)?;
+            if &response != b"ready\n" { bail!("Clipboard helper failed"); }
             Ok(())
         })();
         if let Err(error) = published {
@@ -72,10 +124,10 @@ impl PasteJob {
         Self::start_payload(ClipboardPayload::text(text), Instant::now() + Duration::from_secs(5))
     }
     pub fn start_payload(payload: ClipboardPayload, deadline: Instant) -> Self {
-        Self::start_with_publisher(deadline, move || Self::publish_payload(payload, std::env::current_exe()?))
+        Self::start_with_publisher(deadline, move |cancelled, deadline| Self::publish_payload(payload, Command::new(std::env::current_exe()?), cancelled, deadline))
     }
 
-    fn start_with_publisher(deadline: Instant, publish: impl FnOnce() -> Result<()> + Send + 'static) -> Self {
+    fn start_with_publisher(deadline: Instant, publish: impl FnOnce(&AtomicBool, Instant) -> Result<()> + Send + 'static) -> Self {
         let (progress_tx, progress) = mpsc::channel();
         let (action, action_rx) = mpsc::channel();
         let cancelled = Arc::new(AtomicBool::new(false));
@@ -88,11 +140,10 @@ impl PasteJob {
         Self { progress, action, cancelled, deadline }
     }
 
-    fn serve(cancelled: &AtomicBool, progress: &Sender<Result<Progress>>, action: Receiver<ClipboardAction>, preparation_deadline: Instant, publish: impl FnOnce() -> Result<()>) -> Result<()> {
-        let can_publish = || !cancelled.load(Ordering::SeqCst) && Instant::now() < preparation_deadline;
-        if !can_publish() { bail!("Clipboard preparation cancelled or timed out"); }
-        publish()?;
-        if !can_publish() { bail!("Clipboard preparation cancelled or timed out"); }
+    fn serve(cancelled: &AtomicBool, progress: &Sender<Result<Progress>>, action: Receiver<ClipboardAction>, preparation_deadline: Instant, publish: impl FnOnce(&AtomicBool, Instant) -> Result<()>) -> Result<()> {
+        ClipboardConnection::check(cancelled, preparation_deadline)?;
+        publish(cancelled, preparation_deadline)?;
+        ClipboardConnection::check(cancelled, preparation_deadline)?;
         progress.send(Ok(Progress::Ready)).context("Paste coordinator stopped")?;
         Self::wait_for_paste(action);
         progress.send(Ok(Progress::Finished)).context("Paste coordinator stopped")?;
@@ -187,7 +238,7 @@ mod tests {
         for action in [Some(ClipboardAction::Pasted), Some(ClipboardAction::Cancelled), None] {
             let clipboard = Arc::new(Mutex::new(vec!["original"]));
             let writer = clipboard.clone();
-            let job = PasteJob::start_with_publisher(Instant::now() + Duration::from_secs(5), move || {
+            let job = PasteJob::start_with_publisher(Instant::now() + Duration::from_secs(5), move |_, _| {
                 writer.lock().unwrap().push("snippet");
                 Ok(())
             });
@@ -211,13 +262,82 @@ mod tests {
         let (progress, result) = mpsc::channel();
         let (_, action) = mpsc::channel();
         let cancelled = AtomicBool::new(false);
-        assert!(PasteJob::serve(&cancelled, &progress, action, Instant::now(), || panic!("Expired request published")).is_err());
+        assert!(PasteJob::serve(&cancelled, &progress, action, Instant::now(), |_, _| panic!("Expired request published")).is_err());
         let (_, action) = mpsc::channel();
-        assert!(PasteJob::serve(&cancelled, &progress, action, Instant::now() + Duration::from_secs(1), || {
+        assert!(PasteJob::serve(&cancelled, &progress, action, Instant::now() + Duration::from_secs(1), |_, _| {
             cancelled.store(true, Ordering::SeqCst);
             Ok(())
         }).is_err());
         assert!(matches!(result.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    }
+
+    fn helper_job(text: String, script: &str, pid_file: &std::path::Path, timeout: Duration) -> PasteJob {
+        let mut command = Command::new("sh");
+        command.args(["-c", script, "clipboard-test"]).arg(pid_file);
+        PasteJob::start_with_publisher(Instant::now() + timeout, move |cancelled, deadline| {
+            PasteJob::publish_payload(ClipboardPayload::text(text), command, cancelled, deadline)
+        })
+    }
+
+    fn helper_pid(pid_file: &std::path::Path) -> i32 {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            if let Ok(pid) = std::fs::read_to_string(pid_file) && let Ok(pid) = pid.trim().parse() { return pid; }
+            assert!(Instant::now() < deadline, "Clipboard test helper did not start");
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    fn assert_helper_reaped(pid: i32) {
+        assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+        assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH));
+    }
+
+    #[test]
+    fn stalled_clipboard_input_times_out_and_reaps_helper() {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("pid");
+        let job = helper_job("x".repeat(1024 * 1024), "echo $$ > \"$1\"; exec sleep 5", &pid_file, Duration::from_secs(1));
+        let pid = helper_pid(&pid_file);
+        let result = job.progress.recv_timeout(Duration::from_millis(1500)).unwrap();
+        assert!(matches!(result, Err(error) if error.to_string().contains("Clipboard preparation cancelled or timed out")));
+        assert_helper_reaped(pid);
+    }
+
+    #[test]
+    fn stalled_clipboard_readiness_times_out_and_reaps_helper() {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("pid");
+        let job = helper_job("snippet".into(), "cat >/dev/null; echo $$ > \"$1\"; printf rea; exec sleep 5", &pid_file, Duration::from_secs(1));
+        let pid = helper_pid(&pid_file);
+        let result = job.progress.recv_timeout(Duration::from_millis(1500)).unwrap();
+        assert!(matches!(result, Err(error) if error.to_string().contains("Clipboard preparation cancelled or timed out")));
+        assert_helper_reaped(pid);
+    }
+
+    #[test]
+    fn cancelling_a_pending_clipboard_helper_reaps_it_before_reporting_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("pid");
+        let job = helper_job("snippet".into(), "cat >/dev/null; echo $$ > \"$1\"; exec sleep 5", &pid_file, Duration::from_secs(5));
+        let pid = helper_pid(&pid_file);
+        job.cancel();
+        let result = job.progress.recv_timeout(Duration::from_millis(500)).unwrap();
+        assert!(matches!(result, Err(error) if error.to_string().contains("Clipboard preparation cancelled or timed out")));
+        assert_helper_reaped(pid);
+    }
+
+    #[test]
+    fn ready_clipboard_helper_outlives_the_paste_job() {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("pid");
+        let job = helper_job("snippet".into(), "cat >/dev/null; echo $$ > \"$1\"; echo ready; exec sleep 5", &pid_file, Duration::from_secs(5));
+        let pid = helper_pid(&pid_file);
+        assert!(matches!(job.progress.recv_timeout(Duration::from_secs(1)).unwrap().unwrap(), Progress::Ready));
+        job.pasted();
+        assert!(matches!(job.progress.recv_timeout(Duration::from_secs(1)).unwrap().unwrap(), Progress::Finished));
+        drop(job);
+        assert_eq!(unsafe { libc::kill(pid, libc::SIGTERM) }, 0);
     }
 
     #[test]
