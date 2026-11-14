@@ -60,9 +60,9 @@ unicode-normalization = "0.1"
 unicode-segmentation = "1"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
-rusqlite = { version = "0.38", features = ["bundled", "backup"] }
+rusqlite = { version = "0.41.1", features = ["bundled", "backup"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
-zip = { version = "6.0.0", default-features = false, features = ["deflate"] }
+zip = { version = "9.5.1", default-features = false, features = ["deflate"] }
 ratatui-image = { version = "11.0.8", default-features = false, features = ["crossterm"] , optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]

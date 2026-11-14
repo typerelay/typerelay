@@ -102,7 +102,7 @@ See the [MCP setup](docs/mcp/setup.md), [tool catalog](docs/mcp/tools.md) and [A
 
 ## Development
 
-Requirements: Docker Compose, Rust 1.88+, Node.js 24+ and pnpm 12.
+Requirements: Docker Compose, Rust 1.90+, Node.js 24+ and pnpm 12.
 
 These commands work in fish, bash and zsh:
 

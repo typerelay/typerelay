@@ -2,7 +2,7 @@ use anyhow::Result;
 use typerelay_client::{database::Database,panel::Panel};
 fn main()->Result<()> {
     let args:Vec<_>=std::env::args().collect();let temporary=tempfile::tempdir()?;let directory=temporary.path().join("snippets");std::fs::create_dir_all(&directory)?;
-    if let Some(path)=args.get(1){if path.ends_with(".json"){let response=serde_json::from_slice(&std::fs::read(path)?)?;Database::open(&directory)?.apply(&response,None)?;}else{let source=rusqlite::Connection::open_with_flags(path,rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;source.backup(rusqlite::MAIN_DB,directory.join("typerelay.sqlite"),None)?;}}
+    if let Some(path)=args.get(1){if path.ends_with(".json"){let response=serde_json::from_slice(&std::fs::read(path)?)?;Database::open(&directory)?.apply(&response,None)?;}else{let source=rusqlite::Connection::open_with_flags(path,rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;source.backup(rusqlite::MAIN_DB,directory.join("typerelay.sqlite"),rusqlite::backup::NO_PROGRESS)?;}}
     else {let db=Database::open(&directory)?;for group in 0..10{let records:Vec<_>=(group*1000..(group+1)*1000).map(|index|serde_json::json!({"trigger":format!("s{index}"),"replace":format!("Missed meeting followup number {index}; contact support to reschedule.")})).collect();db.import(&format!("Benchmark{group}"),&serde_json::json!({"matches":records}).to_string())?;}}
     let queries=["missed","meeting","missed meeting","meeting missed","meeitng","reschedlue"];
     let cold=std::time::Instant::now();let rows=Panel::search(&directory,"missed meeting",None)?;println!("cold_ms={:.2} matches={}",cold.elapsed().as_secs_f64()*1000.0,rows.len());

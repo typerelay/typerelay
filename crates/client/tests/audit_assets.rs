@@ -28,6 +28,23 @@ fn bundles_roundtrip_500_images_and_preserve_existing_destinations() {
 }
 
 #[test]
+fn imports_a_bundle_exported_with_zip_6() {
+    let root = tempfile::tempdir().unwrap();
+    let bundle = root.path().join("zip6.typerelay.zip");
+    // Exported by TypeRelay at f720b8d using zip 6.0.0.
+    fs::write(&bundle, include_bytes!("fixtures/zip6.typerelay.zip")).unwrap();
+    let db = Database::open(&root.path().join("restored")).unwrap();
+    let restored = db.import_bundle("Restored", &bundle).unwrap();
+    let id = "f6e290ada1b86a1d84ff1fcaf5c002a16b938ed69cea94ed176227461d09bb6c";
+    assert_eq!(restored.entries.len(), 1);
+    assert_eq!(restored.entries[0].trigger, "legacy-pixel");
+    assert_eq!(restored.entries[0].replace, format!("![](typerelay-asset:{id})"));
+    let (metadata, bytes) = db.asset(id).unwrap().unwrap();
+    assert_eq!(format!("{:x}", Sha256::digest(bytes)), id);
+    assert_eq!(metadata["source_urls"], json!(["https://example.test/pixel.png"]));
+}
+
+#[test]
 fn legacy_native_bundle_sources_are_still_read() {
     let root = tempfile::tempdir().unwrap(); let db = Database::open(&root.path().join("source")).unwrap(); let id = image(&db, 1);
     let (metadata, bytes) = db.asset(&id).unwrap().unwrap(); let path = root.path().join("legacy.typerelay.zip");
