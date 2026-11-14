@@ -160,7 +160,7 @@ services:
       - .:/repo
     ports:
       - "127.0.0.1:5173:5173"
-    command: [sh, -c, "npx --yes pnpm@12.0.0 --filter @typerelay/docs install --frozen-lockfile && npx --yes pnpm@12.0.0 --filter @typerelay/docs build"]
+    command: [sh, -c, "npx --yes pnpm@12.18.0 --filter @typerelay/docs install --frozen-lockfile && npx --yes pnpm@12.18.0 --filter @typerelay/docs build"]
   mcp:
     image: typerelay-mcp
     build:
@@ -185,7 +185,7 @@ services:
       npm_config_cache: /tmp/npm-cache
     volumes:
       - .:/repo
-    command: [sh, -c, "npx --yes pnpm@12.0.0 --filter @typerelay/mcp install --frozen-lockfile && npx --yes pnpm@12.0.0 --filter @typerelay/mcp test"]
+    command: [sh, -c, "npx --yes pnpm@12.18.0 --filter @typerelay/mcp install --frozen-lockfile && npx --yes pnpm@12.18.0 --filter @typerelay/mcp test"]
   browser-check:
     depends_on:
       app:

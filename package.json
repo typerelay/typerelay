@@ -8,7 +8,7 @@
   "description": "Cross-platform text expansion with shared snippets and native keyboards",
   "license": "AGPL-3.0",
   "type": "module",
-  "packageManager": "pnpm@12.0.0",
+  "packageManager": "pnpm@12.18.0",
   "engines": {
     "node": ">=24"
   },

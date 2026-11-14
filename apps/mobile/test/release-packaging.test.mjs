@@ -11,7 +11,7 @@ describe('mobile release packaging', () => {
 		const packageJson = JSON.parse(source('package.json'));
 		const workspace = source('pnpm-workspace.yaml');
 		assert.equal(packageJson.private, true);
-		assert.equal(packageJson.packageManager, 'pnpm@12.0.0');
+		assert.equal(packageJson.packageManager, 'pnpm@12.18.0');
 		assert.equal(packageJson.scripts['android:release'], 'pnpm --filter @typerelay/mobile android:release');
 		assert.match(workspace, /- "apps\/\*"/);
 		assert.match(workspace, /- "docs"/);

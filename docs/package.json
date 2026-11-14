@@ -2,7 +2,7 @@
   "name": "@typerelay/docs",
   "private": true,
   "type": "module",
-  "packageManager": "pnpm@12.0.0",
+  "packageManager": "pnpm@12.18.0",
   "scripts": {
     "dev": "node scripts/export-openapi.js && vitepress dev --host 0.0.0.0",
     "build": "node scripts/export-openapi.js && vitepress build && node scripts/check-docs.js"

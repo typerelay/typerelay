@@ -1,5 +1,5 @@
 FROM node:lts-trixie-slim AS workspace-dependencies
-RUN npm install -g pnpm@12.0.0
+RUN npm install -g pnpm@12.18.0
 WORKDIR /repo
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/server/package.json ./apps/server/package.json
