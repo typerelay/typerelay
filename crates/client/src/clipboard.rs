@@ -5,12 +5,13 @@ use wl_clipboard_rs::{copy::{self, MimeSource, MimeType, Options, Source}, paste
 use crate::clipboard_payload::ClipboardPayload;
 
 pub enum Progress { Ready, Finished }
+enum ClipboardAction { Pasted, Cancelled }
 
 pub struct PasteJob {
     pub progress: Receiver<Result<Progress>>,
-    pasted: Sender<()>,
+    action: Sender<ClipboardAction>,
     cancelled: Arc<AtomicBool>,
-    started: Instant,
+    deadline: Instant,
 }
 
 struct ClipboardLease {
@@ -139,50 +140,49 @@ impl PasteJob {
     }
 
     pub fn start(text: String) -> Self {
-		Self::start_payload(ClipboardPayload::text(text))
-	}
-	pub fn start_payload(payload:ClipboardPayload)->Self {
+        Self::start_payload(ClipboardPayload::text(text), Instant::now() + Duration::from_secs(5))
+    }
+    pub fn start_payload(payload: ClipboardPayload, deadline: Instant) -> Self {
         let (progress_tx, progress) = mpsc::channel();
-        let (pasted, pasted_rx) = mpsc::channel();
+        let (action, action_rx) = mpsc::channel();
         let cancelled = Arc::new(AtomicBool::new(false));
         let cancellation = cancelled.clone();
-        let started = Instant::now();
+        let preparation_deadline = deadline.min(Instant::now() + Duration::from_secs(2));
         thread::spawn(move || {
-			let result = Self::serve(payload, &cancellation, &progress_tx, pasted_rx, started + Duration::from_secs(2));
+            let result = Self::serve(payload, &cancellation, &progress_tx, action_rx, preparation_deadline);
             if let Err(error) = result { let _ = progress_tx.send(Err(error)); }
         });
-        Self { progress, pasted, cancelled, started }
+        Self { progress, action, cancelled, deadline }
     }
 
-	fn serve(payload:ClipboardPayload, cancelled: &AtomicBool, progress: &Sender<Result<Progress>>, pasted: Receiver<()>, preparation_deadline: Instant) -> Result<()> {
+    fn serve(payload: ClipboardPayload, cancelled: &AtomicBool, progress: &Sender<Result<Progress>>, action: Receiver<ClipboardAction>, preparation_deadline: Instant) -> Result<()> {
         let mut lease = ClipboardLease::capture(cancelled, preparation_deadline)?;
         if cancelled.load(Ordering::SeqCst) { return Ok(()); }
         if Instant::now() >= preparation_deadline { bail!("Clipboard preservation timed out; left unchanged"); }
-		lease.publish(payload)?;
+        lease.publish(payload)?;
         if cancelled.load(Ordering::SeqCst) { return Ok(()); }
         if Instant::now() >= preparation_deadline { bail!("Clipboard preparation timed out"); }
         progress.send(Ok(Progress::Ready)).context("Paste coordinator stopped")?;
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while !cancelled.load(Ordering::SeqCst) {
-            match pasted.recv_timeout(Duration::from_millis(20)) {
-                Ok(()) => {
-                    // Keep the offer alive while the target processes its paste shortcut.
-                    thread::sleep(Duration::from_millis(300));
-                    break;
-                }
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                Err(mpsc::RecvTimeoutError::Timeout) if Instant::now() >= deadline => break,
-                Err(_) => (),
-            }
-        }
+        Self::wait_for_paste(action);
         lease.restore()?;
         progress.send(Ok(Progress::Finished)).context("Paste coordinator stopped")?;
         Ok(())
     }
 
-    pub fn pasted(&self) { let _ = self.pasted.send(()); }
-    pub fn cancel(&self) { self.cancelled.store(true, Ordering::SeqCst); }
-    pub fn timed_out(&self) -> bool { self.started.elapsed() > Duration::from_secs(5) }
+    fn wait_for_paste(action: Receiver<ClipboardAction>) {
+        if matches!(action.recv(), Ok(ClipboardAction::Pasted)) {
+            // Keep the offer alive while the target processes its paste shortcut.
+            thread::sleep(Duration::from_millis(300));
+        }
+    }
+
+    pub fn pasted(&self) { let _ = self.action.send(ClipboardAction::Pasted); }
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+        let _ = self.action.send(ClipboardAction::Cancelled);
+    }
+    pub fn timed_out(&self) -> bool { self.expired_at(Instant::now()) }
+    fn expired_at(&self, now: Instant) -> bool { now >= self.deadline }
 }
 
 impl Drop for PasteJob {
@@ -207,6 +207,55 @@ mod tests {
         let (reader, mut writer) = UnixStream::pair().unwrap();
         writer.write_all(bytes).unwrap();
         reader
+    }
+
+    #[test]
+    fn waits_for_relay_acknowledgement_beyond_the_old_clipboard_timeout() {
+        let (action, receive) = mpsc::channel();
+        let (waiting, ready) = mpsc::channel();
+        let (done, finished) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            waiting.send(()).unwrap();
+            PasteJob::wait_for_paste(receive);
+            done.send(()).unwrap();
+        });
+        ready.recv().unwrap();
+        assert_eq!(finished.recv_timeout(Duration::from_millis(3100)), Err(mpsc::RecvTimeoutError::Timeout));
+        action.send(ClipboardAction::Pasted).unwrap();
+        finished.recv_timeout(Duration::from_secs(1)).unwrap();
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn cancellation_and_disconnection_release_the_clipboard_wait() {
+        let (action, receive) = mpsc::channel();
+        action.send(ClipboardAction::Cancelled).unwrap();
+        PasteJob::wait_for_paste(receive);
+        let (action, receive) = mpsc::channel();
+        drop(action);
+        PasteJob::wait_for_paste(receive);
+    }
+
+    #[test]
+    fn queued_acknowledgement_keeps_grace_period_even_after_cancellation() {
+        let (action, receive) = mpsc::channel();
+        action.send(ClipboardAction::Pasted).unwrap();
+        action.send(ClipboardAction::Cancelled).unwrap();
+        let start = Instant::now();
+        PasteJob::wait_for_paste(receive);
+        assert!(start.elapsed() >= Duration::from_millis(300));
+    }
+
+    #[test]
+    fn paste_expires_at_the_original_request_cutoff() {
+        let queued = Instant::now();
+        let deadline = queued + Duration::from_secs(5);
+        let (finished, progress) = mpsc::channel();
+        drop(finished);
+        let (action, _) = mpsc::channel();
+        let job = PasteJob { progress, action, cancelled: Arc::new(AtomicBool::new(false)), deadline };
+        assert!(!job.expired_at(queued + Duration::from_millis(4999)));
+        assert!(job.expired_at(deadline));
     }
 
     #[test]
