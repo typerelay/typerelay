@@ -458,9 +458,17 @@ impl Session {
                     }
                     Ok(Ok(Progress::Ready)) => { state.cancelled = true; state.job.cancel(); }
                     Ok(Ok(Progress::Finished)) => { if let Some(cursor)=state.cursor.take()&&state.sent&&!state.cancelled {if state.generation!=*input_generation||Self::target()?!=state.target {state.cancelled=true;} else {match Hyprland::position_cursor(state.target.as_deref().unwrap_or_default(),&state.expansion.text,cursor.utf16,cursor_discovery,||Ok(Self::target()?==state.target&&!context.changed(state.target.as_deref())?)) {Ok(true)=>{if std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some(){eprintln!("Cursor positioned directly");}state.cursor_remaining=Some(0);continue;},Ok(false)=>{state.cursor_remaining=Some(cursor.backward_graphemes);continue;},Err(error)=>{eprintln!("Cursor positioning cancelled: {error:#}");state.cancelled=true;}}}} if state.confirm_enter&&state.sent&&!state.cancelled&&state.generation==*input_generation&&Self::target()?==state.target&&!context.changed(state.target.as_deref())? {output.emit(&Self::stroke(KeyCode::KEY_ENTER,false))?;} if state.sent && !state.cancelled && state.reply.is_none() { Self::record_usage(&state.expansion); } if let Some(reply) = state.reply.take() { let _ = reply.send(if state.sent && !state.cancelled { Ok(state.generation) } else { Err("Insertion cancelled; nothing retried".into()) }); } paste = None; continue; }
-                    Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    failure @ (Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
                         eprintln!("Clipboard paste failed; no automatic retry");
+                        if let Some(reply) = &state.reply {
+                            let message = match failure {
+                                Ok(Err(error)) if !state.started => format!("{error}; no automatic retry"),
+                                _ => "Clipboard paste failed; no automatic retry".into(),
+                            };
+                            let _ = reply.send(Err(message));
+                        }
                         if state.restore_space && state.reply.is_none() && !state.started && !state.cancelled && Self::target()? == state.target { for event in Self::stroke(KeyCode::KEY_SPACE, false) { output.emit(&[event])?; } }
+                        insertion.clear();
                         paste = None;
                         continue;
                     }
@@ -469,6 +477,7 @@ impl Session {
                 if state.job.timed_out() {
                     eprintln!("Clipboard paste timed out; releasing buffered typing");
                     state.job.cancel();
+                    if let Some(reply) = &state.reply { let _ = reply.send(Err("Clipboard paste timed out; no automatic retry".into())); }
                     insertion.clear();
                     paste = None;
                     continue;

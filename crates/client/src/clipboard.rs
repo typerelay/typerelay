@@ -1,6 +1,6 @@
 //! Temporary Wayland clipboard ownership, kept off the keyboard event loop.
 use anyhow::{Context, Result, bail};
-use std::{collections::BTreeMap, io::{Read, Write, BufRead}, process::{Command, Stdio}, sync::{Arc, atomic::{AtomicBool, Ordering}, mpsc::{self, Receiver, Sender}}, thread, time::{Duration, Instant, SystemTime, UNIX_EPOCH}};
+use std::{collections::{BTreeMap, HashSet}, io::{Read, Write, BufRead}, os::fd::AsRawFd, process::{Command, Stdio}, sync::{Arc, atomic::{AtomicBool, Ordering}, mpsc::{self, Receiver, Sender}}, thread, time::{Duration, Instant, SystemTime, UNIX_EPOCH}};
 use wl_clipboard_rs::{copy::{self, MimeSource, MimeType, Options, Source}, paste::{self, ClipboardType, Seat}};
 use crate::clipboard_payload::ClipboardPayload;
 
@@ -20,26 +20,54 @@ struct ClipboardLease {
 }
 
 impl ClipboardLease {
-    fn capture(cancelled: &AtomicBool) -> Result<Self> {
-        let mut previous = BTreeMap::new();
+    const MAX_BYTES: usize = 16 * 1024 * 1024;
+
+    fn capture(cancelled: &AtomicBool, deadline: Instant) -> Result<Self> {
         let types = match paste::get_mime_types(ClipboardType::Regular, Seat::Unspecified) {
             Ok(types) => types,
             Err(paste::Error::ClipboardEmpty) => Default::default(),
             Err(error) => return Err(error.into()),
         };
-        if types.len() > 64 { bail!("Too many clipboard formats to preserve"); }
-        let mut total = 0;
-        for mime in types {
-            if cancelled.load(Ordering::SeqCst) { bail!("Paste cancelled"); }
-            let (pipe, _) = paste::get_contents(ClipboardType::Regular, Seat::Unspecified, paste::MimeType::Specific(&mime))?;
-            let mut bytes = Vec::new();
-            pipe.take(16 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
-            total += bytes.len();
-            if total > 16 * 1024 * 1024 { bail!("Clipboard exceeds preservation limit; left unchanged"); }
-            previous.insert(mime, bytes);
-        }
+        let previous = Self::capture_formats(types, cancelled, deadline, |mime| {
+            Ok(paste::get_contents(ClipboardType::Regular, Seat::Unspecified, paste::MimeType::Specific(mime))?.0)
+        })?;
         let marker = format!("application/x-typerelay-paste-{}-{}", std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos());
         Ok(Self { previous, marker, published: false })
+    }
+
+    fn capture_formats<R: Read + AsRawFd>(types: HashSet<String>, cancelled: &AtomicBool, deadline: Instant, mut contents: impl FnMut(&str) -> Result<R>) -> Result<BTreeMap<String, Vec<u8>>> {
+        let has_utf8 = types.contains("text/plain;charset=utf-8") || types.contains("UTF8_STRING");
+        // XWayland can advertise a selection-management target and a redundant legacy conversion that never complete.
+        let formats: Vec<_> = types.into_iter().filter(|mime| mime != "SAVE_TARGETS" && !(has_utf8 && mime == "COMPOUND_TEXT")).collect();
+        if formats.len() > 64 { bail!("Too many clipboard formats to preserve"); }
+        let mut previous = BTreeMap::new();
+        let mut total = 0;
+        let mut chunk = [0; 32768];
+        for mime in formats {
+            if cancelled.load(Ordering::SeqCst) { bail!("Paste cancelled"); }
+            if Instant::now() >= deadline { bail!("Clipboard preservation timed out; left unchanged"); }
+            let mut pipe = contents(&mime)?;
+            let mut descriptor = libc::pollfd { fd: pipe.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+            let mut bytes = Vec::new();
+            loop {
+                if cancelled.load(Ordering::SeqCst) { bail!("Paste cancelled"); }
+                let left = deadline.saturating_duration_since(Instant::now());
+                if left.is_zero() { bail!("Clipboard preservation timed out; left unchanged"); }
+                let ready = unsafe { libc::poll(&mut descriptor, 1, left.as_millis().clamp(1, 20) as i32) };
+                if ready == 0 { continue; }
+                let count = if ready < 0 { Err(std::io::Error::last_os_error()) } else { pipe.read(&mut chunk) };
+                let count = match count {
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    result => result?,
+                };
+                if count == 0 { break; }
+                total += count;
+                if total > Self::MAX_BYTES { bail!("Clipboard exceeds preservation limit; left unchanged"); }
+                bytes.extend_from_slice(&chunk[..count]);
+            }
+            previous.insert(mime, bytes);
+        }
+        Ok(previous)
     }
 
 	fn publish(&mut self,payload:ClipboardPayload)->Result<()> {
@@ -118,17 +146,21 @@ impl PasteJob {
         let (pasted, pasted_rx) = mpsc::channel();
         let cancelled = Arc::new(AtomicBool::new(false));
         let cancellation = cancelled.clone();
+        let started = Instant::now();
         thread::spawn(move || {
-			let result = Self::serve(payload, &cancellation, &progress_tx, pasted_rx);
+			let result = Self::serve(payload, &cancellation, &progress_tx, pasted_rx, started + Duration::from_secs(2));
             if let Err(error) = result { let _ = progress_tx.send(Err(error)); }
         });
-        Self { progress, pasted, cancelled, started: Instant::now() }
+        Self { progress, pasted, cancelled, started }
     }
 
-	fn serve(payload:ClipboardPayload, cancelled: &AtomicBool, progress: &Sender<Result<Progress>>, pasted: Receiver<()>) -> Result<()> {
-        let mut lease = ClipboardLease::capture(cancelled)?;
+	fn serve(payload:ClipboardPayload, cancelled: &AtomicBool, progress: &Sender<Result<Progress>>, pasted: Receiver<()>, preparation_deadline: Instant) -> Result<()> {
+        let mut lease = ClipboardLease::capture(cancelled, preparation_deadline)?;
         if cancelled.load(Ordering::SeqCst) { return Ok(()); }
+        if Instant::now() >= preparation_deadline { bail!("Clipboard preservation timed out; left unchanged"); }
 		lease.publish(payload)?;
+        if cancelled.load(Ordering::SeqCst) { return Ok(()); }
+        if Instant::now() >= preparation_deadline { bail!("Clipboard preparation timed out"); }
         progress.send(Ok(Progress::Ready)).context("Paste coordinator stopped")?;
         let deadline = Instant::now() + Duration::from_secs(3);
         while !cancelled.load(Ordering::SeqCst) {
@@ -163,5 +195,78 @@ impl Drop for PasteJob {
                 _ => break,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::net::UnixStream;
+
+    fn offered_contents(bytes: &[u8]) -> UnixStream {
+        let (reader, mut writer) = UnixStream::pair().unwrap();
+        writer.write_all(bytes).unwrap();
+        reader
+    }
+
+    #[test]
+    fn xwayland_browser_clipboard_preserves_usable_formats_and_skips_stalled_targets() {
+        let expected = BTreeMap::from([
+            ("text/plain;charset=utf-8".to_owned(), "café".as_bytes().to_vec()),
+            ("text/html".to_owned(), b"<b>cafe</b>".to_vec()),
+            ("text/_moz_htmlcontext".to_owned(), b"<body></body>".to_vec()),
+        ]);
+        let types = expected.keys().cloned().chain(["COMPOUND_TEXT".into(), "SAVE_TARGETS".into()]).collect();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let (_writer, stalled) = UnixStream::pair().unwrap();
+        let snapshot = ClipboardLease::capture_formats(types, &AtomicBool::new(false), deadline, |mime| {
+            match expected.get(mime) { Some(bytes) => Ok(offered_contents(bytes)), None => Ok(stalled.try_clone()?) }
+        }).unwrap();
+        assert_eq!(snapshot, expected);
+    }
+
+    #[test]
+    fn a_stalled_required_format_aborts_instead_of_saving_partial_clipboard_data() {
+        let (reader, mut writer) = UnixStream::pair().unwrap();
+        writer.write_all(b"partial").unwrap();
+        let deadline = Instant::now() + Duration::from_millis(50);
+        let error = ClipboardLease::capture_formats(HashSet::from(["text/html".into()]), &AtomicBool::new(false), deadline, |_| Ok(reader.try_clone()?)).unwrap_err();
+        assert_eq!(error.to_string(), "Clipboard preservation timed out; left unchanged");
+    }
+
+    #[test]
+    fn cancelled_clipboard_transfer_stops_before_reading_the_offer() {
+        let cancelled = AtomicBool::new(false);
+        let (_writer, reader) = UnixStream::pair().unwrap();
+        let error = ClipboardLease::capture_formats(HashSet::from(["text/html".into()]), &cancelled, Instant::now() + Duration::from_secs(1), |_| {
+            cancelled.store(true, Ordering::SeqCst);
+            Ok(reader.try_clone()?)
+        }).unwrap_err();
+        assert_eq!(error.to_string(), "Paste cancelled");
+    }
+
+    #[test]
+    fn clipboard_preservation_keeps_format_and_byte_limits() {
+        let cancelled = AtomicBool::new(false);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let formats = (0..65).map(|index| format!("application/test-{index}")).collect();
+        let result = ClipboardLease::capture_formats::<UnixStream>(formats, &cancelled, deadline, |_| panic!("Too many formats"));
+        assert_eq!(result.unwrap_err().to_string(), "Too many clipboard formats to preserve");
+
+        let oversized = tempfile::tempfile().unwrap();
+        oversized.set_len((ClipboardLease::MAX_BYTES + 1) as u64).unwrap();
+        let result = ClipboardLease::capture_formats(HashSet::from(["text/html".into()]), &cancelled, deadline, |_| Ok(oversized.try_clone()?));
+        assert_eq!(result.unwrap_err().to_string(), "Clipboard exceeds preservation limit; left unchanged");
+    }
+
+    #[test]
+    fn compound_text_is_preserved_when_it_is_the_only_text_format() {
+        let types = HashSet::from(["COMPOUND_TEXT".into(), "SAVE_TARGETS".into()]);
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let snapshot = ClipboardLease::capture_formats(types, &AtomicBool::new(false), deadline, |mime| {
+            assert_eq!(mime, "COMPOUND_TEXT");
+            Ok(offered_contents(b"legacy"))
+        }).unwrap();
+        assert_eq!(snapshot, BTreeMap::from([("COMPOUND_TEXT".into(), b"legacy".to_vec())]));
     }
 }
