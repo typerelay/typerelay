@@ -149,7 +149,7 @@ impl Cli {
                 if let Some(backup) = report.backup { println!("Backups: {}", backup.display()); }
             }
             #[cfg(target_os = "linux")]
-            Commands::ClipboardServe => clipboard::PasteJob::serve_restored()?,
+            Commands::ClipboardServe => clipboard::PasteJob::serve_clipboard()?,
             #[cfg(target_os = "linux")]
             Commands::InputAccess { .. } => unreachable!("Input access is handled before user data is opened"),
             #[cfg(target_os = "linux")]

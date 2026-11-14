@@ -9,6 +9,8 @@ TypeRelay verifies the original window before insertion. If focus cannot be rest
 
 ## Omarchy/Hyprland
 
+- Clipboard-based insertion replaces the clipboard with the snippet and leaves it there until your next copy. Typerelay never restores the previous clipboard on Linux, including after cancellation.
+
 - Continuous expansion uses Omarchy/Hyprland, a selected physical keyboard or keyd's effective virtual keyboard, uinput and a US keyboard layout. Keyd is optional; see [keyboard selection](./omarchy).
 - Native setup persists only the required selected-keyboard, pointer-cancellation and uinput access. The engine runs as the desktop user: directly from AppImage, or through the deb/rpm systemd user service.
 - A pointer click, focus change or lock screen cancels a pending abbreviation. Keyboard reconnects are handled by the managed service restart path.
@@ -38,6 +40,6 @@ TypeRelay verifies the original window before insertion. If focus cannot be rest
 ## All platforms
 
 - Release shortcut keys before insertion. TypeRelay waits briefly and cancels instead of inserting with stuck modifiers.
-- Clipboard restoration never overwrites content copied by another application while insertion is finishing.
+- Linux does not restore the previous clipboard. macOS and Windows check clipboard ownership before restoration.
 - Templates with explicit Enter actions can submit forms or run terminal commands. Review the preview before inserting.
 - Search and expansion work offline. Sign-in, synchronization, team changes and update checks require network access.
