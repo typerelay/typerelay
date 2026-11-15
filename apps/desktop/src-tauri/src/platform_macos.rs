@@ -259,14 +259,16 @@ impl ObservationAdapter {
         std::thread::spawn(move||{
             let mut previous=None;let mut epoch=0;let mut native_previous=None::<typerelay_client::observation::CaptureContext>;let mut native_generation=0;let mut native_sequence=0;
             loop {
-                let raw=receiver.recv_timeout(Duration::from_millis(25)).ok();
+                // Keys wake this loop at once; the idle tick only notices focus changes, so it need not poll accessibility 40 times a second.
+                // A key that reveals a focus change stamps the boundary with its own time, or the observer drops the key as out of order.
+                let raw=receiver.recv_timeout(Duration::from_millis(500)).ok();
                 if !state.enabled.load(Ordering::SeqCst){previous=None;continue;}
                 if !monitored.load(Ordering::SeqCst){previous=None;state.safety(false);state.status("Permission needed: Input Monitoring; restart Typerelay after granting access");continue;}
                 let current_epoch=state.epoch.load(Ordering::SeqCst);if epoch!=current_epoch{previous=None;epoch=current_epoch;}
                 if state.native(){
                     use typerelay_client::observation::{CaptureHealth,CaptureSource,Edit,Protection};
                     if let Some(mut context)=Self::native_context(&state.app){
-                        if native_previous.as_ref().is_none_or(|old|old.app!=context.app||old.window!=context.window||old.layout!=context.layout){if let Some(old)=&native_previous{native_sequence+=1;state.native_event(old.clone(),CaptureSource::Keyboard,native_sequence,if old.layout==context.layout{Edit::Boundary}else{Edit::Reset},crate::observation::Observation::now());}native_generation+=1;}context.generation=native_generation;
+                        if native_previous.as_ref().is_none_or(|old|old.app!=context.app||old.window!=context.window||old.layout!=context.layout){if let Some(old)=&native_previous{native_sequence+=1;state.native_event(old.clone(),CaptureSource::Keyboard,native_sequence,if old.layout==context.layout{Edit::Boundary}else{Edit::Reset},raw.as_ref().map_or_else(crate::observation::Observation::now,|(_,at,_)|*at));}native_generation+=1;}context.generation=native_generation;
                         state.native_health(CaptureHealth{desktop:"macos".into(),layout:context.layout.clone(),ime:context.ime.clone(),app:Some(context.app.clone()),source:"keyboard".into(),blocked:if context.protection==Protection::Protected{Some("Learning paused in secure input".into())}else if context.ime.is_some(){Some("IME active: verified composition integration required".into())}else{None},at_ms:crate::observation::Observation::now(),..Default::default()});
                         if let Some((event_epoch,at,edit))=raw&&event_epoch==epoch&&crate::observation::Observation::now()-at<250{native_sequence+=1;state.native_event(context.clone(),CaptureSource::Keyboard,native_sequence,edit,at);}native_previous=Some(context);
                     }else{if let Some(old)=native_previous.take(){native_sequence+=1;state.native_event(old,CaptureSource::Keyboard,native_sequence,Edit::Reset,crate::observation::Observation::now());}state.native_health(CaptureHealth{desktop:"macos".into(),blocked:Some("Allow Accessibility and Input Monitoring, then focus an allowed app".into()),at_ms:crate::observation::Observation::now(),..Default::default()});}
