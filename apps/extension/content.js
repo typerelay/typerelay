@@ -5,10 +5,7 @@ globalThis.typeRelayContentReady = true;
 let items = [];
 let prefix = ';';
 let ownedUntil = 0;
-let claiming = false;
 const MAX_BEFORE = 128;
-const OWNERSHIP_MS = 1500;
-const RENEW_MS = 1000;
 let lastEditor;
 let lastSelection;
 let promptOpen = false;
@@ -145,9 +142,7 @@ async function expand(editor, saved, id, expected = '', erase = 0) {
 async function claim() {
 	if (googleDocs) { ownedUntil = 0; return; }
 	if (!document.hasFocus() || !editorFor(document.activeElement) || promptOpen) { ownedUntil = 0; return; }
-	if (claiming) return;
-	claiming = true;
-	try { if ((await send({ type: 'claim' })).verified) ownedUntil = Date.now() + OWNERSHIP_MS; else ownedUntil = 0; } catch { ownedUntil = 0; } finally { claiming = false; }
+	try { if ((await send({ type: 'claim' })).verified) ownedUntil = Date.now() + 650; else ownedUntil = 0; } catch { ownedUntil = 0; }
 }
 
 chrome.storage.onChanged.addListener((changes, area) => {
@@ -157,7 +152,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 void send({ type: 'snapshot' }).then(snapshot => { items = snapshot.items; prefix = snapshot.prefix; }).catch(() => undefined);
-document.addEventListener('focusout', () => { ownedUntil = 0; }, true);
+// Heartbeat must stay under the native 700 ms browser lease (crates/client/src/browser_lease.rs) or both sides expand.
+setInterval(() => { if (items.length) void claim(); }, 400);
 
 document.addEventListener('focusin', event => { const editor = editorFor(event.target); if (editor) { lastEditor = editor; lastSelection = selectionFor(editor); void send({ type: 'focus' }).catch(() => undefined); void claim(); } }, true);
 document.addEventListener('keyup', event => { if (event.isTrusted && confirmingKeys.has(event.code || event.key)) { confirmingKeys.delete(event.code || event.key); event.preventDefault(); event.stopImmediatePropagation(); return; } const editor = editorFor(event.target); if (editor) { lastEditor = editor; lastSelection = selectionFor(editor); } }, true);
@@ -165,7 +161,6 @@ document.addEventListener('mouseup', event => { const editor = editorFor(event.t
 
 document.addEventListener('keydown', event => {
 	if (event.isTrusted && (confirmingKeys.has(event.code || event.key) || (expansionEditors.has(editorFor(event.target)) && !promptOpen && [' ', 'Enter'].includes(event.key)))) { confirmingKeys.add(event.code || event.key); event.preventDefault(); event.stopImmediatePropagation(); return; }
-	if (event.isTrusted && items.length && ownedUntil - Date.now() < RENEW_MS) void claim();
 	if (!event.isTrusted || ![' ', 'Enter'].includes(event.key) || event.repeat || event.isComposing || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || promptOpen || Date.now() > ownedUntil) return;
 	const editor = editorFor(event.target);
 	if (!editor) return;
