@@ -9,9 +9,10 @@ import { ApiRateLimit } from '../rate_limit.js';
 
 export class AdminSettings {
 	static templates = emailTemplates;
-	// Cached 30s in Memcached (misses on backend failure); writers call invalidate().
-	static async get(key, fallback = {}) { const { value } = await ApiRateLimit.getCache().getOrLoad('setting:' + key, async () => ({ value: (await SystemSetting.findOne({ key }).lean())?.value ?? null }), { ttlMs: 30000 }); return value ?? fallback; }
-	static async invalidate(key) { await ApiRateLimit.getCache().delete('setting:' + key); }
+	// Cached 30s in Memcached (misses on backend failure); writers call invalidate(). Keyed by database so stacks and test databases sharing Memcached stay isolated.
+	static cacheKey(key) { return 'setting:' + mongoose.connection.name + ':' + key; }
+	static async get(key, fallback = {}) { const { value } = await ApiRateLimit.getCache().getOrLoad(AdminSettings.cacheKey(key), async () => ({ value: (await SystemSetting.findOne({ key }).lean())?.value ?? null }), { ttlMs: 30000 }); return value ?? fallback; }
+	static async invalidate(key) { await ApiRateLimit.getCache().delete(AdminSettings.cacheKey(key)); }
 	static async set(key, value) { await SystemSetting.updateOne({ key }, { $set: { value }, $inc: { revision: 1 } }, { upsert: true }); await AdminSettings.invalidate(key); return value; }
 	static validateTemplate(key, input) {
 		const template = AdminSettings.templates[key]; Support.assert(template, 'Unknown template', 404);
