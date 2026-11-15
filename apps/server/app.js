@@ -56,7 +56,7 @@ export class Server {
 		const assetHash = createHash('sha256');
 		for (const root of [fileURLToPath(new URL('./public/', import.meta.url)), '/data/editor/']) {
 			if (!existsSync(root)) continue;
-			for (const name of (await readdir(root, { recursive: true })).filter(name => /\.(js|css|wasm)$/.test(name)).sort()) assetHash.update(name).update('\0').update(await readFile(root + name)).update('\0');
+			for (const name of (await readdir(root, { recursive: true })).filter(name => /\.(js|css|wasm|webp|png|jpe?g|gif|svg|ico|woff2?|ttf)$/i.test(name)).sort()) assetHash.update(name).update('\0').update(await readFile(root + name)).update('\0');
 		}
 		const assetVersion = String(process.env.APP_VERSION || 'development').replace(/[^A-Za-z0-9._-]/g, '-') + '-' + assetHash.digest('hex').slice(0, 16);
 		const authBackgrounds = (await readdir(fileURLToPath(new URL('./public/auth/backgrounds/', import.meta.url)))).filter(name => /^[a-z0-9][a-z0-9_-]*\.webp$/i.test(name)).sort();
@@ -79,10 +79,12 @@ export class Server {
 		if (existsSync(docsDist)) app.use('/docs', helmet({ contentSecurityPolicy: false }), express.static(docsDist, docsOptions), (req, res) => res.status(404).sendFile(docsDist + '/404.html'));
 		app.use(helmet({ contentSecurityPolicy: { directives: { 'upgrade-insecure-requests': Auth.origin.startsWith('https:') ? [] : null, 'script-src': ["'self'", "'wasm-unsafe-eval'"], 'style-src': ["'self'", (req, res) => "'nonce-" + res.locals.styleNonce + "'"], 'style-src-elem': ["'self'", "'unsafe-inline'"], 'style-src-attr': ["'unsafe-inline'"], 'img-src': ["'self'", 'data:', 'https://ava.helpmonks.com', ...(ProductUpdates.enabled() ? ['https:', 'http:'] : [])] } } }));
 		const publicAssets = express.static('public');
-		const versionedAssets = express.static('public', { maxAge: '1y', immutable: true });
+		// Development edits public files without restarting, so only release builds may cache forever.
+		const immutable = process.env.NODE_ENV === 'development' ? {} : { maxAge: '1y', immutable: true };
+		const versionedAssets = express.static('public', immutable);
 		const vendor = { maxAge: '7d' };
 		app.use('/assets/generated', express.static('/data/editor'));
-		app.use(`/assets/${assetVersion}/generated`, express.static('/data/editor', { maxAge: '1y', immutable: true }));
+		app.use(`/assets/${assetVersion}/generated`, express.static('/data/editor', immutable));
 		app.use('/assets/:assetVersion', (req, res, next) => req.path === '/' ? next() : req.params.assetVersion === assetVersion ? versionedAssets(req, res, next) : res.sendStatus(404));
 		app.use('/assets', publicAssets);
 		app.use('/vendor/webauthn', express.static('node_modules/@simplewebauthn/browser/dist/bundle', vendor));

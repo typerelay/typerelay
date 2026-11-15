@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { Parser } from 'htmlparser2';
@@ -11,7 +12,7 @@ export class RichText {
 		return process.env.TYPERELAY_WASM || (existsSync('/data/editor/template.wasm') ? '/data/editor/template.wasm' : local);
 	}
 	static load() {
-		if (!RichText.instance) RichText.instance = new WebAssembly.Instance(new WebAssembly.Module(readFileSync(RichText.wasmPath())), {}).exports;
+		if (!RichText.instance) { const bytes = readFileSync(RichText.wasmPath()); RichText.version = createHash('sha256').update(bytes).digest('hex').slice(0, 16); RichText.instance = new WebAssembly.Instance(new WebAssembly.Module(bytes), {}).exports; }
 		return RichText.instance;
 	}
 	static render(input) { return RichText.call('rich_text_render', { markdown: input.markdown || '', variables: input.variables || {}, values: input.values || {}, assets: Array.isArray(input.assets) ? {} : (input.assets || {}), now_ms: input.now_ms ?? Date.now(), offset_minutes: input.offset_minutes ?? 0, preview: input.preview ?? true }); }

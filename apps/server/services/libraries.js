@@ -86,7 +86,9 @@ export class Libraries {
 	static entry(snippet, html) { if (snippet.content?.type === 'rich_text') return { ...snippet, replace: snippet.content.markdown, rich_html: html ?? RichText.render(Libraries.richInput(snippet)).html }; return { ...snippet, replace: snippet.content?.text }; }
 	// Rendered rich HTML is cached by input hash; time-dependent snippets are rendered every time and a cache failure falls back to rendering.
 	static async richHtml(snippets) {
-		const items = snippets.map(snippet => snippet.content?.type === 'rich_text' && !/{{\s*(date|time|timestamp)/.test(snippet.content.markdown || '') ? { snippet, key: 'rich_html:' + Support.hash(JSON.stringify(Libraries.richInput(snippet))) } : null);
+		// The key includes the renderer build so a changed WASM never serves old HTML.
+		RichText.load();
+		const items = snippets.map(snippet => snippet.content?.type === 'rich_text' && !/{{\s*(date|time|timestamp)/.test(snippet.content.markdown || '') ? { snippet, key: 'rich_html:' + RichText.version + ':' + Support.hash(JSON.stringify(Libraries.richInput(snippet))) } : null);
 		const keys = items.filter(Boolean).map(item => item.key);
 		let hits = new Map();
 		if (keys.length) try { const values = await ApiRateLimit.getCache().getMany(keys); keys.forEach((key, index) => hits.set(key, values[index])); } catch {}
