@@ -1,6 +1,5 @@
 import { timingSafeEqual } from 'node:crypto';
 import express from 'express';
-import pug from 'pug';
 import Ajv from 'ajv/dist/2020.js';
 import { ApiSchema } from './openapi.js';
 import { Auth } from '../services/auth.js';
@@ -105,14 +104,14 @@ export class PublicApi {
 		app.use(['/api/v2/access-tokens', '/api/v2/oauth'], async (req, res, next) => { if (req.method !== 'GET') await Security.assertConfirmed(req.ctx.user, 'creating API credentials'); res.set('Cache-Control', 'no-store'); next(); });
 		app.get('/api/v2/access-tokens', async (req, res) => {
 			const grants = await Integration.find({ user: req.ctx.user, account: req.ctx.account, kind: 'pat', revoked: false }).sort({ createdAt: 1 }).lean();
-			res.json(grants.map(grant => ({ id: String(grant._id), html: pug.renderFile('./views/ajax/access-token.pug', { grant }) })));
+			res.json(grants.map(grant => ({ id: String(grant._id), html: Support.render('./views/ajax/access-token.pug', { grant }) })));
 		});
-		app.post('/api/v2/access-tokens', async (req, res) => { const { token, grant } = await Auth.createIntegration(req.ctx, req.body); res.json({ id: String(grant._id), html: pug.renderFile('./views/ajax/access-token.pug', { grant }), secret_html: pug.renderFile('./views/ajax/access-token-secret.pug', { id: String(grant._id), token }) }); });
+		app.post('/api/v2/access-tokens', async (req, res) => { const { token, grant } = await Auth.createIntegration(req.ctx, req.body); res.json({ id: String(grant._id), html: Support.render('./views/ajax/access-token.pug', { grant }), secret_html: Support.render('./views/ajax/access-token-secret.pug', { id: String(grant._id), token }) }); });
 		app.delete('/api/v2/access-tokens/:id', async (req, res) => { const grant = await Integration.findOneAndUpdate({ _id: Support.id(req.params.id), user: req.ctx.user, account: req.ctx.account, kind: 'pat', revoked: false }, { $set: { revoked: true } }).lean(); Support.assert(grant, 'Token not found', 404); res.json({ revoked: req.params.id }); });
 		app.get('/api/v2/oauth/config', (req, res) => res.json(Auth.oauthConfig()));
 		app.get('/api/v2/oauth/consents', async (req, res) => {
 			const grants = await Integration.find({ user: req.ctx.user, account: req.ctx.account, kind: 'oauth', revoked: false }).sort({ last_used: -1, createdAt: -1 }).lean();
-			res.json(grants.map(grant => ({ id: String(grant._id), html: pug.renderFile('./views/ajax/oauth-consent.pug', { grant }) })));
+			res.json(grants.map(grant => ({ id: String(grant._id), html: Support.render('./views/ajax/oauth-consent.pug', { grant }) })));
 		});
 		app.delete('/api/v2/oauth/consents/:id', async (req, res) => {
 			const grant = await Integration.findOneAndUpdate({ _id: Support.id(req.params.id), user: req.ctx.user, account: req.ctx.account, kind: 'oauth', revoked: false }, { $set: { revoked: true } }).lean();
@@ -121,10 +120,10 @@ export class PublicApi {
 		app.get('/api/v2/oauth/clients', async (req, res) => {
 			Support.assert(Support.admin(req.ctx), 'Owner or admin access required', 403);
 			const clients = await OAuthClient.find({ account: req.ctx.account, registration_source: 'manual' }).sort({ createdAt: -1 }).lean();
-			res.json(clients.map(client => ({ id: String(client._id), html: pug.renderFile('./views/ajax/oauth-client.pug', { client: Auth.integrationClient(client) }) })));
+			res.json(clients.map(client => ({ id: String(client._id), html: Support.render('./views/ajax/oauth-client.pug', { client: Auth.integrationClient(client) }) })));
 		});
 		app.post('/api/v2/oauth/clients', async (req, res) => {
-			const client = await Auth.createOAuthClient(req.ctx, req.body); res.status(201).json({ id: client.id, html: pug.renderFile('./views/ajax/oauth-client.pug', { client }), ...(client.client_secret ? { secret_html: pug.renderFile('./views/ajax/oauth-client-secret.pug', { secret: client.client_secret }) } : {}) });
+			const client = await Auth.createOAuthClient(req.ctx, req.body); res.status(201).json({ id: client.id, html: Support.render('./views/ajax/oauth-client.pug', { client }), ...(client.client_secret ? { secret_html: Support.render('./views/ajax/oauth-client-secret.pug', { secret: client.client_secret }) } : {}) });
 		});
 		app.delete('/api/v2/oauth/clients/:id', async (req, res) => {
 			Support.assert(Support.admin(req.ctx), 'Owner or admin access required', 403);

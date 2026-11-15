@@ -7,7 +7,6 @@ import QRCode from 'qrcode';
 import { SAML } from '@node-saml/node-saml';
 import { X509Certificate } from 'node:crypto';
 import { DOMParser } from '@xmldom/xmldom';
-import pug from 'pug';
 import { generateRegistrationOptions, verifyRegistrationResponse, generateAuthenticationOptions, verifyAuthenticationResponse } from '@simplewebauthn/server';
 import { mongoose, User, Ticket, Passkey, Member, Account, SsoLog } from '../model/index.js';
 import { Auth } from './auth.js';
@@ -224,7 +223,7 @@ export class Security {
 		const account = await Security.ssoAdmin(req, false);
 		const settings = { account: String(account._id), ...account.sso, recovery_hash: undefined, entitled: Billing.entitlements(account).capabilities.sso, urls: Security.ssoUrls(account), tested: account.sso?.tested_fingerprint === Security.ssoFingerprint(account), owner: req.ctx.role === 'owner' };
 		delete settings.tested_fingerprint;
-		return { revision: settings.revision || 0, html: pug.renderFile('./views/ajax/sso.pug', { settings }) };
+		return { revision: settings.revision || 0, html: Support.render('./views/ajax/sso.pug', { settings }) };
 	}
 	static async saveSso(req) {
 		const account = await Security.ssoAdmin(req);
@@ -258,7 +257,7 @@ export class Security {
 		const code = Support.token();
 		await AccountAccess.write(account._id, session => Account.updateOne({ _id: account._id }, { $set: { 'sso.recovery_hash': Support.hash(code), 'sso.recovery_ready': true } }, { session }));
 		await Security.ssoLog(account._id, 'recovery_generated', req.ctx.user);
-		return { ...await Security.ssoSettings(req), secret_html: pug.renderFile('./views/ajax/sso-recovery-code.pug', { code }) };
+		return { ...await Security.ssoSettings(req), secret_html: Support.render('./views/ajax/sso-recovery-code.pug', { code }) };
 	}
 	static ssoDestination(value, account) {
 		if (!value) return `/?account=${account}`;
@@ -454,7 +453,7 @@ export class Security {
 		app.get('/api/v2/sso', async (req, res) => res.json(await Security.ssoSettings(req)));
 		app.put('/api/v2/sso', async (req, res) => res.json(await Security.saveSso(req)));
 		app.post('/api/v2/sso/recovery-code', async (req, res) => res.json(await Security.ssoRecoveryCode(req)));
-		app.get('/api/v2/sso/logs', async (req, res) => { await Security.ssoAdmin(req, false); const logs = await SsoLog.find({ account: req.ctx.account, expires: { $gt: new Date() } }).sort({ createdAt: -1, _id: -1 }).limit(50).lean(); res.json({ html: pug.renderFile('./views/ajax/sso-logs.pug', { logs }) }); });
+		app.get('/api/v2/sso/logs', async (req, res) => { await Security.ssoAdmin(req, false); const logs = await SsoLog.find({ account: req.ctx.account, expires: { $gt: new Date() } }).sort({ createdAt: -1, _id: -1 }).limit(50).lean(); res.json({ html: Support.render('./views/ajax/sso-logs.pug', { logs }) }); });
 		app.use('/api/v2/security', limit, async (req, res, next) => { if (req.method !== 'GET') { Security.browserSession(req); await Security.assertConfirmed(req.ctx.user, 'changing security settings'); } res.setHeader('Cache-Control', 'no-store'); next(); });
 		app.get('/api/v2/security', async (req, res) => {
 			const user = await User.findById(req.ctx.user).lean();

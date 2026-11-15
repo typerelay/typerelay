@@ -1,3 +1,4 @@
+import pug from 'pug';
 import { createHash, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { Account, Change, Group, Member } from '../model/index.js';
@@ -8,6 +9,8 @@ export class Fault extends Error {
 	constructor(status, message, code = '', details = null) { super(message); this.status = status; this.code = code; this.details = details; }
 }
 export class Support {
+	// Compiled templates are cached except in development/test, so template edits show up without a restart.
+	static render(file, locals) { return pug.renderFile(file, { cache: !['development', 'test'].includes(process.env.NODE_ENV), ...locals }); }
 	static assert(value, message, status = 400) { if (!value) throw new Fault(status, message); }
 	static token() { return randomBytes(32).toString('base64url'); }
 	static hash(value) { return createHash('sha256').update(value).digest('hex'); }
