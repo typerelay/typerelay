@@ -88,7 +88,7 @@ export class PanelRelease {
 	}
 	static buildEnvironment(environment) {
 		const result = { ...environment };
-		for (const key of Object.keys(result)) if (key === 'WINDOWS_SIGNING_PIN' || key.startsWith('BUNNY_STORAGE_PASSWORD') || key.startsWith('APPLE_')) delete result[key];
+		for (const key of Object.keys(result)) if (key === 'WINDOWS_SIGNING_PIN' || key.startsWith('BUNNY_STORAGE_PASSWORD') || key.startsWith('APPLE_') || ['APPIMAGE', 'APPDIR', 'TARGET_APPIMAGE'].includes(key)) delete result[key]; // a parent AppImage's TARGET_APPIMAGE makes linuxdeploy run that AppImage instead
 		if (result.TAURI_SIGNING_PRIVATE_KEY) delete result.TAURI_SIGNING_PRIVATE_KEY_PATH;
 		return result;
 	}
