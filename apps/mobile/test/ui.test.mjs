@@ -118,3 +118,11 @@ test('email confirmation banner follows the status and Resend posts once', async
   dom.window.Auth.tokens = null; confirmed = false; await dom.window.MobileApp.refreshEmailConfirmation(); assert.equal(banner.hidden, true);
  } finally { dom.window.close(); }
 });
+
+test('updates map rows by key: renders only the changed row and removes stale ones', () => {
+ const fixture = new Fixture(); fixture.update(); const [first, second] = fixture.list.children; let renders = 0;
+ const counting = values => { renders++; return render(values); };
+ fixture.libraries[0].records[1].title = 'Changed'; Items.update(fixture.list, fixture.libraries, counting);
+ assert.equal(renders, 1); assert.equal(fixture.list.children[0], first); assert.notEqual(fixture.list.children[1], second);
+ fixture.libraries[0].records.shift(); Items.update(fixture.list, fixture.libraries, counting); assert.equal(fixture.list.children.length, 1); fixture.dom.window.close();
+});

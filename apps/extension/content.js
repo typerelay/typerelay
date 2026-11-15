@@ -5,6 +5,10 @@ globalThis.typeRelayContentReady = true;
 let items = [];
 let prefix = ';';
 let ownedUntil = 0;
+let claiming = false;
+const MAX_BEFORE = 128;
+const OWNERSHIP_MS = 1500;
+const RENEW_MS = 1000;
 let lastEditor;
 let lastSelection;
 let promptOpen = false;
@@ -33,10 +37,15 @@ function beforeCaret(editor) {
 	if (!saved) return null;
 	if ('start' in saved) return saved.start === saved.end ? editor.value.slice(0, saved.start) : null;
 	if (!saved.collapsed) return null;
-	const range = saved.cloneRange();
-	range.selectNodeContents(editor);
-	range.setEnd(saved.startContainer, saved.startOffset);
-	return range.toString();
+	// The matcher only reads the last 128 characters, so walk text nodes backwards from the caret instead of copying the whole field.
+	const container = saved.startContainer;
+	const walker = editor.ownerDocument.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+	let text = '';
+	let node;
+	if (container.nodeType === Node.TEXT_NODE) { text = container.data.slice(0, saved.startOffset); walker.currentNode = container; node = walker.previousNode(); }
+	else { const next = container.childNodes[saved.startOffset]; walker.currentNode = next || container; node = next ? walker.previousNode() : walker.lastChild() || walker.previousNode(); }
+	while (node && text.length < MAX_BEFORE) { text = node.data + text; node = walker.previousNode(); }
+	return text.slice(-MAX_BEFORE);
 }
 
 function restore(editor, saved) {
@@ -136,7 +145,9 @@ async function expand(editor, saved, id, expected = '', erase = 0) {
 async function claim() {
 	if (googleDocs) { ownedUntil = 0; return; }
 	if (!document.hasFocus() || !editorFor(document.activeElement) || promptOpen) { ownedUntil = 0; return; }
-	try { if ((await send({ type: 'claim' })).verified) ownedUntil = Date.now() + 650; else ownedUntil = 0; } catch { ownedUntil = 0; }
+	if (claiming) return;
+	claiming = true;
+	try { if ((await send({ type: 'claim' })).verified) ownedUntil = Date.now() + OWNERSHIP_MS; else ownedUntil = 0; } catch { ownedUntil = 0; } finally { claiming = false; }
 }
 
 chrome.storage.onChanged.addListener((changes, area) => {
@@ -146,7 +157,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 void send({ type: 'snapshot' }).then(snapshot => { items = snapshot.items; prefix = snapshot.prefix; }).catch(() => undefined);
-setInterval(() => { if (items.length) void claim(); }, 400);
+document.addEventListener('focusout', () => { ownedUntil = 0; }, true);
 
 document.addEventListener('focusin', event => { const editor = editorFor(event.target); if (editor) { lastEditor = editor; lastSelection = selectionFor(editor); void send({ type: 'focus' }).catch(() => undefined); void claim(); } }, true);
 document.addEventListener('keyup', event => { if (event.isTrusted && confirmingKeys.has(event.code || event.key)) { confirmingKeys.delete(event.code || event.key); event.preventDefault(); event.stopImmediatePropagation(); return; } const editor = editorFor(event.target); if (editor) { lastEditor = editor; lastSelection = selectionFor(editor); } }, true);
@@ -154,6 +165,7 @@ document.addEventListener('mouseup', event => { const editor = editorFor(event.t
 
 document.addEventListener('keydown', event => {
 	if (event.isTrusted && (confirmingKeys.has(event.code || event.key) || (expansionEditors.has(editorFor(event.target)) && !promptOpen && [' ', 'Enter'].includes(event.key)))) { confirmingKeys.add(event.code || event.key); event.preventDefault(); event.stopImmediatePropagation(); return; }
+	if (event.isTrusted && items.length && ownedUntil - Date.now() < RENEW_MS) void claim();
 	if (!event.isTrusted || ![' ', 'Enter'].includes(event.key) || event.repeat || event.isComposing || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || promptOpen || Date.now() > ownedUntil) return;
 	const editor = editorFor(event.target);
 	if (!editor) return;

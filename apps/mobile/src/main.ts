@@ -115,6 +115,7 @@ export class MobileApp {
   SwipeRows.bind(MobileApp.$('snippets'), MobileApp.swipeAction);
   MobileApp.filter();
  }
+ static searchTimer = 0;
  static filter() {
   const query = MobileApp.input('search').value.toLocaleLowerCase(); const library = MobileApp.input('library').value; let count = 0;
   for (const element of [...MobileApp.$('snippets').children] as HTMLElement[]) { element.hidden = (!!library && element.dataset.library !== library) || !(element.dataset.search || '').includes(query); if (!element.hidden) count++; }
@@ -323,8 +324,8 @@ export class MobileApp {
   MobileApp.$('profile').onclick = MobileApp.showSettings;
   MobileApp.$('settings-back').onclick = () => MobileApp.switchScreen('snippets');
   MobileApp.$('nav-search').onclick = () => { MobileApp.switchScreen('snippets'); requestAnimationFrame(() => { MobileApp.$('snippets-screen').scrollIntoView({ behavior: 'smooth', block: 'start' }); MobileApp.input('search').focus({ preventScroll: true }); }); };
-  MobileApp.$('search').oninput = MobileApp.filter;
-  MobileApp.$('clear-search').onclick = () => { MobileApp.input('search').value = ''; MobileApp.filter(); MobileApp.input('search').focus(); };
+  MobileApp.$('search').oninput = () => { clearTimeout(MobileApp.searchTimer); MobileApp.searchTimer = window.setTimeout(MobileApp.filter, 120); };
+  MobileApp.$('clear-search').onclick = () => { MobileApp.input('search').value = ''; clearTimeout(MobileApp.searchTimer); MobileApp.filter(); MobileApp.input('search').focus(); };
   MobileApp.$('library-filters').onclick = event => { const button = (event.target as HTMLElement).closest<HTMLElement>('[data-library-filter]'); if (!button) return; MobileApp.input('library').value = button.dataset.libraryFilter || ''; MobileApp.filter(); };
   MobileApp.$('add').onclick = () => { MobileApp.switchScreen('snippets'); const library = MobileApp.state.libraries.find(library => library.permissions.edit && (!MobileApp.input('library').value || library._id === MobileApp.input('library').value)); if (!library) return MobileApp.toast('Choose an editable library. Create libraries in the web app.', 'error'); void MobileApp.openEditor(library).catch(MobileApp.error); };
   MobileApp.$('resume-draft').onclick = () => { const draft = MobileApp.state.draft; if (!draft) return; try { const library = MobileApp.library(draft.editing.library); void MobileApp.openEditor(library, library.records.find(item => item.id === draft.editing.id), draft).catch(MobileApp.error); } catch (error) { MobileApp.error(error); } };

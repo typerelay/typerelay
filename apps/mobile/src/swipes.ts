@@ -64,7 +64,7 @@ export class SwipeRows {
  static start = (event: PointerEvent) => {
   const row = (event.target as HTMLElement).closest<HTMLElement>('.snippet-swipe-shell');
   if (!row || (event.target as HTMLElement).closest('[data-swipe-side]') || (event.pointerType === 'mouse' && event.button !== 0)) return;
-  for (const other of row.parentElement?.querySelectorAll<HTMLElement>('.snippet-swipe-shell') || []) if (other !== row) SwipeRows.reset(other);
+  for (const other of row.parentElement?.querySelectorAll<HTMLElement>('.snippet-swipe-shell') || []) if (other !== row && Number(other.dataset.swipeOffset || 0)) SwipeRows.reset(other);
   SwipeRows.drag = { dragging: false, offset: Number(row.dataset.swipeOffset || 0), pointer: event.pointerId, row, startX: event.clientX, startY: event.clientY };
  };
  static move = (event: PointerEvent) => {
