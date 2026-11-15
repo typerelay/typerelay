@@ -1,12 +1,13 @@
-use typerelay_client::{database::DatabaseSnapshot, desktop::{Hyprland, Registration}};
+use typerelay_client::{database::{DatabaseSnapshot, Watcher}, desktop::{Hyprland, Registration}};
 use crate::clipboard::{PasteJob, Progress};
 use anyhow::{Context, Result, bail};
 use evdev::{Device, EventType, InputEvent, KeyCode, InputId, BusType, uinput::VirtualDevice};
 use fs2::FileExt;
 use std::{collections::{BTreeSet, VecDeque}, fs, io::Read, os::unix::net::UnixStream, path::PathBuf, process::Command, sync::{Arc, atomic::{AtomicBool, AtomicU64, Ordering}}, thread, time::{Duration, Instant}};
-use typerelay_core::{Engine, Input, Expansion, FeedResult};
+use typerelay_core::{Engine, Input, Expansion, FeedResult, Snapshot};
 use typerelay_client::{settings::SettingsStore, editor::Paths, browser_lease::BrowserLease};
 use typerelay_client::installation::Installer;
+type Usage = std::sync::mpsc::SyncSender<(typerelay_client::panel::Hit, &'static str, usize)>;
 
 #[path = "omarchy_input.rs"]
 mod input_devices;
@@ -114,10 +115,8 @@ impl ContextWatch {
 }
 
 impl Session {
-    fn record_usage(expansion: &Expansion) {
-        if let Some(identity) = &expansion.identity {
-            if let Ok(root) = Paths::config_dir() { let hit=typerelay_client::panel::Hit{id:identity.id.clone(),library:identity.library.clone(),revision:identity.revision,library_name:String::new(),title:String::new(),abbreviation:String::new(),preview:String::new()};typerelay_client::panel::Panel::record_usage(&root.join("snippets"),&hit,"insert","desktop",expansion.text.chars().count().saturating_sub(expansion.erase)); }
-        }
+    fn record_usage(usage: &Usage, expansion: &Expansion) {
+        if let Some(identity) = &expansion.identity { let hit=typerelay_client::panel::Hit{id:identity.id.clone(),library:identity.library.clone(),revision:identity.revision,library_name:String::new(),title:String::new(),abbreviation:String::new(),preview:String::new()};let _=usage.try_send((hit,"insert",expansion.text.chars().count().saturating_sub(expansion.erase))); }
     }
 
     const MODIFIERS: [KeyCode; 8] = [KeyCode::KEY_LEFTSHIFT, KeyCode::KEY_RIGHTSHIFT, KeyCode::KEY_LEFTCTRL, KeyCode::KEY_RIGHTCTRL, KeyCode::KEY_LEFTALT, KeyCode::KEY_RIGHTALT, KeyCode::KEY_LEFTMETA, KeyCode::KEY_RIGHTMETA];
@@ -296,7 +295,7 @@ impl Session {
         Ok(strokes)
     }
 
-    pub fn run(mut store: DatabaseSnapshot, device_name: &str) -> Result<()> {
+    pub fn run(store: DatabaseSnapshot, device_name: &str) -> Result<()> {
         if unsafe { libc::geteuid() } == 0 { bail!("Run the client as your desktop user, not root"); }
         let runtime = std::env::var("XDG_RUNTIME_DIR")?;
         let lock = fs::OpenOptions::new().create(true).truncate(false).read(true).write(true).open(PathBuf::from(runtime).join("typerelay.lock"))?;
@@ -309,10 +308,11 @@ impl Session {
         let progress=Arc::new(AtomicU64::new(0));let guarded=Arc::new(AtomicBool::new(true));Self::guard_relay(guarded.clone(),progress.clone());
         let mut input_generation = 0u64;
         let cursor_discovery = Arc::new(AtomicBool::new(false));
+        let mut snapshots = store.watch();
         let result = Self::keep_connected(&running, &progress, || {
             input_generation = input_generation.wrapping_add(1);
             while let Ok(request) = panel.0.try_recv() { let _ = request.reply.send(Err("Keyboard reconnected; insertion cancelled".into())); }
-            Self::relay(&mut store, device_name, &running, &progress, &panel, &mut input_generation, &cursor_discovery)
+            Self::relay(&mut snapshots, device_name, &running, &progress, &panel, &mut input_generation, &cursor_discovery)
         });
         running.store(false, Ordering::SeqCst);
         guarded.store(false, Ordering::SeqCst);
@@ -337,7 +337,7 @@ impl Session {
         Ok(())
     }
 
-    fn relay(store: &mut DatabaseSnapshot, requested: &str, running: &AtomicBool, progress: &AtomicU64, panel: &(std::sync::mpsc::Receiver<typerelay_client::panel_ipc::Insertion>, std::sync::mpsc::SyncSender<typerelay_client::panel_ipc::Insertion>), input_generation: &mut u64, cursor_discovery: &Arc<AtomicBool>) -> Result<()> {
+    fn relay((snapshot, reloads): &mut (Snapshot, Watcher<Result<Snapshot>>), requested: &str, running: &AtomicBool, progress: &AtomicU64, panel: &(std::sync::mpsc::Receiver<typerelay_client::panel_ipc::Insertion>, std::sync::mpsc::SyncSender<typerelay_client::panel_ipc::Insertion>), input_generation: &mut u64, cursor_discovery: &Arc<AtomicBool>) -> Result<()> {
         let (panel_requests, template_tx) = panel;
         let devices = Hyprland::query("devices")?;
         Self::check_interference(&devices)?;
@@ -353,7 +353,8 @@ impl Session {
         let mut caps_control = false;
         let mut source = None;
         let mut settings = SettingsStore::open(Paths::config_dir()?.join("settings.yml"))?;
-        let mut engine = Engine::new(store.snapshot.clone());
+        let mut engine = Engine::new(snapshot.clone());
+        let usage_recorder = &typerelay_client::panel::Panel::usage_recorder(Paths::config_dir()?.join("snippets"));
         engine.set_prefix(&settings.settings.trigger_prefix).map_err(anyhow::Error::msg)?;
         let mut pressed = BTreeSet::new();
         let mut suppressed = BTreeSet::<(u64,u16)>::new();
@@ -373,7 +374,7 @@ impl Session {
         let mut paste: Option<PasteState> = None;
         let mut last_conflict_check = Instant::now()-Duration::from_secs(2);
         let mut last_health = String::new();
-        eprintln!("TypeRelay running: {} snippets; automatic keyboard input; configured prefix + abbreviation + Space or Enter. Ctrl+C stops. No keystrokes are logged.", store.snapshot.len());
+        eprintln!("TypeRelay running: {} snippets; automatic keyboard input; configured prefix + abbreviation + Space or Enter. Ctrl+C stops. No keystrokes are logged.", snapshot.len());
         while running.load(Ordering::SeqCst) {
             progress.fetch_add(1,Ordering::SeqCst);
             if last_conflict_check.elapsed() >= Duration::from_secs(2) {
@@ -399,11 +400,10 @@ impl Session {
                 if let Some(state) = &mut paste { state.cancelled = true; state.job.cancel(); }
             }
             if last_reload.elapsed() > Duration::from_millis(500) {
-                match store.reload() {
-                    Ok(Some(snapshot)) => { engine.replace_snapshot(snapshot); eprintln!("Snippet snapshot reloaded"); }
-                    Ok(None) => (),
+                while let Some(reloaded) = reloads.try_recv() { match reloaded {
+                    Ok(reloaded) => { *snapshot = reloaded.clone(); engine.replace_snapshot(reloaded); eprintln!("Snippet snapshot reloaded"); }
                     Err(error) => eprintln!("Snippet reload rejected: {error:#}; keeping last valid snapshot"),
-                }
+                } }
                 match settings.reload() {
                     Ok(true) => { engine.set_prefix(&settings.settings.trigger_prefix).map_err(anyhow::Error::msg)?; target = None; eprintln!("Trigger prefix updated"); }
                     Ok(false) => (),
@@ -463,7 +463,7 @@ impl Session {
                         state.started = true;
                     }
                     Ok(Ok(Progress::Ready)) => { state.cancelled = true; state.job.cancel(); }
-                    Ok(Ok(Progress::Finished)) => { state.sent = Self::finish_clipboard_strokes(&mut insertion, state.sent); if let Some(cursor)=state.cursor.take()&&state.sent&&!state.cancelled {if state.generation!=*input_generation||Self::target()?!=state.target {state.cancelled=true;} else {match Hyprland::position_cursor(state.target.as_deref().unwrap_or_default(),&state.expansion.text,cursor.utf16,cursor_discovery,||Ok(Self::target()?==state.target&&!context.changed(state.target.as_deref())?)) {Ok(true)=>{if std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some(){eprintln!("Cursor positioned directly");}state.cursor_remaining=Some(0);continue;},Ok(false)=>{state.cursor_remaining=Some(cursor.backward_graphemes);continue;},Err(error)=>{eprintln!("Cursor positioning cancelled: {error:#}");state.cancelled=true;}}}} if state.confirm_enter&&state.sent&&!state.cancelled&&state.generation==*input_generation&&Self::target()?==state.target&&!context.changed(state.target.as_deref())? {output.emit(&Self::stroke(KeyCode::KEY_ENTER,false))?;} if state.sent && !state.cancelled && state.reply.is_none() { Self::record_usage(&state.expansion); } if let Some(reply) = state.reply.take() { let _ = reply.send(if state.sent && !state.cancelled { Ok(state.generation) } else { Err("Insertion cancelled; nothing retried".into()) }); } paste = None; continue; }
+                    Ok(Ok(Progress::Finished)) => { state.sent = Self::finish_clipboard_strokes(&mut insertion, state.sent); if let Some(cursor)=state.cursor.take()&&state.sent&&!state.cancelled {if state.generation!=*input_generation||Self::target()?!=state.target {state.cancelled=true;} else {match Hyprland::position_cursor(state.target.as_deref().unwrap_or_default(),&state.expansion.text,cursor.utf16,cursor_discovery,||Ok(Self::target()?==state.target&&!context.changed(state.target.as_deref())?)) {Ok(true)=>{if std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some(){eprintln!("Cursor positioned directly");}state.cursor_remaining=Some(0);continue;},Ok(false)=>{state.cursor_remaining=Some(cursor.backward_graphemes);continue;},Err(error)=>{eprintln!("Cursor positioning cancelled: {error:#}");state.cancelled=true;}}}} if state.confirm_enter&&state.sent&&!state.cancelled&&state.generation==*input_generation&&Self::target()?==state.target&&!context.changed(state.target.as_deref())? {output.emit(&Self::stroke(KeyCode::KEY_ENTER,false))?;} if state.sent && !state.cancelled && state.reply.is_none() { Self::record_usage(usage_recorder, &state.expansion); } if let Some(reply) = state.reply.take() { let _ = reply.send(if state.sent && !state.cancelled { Ok(state.generation) } else { Err("Insertion cancelled; nothing retried".into()) }); } paste = None; continue; }
                     failure @ (Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
                         eprintln!("Clipboard paste failed; no automatic retry");
                         if let Some(reply) = &state.reply {
@@ -502,7 +502,7 @@ impl Session {
                     }
                     if insertion.is_empty() {
                         if let Some(state) = &mut paste { state.job.pasted(); state.sent = true; }
-                        if let Some(expansion) = usage.take() { Self::record_usage(&expansion); }
+                        if let Some(expansion) = usage.take() { Self::record_usage(usage_recorder, &expansion); }
                     }
                     last_stroke = Instant::now();
                 }

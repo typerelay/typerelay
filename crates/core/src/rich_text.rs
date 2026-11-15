@@ -6,11 +6,33 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::borrow::Cow;
+use std::sync::LazyLock;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 
 type PendingImage=(usize,Vec<Event<'static>>,usize,Option<std::ops::Range<usize>>);
 
 const ASSET_PREFIX: &str = "typerelay-asset:";
+static STYLE_ALIGN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^text-align:(left|center|right|justify);?$").unwrap());
+static UNDERLINE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)\+\+(.+?)\+\+").unwrap());
+static IMAGE_TITLE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?s)\s+((?:\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|\((?:\\.|[^)\\])*\)))\s*\)?$"#).unwrap());
+static ASSET_REF: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?i)typerelay-asset:([a-f0-9]{64})"#).unwrap());
+static IMAGE_ALT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?is)<img\b[^>]*\balt=["']([^"']*)["'][^>]*>"#).unwrap());
+static BLOCK_TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)</?(?:p|div|h[1-6]|li|tr|blockquote|pre|br|hr)[^>]*>").unwrap());
+static ANY_TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)<[^>]*>").unwrap());
+static RTF_IMAGE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?is)<img\b[^>]*\bsrc=["']data:image/(png|jpeg);base64,([^"']+)["'][^>]*>"#).unwrap());
+static IMAGE_TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?is)<img\b[^>]*>").unwrap());
+static SANITIZER: LazyLock<Builder<'static>> = LazyLock::new(|| {
+    let mut builder = Builder::default();
+    builder
+			.add_tags(["u", "s", "del", "table", "thead", "tbody", "tfoot", "tr", "th", "td", "caption", "colgroup", "col", "svg", "g", "path", "circle", "ellipse", "line", "polyline", "polygon", "rect", "text"])
+			.add_generic_attributes(["class", "title", "align", "style", "data-align", "data-asset", "data-placement", "width", "height", "viewBox", "fill", "stroke", "stroke-width", "d", "x", "y", "x1", "x2", "y1", "y2", "cx", "cy", "r", "rx", "ry", "points"])
+			.add_tag_attributes("img", ["src", "alt", "title", "width", "height", "data-asset", "data-source-url"])
+			.add_tag_attributes("a", ["href", "title", "target"])
+			.url_schemes(["http", "https", "mailto", "tel", "data", "typerelay-asset"].into_iter().collect())
+			// ammonia drops non-whitelisted URL schemes before this filter, so "data" stays in url_schemes for img src; here every other data: URL is removed, keeping only data:image/ image sources.
+			.attribute_filter(|element,attribute,value|if attribute=="style"{let normalized=value.trim().to_ascii_lowercase().replace(' ',"");STYLE_ALIGN.is_match(&normalized).then_some(Cow::Owned(normalized))}else{let lower=value.trim().to_ascii_lowercase();if lower.starts_with("data:")&&!(element=="img"&&attribute=="src"&&lower.starts_with("data:image/")){None}else{Some(Cow::Borrowed(value))}});
+    builder
+});
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -58,18 +80,7 @@ impl RichText {
         lower.starts_with('#') || lower.starts_with('/') || ["https:", "http:", "mailto:", "tel:", ASSET_PREFIX].iter().any(|scheme| lower.starts_with(scheme))
     }
 
-    fn sanitizer() -> Builder<'static> {
-        let mut builder = Builder::default();
-        builder
-			.add_tags(["u", "s", "del", "table", "thead", "tbody", "tfoot", "tr", "th", "td", "caption", "colgroup", "col", "svg", "g", "path", "circle", "ellipse", "line", "polyline", "polygon", "rect", "text"])
-			.add_generic_attributes(["class", "title", "align", "style", "data-align", "data-asset", "data-placement", "width", "height", "viewBox", "fill", "stroke", "stroke-width", "d", "x", "y", "x1", "x2", "y1", "y2", "cx", "cy", "r", "rx", "ry", "points"])
-			.add_tag_attributes("img", ["src", "alt", "title", "width", "height", "data-asset", "data-source-url"])
-			.add_tag_attributes("a", ["href", "title", "target"])
-			.url_schemes(["http", "https", "mailto", "tel", "data", "typerelay-asset"].into_iter().collect())
-			// ammonia drops non-whitelisted URL schemes before this filter, so "data" stays in url_schemes for img src; here every other data: URL is removed, keeping only data:image/ image sources.
-			.attribute_filter(|element,attribute,value|if attribute=="style"{let normalized=value.trim().to_ascii_lowercase().replace(' ',"");Regex::new(r"^text-align:(left|center|right|justify);?$").unwrap().is_match(&normalized).then_some(Cow::Owned(normalized))}else{let lower=value.trim().to_ascii_lowercase();if lower.starts_with("data:")&&!(element=="img"&&attribute=="src"&&lower.starts_with("data:image/")){None}else{Some(Cow::Borrowed(value))}});
-        builder
-    }
+    fn sanitizer() -> &'static Builder<'static> { &SANITIZER }
     fn code_spans(markdown:&str)->Vec<std::ops::Range<usize>>{
         let mut spans=Vec::new();let mut block=None;
         for(event,range)in Parser::new_ext(markdown,Self::options()).into_offset_iter(){match event{
@@ -78,7 +89,7 @@ impl RichText {
             Event::Code(_)=>spans.push(range),_=>(),
         }}spans
     }
-    fn syntax(markdown:&str)->String{let code=Self::code_spans(markdown);Regex::new(r"(?s)\+\+(.+?)\+\+").unwrap().replace_all(markdown,|captures:&regex::Captures<'_>|{let whole=captures.get(0).unwrap();if code.iter().any(|range|range.start<whole.end()&&range.end>whole.start()){whole.as_str().to_owned()}else{format!("<u>{}</u>",&captures[1])}}).into_owned()}
+    fn syntax(markdown:&str)->String{let code=Self::code_spans(markdown);UNDERLINE.replace_all(markdown,|captures:&regex::Captures<'_>|{let whole=captures.get(0).unwrap();if code.iter().any(|range|range.start<whole.end()&&range.end>whole.start()){whole.as_str().to_owned()}else{format!("<u>{}</u>",&captures[1])}}).into_owned()}
 
     fn replace_values(source:&str,replacements:&BTreeMap<String,String>,escape:impl Fn(&str)->String)->String{let mut output=String::new();let mut position=0;while let Some((index,marker,value))=replacements.iter().filter_map(|(marker,value)|source[position..].find(marker).map(|index|(position+index,marker,value))).min_by_key(|found|found.0){output.push_str(&source[position..index]);output.push_str(&escape(value));position=index+marker.len();}output.push_str(&source[position..]);output}
     fn answer_url(source:&str,replacements:&BTreeMap<String,String>)->Result<CowStr<'static>,String>{
@@ -99,11 +110,11 @@ impl RichText {
         })
     }
 
-    pub fn images_json(input:&str)->String{let result=(||->Result<serde_json::Value,String>{let markdown:String=serde_json::from_str(input).map_err(|error|error.to_string())?;if markdown.len()>16*1048576{return Err("Image preparation exceeds 16 MiB".into());}let mut images=Vec::new();let mut image:Option<PendingImage>=None;let code=Self::code_spans(&markdown);let mut block=None;let mut parser=Parser::new_ext(&markdown,Self::options()).into_offset_iter();let events:Vec<_>=parser.by_ref().collect();let definitions=parser.reference_definitions();let titles=Regex::new(r#"(?s)\s+((?:\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|\((?:\\.|[^)\\])*\)))\s*\)?$"#).unwrap();
+    pub fn images_json(input:&str)->String{let result=(||->Result<serde_json::Value,String>{let markdown:String=serde_json::from_str(input).map_err(|error|error.to_string())?;if markdown.len()>16*1048576{return Err("Image preparation exceeds 16 MiB".into());}let mut images=Vec::new();let mut image:Option<PendingImage>=None;let code=Self::code_spans(&markdown);let mut block=None;let mut parser=Parser::new_ext(&markdown,Self::options()).into_offset_iter();let events:Vec<_>=parser.by_ref().collect();let definitions=parser.reference_definitions();
         for(event,range)in events{match event{
             Event::Start(Tag::HtmlBlock)=>block=Some(range.start),Event::End(TagEnd::HtmlBlock)=>block=None,
             Event::Start(Tag::Image{ref id,..})=>if let Some((_,events,depth,_))=&mut image{events.push(event.into_static());*depth+=1;}else{let definition=definitions.get(id).map(|definition|definition.span.clone());image=Some((range.start,vec![event.into_static()],1,definition));},
-            Event::End(TagEnd::Image)=>if let Some((_,events,depth,_))=&mut image{events.push(event.clone().into_static());*depth-=1;if *depth>0{continue;}let(start,events,_,definition)=image.take().unwrap();let source=&markdown[definition.unwrap_or(start..range.end)];let title=titles.captures(source).map(|capture|capture[1].to_string());let mut html=String::new();html::push_html(&mut html,events.into_iter());let mut end=start+2;let mut depth=1;while end<markdown.len(){if let Some(range)=code.iter().find(|range|range.contains(&end)){end=range.end;continue;}match markdown.as_bytes()[end]{b'\\'=>{end+=2;continue;},b'['=>depth+=1,b']'=>{depth-=1;if depth==0{break;}},_=>(),}end+=1;}images.push(serde_json::json!({"start":start,"end":range.end,"html":html,"label":&markdown[start+2..end],"title":title}));},
+            Event::End(TagEnd::Image)=>if let Some((_,events,depth,_))=&mut image{events.push(event.clone().into_static());*depth-=1;if *depth>0{continue;}let(start,events,_,definition)=image.take().unwrap();let source=&markdown[definition.unwrap_or(start..range.end)];let title=IMAGE_TITLE.captures(source).map(|capture|capture[1].to_string());let mut html=String::new();html::push_html(&mut html,events.into_iter());let mut end=start+2;let mut depth=1;while end<markdown.len(){if let Some(range)=code.iter().find(|range|range.contains(&end)){end=range.end;continue;}match markdown.as_bytes()[end]{b'\\'=>{end+=2;continue;},b'['=>depth+=1,b']'=>{depth-=1;if depth==0{break;}},_=>(),}end+=1;}images.push(serde_json::json!({"start":start,"end":range.end,"html":html,"label":&markdown[start+2..end],"title":title}));},
             Event::Html(value)|Event::InlineHtml(value)if image.is_none()=>images.push(serde_json::json!({"start":range.start,"end":range.end,"html":value.as_ref(),"block":block})),
             event=>if let Some((_,events,_,_))=&mut image{events.push(event.into_static());},
         }}Ok(serde_json::json!(images))})();result.unwrap_or_else(|error|serde_json::json!({"error":error})).to_string()}
@@ -124,23 +135,21 @@ impl RichText {
                     Event::Start(Tag::Image { link_type, dest_url: CowStr::Boxed(destination.into_boxed_str()), title, id })
                 } else { Event::Start(Tag::Image { link_type, dest_url, title, id }) }
             }
-			Event::Html(value)=>{let pattern=Regex::new(r#"(?i)typerelay-asset:([a-f0-9]{64})"#).unwrap();let replaced=pattern.replace_all(&value,|captures:&regex::Captures<'_>|{let id=captures[1].to_ascii_lowercase();found.insert(id.clone());provided.get(&id).cloned().unwrap_or_else(||format!("{ASSET_PREFIX}{id}"))});Event::Html(CowStr::Boxed(replaced.into_owned().into_boxed_str()))},
-			Event::InlineHtml(value)=>{let pattern=Regex::new(r#"(?i)typerelay-asset:([a-f0-9]{64})"#).unwrap();let replaced=pattern.replace_all(&value,|captures:&regex::Captures<'_>|{let id=captures[1].to_ascii_lowercase();found.insert(id.clone());provided.get(&id).cloned().unwrap_or_else(||format!("{ASSET_PREFIX}{id}"))});Event::InlineHtml(CowStr::Boxed(replaced.into_owned().into_boxed_str()))},
+			Event::Html(value)=>{let replaced=ASSET_REF.replace_all(&value,|captures:&regex::Captures<'_>|{let id=captures[1].to_ascii_lowercase();found.insert(id.clone());provided.get(&id).cloned().unwrap_or_else(||format!("{ASSET_PREFIX}{id}"))});Event::Html(CowStr::Boxed(replaced.into_owned().into_boxed_str()))},
+			Event::InlineHtml(value)=>{let replaced=ASSET_REF.replace_all(&value,|captures:&regex::Captures<'_>|{let id=captures[1].to_ascii_lowercase();found.insert(id.clone());provided.get(&id).cloned().unwrap_or_else(||format!("{ASSET_PREFIX}{id}"))});Event::InlineHtml(CowStr::Boxed(replaced.into_owned().into_boxed_str()))},
             other => other,
         }).collect()
     }
 
     fn raw_text(html: &str) -> String {
-		let images=Regex::new(r#"(?is)<img\b[^>]*\balt=["']([^"']*)["'][^>]*>"#).unwrap();let html=images.replace_all(html,"[Image: $1]");
-        let block = Regex::new(r"(?i)</?(?:p|div|h[1-6]|li|tr|blockquote|pre|br|hr)[^>]*>").unwrap();
-        let tags = Regex::new(r"(?s)<[^>]*>").unwrap();
-		let with_breaks = block.replace_all(&html, "\n");
-		let mut text=html_escape::decode_html_entities(&tags.replace_all(&with_breaks, "")).replace("\r\n", "\n");while text.contains("\n\n"){text=text.replace("\n\n","\n");}text.trim_matches('\n').into()
+		let html=IMAGE_ALT.replace_all(html,"[Image: $1]");
+		let with_breaks = BLOCK_TAG.replace_all(&html, "\n");
+		let mut text=html_escape::decode_html_entities(&ANY_TAG.replace_all(&with_breaks, "")).replace("\r\n", "\n");while text.contains("\n\n"){text=text.replace("\n\n","\n");}text.trim_matches('\n').into()
     }
 
 	fn rtf_text(output:&mut String,value:&str){for unit in value.encode_utf16(){match unit{92=>output.push_str("\\\\"),123=>output.push_str("\\{"),125=>output.push_str("\\}"),10=>output.push_str("\\line "),9=>output.push_str("\\tab "),32..=126=>output.push(char::from_u32(unit as u32).unwrap()),_=>output.push_str(&format!("\\u{}?",unit as i16)),}}}
 	fn rtf_markup_text(output:&mut String,value:&str){for part in value.split_inclusive(['\u{e000}','\u{e001}']){if part.ends_with('\u{e000}'){Self::rtf_text(output,part.trim_end_matches('\u{e000}'));output.push_str("\\ul ");}else if part.ends_with('\u{e001}'){Self::rtf_text(output,part.trim_end_matches('\u{e001}'));output.push_str("\\ul0 ");}else{Self::rtf_text(output,part);}}}
-	fn rtf_html(output:&mut String,value:&str){let sanitized=Self::sanitizer().clean(value).to_string().replace("<u>","\u{e000}").replace("</u>","\u{e001}");if sanitized.contains("text-align:center"){output.push_str("\\qc ");}else if sanitized.contains("text-align:right"){output.push_str("\\qr ");}else if sanitized.contains("text-align:justify"){output.push_str("\\qj ");}let images=Regex::new(r#"(?is)<img\b[^>]*\bsrc=["']data:image/(png|jpeg);base64,([^"']+)["'][^>]*>"#).unwrap();let mut offset=0;for capture in images.captures_iter(&sanitized){let whole=capture.get(0).unwrap();Self::rtf_markup_text(output,&Self::raw_text(&sanitized[offset..whole.start()]));if let Ok(bytes)=STANDARD.decode(&capture[2]){output.push_str("{\\pict");output.push_str(if &capture[1].to_ascii_lowercase()=="png"{"\\pngblip"}else{"\\jpegblip"});output.push(' ');for byte in bytes{output.push_str(&format!("{byte:02x}"));}output.push('}');}offset=whole.end();}Self::rtf_markup_text(output,&Self::raw_text(&sanitized[offset..]));if sanitized.contains("text-align:"){output.push_str("\\ql ");}}
+	fn rtf_html(output:&mut String,value:&str){let sanitized=Self::sanitizer().clean(value).to_string().replace("<u>","\u{e000}").replace("</u>","\u{e001}");if sanitized.contains("text-align:center"){output.push_str("\\qc ");}else if sanitized.contains("text-align:right"){output.push_str("\\qr ");}else if sanitized.contains("text-align:justify"){output.push_str("\\qj ");}let mut offset=0;for capture in RTF_IMAGE.captures_iter(&sanitized){let whole=capture.get(0).unwrap();Self::rtf_markup_text(output,&Self::raw_text(&sanitized[offset..whole.start()]));if let Ok(bytes)=STANDARD.decode(&capture[2]){output.push_str("{\\pict");output.push_str(if &capture[1].to_ascii_lowercase()=="png"{"\\pngblip"}else{"\\jpegblip"});output.push(' ');for byte in bytes{output.push_str(&format!("{byte:02x}"));}output.push('}');}offset=whole.end();}Self::rtf_markup_text(output,&Self::raw_text(&sanitized[offset..]));if sanitized.contains("text-align:"){output.push_str("\\ql ");}}
 	fn rtf(events:Vec<Event<'_>>)->String{let mut output=String::from("{\\rtf1\\ansi\\deff0\\uc1 ");let mut image=false;for event in events{match event{Event::Start(Tag::Strong)=>output.push_str("\\b "),Event::End(TagEnd::Strong)=>output.push_str("\\b0 "),Event::Start(Tag::Emphasis)=>output.push_str("\\i "),Event::End(TagEnd::Emphasis)=>output.push_str("\\i0 "),Event::Start(Tag::Strikethrough)=>output.push_str("\\strike "),Event::End(TagEnd::Strikethrough)=>output.push_str("\\strike0 "),Event::Start(Tag::Heading{level,..})=>output.push_str(&format!("\\b\\fs{} ",match level{pulldown_cmark::HeadingLevel::H1=>40,pulldown_cmark::HeadingLevel::H2=>34,pulldown_cmark::HeadingLevel::H3=>30,pulldown_cmark::HeadingLevel::H4=>26,pulldown_cmark::HeadingLevel::H5=>24,pulldown_cmark::HeadingLevel::H6=>22})),Event::End(TagEnd::Heading(_))=>output.push_str("\\b0\\fs24\\par "),Event::Start(Tag::BlockQuote(_))=>output.push_str("\\li360\\i "),Event::End(TagEnd::BlockQuote(_))=>output.push_str("\\li0\\i0\\par "),Event::Start(Tag::CodeBlock(_))=>output.push_str("\\fmodern "),Event::End(TagEnd::CodeBlock)=>output.push_str("\\f0\\par "),Event::Start(Tag::Item)=>output.push_str("\\bullet\\tab "),Event::End(TagEnd::Item)|Event::End(TagEnd::Paragraph)=>output.push_str("\\par "),Event::End(TagEnd::TableCell)=>output.push_str("\\tab "),Event::End(TagEnd::TableRow)=>output.push_str("\\par "),Event::Start(Tag::Image{dest_url,title,..})=>{image=true;let value=dest_url.as_ref();let encoded=value.split_once(",").filter(|_|value.starts_with("data:image/")).and_then(|(_,data)|STANDARD.decode(data).ok());if let Some(bytes)=encoded{let kind=if value.starts_with("data:image/png"){"\\pngblip"}else if value.starts_with("data:image/jpeg"){"\\jpegblip"}else{""};if !kind.is_empty(){output.push_str("{\\pict");output.push_str(kind);output.push(' ');for byte in bytes{output.push_str(&format!("{byte:02x}"));}output.push('}');}}else{output.push_str("[Image");if !title.is_empty(){output.push_str(": ");Self::rtf_text(&mut output,&title);}output.push(']');}},Event::End(TagEnd::Image)=>image=false,Event::Text(value)|Event::Code(value)if !image=>Self::rtf_text(&mut output,&value),Event::Html(value)|Event::InlineHtml(value)=>{let tag=value.trim().to_ascii_lowercase();if tag=="<u>"{output.push_str("\\ul ");}else if tag=="</u>"{output.push_str("\\ul0 ");}else{Self::rtf_html(&mut output,&value);}},Event::HardBreak|Event::SoftBreak=>output.push_str("\\line "),Event::Rule=>output.push_str("\\par ____________________\\par "),Event::TaskListMarker(done)=>output.push_str(if done{"[x] "}else{"[ ] "}),_=>(),}}output.push('}');output}
 
     fn render_fragment(markdown: &str, assets: &BTreeMap<String, String>, replacements:&BTreeMap<String,String>) -> Result<(String, String, String, Vec<String>, usize), String> {
@@ -160,12 +169,12 @@ impl RichText {
         let mut rendered = String::new();
         html::push_html(&mut rendered, events.clone().into_iter());
         let sanitized = Self::sanitizer().clean(&rendered).to_string();let rtf=Self::rtf(events.clone());
-		let mut text = String::new();let mut image_alt:Option<String>=None;let mut image_characters=0usize;let image_tags=Regex::new(r"(?is)<img\b[^>]*>").unwrap();
+		let mut text = String::new();let mut image_alt:Option<String>=None;let mut image_characters=0usize;
         let mut list_depth = 0usize;
         for event in events {
             match event {
 				Event::Text(value)|Event::Code(value)=>if let Some(alt)=&mut image_alt{alt.push_str(&value)}else{text.push_str(&value)},
-                Event::Html(value) | Event::InlineHtml(value) => { let cleaned=Self::sanitizer().clean(&value).to_string();let plain=Self::raw_text(&cleaned);let without=Self::raw_text(&image_tags.replace_all(&cleaned,""));image_characters+=plain.chars().count().saturating_sub(without.chars().count());text.push_str(&plain); },
+                Event::Html(value) | Event::InlineHtml(value) => { let cleaned=Self::sanitizer().clean(&value).to_string();let plain=Self::raw_text(&cleaned);let without=Self::raw_text(&IMAGE_TAG.replace_all(&cleaned,""));image_characters+=plain.chars().count().saturating_sub(without.chars().count());text.push_str(&plain); },
                 Event::Start(Tag::List(_)) => { list_depth += 1; if !text.ends_with('\n') { text.push('\n'); } },
                 Event::End(TagEnd::List(_)) => { list_depth = list_depth.saturating_sub(1); if !text.ends_with('\n') { text.push('\n'); } },
                 Event::Start(Tag::Item) => { text.push_str(&"  ".repeat(list_depth.saturating_sub(1))); text.push_str("• "); },
