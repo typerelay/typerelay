@@ -137,6 +137,7 @@ test('top navigation opens the public mobile apps modal with QR codes', async ()
 		assert.equal(document.querySelector('#mobile-apps-modal-title').textContent.trim(), 'Get the TypeRelay mobile app');
 		document.querySelector('#workspace').removeAttribute('data-account');
 		let mobileRequests = 0;
+		dom.window.AbortController = AbortController;
 		dom.window.fetch = async (path, options = {}) => {
 			if (String(path).includes('mobile-apps')) mobileRequests++;
 			return fetch(new URL(path, Fixture.origin), { ...options, headers: { ...options.headers, Cookie: Fixture.cookie } });
@@ -339,6 +340,7 @@ test('web AJAX updates only affected snippets; preserves panel, filter and multi
 	const errors = [];
 	dom.window.Swal = { fire: async value => { if (value.icon === 'error') errors.push(value.title); return { isConfirmed: true }; } };
 	dom.window.bootstrap = { Modal: { getOrCreateInstance: () => ({ show() {}, hide() {} }), getInstance: () => ({ hide() {} }) } };
+	dom.window.AbortController = AbortController;
 	dom.window.fetch = async (path, options = {}) => {
 		const response = await fetch(new URL(path, Fixture.origin), { ...options, headers: { ...options.headers, Cookie: Fixture.cookie } });
 		return response;
