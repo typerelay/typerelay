@@ -205,7 +205,7 @@ importers:
   apps/mcp:
     dependencies:
       '@managani/cache':
-        specifier: 0.1.5
+        specifier: ^0.1.5
         version: 0.1.5
       '@modelcontextprotocol/sdk':
         specifier: ^1.32.1
@@ -311,10 +311,10 @@ importers:
         specifier: ^6.43.13
         version: 6.43.13
       '@managani/cache':
-        specifier: 0.1.5
+        specifier: ^0.1.5
         version: 0.1.5
       '@managani/node':
-        specifier: 0.1.2
+        specifier: ^0.1.2
         version: 0.1.2(supports-color@7.2.0)(vitepress@1.6.4(@algolia/client-search@5.59.0)(@types/node@22.20.2)(lightningcss@1.33.0)(postcss@8.5.29)(qrcode@1.5.4)(search-insights@2.17.3)(typescript@7.0.2))(vue@3.5.43(typescript@7.0.2))
       '@node-saml/node-saml':
         specifier: ^5.1.0
