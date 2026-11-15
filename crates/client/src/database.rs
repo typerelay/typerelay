@@ -957,14 +957,15 @@ impl DatabaseSnapshot {
     }
 }
 /// Polls on a background thread every 500 ms and queues results in order, so input threads only call `try_recv`; the thread stops once the watcher is dropped.
-pub struct Watcher<T> { receiver: std::sync::mpsc::Receiver<T>, _alive: std::sync::Arc<()> }
+pub struct Watcher<T> { receiver: std::sync::mpsc::Receiver<T>, _alive: std::sync::Arc<()>, stopped: std::sync::atomic::AtomicBool }
 impl<T: Send + 'static> Watcher<T> {
     pub fn spawn(mut poll: impl FnMut() -> Option<T> + Send + 'static) -> Self {
         let (sender, receiver) = std::sync::mpsc::sync_channel(4); let alive = std::sync::Arc::new(()); let watched = std::sync::Arc::downgrade(&alive);
         std::thread::spawn(move || while watched.strong_count() > 0 { std::thread::sleep(StdDuration::from_millis(500)); if let Some(value) = poll() && sender.send(value).is_err() { break; } });
-        Self { receiver, _alive: alive }
+        Self { receiver, _alive: alive, stopped: std::sync::atomic::AtomicBool::new(false) }
     }
-    pub fn try_recv(&self) -> Option<T> { self.receiver.try_recv().ok() }
+    // A panicked poll thread would otherwise stop updates silently.
+    pub fn try_recv(&self) -> Option<T> { match self.receiver.try_recv() { Ok(value) => Some(value), Err(std::sync::mpsc::TryRecvError::Disconnected) => { if !self.stopped.swap(true, std::sync::atomic::Ordering::Relaxed) { eprintln!("Snapshot watcher stopped; keeping last valid snapshot"); } None } Err(_) => None } }
 }
 impl DatabaseSnapshot {
     pub fn watch(mut self) -> (Snapshot, Watcher<Result<Snapshot>>) { (self.snapshot.clone(), Watcher::spawn(move || self.reload().transpose())) }
