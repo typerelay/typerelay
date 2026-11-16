@@ -5,7 +5,6 @@ import { AdminAccounts } from './services/admin_accounts.js';
 import { AdminSettings } from './services/admin_settings.js';
 import { Ai } from './ai/index.js';
 import { AccountAccess } from './services/account_access.js';
-import pug from 'pug';
 import session from 'express-session';
 import MongoStore from 'connect-mongo';
 import helmet from 'helmet';
@@ -57,7 +56,7 @@ export class Server {
 		const assetHash = createHash('sha256');
 		for (const root of [fileURLToPath(new URL('./public/', import.meta.url)), '/data/editor/']) {
 			if (!existsSync(root)) continue;
-			for (const name of (await readdir(root, { recursive: true })).filter(name => /\.(js|css|wasm)$/.test(name)).sort()) assetHash.update(name).update('\0').update(await readFile(root + name)).update('\0');
+			for (const name of (await readdir(root, { recursive: true })).filter(name => /\.(js|css|wasm|webp|png|jpe?g|gif|svg|ico|woff2?|ttf)$/i.test(name)).sort()) assetHash.update(name).update('\0').update(await readFile(root + name)).update('\0');
 		}
 		const assetVersion = String(process.env.APP_VERSION || 'development').replace(/[^A-Za-z0-9._-]/g, '-') + '-' + assetHash.digest('hex').slice(0, 16);
 		const authBackgrounds = (await readdir(fileURLToPath(new URL('./public/auth/backgrounds/', import.meta.url)))).filter(name => /^[a-z0-9][a-z0-9_-]*\.webp$/i.test(name)).sort();
@@ -79,20 +78,25 @@ export class Server {
 		const docsDist = process.env.DOCS_DIR || fileURLToPath(new URL('./docs-dist/', import.meta.url));
 		if (existsSync(docsDist)) app.use('/docs', helmet({ contentSecurityPolicy: false }), express.static(docsDist, docsOptions), (req, res) => res.status(404).sendFile(docsDist + '/404.html'));
 		app.use(helmet({ contentSecurityPolicy: { directives: { 'upgrade-insecure-requests': Auth.origin.startsWith('https:') ? [] : null, 'script-src': ["'self'", "'wasm-unsafe-eval'"], 'style-src': ["'self'", (req, res) => "'nonce-" + res.locals.styleNonce + "'"], 'style-src-elem': ["'self'", "'unsafe-inline'"], 'style-src-attr': ["'unsafe-inline'"], 'img-src': ["'self'", 'data:', 'https://ava.helpmonks.com', ...(ProductUpdates.enabled() ? ['https:', 'http:'] : [])] } } }));
+		const publicAssets = express.static('public');
+		// Development edits public files without restarting, so only release builds may cache forever.
+		const immutable = process.env.NODE_ENV === 'development' ? {} : { maxAge: '1y', immutable: true };
+		const versionedAssets = express.static('public', immutable);
+		const vendor = { maxAge: '7d' };
+		app.use('/assets/generated', express.static('/data/editor'));
+		app.use(`/assets/${assetVersion}/generated`, express.static('/data/editor', immutable));
+		app.use('/assets/:assetVersion', (req, res, next) => req.path === '/' ? next() : req.params.assetVersion === assetVersion ? versionedAssets(req, res, next) : res.sendStatus(404));
+		app.use('/assets', publicAssets);
+		app.use('/vendor/webauthn', express.static('node_modules/@simplewebauthn/browser/dist/bundle', vendor));
+		app.use('/vendor/bootstrap', express.static('node_modules/bootstrap/dist', vendor));
+		app.use('/vendor/sweetalert2', express.static('node_modules/sweetalert2/dist', vendor));
+		app.use('/vendor/tom-select', express.static('node_modules/tom-select/dist', vendor));
+		app.use('/white-label-assets', express.static(WhiteLabel.assetsRoot(), { index: false, maxAge: '7d' }));
+		app.get('/health', (req, res) => res.json({ ok: true }));
 		app.use(AccountAccess.middleware);
 		app.post('/billing/webhook', express.raw({ type: 'application/json' }), async (req, res) => { Support.assert(req.headers['stripe-signature'], 'Missing Stripe-Signature', 400); try { await Billing.handleWebhook(req.body, req.headers['stripe-signature']); res.json({ received: true }); } catch (error) { error.status ||= 400; throw error; } });
 		app.use('/auth/sso/:account/callback', express.urlencoded({ extended: false, limit: '200kb', parameterLimit: 8 }));
 		app.use(express.json({ limit: '12mb' }), express.urlencoded({ extended: false, limit: '32kb' }));
-		const publicAssets = express.static('public');
-		app.use(['/assets/generated', `/assets/${assetVersion}/generated`], express.static('/data/editor'));
-		app.use('/assets/:assetVersion', (req, res, next) => req.path === '/' ? next() : req.params.assetVersion === assetVersion ? publicAssets(req, res, next) : res.sendStatus(404));
-		app.use('/assets', publicAssets);
-		app.use('/vendor/webauthn', express.static('node_modules/@simplewebauthn/browser/dist/bundle'));
-		app.use('/vendor/bootstrap', express.static('node_modules/bootstrap/dist'));
-		app.use('/vendor/sweetalert2', express.static('node_modules/sweetalert2/dist'));
-		app.use('/vendor/tom-select', express.static('node_modules/tom-select/dist'));
-		app.use('/white-label-assets', express.static(WhiteLabel.assetsRoot(), { index: false, maxAge: '7d' }));
-		app.get('/health', (req, res) => res.json({ ok: true }));
 		// Seconds; retain non-rolling cookies and the separate admin deadline.
 		const sessionStore = MongoStore.create({ mongoUrl: process.env.MONGO_URI, collectionName: 'web_sessions', touchAfter: 60 });
 		app.use(session({ name: 'typerelay.sid', secret: process.env.SESSION_SECRET, store: sessionStore, resave: false, saveUninitialized: false, cookie: { httpOnly: true, sameSite: 'lax', secure: Auth.origin.startsWith('https:'), maxAge: 7 * 86400000 } }));
@@ -164,7 +168,7 @@ export class Server {
 			Support.assert(req.body.user === req.session.user, 'Account changed; reload before deleting.', 409);
 			await AdminAccounts.requestUserDeletion(req.session.user, req.body);
 			delete req.session.user; delete req.session.auth_at;
-			res.status(202).json({ html: pug.renderFile('./views/ajax/account-deletion-receipt.pug') });
+			res.status(202).json({ html: Support.render('./views/ajax/account-deletion-receipt.pug') });
 		});
 		app.post('/auth/logout', async (req, res) => { await new Promise(resolve => req.session.destroy(resolve)); res.json({ signed_out: true }); });
 		app.post('/oauth/token', tokenLimit, async (req, res) => res.json(await Auth.exchange(req.body)));
@@ -216,7 +220,7 @@ export class Server {
 		app.post('/api/v2/statistics/events', async (req, res) => res.json(await Statistics.ingest(req.ctx, req.body)));
 		app.get('/api/v2/statistics', async (req, res) => {
 			const report = await Statistics.report(req.ctx, req.query);
-			const rows = Object.fromEntries(['days', 'snippets', 'libraries', 'members'].map(kind => [kind, report[kind].map(row => ({ id: row.id, html: pug.renderFile('./views/ajax/statistics-row.pug', { row, kind, settings: report.settings }) }))]));
+			const rows = Object.fromEntries(['days', 'snippets', 'libraries', 'members'].map(kind => [kind, report[kind].map(row => ({ id: row.id, html: Support.render('./views/ajax/statistics-row.pug', { row, kind, settings: report.settings }) }))]));
 			res.json({ ...report, rows });
 		});
 		app.get('/api/v2/statistics/export', async (req, res) => res.type('text/csv').attachment('typerelay-statistics.csv').send(Statistics.csv(await Statistics.report(req.ctx, req.query))));
@@ -314,7 +318,7 @@ export class Server {
 			res.render('ajax/mobile_apps_modal', { model: { ios: { url: IOS_BETA_URL, qrcode: iosQrcode }, android: { url: ANDROID_STORE_URL, qrcode: androidQrcode } } });
 		});
 		app.get('/api/v2/libraries', async (req, res) => res.json(await Libraries.list(req.ctx)));
-		app.post('/api/v2/import/:format/preview', uploadLimit, async (req, res) => { const preview = await Libraries.previewImport(req.params.format, req.body); res.json({ ...preview, html: pug.renderFile('./views/ajax/snippetslab.pug', preview) }); });
+		app.post('/api/v2/import/:format/preview', uploadLimit, async (req, res) => { const preview = await Libraries.previewImport(req.params.format, req.body); res.json({ ...preview, html: Support.render('./views/ajax/snippetslab.pug', preview) }); });
 		app.post('/api/v2/import/preview', uploadLimit, async (req, res) => res.json(await Yaml.run(req.body.yaml)));
 		app.post('/api/v2/import/:format', uploadLimit, async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.commitImport(ctx, req.params.format, req.body, session), { format: req.params.format })));
 		app.post('/api/v2/libraries', bulkCreateLimit, async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, async (ctx, session) => ({ library: await Libraries.create(ctx, req.body, session) }))));
@@ -328,13 +332,13 @@ export class Server {
 		app.get('/api/v2/sync', async (req, res) => res.json({ ...await Libraries.download(req.ctx, Number(req.query.cursor || 0), req.headers['x-typerelay-personal-abbreviations'] === '1'), statistics_identity: { account: req.ctx.account, user: req.ctx.user, device: req.ctx.device || null } }));
 		app.post('/api/v2/conflicts/:id', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.resolve(ctx, req.params.id, req.body, session), { conflict: req.params.id })));
 		app.get('/api/v2/team', async (req, res) => res.json(await Team.list(req.ctx)));
-		app.post('/api/v2/team/members', async (req, res) => { const result = await Team.add(req.ctx, req.body); res.json({ ...result, html: pug.renderFile('./views/ajax/member.pug', { member: result.member, ctx: req.ctx, viewerAvatarStyle: (await User.findById(req.ctx.user).select('avatar_style').lean()).avatar_style }) }); });
+		app.post('/api/v2/team/members', async (req, res) => { const result = await Team.add(req.ctx, req.body); res.json({ ...result, html: Support.render('./views/ajax/member.pug', { member: result.member, ctx: req.ctx, viewerAvatarStyle: (await User.findById(req.ctx.user).select('avatar_style').lean()).avatar_style }) }); });
 		app.post('/api/v2/team/invitations', async (req, res) => res.json(await Team.invite(req.ctx, req.body.email)));
 		app.delete('/api/v2/team/invitations/:id', async (req, res) => { Support.assert(Support.admin(req.ctx), 'Admin required', 403); await Ticket.deleteOne({ _id: Support.id(req.params.id), account: req.ctx.account, kind: 'invite' }); res.json({ deleted: req.params.id }); });
 		app.post('/api/v2/team/accept', async (req, res) => { Support.assert(req.ctx.sso_revision == null, 'Sign in with password, Magic Link or passkey to accept account invitations', 403); res.json(await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Team.accept(ctx, req.body.token, session))); });
 		app.patch('/api/v2/team/members/:id', async (req, res) => res.json(await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Team.member(ctx, req.params.id, req.body, session))));
-		app.post('/api/v2/team/groups', async (req, res) => { const result = await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Team.group(ctx, null, req.body, session)); const team = await Team.list(req.ctx); res.json({ ...result, html: pug.renderFile('./views/ajax/group.pug', { group: result.group, team, ctx: req.ctx }) }); });
-		app.patch('/api/v2/team/groups/:id', async (req, res) => { const result = await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Team.group(ctx, req.params.id, req.body, session)); if (result.group) { const team = await Team.list(req.ctx); result.html = pug.renderFile('./views/ajax/group.pug', { group: result.group, team, ctx: req.ctx }); } res.json(result); });
+		app.post('/api/v2/team/groups', async (req, res) => { const result = await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Team.group(ctx, null, req.body, session)); const team = await Team.list(req.ctx); res.json({ ...result, html: Support.render('./views/ajax/group.pug', { group: result.group, team, ctx: req.ctx }) }); });
+		app.patch('/api/v2/team/groups/:id', async (req, res) => { const result = await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Team.group(ctx, req.params.id, req.body, session)); if (result.group) { const team = await Team.list(req.ctx); result.html = Support.render('./views/ajax/group.pug', { group: result.group, team, ctx: req.ctx }); } res.json(result); });
 		app.delete('/api/v2/connection', async (req, res) => { Support.assert(req.ctx.device, 'Device authentication required', 401); await Device.updateOne({ _id: req.ctx.device, user: req.ctx.user, account: req.ctx.account }, { $set: { revoked: true } }); res.json({ disconnected: true }); });
 		app.get('/api/v2/devices', async (req, res) => res.json(await Device.find({ account: req.ctx.account, user: req.ctx.user, revoked: false }).select('_id name client_type os createdAt last_active').lean()));
 		app.delete('/api/v2/devices/:id', async (req, res) => { await Device.updateOne({ _id: Support.id(req.params.id), account: req.ctx.account, user: req.ctx.user }, { $set: { revoked: true } }); res.json({ deleted: req.params.id }); });
@@ -342,7 +346,7 @@ export class Server {
 			const result = await Security.profile(req);
 			const member = await Member.findOne({ account: req.ctx.account, user: req.ctx.user }).lean();
 			const team = await Team.list(req.ctx);
-			res.json({ ...result, avatar: pug.renderFile('./views/ajax/avatar.pug', { profile: result }), member: { id: String(member._id), html: pug.renderFile('./views/ajax/member.pug', { member: { ...member, profile: result }, ctx: req.ctx, viewerAvatarStyle: result.avatar_style }) }, avatars: team.members.map(item => ({ id: String(item._id), html: pug.renderFile('./views/ajax/avatar-image.pug', { person: item.profile, avatarStyle: result.avatar_style, avatarKey: String(item._id) }) })), preview: pug.renderFile('./views/ajax/avatar-image.pug', { person: result, avatarStyle: result.avatar_style, avatarKey: 'preview' }) });
+			res.json({ ...result, avatar: Support.render('./views/ajax/avatar.pug', { profile: result }), member: { id: String(member._id), html: Support.render('./views/ajax/member.pug', { member: { ...member, profile: result }, ctx: req.ctx, viewerAvatarStyle: result.avatar_style }) }, avatars: team.members.map(item => ({ id: String(item._id), html: Support.render('./views/ajax/avatar-image.pug', { person: item.profile, avatarStyle: result.avatar_style, avatarKey: String(item._id) }) })), preview: Support.render('./views/ajax/avatar-image.pug', { person: result, avatarStyle: result.avatar_style, avatarKey: 'preview' }) });
 		});
 		app.patch('/api/v2/account', async (req, res) => { Support.assert(Support.admin(req.ctx), 'Admin required', 403); await Account.updateOne({ _id: req.ctx.account }, { $set: { name: Support.text(req.body.name) } }); res.json({ name: req.body.name }); });
 		app.get('/api/v2/forms/:kind', async (req, res) => {
@@ -358,7 +362,7 @@ export class Server {
 		});
 		app.get('/api/v2/editor/:id', async (req, res) => {
 			const library = Libraries.view(req.ctx, await Libraries.get(req.ctx, req.params.id));
-			if (req.query.format === 'json') return res.json({ library, html: pug.renderFile('./views/ajax/editor.pug', { library }), card: pug.renderFile('./views/ajax/library.pug', { library }) });
+			if (req.query.format === 'json') return res.json({ library, html: Support.render('./views/ajax/editor.pug', { library }), card: Support.render('./views/ajax/library.pug', { library }) });
 			res.render('ajax/editor', { library });
 		});
 		app.get('/api/v2/fragments/:type/:id', async (req, res) => {
@@ -393,7 +397,7 @@ export class Server {
 			if (error.code === 'sso_required' && req.method === 'GET' && !req.path.startsWith('/api/')) return res.status(403).render('sso-message', { title: 'SSO sign-in required', message: error.message, destination: error.details.login_url, recovery: error.details.recovery_url });
 			if (req.path.startsWith('/auth/sso/') && req.method === 'GET' || /^\/auth\/sso\/[^/]+\/callback$/.test(req.path)) return res.status(status).render('sso-message', { title: 'SSO sign-in failed', message: status === 500 ? 'Unable to complete sign-in. Start again or contact your administrator.' : error.message, destination: '/login' });
 			if (status === 500) { recordException(error); console.error(error); }
-			res.status(status).json({ error: status === 500 ? 'Request failed; please retry' : (error.code === 11000 ? 'Abbreviation or name already exists' : error.message), ...(typeof error.code === 'string' && error.code ? { code: error.code } : {}), ...(error.details ? { details: error.details } : {}), ...(error.settings ? { settings: error.settings, html: pug.renderFile('./views/ajax/white-label.pug', { whiteLabelSettings: error.settings }) } : {}) });
+			res.status(status).json({ error: status === 500 ? 'Request failed; please retry' : (error.code === 11000 ? 'Abbreviation or name already exists' : error.message), ...(typeof error.code === 'string' && error.code ? { code: error.code } : {}), ...(error.details ? { details: error.details } : {}), ...(error.settings ? { settings: error.settings, html: Support.render('./views/ajax/white-label.pug', { whiteLabelSettings: error.settings }) } : {}) });
 		});
 		const port = Number(process.env.PORT || 3040);
 		const server = app.listen(port, '0.0.0.0', () => console.log(JSON.stringify({ event: 'service_started', service: process.env.OTEL_SERVICE_NAME || 'typerelay-app', mode: 'app', port, version: process.env.APP_VERSION || 'development' })));
@@ -404,7 +408,7 @@ export class Server {
 		// Only a verified custom domain may supply the origin; a forwarded Host header never does.
 		return req.boundOrigin || Auth.origin;
 	}
-	static whiteLabelResult(res, settings) { res.json({ settings, html: pug.renderFile('./views/ajax/white-label.pug', { whiteLabelSettings: settings }), brand_html: pug.renderFile('./views/ajax/brand.pug', { brandUrl: settings.logo_url }) }); }
+	static whiteLabelResult(res, settings) { res.json({ settings, html: Support.render('./views/ajax/white-label.pug', { whiteLabelSettings: settings }), brand_html: Support.render('./views/ajax/brand.pug', { brandUrl: settings.logo_url }) }); }
 	static async whiteLabelAssetUpload(req, res) {
 		await WhiteLabel.assertUpload(req.ctx.account);
 		await mkdir(WhiteLabel.temporaryRoot(req.ctx.account), { recursive: true });
@@ -430,15 +434,15 @@ export class Server {
 		await mongoose.connection.transaction(async session => {
 			const libraries = await Libraries.list(ctx, session);
 			const account = await Account.findById(ctx.account).select('sequence').session(session).read('primary').lean();
-			result = { personal_sequence: account.sequence, personal_fragments: libraries.flatMap(library => library.snippets.map(snippet => ({ library: library._id, snippet, html: pug.renderFile('./views/ajax/snippet.pug', { snippet, library }) }))) };
+			result = { personal_sequence: account.sequence, personal_fragments: libraries.flatMap(library => library.snippets.map(snippet => ({ library: library._id, snippet, html: Support.render('./views/ajax/snippet.pug', { snippet, library }) }))) };
 		}, { readConcern: { level: 'snapshot' } });
 		return result;
 	}
 	static presentation(library) {
-		return { library, html: pug.renderFile('./views/ajax/library.pug', { library }), fragments: library.snippets.map(snippet => ({ id: snippet.id, revision: snippet.revision, html: pug.renderFile('./views/ajax/snippet.pug', { snippet, library }) })) };
+		return { library, html: Support.render('./views/ajax/library.pug', { library }), fragments: library.snippets.map(snippet => ({ id: snippet.id, revision: snippet.revision, html: Support.render('./views/ajax/snippet.pug', { snippet, library }) })) };
 	}
 	static async result(res, ctx, result) {
-		if (result.import_summary) result.import_summary_html = pug.renderFile('./views/ajax/import-summary.pug', result.import_summary);
+		if (result.import_summary) result.import_summary_html = Support.render('./views/ajax/import-summary.pug', result.import_summary);
 		if (result.libraries) result.libraries = await Libraries.personalize(ctx, result.libraries);
 		if (result.library) [result.library] = await Libraries.personalize(ctx, [result.library]);
 		if (result.libraries) return res.json({ ...result, updates: result.libraries.map(Server.presentation) });

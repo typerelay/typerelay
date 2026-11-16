@@ -131,8 +131,8 @@ class TypeRelay {
 		const render = item => document.querySelector('template[data-avatar-option="' + CSS.escape(item.value) + '"]').content.firstElementChild.cloneNode(true);
 		new globalThis.TomSelect(select, { plugins: ['dropdown_input'], maxItems: 1, maxOptions: 30, create: false, sortField: { field: '$order', direction: 'asc' }, render: { option: render, item: render }, onChange: value => { const option = document.querySelector('template[data-avatar-option="' + CSS.escape(value) + '"]'); if (!option) return; const picture = option.content.querySelector('.avatar-picture').cloneNode(true); picture.dataset.viewerAvatar = 'preview'; document.querySelector('#profile-avatar-preview').replaceChildren(picture); }, onInitialize() { this.control_input.removeAttribute('placeholder'); this.control_input.setAttribute('aria-label', 'Search avatar styles'); } });
 	}
-	async request(path, method = 'GET', body, raw = false) {
-		const response = await fetch(path.startsWith('/') ? path : '/api/v2/' + path, { method, headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': document.querySelector('meta[name=csrf-token]').content, 'X-Account-Id': this.account || '', 'X-TypeRelay-Personal-Abbreviations': '1' }, body: body ? JSON.stringify({ operation_id: this.submitting ? this.formOperation : crypto.randomUUID(), ...body }) : undefined });
+	async request(path, method = 'GET', body, raw = false, signal) {
+		const response = await fetch(path.startsWith('/') ? path : '/api/v2/' + path, { method, headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': document.querySelector('meta[name=csrf-token]').content, 'X-Account-Id': this.account || '', 'X-TypeRelay-Personal-Abbreviations': '1' }, body: body ? JSON.stringify({ operation_id: this.submitting ? this.formOperation : crypto.randomUUID(), ...body }) : undefined, signal });
 		if (!response.ok) { const result = await response.json(); const error = new Error(result.error); Object.assign(error, result); throw error; }
 		if (response.headers.get('X-CSRF-Token')) document.querySelector('meta[name=csrf-token]').content = response.headers.get('X-CSRF-Token');
 		return raw ? response.text() : response.json();
@@ -222,7 +222,10 @@ class TypeRelay {
 		if (!input) return;
 		const query = input.value;
 		const version = ++this.searchVersion;
-		const html = await this.request('search?q=' + encodeURIComponent(query), 'GET', null, true);
+		this.searchAbort?.abort();
+		const abort = this.searchAbort = new AbortController();
+		let html;
+		try { html = await this.request('search?q=' + encodeURIComponent(query), 'GET', null, true, abort.signal); } catch (error) { if (error.name === 'AbortError') return; throw error; }
 		if (version !== this.searchVersion || query !== input.value) return;
 		// Search queries are explicit navigation, never a mutation refresh.
 		document.querySelector('#search-results').replaceChildren(this.fragment(html));

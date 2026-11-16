@@ -94,6 +94,9 @@ impl Database {
         let mut statement = self.connection.prepare("SELECT data FROM snippets WHERE library=?1 ORDER BY CAST(json_extract(data,'$.position') AS INTEGER),id")?;
         statement.query_map([id], |row| row.get::<_, String>(0))?.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
     }
+    pub fn record(&self, library: &str, id: &str) -> Result<Option<Value>> {
+        self.connection.query_row("SELECT data FROM snippets WHERE id=?1 AND library=?2", [id, library], |row| row.get::<_, String>(0)).optional()?.map(|text| serde_json::from_str(&text).map_err(Into::into)).transpose()
+    }
     fn put_record(&self, library: &str, entry: &Value) -> Result<()> {
 		let id=entry["id"].as_str().context("Missing snippet ID")?;
 		self.connection.execute("INSERT INTO snippets(id,library,data) VALUES(?1,?2,?3) ON CONFLICT(id) DO UPDATE SET library=excluded.library,data=excluded.data", params![id, library, entry.to_string()])?;
@@ -953,6 +956,24 @@ impl DatabaseSnapshot {
         Ok(Some(snapshot))
     }
 }
+/// Polls on a background thread every 500 ms and queues results in order, so input threads only call `try_recv`; the thread stops once the watcher is dropped.
+pub struct Watcher<T> { receiver: std::sync::mpsc::Receiver<T>, _alive: std::sync::Arc<()>, stopped: std::sync::atomic::AtomicBool }
+impl<T: Send + 'static> Watcher<T> {
+    pub fn spawn(mut poll: impl FnMut() -> Option<T> + Send + 'static) -> Self {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(4); let alive = std::sync::Arc::new(()); let watched = std::sync::Arc::downgrade(&alive);
+        std::thread::spawn(move || while watched.strong_count() > 0 { std::thread::sleep(StdDuration::from_millis(500)); if let Some(value) = poll() && sender.send(value).is_err() { break; } });
+        Self { receiver, _alive: alive, stopped: std::sync::atomic::AtomicBool::new(false) }
+    }
+    // A panicked poll thread would otherwise stop updates silently.
+    pub fn try_recv(&self) -> Option<T> { match self.receiver.try_recv() { Ok(value) => Some(value), Err(std::sync::mpsc::TryRecvError::Disconnected) => { if !self.stopped.swap(true, std::sync::atomic::Ordering::Relaxed) { eprintln!("Snapshot watcher stopped; keeping last valid snapshot"); } None } Err(_) => None } }
+}
+impl DatabaseSnapshot {
+    pub fn watch(mut self) -> (Snapshot, Watcher<Result<Snapshot>>) { (self.snapshot.clone(), Watcher::spawn(move || self.reload().transpose())) }
+    /// Desktop hooks: snapshot and trigger-prefix changes only; rejected reloads keep the current values.
+    pub fn watch_settings(mut self, mut settings: crate::settings::SettingsStore) -> Watcher<(Option<Snapshot>, Option<String>)> {
+        Watcher::spawn(move || { let snapshot = self.reload().ok().flatten(); let prefix = matches!(settings.reload(), Ok(true)).then(|| settings.settings.trigger_prefix.clone()); (snapshot.is_some() || prefix.is_some()).then_some((snapshot, prefix)) })
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -1093,6 +1114,16 @@ mod tests {
         let before = db.library("restored").unwrap(); let records = db.records("restored").unwrap(); let pending = db.pending().unwrap();
         assert!(db.trash_action(&target(4), "restore").is_err());
         assert_eq!(db.library("restored").unwrap(), before); assert_eq!(db.records("restored").unwrap(), records); assert_eq!(db.pending().unwrap(), pending);
+    }
+    #[test]
+    fn watcher_publishes_changed_snapshots_off_thread() {
+        let fixture=Fixture::new(); let db=fixture.db(); db.import("One", "matches: [{trigger: one, replace: First}]").unwrap();
+        let (snapshot, reloads)=DatabaseSnapshot::open(&fixture.directory).unwrap().watch(); assert_eq!(snapshot.len(),1);
+        db.import("Two", "matches: [{trigger: two, replace: Second}]").unwrap();
+        let deadline=std::time::Instant::now()+StdDuration::from_secs(5); let mut received=None;
+        while received.is_none() && std::time::Instant::now()<deadline { received=reloads.try_recv(); std::thread::sleep(StdDuration::from_millis(20)); }
+        assert_eq!(received.unwrap().unwrap().len(),2); std::thread::sleep(StdDuration::from_millis(1100)); assert!(reloads.try_recv().is_none());
+        let (sender, receiver)=std::sync::mpsc::channel(); drop(Watcher::spawn(move || { let _=sender.send(()); Some(()) })); std::thread::sleep(StdDuration::from_millis(1200)); assert!(receiver.try_iter().count()<=1); assert!(receiver.recv_timeout(StdDuration::from_secs(1)).is_err());
     }
     struct Fixture { _temp: tempfile::TempDir, directory: PathBuf }
     impl Fixture {

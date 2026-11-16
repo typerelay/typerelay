@@ -21,6 +21,9 @@ test('build children never receive the hardware PIN or publishing credentials', 
 	const env = PanelRelease.buildEnvironment({ PATH: '/bin', WINDOWS_SIGNING_PIN: 'fixture-pin', BUNNY_STORAGE_PASSWORD_TEST: 'fixture-storage', APPLE_PASSWORD: 'fixture-apple' });
 	assert.deepEqual(env, { PATH: '/bin' });
 });
+test('build children ignore a parent AppImage so linuxdeploy runs itself', () => {
+	assert.deepEqual(PanelRelease.buildEnvironment({ PATH: '/bin', APPIMAGE: '/apps/Host.AppImage', APPDIR: '/tmp/.mount_Host', TARGET_APPIMAGE: '/apps/Host.AppImage' }), { PATH: '/bin' });
+});
 test('Tauri signing receives only one private key source', () => {
 	const env = PanelRelease.buildEnvironment({ TAURI_SIGNING_PRIVATE_KEY: 'fixture-key', TAURI_SIGNING_PRIVATE_KEY_PATH: '/private/key', TAURI_SIGNING_PRIVATE_KEY_PASSWORD: 'fixture-password' });
 	assert.deepEqual(env, { TAURI_SIGNING_PRIVATE_KEY: 'fixture-key', TAURI_SIGNING_PRIVATE_KEY_PASSWORD: 'fixture-password' });

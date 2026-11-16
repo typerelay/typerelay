@@ -3,7 +3,6 @@ import { timingSafeEqual, createHash } from 'node:crypto';
 import { rateLimit } from 'express-rate-limit';
 import { ApiRateLimit } from './rate_limit.js';
 import { RateLimitSupport } from './rate_limit_support.js';
-import pug from 'pug';
 import { AdminAccounts } from './services/admin_accounts.js';
 import { AdminSettings } from './services/admin_settings.js';
 import { Ai } from './ai/index.js';
@@ -19,8 +18,8 @@ export class Admin {
 		return timingSafeEqual(digest(email.trim().toLowerCase()), digest(process.env.SYSADMIN_EMAIL.trim().toLowerCase())) && timingSafeEqual(digest(password), digest(process.env.SYSADMIN_PASSWORD));
 	}
 	static fingerprint() { return Support.hash((process.env.SYSADMIN_EMAIL || '') + '\0' + (process.env.SYSADMIN_PASSWORD || '')); }
-	static fragment(account) { return { account, id: account.id, revision: account.revision, html: pug.renderFile('./views/ajax/admin-account.pug', { account }) }; }
-	static async templateResult(key) { const template = await AdminSettings.template(key); return { id: key, template, html: pug.renderFile('./views/ajax/admin-template.pug', { template }) }; }
+	static fragment(account) { return { account, id: account.id, revision: account.revision, html: Support.render('./views/ajax/admin-account.pug', { account }) }; }
+	static async templateResult(key) { const template = await AdminSettings.template(key); return { id: key, template, html: Support.render('./views/ajax/admin-template.pug', { template }) }; }
 	static mount(app) {
 		const router = Router();
 		router.use((req, res, next) => {
@@ -63,7 +62,7 @@ export class Admin {
 		router.get('/api/accounts/:id/deletion', async (req, res) => { const exists = await Account.exists({ _id: Support.id(req.params.id) }); res.json(exists ? Admin.fragment(await AdminAccounts.get(req.params.id)) : { deleted: req.params.id }); });
 		router.post('/api/accounts/:id/deletion/retry', async (req, res) => res.status(202).json(Admin.fragment(await AdminAccounts.retry(req.params.id))));
 		router.get('/account-deletions', async (req, res) => res.render('admin/deletions', { requests: await AdminAccounts.personalDeletions() }));
-		router.post('/api/account-deletions/:id/review', async (req, res) => { const request = await AdminAccounts.reviewUserDeletion(req.params.id, req.body.confirmation); await AdminSettings.audit(res.locals.adminEmail, 'user.deletion.review', req.params.id); res.json({ html: pug.renderFile('./views/ajax/admin-deletion.pug', { request }) }); });
+		router.post('/api/account-deletions/:id/review', async (req, res) => { const request = await AdminAccounts.reviewUserDeletion(req.params.id, req.body.confirmation); await AdminSettings.audit(res.locals.adminEmail, 'user.deletion.review', req.params.id); res.json({ html: Support.render('./views/ajax/admin-deletion.pug', { request }) }); });
 		router.get('/email-templates', async (req, res) => res.render('admin/templates', { templates: await Promise.all(Object.keys(AdminSettings.templates).map(AdminSettings.template)) }));
 		router.get('/api/email-templates/:key/form', async (req, res) => res.render('ajax/admin-template-form', { template: await AdminSettings.template(req.params.key) }));
 		router.put('/api/email-templates/:key', async (req, res) => {

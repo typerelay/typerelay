@@ -77,14 +77,19 @@ impl Panel {
         let transaction = db.connection.unchecked_transaction()?;
         let library = db.library(&hit.library)?;
         ensure!(library["state"] == "active" && library["permissions"]["read"] == true, "Library is no longer available");
-        let records = db.records(&hit.library)?;
-        let entry = records.iter().find(|entry|entry["id"] == hit.id && entry["state"] == "active").context("Snippet moved or was removed; search again")?;
+        let entry = db.record(&hit.library, &hit.id)?.filter(|entry|entry["state"] == "active").context("Snippet moved or was removed; search again")?;
         ensure!(entry["revision"] == hit.revision, "Snippet changed; search again");
         let content = entry["content"].clone();
         transaction.commit()?; Ok(content)
     }
     pub fn record_usage(directory: &Path, hit: &Hit, action: &str, client: &str, characters: usize) {
         if let Err(error) = Database::open(directory).and_then(|db| db.usage(&hit.library, &hit.id, action, client, characters)) { eprintln!("TypeRelay usage could not be queued: {error}"); }
+    }
+    /// One long-lived worker connection keeps SQLite off input threads; events are dropped when the queue is full.
+    pub fn usage_recorder(directory: std::path::PathBuf) -> std::sync::mpsc::SyncSender<(Hit, &'static str, usize)> {
+        let (sender, receiver) = std::sync::mpsc::sync_channel::<(Hit, &'static str, usize)>(64);
+        std::thread::spawn(move || { let mut db = None; for (hit, action, characters) in receiver { let result = match db.take() { Some(open) => Ok(open), None => Database::open(&directory) }.and_then(|open| { open.usage(&hit.library, &hit.id, action, "desktop", characters)?; Ok(open) }); match result { Ok(open) => db = Some(open), Err(error) => eprintln!("TypeRelay usage could not be queued: {error}") } } });
+        sender
     }
     pub fn usage_characters(steps: &[crate::clipboard_payload::ClipboardStep], erase: usize) -> usize { steps.iter().map(|step| match step { crate::clipboard_payload::ClipboardStep::Payload(payload) => payload.characters, crate::clipboard_payload::ClipboardStep::Enter => 0 }).sum::<usize>().saturating_sub(erase) }
     pub fn selected(directory: &Path, hit: &Hit) -> Result<String> { let content = Self::content(directory, hit)?; ensure!(content["type"] != "template", "Fill this template before copying/inserting"); Ok(content["text"].as_str().context("Missing text")?.into()) }
@@ -110,6 +115,15 @@ mod tests {
         db.edit(&local,Some(0),None).unwrap();assert!(Panel::search(temp.path(),"meeting",Some(&local.id)).unwrap().is_empty());
         db.connection.execute("UPDATE libraries SET data=json_set(data,'$.permissions.read',json('false')) WHERE id=?1",[other.id]).unwrap();assert!(Panel::search(temp.path(),"meeting",None).unwrap().is_empty());
         assert!(!temp.path().join("native-ai/endpoint.json").exists());
+    }
+    #[test]
+    fn usage_worker_queues_events_and_content_reads_one_record() {
+        let temp=tempfile::tempdir().unwrap();let db=Database::open(temp.path()).unwrap();let file=db.import("Local","matches: [{trigger: one, replace: First}, {trigger: two, replace: Second}]").unwrap();db.enroll("Local").unwrap();let identity=serde_json::json!({"server":"https://example.test","account":"one","user":"owner"});db.set_meta("statistics_identity",&identity).unwrap();
+        let record=db.record(&file.id,&file.ids[1]).unwrap().unwrap();let hit=Hit{id:file.ids[1].clone(),library:file.id.clone(),revision:record["revision"].as_i64().unwrap(),library_name:String::new(),title:String::new(),abbreviation:String::new(),preview:String::new()};
+        assert_eq!(Panel::content(temp.path(),&hit).unwrap()["text"],"Second");assert!(db.record("other",&file.ids[1]).unwrap().is_none());assert!(Panel::content(temp.path(),&Hit{revision:hit.revision+1,..hit.clone()}).is_err());
+        let usage=Panel::usage_recorder(temp.path().to_owned());for characters in [3,4]{usage.try_send((hit.clone(),"insert",characters)).unwrap();}drop(usage);
+        let deadline=std::time::Instant::now()+std::time::Duration::from_secs(5);while db.pending_usage(&identity).unwrap().len()<2&&std::time::Instant::now()<deadline{std::thread::sleep(std::time::Duration::from_millis(20));}
+        let events=db.pending_usage(&identity).unwrap();assert_eq!(events.iter().map(|event|event["characters"].as_u64().unwrap()).collect::<Vec<_>>(),vec![3,4]);assert_eq!(events[0]["snippet"],hit.id);
     }
     #[test]
     fn indexed_scope_precedes_limit() {

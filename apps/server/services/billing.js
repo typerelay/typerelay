@@ -1,6 +1,5 @@
 import Stripe from 'stripe';
 import { AccountAccess } from './account_access.js';
-import pug from 'pug';
 import { randomBytes } from 'node:crypto';
 import { Account, Device, Library, Member, Snippet, Ticket, User } from '../model/index.js';
 import { Support } from './support.js';
@@ -558,7 +557,7 @@ export class Billing {
 		const { Team } = await import('./team.js');
 		locals.ctx = { ...ctx, entitlements: locals.entitlements };
 		locals.team = await Team.list(locals.ctx);
-		const member_actions = locals.team.members.map(member => ({ id: String(member._id), html: pug.renderFile('./views/ajax/member-actions.pug', { ...locals, member }) }));
-		return { account, member_actions, entitlements: locals.entitlements, subscription_html: pug.renderFile('./views/ajax/subscription.pug', locals), trial_html: pug.renderFile('./views/ajax/trial-button.pug', locals), team_notice_html: pug.renderFile('./views/ajax/team-plan-notice.pug', locals), team_add_html: pug.renderFile('./views/ajax/team-add.pug', locals), team_groups_html: pug.renderFile('./views/ajax/team-groups.pug', locals), statistics_scope_html: pug.renderFile('./views/ajax/statistics-scope.pug', locals), tokens_form_html: locals.entitlements.capabilities.api ? pug.renderFile('./views/ajax/access-token-form.pug') : '', oauth_client_form_html: locals.entitlements.capabilities.api && ['owner', 'admin'].includes(ctx.role) ? pug.renderFile('./views/ajax/oauth-client-form.pug') : '' };
+		const member_actions = locals.team.members.map(member => ({ id: String(member._id), html: Support.render('./views/ajax/member-actions.pug', { ...locals, member }) }));
+		return { account, member_actions, entitlements: locals.entitlements, subscription_html: Support.render('./views/ajax/subscription.pug', locals), trial_html: Support.render('./views/ajax/trial-button.pug', locals), team_notice_html: Support.render('./views/ajax/team-plan-notice.pug', locals), team_add_html: Support.render('./views/ajax/team-add.pug', locals), team_groups_html: Support.render('./views/ajax/team-groups.pug', locals), statistics_scope_html: Support.render('./views/ajax/statistics-scope.pug', locals), tokens_form_html: locals.entitlements.capabilities.api ? Support.render('./views/ajax/access-token-form.pug') : '', oauth_client_form_html: locals.entitlements.capabilities.api && ['owner', 'admin'].includes(ctx.role) ? Support.render('./views/ajax/oauth-client-form.pug') : '' };
 	}
 }

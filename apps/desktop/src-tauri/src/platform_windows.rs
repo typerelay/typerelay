@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, ensure};
 use std::{cell::RefCell,path::PathBuf,sync::{Arc,mpsc::{Receiver,SyncSender,sync_channel}},os::windows::io::{OwnedHandle,FromRawHandle},time::Duration};
-use typerelay_client::{database::DatabaseSnapshot,settings::SettingsStore};
+use typerelay_client::{database::{DatabaseSnapshot,Watcher},settings::SettingsStore};
 use typerelay_core::{Engine,Expansion,Input,FeedResult};
 use typerelay_client::browser_lease::BrowserLease;
 use windows::Win32::System::Threading::{OpenProcess,PROCESS_QUERY_LIMITED_INFORMATION};
@@ -39,10 +39,13 @@ pub fn open_url(url:&str)->Result<()> { std::process::Command::new("rundll32.exe
 pub fn open_tui()->Result<()> { let executable=std::env::current_exe()?.with_file_name("typerelay-tui.exe");ensure!(executable.is_file(),"TypeRelay TUI is missing from this installation");std::process::Command::new(executable).spawn().context("Could not open TypeRelay TUI")?;Ok(()) }
 
 pub struct ExpansionRequest { pub target:Target, pub expansion:Expansion, pub released:Receiver<()>,pub confirm_enter:bool,pub cancelled:Arc<std::sync::atomic::AtomicBool>, pub restore_space:bool }
-struct HookState { store:DatabaseSnapshot, settings:SettingsStore, engine:Engine, target:Option<Target>, sender:SyncSender<ExpansionRequest>, suppress_delimiter:Option<((u32,u32,bool),SyncSender<()>)>, pending:Option<Arc<std::sync::atomic::AtomicBool>>, suppress_right:bool, right_forwarded:bool, enter_forwarded:std::collections::BTreeSet<(u32,bool)> }
+struct HookState { reloads:Watcher<(Option<typerelay_core::Snapshot>,Option<String>)>, engine:Engine, target:Option<Target>, sender:SyncSender<ExpansionRequest>, suppress_delimiter:Option<((u32,u32,bool),SyncSender<()>)>, pending:Option<Arc<std::sync::atomic::AtomicBool>>, suppress_right:bool, right_forwarded:bool, enter_forwarded:std::collections::BTreeSet<(u32,bool)> }
 thread_local! { static HOOK_STATE:RefCell<Option<HookState>>=const{RefCell::new(None)}; }
 impl HookState {
-    fn new(directory:PathBuf,settings_path:PathBuf,sender:SyncSender<ExpansionRequest>)->Result<Self>{let store=DatabaseSnapshot::open(&directory)?;let settings=SettingsStore::open(settings_path)?;let mut engine=Engine::new(store.snapshot.clone());engine.set_prefix(&settings.settings.trigger_prefix).map_err(anyhow::Error::msg)?;Ok(Self{store,settings,engine,target:None,sender,suppress_delimiter:None,pending:None,suppress_right:false,right_forwarded:false,enter_forwarded:Default::default()})}
+    fn new(directory:PathBuf,settings_path:PathBuf,sender:SyncSender<ExpansionRequest>)->Result<Self>{let store=DatabaseSnapshot::open(&directory)?;let settings=SettingsStore::open(settings_path)?;let mut engine=Engine::new(store.snapshot.clone());engine.set_prefix(&settings.settings.trigger_prefix).map_err(anyhow::Error::msg)?;
+        // SQLite snapshot rebuilds and settings file reads stay off the hook thread; the timer only drains this channel.
+        let reloads=store.watch_settings(settings);
+        Ok(Self{reloads,engine,target:None,sender,suppress_delimiter:None,pending:None,suppress_right:false,right_forwarded:false,enter_forwarded:Default::default()})}
     fn input(vk:u32,scan:u32)->Input {match vk{0x08=>Input::Backspace,0x2e=>Input::Delete,0x25=>Input::Left,0x27=>Input::Right,0x20=>Input::Space,0x0d=>Input::Enter,_=>unsafe{let window=GetForegroundWindow();let thread=GetWindowThreadProcessId(window,None);let layout=GetKeyboardLayout(thread);let mut state=[0u8;256];if GetKeyboardState(&mut state).is_err(){return Input::Cancel;}
         for modifier in [0x10usize,0x11,0x12]{state[modifier]=(state[modifier]&1)|if GetAsyncKeyState(modifier as i32)<0{0x80}else{0};}if let Some(key)=state.get_mut(vk as usize){*key|=0x80;}let mut buffer=[0u16;8];let length=ToUnicodeEx(vk,scan,&state,&mut buffer,5,Some(layout));if length<=0{return Input::Cancel;}let Ok(value)=String::from_utf16(&buffer[..usize::try_from(length).unwrap_or_default().min(buffer.len())])else{return Input::Cancel;};let mut characters=value.chars();let Some(character)=characters.next()else{return Input::Cancel;};if characters.next().is_some(){Input::Cancel}else{Input::Character(character)}}}}
     fn modified()->bool {unsafe{let control=GetAsyncKeyState(VK_CONTROL.0 as i32)<0;let alt=GetAsyncKeyState(VK_MENU.0 as i32)<0;[VK_LWIN,VK_RWIN,VK_SHIFT].iter().any(|key|GetAsyncKeyState(key.0 as i32)<0)||control!=alt}}
@@ -69,8 +72,10 @@ impl HookState {
         false
     }
     fn reload(&mut self){
-        if let Ok(Some(snapshot))=self.store.reload(){self.engine.replace_snapshot(snapshot);self.target=None;}
-        if let Ok(true)=self.settings.reload(){let _=self.engine.set_prefix(&self.settings.settings.trigger_prefix);self.target=None;}
+        while let Some((snapshot,prefix))=self.reloads.try_recv(){
+            if let Some(snapshot)=snapshot{self.engine.replace_snapshot(snapshot);self.target=None;}
+            if let Some(prefix)=prefix{let _=self.engine.set_prefix(&prefix);self.target=None;}
+        }
     }
 }
 struct Hook(HHOOK);

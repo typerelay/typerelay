@@ -9,6 +9,7 @@ import { mongoose, Library, Snippet, SnippetAsset, Operation, Conflict, Account,
 import { Fault, Support, Yaml } from './support.js';
 import { Billing } from './billing.js';
 import { RichText } from './rich_text.js';
+import { ApiRateLimit } from '../rate_limit.js';
 
 export class Libraries {
 	static async personalState(ctx, session = null) {
@@ -81,11 +82,26 @@ export class Libraries {
 	static yaml(entry) { const value = Libraries.value(entry); return { trigger: value.trigger, title: value.title, replace: value.content.type === 'rich_text' ? value.content.markdown : value.content.text, type: value.content.type, language: value.content.language || 'plain_text', variables: value.content.variables || {} }; }
 	// Bundles carry their images; YAML exports cannot.
 	static exportEntry(entry,bundle=false){const value=Libraries.value(entry);if(value.content.type==='rich_text'){Support.assert(bundle===true||!value.content.assets.length,'Export rich text with images as a TypeRelay bundle',409);return{trigger:value.trigger,title:value.title,replace:value.content.markdown,type:'rich_text',variables:value.content.variables};}return Libraries.yaml(value);}
-	static entry(snippet) { if(snippet.content?.type==='rich_text'){const assets=Object.fromEntries((snippet.content.assets||[]).map(id=>[id,`/snippet-assets/${snippet.account}/${id}`]));return{...snippet,replace:snippet.content.markdown,rich_html:RichText.render({...snippet.content,assets}).html};}return { ...snippet, replace: snippet.content?.text }; }
+	static richInput(snippet) { return { ...snippet.content, assets: Object.fromEntries((snippet.content.assets || []).map(id => [id, `/snippet-assets/${snippet.account}/${id}`])) }; }
+	static entry(snippet, html) { if (snippet.content?.type === 'rich_text') return { ...snippet, replace: snippet.content.markdown, rich_html: html ?? RichText.render(Libraries.richInput(snippet)).html }; return { ...snippet, replace: snippet.content?.text }; }
+	// Rendered rich HTML is cached by input hash; time-dependent snippets are rendered every time and a cache failure falls back to rendering.
+	static async richHtml(snippets) {
+		// The key includes the renderer build so a changed WASM never serves old HTML.
+		RichText.load();
+		const items = snippets.map(snippet => snippet.content?.type === 'rich_text' && !/{{\s*(date|time|timestamp)/.test(snippet.content.markdown || '') ? { snippet, key: 'rich_html:' + RichText.version + ':' + Support.hash(JSON.stringify(Libraries.richInput(snippet))) } : null);
+		const keys = items.filter(Boolean).map(item => item.key);
+		let hits = new Map();
+		if (keys.length) try { const values = await ApiRateLimit.getCache().getMany(keys); keys.forEach((key, index) => hits.set(key, values[index])); } catch {}
+		const misses = new Map();
+		const html = items.map(item => { if (!item) return undefined; const hit = hits.get(item.key); if (typeof hit === 'string') return hit; const value = RichText.render(Libraries.richInput(item.snippet)).html; misses.set(item.key, value); return value; });
+		if (misses.size) try { await ApiRateLimit.getCache().setMany([...misses].map(([key, value]) => ({ key, value })), { ttlMs: 7 * 86400000 }); } catch {}
+		return html;
+	}
 	static view(ctx, library) { return { ...library, _id: String(library._id), deleted: library.state !== 'active', permissions: Support.access(ctx, library) }; }
 	static async hydrate(library, session, records = null) {
 		const entries = records || await Support.transactionRead(Snippet.find({ library: library._id, state: { $ne: 'purged' } }).sort({ position: 1, id: 1 }).session(session || null).lean(), session);
-		const rendered = entries.map(Libraries.entry);
+		const html = await Libraries.richHtml(entries);
+		const rendered = entries.map((entry, index) => Libraries.entry(entry, html[index]));
 		// Copies keep personalize() from writing personal fields onto records.
 		return { ...library, snippets: rendered.filter(entry => entry.state === 'active').sort((a, b) => (new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0))).map(entry => ({ ...entry })), records: rendered };
 	}

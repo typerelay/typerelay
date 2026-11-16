@@ -239,7 +239,8 @@ export class Auth {
 		const ctx = await Support.context(String(device.user), String(device.account));
 		await Security.credential(ctx, device);
 		await Billing.assertDevice(ctx, device);
-		await Device.updateOne({ _id: device._id, revoked: false }, { $max: { last_active: new Date() } }, { timestamps: false });
+		// Minute precision is enough for "last active"; skip the write on every other request.
+		if (!device.last_active || +device.last_active < Date.now() - 60000) await Device.updateOne({ _id: device._id, revoked: false }, { $max: { last_active: new Date() } }, { timestamps: false });
 		return { ...ctx, device: String(device._id), sso_revision: device.sso_revision };
 	}
 	static scopes = scopes;

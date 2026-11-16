@@ -22,6 +22,11 @@ test('Windows CLI and TUI use one native staging plan', () => {
 	assert.throws(() => NativeTools.plan('aarch64-pc-windows-msvc'), /Unsupported/);
 });
 
+test('Windows panel leaves CRT selection to Rust when crt-static is enabled', async () => {
+	const build = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/build.rs'), 'utf8');
+	assert.match(build, /if std::env::var\("CARGO_CFG_TARGET_FEATURE"\)[^{]*feature == "crt-static"[^{]*\{[^}]*\.static_vc_runtime\(false\)/);
+});
+
 test('Windows bundle embeds both tools and owns its TUI shortcut', async () => {
 	const config = JSON.parse(await fs.readFile(path.join(root, 'apps/desktop/src-tauri/tauri.windows.conf.json'), 'utf8'));
 	const hooks = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/installer-hooks.nsh'), 'utf8');

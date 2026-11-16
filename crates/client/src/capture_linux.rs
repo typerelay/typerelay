@@ -43,7 +43,7 @@ impl CapturePublisher {
             loop {
                 let event=receiver.recv_timeout(Duration::from_millis(20));if matches!(event,Err(std::sync::mpsc::RecvTimeoutError::Disconnected)){break;}
                 if let Ok(Physical::Device(name)) = &event { device = name.clone(); refresh = Instant::now()-Duration::from_secs(1); }
-                if refresh.elapsed()>=Duration::from_millis(100)||matches!(&event,Ok(Physical::Key{value:1|2,..}|Physical::Pointer)){
+                if refresh.elapsed()>=Duration::from_millis(250)||matches!(&event,Ok(Physical::Key{value:1|2,..}|Physical::Pointer)){
                     let next=PanelIpc::capture_control().unwrap_or_default();let available=next.version==1&&next.enabled&&next.expires_ms>Self::now();active.store(available,Ordering::SeqCst);if next.session!=control.session{sequence=0;}if next.session!=control.session||!available{translator=None;current=None;reset.fetch_add(1,Ordering::SeqCst);}control=next;
                     if available{
                         if provider.is_none(){provider=ContextProvider::new(cache.clone()).ok();}

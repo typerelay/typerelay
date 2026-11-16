@@ -1,16 +1,19 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import managani from '@managani/node';
 import { Parser } from 'htmlparser2';
-import pug from 'pug';
 import { emailTemplates } from '../config/email_templates.js';
 import { mongoose, Account, SystemSetting, User, AdminAudit, ApiAudit } from '../model/index.js';
 import { Support } from './support.js';
 import { Auth } from './auth.js';
+import { ApiRateLimit } from '../rate_limit.js';
 
 export class AdminSettings {
 	static templates = emailTemplates;
-	static async get(key, fallback = {}) { return (await SystemSetting.findOne({ key }).lean())?.value ?? fallback; }
-	static async set(key, value) { await SystemSetting.updateOne({ key }, { $set: { value }, $inc: { revision: 1 } }, { upsert: true }); return value; }
+	// Cached 30s in Memcached (misses on backend failure); writers call invalidate(). Keyed by database so stacks and test databases sharing Memcached stay isolated.
+	static cacheKey(key) { return 'setting:' + mongoose.connection.name + ':' + key; }
+	static async get(key, fallback = {}) { const { value } = await ApiRateLimit.getCache().getOrLoad(AdminSettings.cacheKey(key), async () => ({ value: (await SystemSetting.findOne({ key }).lean())?.value ?? null }), { ttlMs: 30000 }); return value == null ? fallback : structuredClone(value); }
+	static async invalidate(key) { await ApiRateLimit.getCache().delete(AdminSettings.cacheKey(key)); }
+	static async set(key, value) { await SystemSetting.updateOne({ key }, { $set: { value }, $inc: { revision: 1 } }, { upsert: true }); await AdminSettings.invalidate(key); return value; }
 	static validateTemplate(key, input) {
 		const template = AdminSettings.templates[key]; Support.assert(template, 'Unknown template', 404);
 		Support.assert(typeof input.subject === 'string' && input.subject.trim() && input.subject.length <= 200 && !/[\r\n]/.test(input.subject), 'Enter a subject up to 200 characters');
@@ -41,7 +44,7 @@ export class AdminSettings {
 		return result;
 	}
 	static samples() { return { url: Auth.origin + '/example-link', name: 'Alex', inviterName: 'Sam', tenantName: 'Example team' }; }
-	static preview(template) { const result = AdminSettings.render(template, AdminSettings.samples()); return { ...result, preview_html: pug.renderFile('./views/ajax/admin-email-preview.pug', { message: result }) }; }
+	static preview(template) { const result = AdminSettings.render(template, AdminSettings.samples()); return { ...result, preview_html: Support.render('./views/ajax/admin-email-preview.pug', { message: result }) }; }
 	static async send(key, to, variables) {
 		const template = await AdminSettings.template(key);
 		const values = { ...variables };

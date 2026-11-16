@@ -109,7 +109,7 @@ test('auto-resume selects matching pending run and refuses ambiguous candidates'
 });
 
 test('resume option rejects missing paths, relative paths and other platforms', () => {
-	for (const args of [['macos', '--resume'], ['macos', '--resume', 'relative'], ['linux', '--resume', '/absolute']]) assert.throws(() => PanelRelease.options([...args, '--dry-run']), /resume/);
+	for (const [mode, ...args] of [['macos', '--resume'], ['macos', '--resume', 'relative'], ['linux', '--resume', '/absolute']]) assert.throws(() => PanelRelease.options([mode, '--dry-run', ...args]), /resume/);
 });
 
 test('release lock prevents concurrent packaging and safely recovers a dead owner', async t => {

@@ -50,6 +50,7 @@ impl NativeAi {
         }};
         request["token"] = json!(endpoint.token); Self::exchange(&mut stream, &request)
     }
+    pub fn release(root: &Path) -> Result<()> { if let Ok((mut stream, endpoint)) = Self::connect(root) { Self::exchange(&mut stream, &json!({"op":"shutdown","when_idle":true,"token":endpoint.token}))?; } Ok(()) }
     pub fn stop(root: &Path) -> Result<()> {
         if let Ok((mut stream, endpoint)) = Self::connect(root) { Self::exchange(&mut stream, &json!({"op":"shutdown","token":endpoint.token}))?; for _ in 0..40 { if Self::connect(root).is_err() { return Ok(()); } std::thread::sleep(Duration::from_millis(50)); } anyhow::bail!("AI worker did not stop for update"); } Ok(())
     }

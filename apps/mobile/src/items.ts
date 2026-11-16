@@ -4,10 +4,11 @@ import type { Library } from './types';
 export class Items {
  static update(list: HTMLElement, libraries: Library[], render: (values: { library: Library; snippet: Library['records'][number] }) => string) {
   const valid = new Set<string>();
+  const elements = new Map([...list.children].map(element => [(element as HTMLElement).dataset.key!, element as HTMLElement]));
   for (const library of libraries) for (const snippet of library.records) {
    const key = `${library._id}:${snippet.id}`; valid.add(key);
    const signature = JSON.stringify([snippet, library.name, library.permissions.edit]);
-   const existing = [...list.children].find(element => (element as HTMLElement).dataset.key === key) as HTMLElement | undefined;
+   const existing = elements.get(key);
    if (existing?.dataset.signature === signature) continue;
    const parser = new list.ownerDocument.defaultView!.DOMParser();
    const element = parser.parseFromString(render({ library, snippet }), 'text/html').body.firstElementChild as HTMLElement;

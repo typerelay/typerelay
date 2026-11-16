@@ -83,6 +83,8 @@ const accountSchema = new mongoose.Schema({
 accountSchema.index({ 'white_label.hostname': 1 }, { name: 'white_label_verified_hostname', unique: true, partialFilterExpression: { 'white_label.hostname': { $type: 'string', $gt: '' }, 'white_label.dns_verified_at': { $type: 'date' } } });
 accountSchema.index({ 'billing.helpmonks_sequence.status': 1, 'billing.helpmonks_sequence.next_attempt_at': 1 });
 accountSchema.index({ 'deletion.requested_at': 1, 'deletion.stage': 1 });
+accountSchema.index({ 'billing.trial_ends_at': 1 }, { name: 'trial_expiry', partialFilterExpression: { 'billing.status': 'trialing' } });
+accountSchema.index({ 'white_label.next_check_at': 1 }, { name: 'white_label_reconcile', partialFilterExpression: { 'white_label.hostname': { $gt: '' } } });
 for (const field of ['stripe_customer_id', 'stripe_subscription_id']) accountSchema.index({ ['billing.' + field]: 1 }, { sparse: true });
 const Account = mongoose.model('Account', accountSchema);
 const membership = new mongoose.Schema({ account: objectid, user: objectid, role: { type: String, enum: ['owner', 'admin', 'member'] } }, { 'read': 'secondaryPreferred' });
@@ -99,6 +101,7 @@ const Library = mongoose.model('Library', new mongoose.Schema({ account: objecti
 const snippetSchema = new mongoose.Schema({ account: objectid, library: objectid, id: String, title: String, trigger: String, content: mixed, position: Number, revision: Number, ...lifecycle }, { timestamps: true, 'read': 'secondaryPreferred' });
 snippetSchema.index({ library: 1, id: 1 }, { unique: true });
 snippetSchema.index({ account: 1, id: 1 }, { unique: true });
+snippetSchema.index({ library: 1, position: 1, id: 1 });
 snippetSchema.index({ library: 1, trigger: 1 }, { unique: true, partialFilterExpression: { state: 'active', trigger: { $type: 'string', $gt: '' } } });
 snippetSchema.index({ state: 1, expires_at: 1, account: 1 });
 snippetSchema.index({ account: 1, state: 1, purge_sequence: 1 });
@@ -144,6 +147,8 @@ Conflict.schema.index({ account: 1, library: 1 });
 for (const field of ['access', 'refresh']) Device.schema.index({ [field]: 1 }, { sparse: true });
 IntegrationToken.schema.index({ expires: 1 }, { expireAfterSeconds: 0 });
 Ticket.schema.index({ expires: 1 }, { expireAfterSeconds: 0 });
+Ticket.schema.index({ kind: 1 });
+User.schema.index({ 'deletion.requested_at': 1, 'deletion.next_attempt_at': 1 }, { name: 'user_deletion', partialFilterExpression: { 'deletion.requested_at': { $type: 'date' } } });
 Integration.schema.index({ hash: 1 }, { unique: true, sparse: true });
 Integration.schema.index({ refresh: 1 }, { unique: true, sparse: true });
 Integration.schema.index({ account: 1, user: 1 });

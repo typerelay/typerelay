@@ -5,6 +5,7 @@ globalThis.typeRelayContentReady = true;
 let items = [];
 let prefix = ';';
 let ownedUntil = 0;
+const MAX_BEFORE = 128;
 let lastEditor;
 let lastSelection;
 let promptOpen = false;
@@ -33,10 +34,15 @@ function beforeCaret(editor) {
 	if (!saved) return null;
 	if ('start' in saved) return saved.start === saved.end ? editor.value.slice(0, saved.start) : null;
 	if (!saved.collapsed) return null;
-	const range = saved.cloneRange();
-	range.selectNodeContents(editor);
-	range.setEnd(saved.startContainer, saved.startOffset);
-	return range.toString();
+	// The matcher only reads the last 128 characters, so walk text nodes backwards from the caret instead of copying the whole field.
+	const container = saved.startContainer;
+	const walker = editor.ownerDocument.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+	let text = '';
+	let node;
+	if (container.nodeType === Node.TEXT_NODE) { text = container.data.slice(0, saved.startOffset); walker.currentNode = container; node = walker.previousNode(); }
+	else { const next = container.childNodes[saved.startOffset]; walker.currentNode = next || container; node = next ? walker.previousNode() : walker.lastChild() || walker.previousNode(); }
+	while (node && text.length < MAX_BEFORE) { text = node.data + text; node = walker.previousNode(); }
+	return text.slice(-MAX_BEFORE);
 }
 
 function restore(editor, saved) {
@@ -146,6 +152,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 void send({ type: 'snapshot' }).then(snapshot => { items = snapshot.items; prefix = snapshot.prefix; }).catch(() => undefined);
+// Heartbeat must stay under the native 700 ms browser lease (crates/client/src/browser_lease.rs) or both sides expand.
 setInterval(() => { if (items.length) void claim(); }, 400);
 
 document.addEventListener('focusin', event => { const editor = editorFor(event.target); if (editor) { lastEditor = editor; lastSelection = selectionFor(editor); void send({ type: 'focus' }).catch(() => undefined); void claim(); } }, true);

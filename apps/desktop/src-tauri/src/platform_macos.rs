@@ -4,7 +4,7 @@ use core_graphics::{event::{CallbackResult,CGEvent,CGEventFlags,CGEventTap,CGEve
 use foreign_types::ForeignType;
 use objc2_app_kit::{NSWorkspace,NSRunningApplication,NSApplicationActivationOptions};
 use std::{ffi::{c_void,CString},mem,process::Command,sync::{Arc,Mutex,mpsc::{Receiver,SyncSender,sync_channel}},time::{Duration,Instant}};
-use typerelay_client::{database::DatabaseSnapshot,settings::SettingsStore};
+use typerelay_client::{database::{DatabaseSnapshot,Watcher},settings::SettingsStore};
 use typerelay_core::{Engine,Expansion,Input,FeedResult};
 use typerelay_client::browser_lease::BrowserLease;
 use objc2_foundation::NSObjectProtocol;
@@ -131,14 +131,17 @@ impl DeferredInput {
     }
 }
 pub struct ExpansionRequest { pub target:Target,pub expansion:Expansion,pub released:Receiver<()>,pub confirm_enter:bool,pub deferred:DeferredInput }
-struct ExpansionState { store:DatabaseSnapshot,settings:SettingsStore,engine:Engine,target:Option<Target>,sender:SyncSender<ExpansionRequest>,release:Option<(u16,SyncSender<()>)>,deferred:Option<DeferredInput>,suppress_right_up:bool,reloaded:Instant }
+struct ExpansionState { reloads:Watcher<(Option<typerelay_core::Snapshot>,Option<String>)>,engine:Engine,target:Option<Target>,sender:SyncSender<ExpansionRequest>,release:Option<(u16,SyncSender<()>)>,deferred:Option<DeferredInput>,suppress_right_up:bool }
 impl ExpansionState {
-    fn new(directory:&std::path::Path,settings_path:std::path::PathBuf,sender:SyncSender<ExpansionRequest>)->Result<Self>{let store=DatabaseSnapshot::open(directory)?;let settings=SettingsStore::open(settings_path)?;let mut engine=Engine::new(store.snapshot.clone());engine.set_prefix(&settings.settings.trigger_prefix).map_err(anyhow::Error::msg)?;Ok(Self{store,settings,engine,target:None,sender,release:None,deferred:None,suppress_right_up:false,reloaded:Instant::now()})}
+    fn new(directory:&std::path::Path,settings_path:std::path::PathBuf,sender:SyncSender<ExpansionRequest>)->Result<Self>{let store=DatabaseSnapshot::open(directory)?;let settings=SettingsStore::open(settings_path)?;let mut engine=Engine::new(store.snapshot.clone());engine.set_prefix(&settings.settings.trigger_prefix).map_err(anyhow::Error::msg)?;
+        // SQLite snapshot rebuilds and settings file reads stay off the event tap; the callback only drains this channel.
+        let reloads=store.watch_settings(settings);
+        Ok(Self{reloads,engine,target:None,sender,release:None,deferred:None,suppress_right_up:false})}
     fn reload(&mut self){
-        if self.reloaded.elapsed()<Duration::from_millis(500){return;}
-        self.reloaded=Instant::now();
-        if let Ok(Some(snapshot))=self.store.reload(){self.engine.replace_snapshot(snapshot);self.target=None;}
-        if let Ok(true)=self.settings.reload(){let _=self.engine.set_prefix(&self.settings.settings.trigger_prefix);self.target=None;}
+        while let Some((snapshot,prefix))=self.reloads.try_recv(){
+            if let Some(snapshot)=snapshot{self.engine.replace_snapshot(snapshot);self.target=None;}
+            if let Some(prefix)=prefix{let _=self.engine.set_prefix(&prefix);self.target=None;}
+        }
     }
     fn character(key:u16)->Option<char>{match key{0=>Some('a'),1=>Some('s'),2=>Some('d'),3=>Some('f'),4=>Some('h'),5=>Some('g'),6=>Some('z'),7=>Some('x'),8=>Some('c'),9=>Some('v'),11=>Some('b'),12=>Some('q'),13=>Some('w'),14=>Some('e'),15=>Some('r'),16=>Some('y'),17=>Some('t'),18=>Some('1'),19=>Some('2'),20=>Some('3'),21=>Some('4'),22=>Some('6'),23=>Some('5'),24=>Some('='),25=>Some('9'),26=>Some('7'),27=>Some('-'),28=>Some('8'),29=>Some('0'),30=>Some(']'),31=>Some('o'),32=>Some('u'),33=>Some('['),34=>Some('i'),35=>Some('p'),37=>Some('l'),38=>Some('j'),39=>Some('\''),40=>Some('k'),41=>Some(';'),42=>Some('\\'),43=>Some(','),44=>Some('/'),45=>Some('n'),46=>Some('m'),47=>Some('.'),50=>Some('`'),_=>None}}
     fn input(event:&CGEvent,key:u16)->Input{match key{51=>Input::Backspace,117=>Input::Delete,123=>Input::Left,124=>Input::Right,49=>Input::Space,36|76=>Input::Enter,_=>{let mut buffer=[0u16;8];let mut length=0;unsafe{CGEventKeyboardGetUnicodeString(event.as_ptr(),buffer.len(),&mut length,buffer.as_mut_ptr());}let value=String::from_utf16_lossy(&buffer[..length.min(buffer.len())]);let mut characters=value.chars();let character=characters.next().or_else(||Self::character(key));let Some(character)=character else{return Input::Cancel;};if characters.next().is_some(){Input::Cancel}else{Input::Character(character)}}}}
@@ -256,14 +259,16 @@ impl ObservationAdapter {
         std::thread::spawn(move||{
             let mut previous=None;let mut epoch=0;let mut native_previous=None::<typerelay_client::observation::CaptureContext>;let mut native_generation=0;let mut native_sequence=0;
             loop {
-                let raw=receiver.recv_timeout(Duration::from_millis(25)).ok();
+                // Keys wake this loop at once; the idle tick only notices focus changes, so it need not poll accessibility 40 times a second.
+                // A key that reveals a focus change stamps the boundary with its own time, or the observer drops the key as out of order.
+                let raw=receiver.recv_timeout(Duration::from_millis(500)).ok();
                 if !state.enabled.load(Ordering::SeqCst){previous=None;continue;}
                 if !monitored.load(Ordering::SeqCst){previous=None;state.safety(false);state.status("Permission needed: Input Monitoring; restart Typerelay after granting access");continue;}
                 let current_epoch=state.epoch.load(Ordering::SeqCst);if epoch!=current_epoch{previous=None;epoch=current_epoch;}
                 if state.native(){
                     use typerelay_client::observation::{CaptureHealth,CaptureSource,Edit,Protection};
                     if let Some(mut context)=Self::native_context(&state.app){
-                        if native_previous.as_ref().is_none_or(|old|old.app!=context.app||old.window!=context.window||old.layout!=context.layout){if let Some(old)=&native_previous{native_sequence+=1;state.native_event(old.clone(),CaptureSource::Keyboard,native_sequence,if old.layout==context.layout{Edit::Boundary}else{Edit::Reset},crate::observation::Observation::now());}native_generation+=1;}context.generation=native_generation;
+                        if native_previous.as_ref().is_none_or(|old|old.app!=context.app||old.window!=context.window||old.layout!=context.layout){if let Some(old)=&native_previous{native_sequence+=1;state.native_event(old.clone(),CaptureSource::Keyboard,native_sequence,if old.layout==context.layout{Edit::Boundary}else{Edit::Reset},raw.as_ref().map_or_else(crate::observation::Observation::now,|(_,at,_)|*at));}native_generation+=1;}context.generation=native_generation;
                         state.native_health(CaptureHealth{desktop:"macos".into(),layout:context.layout.clone(),ime:context.ime.clone(),app:Some(context.app.clone()),source:"keyboard".into(),blocked:if context.protection==Protection::Protected{Some("Learning paused in secure input".into())}else if context.ime.is_some(){Some("IME active: verified composition integration required".into())}else{None},at_ms:crate::observation::Observation::now(),..Default::default()});
                         if let Some((event_epoch,at,edit))=raw&&event_epoch==epoch&&crate::observation::Observation::now()-at<250{native_sequence+=1;state.native_event(context.clone(),CaptureSource::Keyboard,native_sequence,edit,at);}native_previous=Some(context);
                     }else{if let Some(old)=native_previous.take(){native_sequence+=1;state.native_event(old,CaptureSource::Keyboard,native_sequence,Edit::Reset,crate::observation::Observation::now());}state.native_health(CaptureHealth{desktop:"macos".into(),blocked:Some("Allow Accessibility and Input Monitoring, then focus an allowed app".into()),at_ms:crate::observation::Observation::now(),..Default::default()});}

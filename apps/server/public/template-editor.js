@@ -9,8 +9,8 @@ export class TemplateEditor {
 		root.hidden = document.querySelector('#snippet-type').value === 'code';
 		if (area !== this.area) {
 			this.area = area; this.variables = JSON.parse(root.dataset.variables); this.names = '';
-			area.addEventListener('input', () => this.preview());
-			root.addEventListener('input', event => { const field = event.target.dataset.vfield; if (field) { const name = event.target.closest('[data-variable]').dataset.variable; this.variables[name][field] = event.target.type === 'checkbox' ? event.target.checked : event.target.value; this.preview(); } });
+			area.addEventListener('input', () => this.schedule());
+			root.addEventListener('input', event => { const field = event.target.dataset.vfield; if (field) { const name = event.target.closest('[data-variable]').dataset.variable; this.variables[name][field] = event.target.type === 'checkbox' ? event.target.checked : event.target.value; this.schedule(); } });
 			document.querySelector('#insert-variable').onclick = () => {
 				if (this.client.codeReadonly) return;
 				const kind = document.querySelector('#variable-kind').value;
@@ -23,7 +23,9 @@ export class TemplateEditor {
 		if (!root.hidden) this.preview();
 	}
 	async content() { if (document.querySelector('#snippet-type').value === 'rich_text') { const result = await RichTextRuntime.render({ markdown: this.client.richView?.content() || this.area.value, variables: this.variables }, {}, true); this.variables = result.variables; return { variables: result.variables }; } return (await TemplateRuntime.render({ text: this.area.value, variables: this.variables }, {}, true)).template; }
+	schedule() { clearTimeout(this.timer); this.timer = setTimeout(() => this.preview(), 150); }
 	async preview() {
+		clearTimeout(this.timer);
 		if (!this.area?.isConnected || document.querySelector('#snippet-type').value === 'code') return;
 		const sequence = ++this.sequence;
 		try {
@@ -54,8 +56,8 @@ export class TemplateFill {
 		this.client = client; this.sequence = 0;
 		this.modal = document.querySelector('#template-fill');
 		if (!this.modal) return;
-		this.modal.addEventListener('input', () => this.preview());
-		this.modal.addEventListener('hidden.bs.modal', () => { this.sequence++; this.content = null; document.querySelector('#template-fill-fields').replaceChildren(); document.querySelector('#template-fill-preview').textContent = ''; if (this.restoreEditor) { this.restoreEditor = false; bootstrap.Modal.getOrCreateInstance(document.querySelector('#form-modal')).show(); } });
+		this.modal.addEventListener('input', () => { clearTimeout(this.timer); this.timer = setTimeout(() => this.preview(), 150); });
+		this.modal.addEventListener('hidden.bs.modal', () => { clearTimeout(this.timer); this.sequence++; this.content = null; document.querySelector('#template-fill-fields').replaceChildren(); document.querySelector('#template-fill-preview').textContent = ''; if (this.restoreEditor) { this.restoreEditor = false; bootstrap.Modal.getOrCreateInstance(document.querySelector('#form-modal')).show(); } });
 		document.querySelector('#template-fill-form').onsubmit = async event => {
 			event.preventDefault(); const button = event.submitter; if (button) button.disabled = true;
 			try { const now = new Date(); const values = this.values(); if (this.revalidate) await this.revalidate(); const result = this.rich ? await this.client.copyRich(this.content, values) : await TemplateRuntime.render(this.content, values, false, now); if (!this.rich) await navigator.clipboard.writeText(result.text); this.onCopied?.(result.text, result.characters); bootstrap.Modal.getInstance(this.modal).hide(); this.client.toast(result.cursor ? 'Copied text. Cursor positioning was omitted.' : result.enter_actions ? 'Copied content. Enter key actions were omitted.' : 'Copied'); } catch (error) { document.querySelector('#template-fill-error').textContent = error.message; } finally { if (button) button.disabled = false; }
