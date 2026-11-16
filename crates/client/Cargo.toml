@@ -26,6 +26,10 @@ required-features = ["desktop"]
 name = "typerelay-yaml"
 path = "src/yaml_helper.rs"
 
+[[test]]
+name = "ai_worker_exit"
+required-features = ["ai-runtime"]
+
 [features]
 ai-runtime = ["desktop", "dep:llama-cpp-2"]
 ai-vulkan = ["ai-runtime", "llama-cpp-2/vulkan"]
