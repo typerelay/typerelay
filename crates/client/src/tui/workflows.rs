@@ -91,7 +91,7 @@ impl App {
         let saved=Database::open(&self.store.directory)?.save_draft(&self.identity,draft,as_new)?;
         self.original_entry=Some(draft.entry.clone());self.file=Some(saved);self.editing=None;self.move_destination=None;self.draft_record=None;self.draft_lock=None;
         self.screen=if std::mem::take(&mut self.global_edit){Screen::Files}else{Screen::Browse};
-        self.reload_files(false)?;self.rebuild_global_hits();self.snippets_state.select(Some(0));self.retain_selection();
+        self.reload_files(false)?;self.snippets_state.select(Some(0));self.retain_selection();
         self.message("Saved locally. Enrolled-library changes are queued for background sync.",false);
         if self.draft_gate { self.show_drafts()?; }
         Ok(())
