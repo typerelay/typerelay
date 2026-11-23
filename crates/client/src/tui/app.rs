@@ -151,24 +151,27 @@ impl App {
     fn value(field: &TextArea<'_>) -> String { field.lines().join("\n") }
     fn global_active(&self) -> bool { !Self::value(&self.global_search).is_empty() }
     fn selected_global(&self) -> Option<&GlobalHit> { if !self.search_done{return None;}self.global_hits.get(self.global_state.selected()?) }
-    fn publish_search(&mut self, rows: Vec<typerelay_client::panel::Hit>) {
+    fn publish_search(&mut self, rows: Vec<typerelay_client::panel::Hit>, preserve_browse_selection: bool) {
         self.search_done=true;
         if let Some(scope)=&self.search_scope {
             self.search_hits=rows.iter().filter(|row|row.library==*scope).filter_map(|row|self.file.as_ref()?.ids.iter().position(|id|*id==row.id)).collect();
             let visible = self.filtered();
-            let index = self.search_selection.as_ref().and_then(|(_, id)| visible.iter().position(|index| self.file.as_ref().is_some_and(|file| file.ids[*index] == *id))).unwrap_or(0);
-            self.snippets_state.select((!visible.is_empty()).then_some(index));
+            let index = self.search_selection.as_ref().and_then(|(_, id)| visible.iter().position(|index| self.file.as_ref().is_some_and(|file| file.ids[*index] == *id)));
+            self.snippets_state.select(index.or_else(|| (!preserve_browse_selection && !visible.is_empty()).then_some(0)));
         }else{
             self.global_hits=rows.into_iter().filter_map(|row|{let file_index=self.files.iter().position(|file|file.id==row.library)?;let entry_index=self.files[file_index].ids.iter().position(|id|*id==row.id)?;Some(GlobalHit{library_id:row.library,snippet_id:row.id,file_index,entry_index})}).collect();
             let index=self.search_selection.as_ref().and_then(|(library,id)|self.global_hits.iter().position(|hit|hit.library_id==*library&&hit.snippet_id==*id)).unwrap_or(0);self.global_state.select((!self.global_hits.is_empty()).then_some(index));
         }
     }
     fn rebuild_global_hits(&mut self) {
+        self.rebuild_search(false);
+    }
+    fn rebuild_search(&mut self, preserve_browse_selection: bool) {
         if !matches!(self.screen,Screen::Files|Screen::Browse){return;}
         if self.search_done {self.search_selection=if self.screen==Screen::Browse{self.file.as_ref().and_then(|file|{let indices=if self.search_query.trim().is_empty(){file.search("")}else{self.search_hits.clone()};let index=*indices.get(self.snippets_state.selected()?)?;Some((file.id.clone(),file.ids.get(index)?.clone()))})}else{self.selected_global().map(|hit|(hit.library_id.clone(),hit.snippet_id.clone()))};}
         self.search_query=if self.screen==Screen::Browse{Self::value(&self.search)}else{Self::value(&self.global_search)};self.search_scope=if self.screen==Screen::Browse{self.file.as_ref().map(|file|file.id.clone())}else{None};self.search_done=false;
         let rows=typerelay_client::panel::Panel::search(&self.store.directory,&self.search_query,self.search_scope.as_deref());
-        match rows {Ok(rows)=>self.publish_search(rows),Err(error)=>{self.publish_search(Vec::new());self.message(error.to_string(),true);}}
+        match rows {Ok(rows)=>self.publish_search(rows, preserve_browse_selection),Err(error)=>{self.publish_search(Vec::new(), preserve_browse_selection);self.message(error.to_string(),true);}}
     }
     fn reload_files(&mut self) -> Result<()> {
         self.files = Self::load_files(&self.store)?;
@@ -203,7 +206,7 @@ impl App {
     fn message(&mut self, text: impl Into<String>, error: bool) { self.status = text.into(); self.error = error; }
     fn filtered(&self) -> Vec<usize> { if Self::value(&self.search).trim().is_empty(){return self.file.as_ref().map(|file|file.search("")).unwrap_or_default();}
     if !self.search_done||self.search_query!=Self::value(&self.search)||self.search_scope.as_deref()!=self.file.as_ref().map(|file|file.id.as_str()){return Vec::new();}self.search_hits.clone() }
-    fn selected(&self) -> Option<usize> { self.filtered().get(self.snippets_state.selected().unwrap_or(0)).copied() }
+    fn selected(&self) -> Option<usize> { self.filtered().get(self.snippets_state.selected()?).copied() }
     fn apply(&mut self, destination: Destination) -> Result<()> {
         self.cancel_writing();
         if destination != Destination::Quit && self.draft_gate { self.show_drafts()?; if self.draft_gate { return Ok(()); } }
@@ -522,8 +525,8 @@ impl App {
         let count = if self.screen == Screen::Files { if self.global_active() { self.global_hits.len() } else { self.files.len() + 1 } } else { self.filtered().len() };
         let state = if self.screen == Screen::Files { if self.global_active() { &mut self.global_state } else { &mut self.file_state } } else { &mut self.snippets_state };
         if count == 0 { state.select(None); return; }
-        let current = state.selected().unwrap_or(0);
-        state.select(Some(if down { (current + 1).min(count - 1) } else { current.saturating_sub(1) }));
+        let next = state.selected().map_or(0, |current| if down { (current + 1).min(count - 1) } else { current.saturating_sub(1) });
+        state.select(Some(next));
     }
     fn abbreviation_input(&mut self, event: Event) {
         match event {
@@ -671,7 +674,10 @@ impl App {
                     KeyCode::Delete if !self.search_focused => self.request_delete()?,
                     KeyCode::Char('/') if !self.search_focused => self.search_focused = true,
                     KeyCode::Tab => self.search_focused = !self.search_focused,
-                    _ if self.search_focused => { Self::single_input(&mut self.search, Event::Key(key)); self.snippets_state.select(Some(0)); }
+                    _ if self.search_focused => {
+                        Self::single_input(&mut self.search, Event::Key(key));
+                        if Self::value(&self.search) != self.search_query { self.snippets_state.select(Some(0)); }
+                    }
                     _ => (),
                 },
                 Screen::Edit => match key.code {
@@ -708,7 +714,13 @@ impl App {
                 Screen::Settings => Self::single_input(&mut self.prefix, Event::Paste(text)),
                 Screen::NewFile => Self::single_input(&mut self.name, Event::Paste(text)),
                 Screen::Files if self.global_search_focused => { Self::single_input(&mut self.global_search, Event::Paste(text)); self.rebuild_global_hits(); }
-                Screen::Browse if self.search_focused => { Self::single_input(&mut self.search, Event::Paste(text)); self.snippets_state.select(Some(0)); self.rebuild_global_hits(); }
+                Screen::Browse if self.search_focused => {
+                    Self::single_input(&mut self.search, Event::Paste(text));
+                    if Self::value(&self.search) != self.search_query {
+                        self.snippets_state.select(Some(0));
+                        self.rebuild_global_hits();
+                    }
+                }
                 _ => (),
             }
         } else if let Event::Mouse(mouse) = event {
@@ -788,7 +800,7 @@ impl App {
                     self.search_done = false;
                     self.file = Some(current);
                     self.retain_selection();
-                    self.rebuild_global_hits();
+                    self.rebuild_search(true);
                 }
                 Err(_) => { self.file = None; let _ = self.apply(Destination::Files); }
             }
@@ -866,7 +878,7 @@ impl App {
                 let entries = self.file.as_ref().map(|file| file.entries.as_slice()).unwrap_or(&[]);
                 let items = filtered.iter().map(|index| ListItem::new(format!("[{}] {}", if self.selected_ids.contains(&self.file.as_ref().unwrap().ids[*index]) { "x" } else { " " }, entries[*index].label()))).collect::<Vec<_>>();
                 frame.render_stateful_widget(List::new(items).block(Self::border(if !self.search_done{"Searching…".into()}else{format!("{} snippets — enter to edit", filtered.len())}, !self.search_focused)).highlight_style(Style::default().bg(Color::DarkGray)).highlight_symbol("› "), columns[0], &mut self.snippets_state);
-                let preview = self.selected().map(|index| self.file.as_ref().unwrap().entries[index].replace.clone()).unwrap_or_else(||if !self.search_done{"Searching…".into()}else{"No matching snippets.".into()});
+                let preview = self.selected().map(|index| self.file.as_ref().unwrap().entries[index].replace.clone()).unwrap_or_else(||if !self.search_done{"Searching…".into()}else if filtered.is_empty(){"No matching snippets.".into()}else{"Select a snippet.".into()});
                 frame.render_widget(Paragraph::new(preview).scroll((0, self.preview_x)).block(Self::border("Preview · ←/→ scroll · ctrl+c Copy", false)), columns[1]);
             }
 			Screen::Image=>{let parts=Layout::vertical([Constraint::Length(3),Constraint::Length(3),Constraint::Length(3),Constraint::Length(3),Constraint::Min(2),Constraint::Length(3)]).split(body);self.image_source.set_block(Self::border("Local path or HTTP/HTTPS URL",self.image_focus==0));self.image_alt.set_block(Self::border("Alt text",self.image_focus==1));self.image_title.set_block(Self::border("Title",self.image_focus==2));self.image_width.set_block(Self::border("Display width (32–2048)",self.image_focus==3));frame.render_widget(&self.image_source,parts[0]);frame.render_widget(&self.image_alt,parts[1]);frame.render_widget(&self.image_title,parts[2]);frame.render_widget(&self.image_width,parts[3]);frame.render_widget(Paragraph::new("PNG, JPEG, WebP, and GIF · 5 MiB input · remote images are cached for offline insertion"),parts[4]);self.field_areas.extend([parts[0],parts[1],parts[2],parts[3]]);self.form_buttons(frame,parts[5]);}
@@ -1318,6 +1330,7 @@ mod tests {
         app.file = Some(app.store.save(app.file.as_ref().unwrap(), None, Match { variables: Default::default(), trigger: "shared".into(), replace: "Read only".into(), ..Match::default() }).unwrap());
         let db = typerelay_client::database::Database::open(&app.store.directory).unwrap();
         db.connection.execute("UPDATE libraries SET data=json_set(data,'$.permissions.edit',json('false'))", []).unwrap();
+        Fixture::key(&mut app, KeyCode::Down, KeyModifiers::NONE);
         Fixture::key(&mut app, KeyCode::F(3), KeyModifiers::NONE);
         assert_eq!(app.screen, Screen::Browse);
         assert!(app.status.contains("read-only"));
@@ -1371,6 +1384,52 @@ mod tests {
         assert!(!app.dirty());
         app.expansion.insert_str("changed"); Fixture::key(&mut app, KeyCode::F(1), KeyModifiers::NONE); Fixture::key(&mut app, KeyCode::Char('d'), KeyModifiers::NONE);
         assert_eq!(app.screen, Screen::Files); assert_eq!(app.store.open("sales").unwrap().entries[0].replace, "Hello\nworld\n");
+    }
+    #[test]
+    fn enter_requires_a_new_selection_after_sync_removes_the_highlighted_snippet() {
+        use serde_json::json;
+        use typerelay_client::database::Database;
+
+        for query in ["", "shared"] {
+            let temp = tempfile::tempdir().unwrap();
+            let mut app = Fixture::app(temp.path());
+            let db = Database::open(&app.store.directory).unwrap();
+            let file = db.import("Synced", "matches: [{replace: Shared first}, {replace: Shared second}]").unwrap();
+            let mut remote = db.library(&file.id).unwrap();
+            remote["records"] = json!(db.records(&file.id).unwrap());
+            db.apply(&json!({"library": remote}), None).unwrap();
+            app.file = Some(db.editor_id(&file.id).unwrap());
+            app.screen = Screen::Browse;
+            app.search = App::text(query);
+            app.rebuild_global_hits();
+            Fixture::key(&mut app, KeyCode::Down, KeyModifiers::NONE);
+            let removed = app.file.as_ref().unwrap().ids[app.selected().unwrap()].clone();
+            let records = remote["records"].as_array_mut().unwrap();
+            records.retain(|row| row["id"] != removed);
+            let remaining = records[0]["id"].as_str().unwrap().to_owned();
+            remote["revision"] = json!(2);
+            db.apply(&json!({"library": remote}), None).unwrap();
+
+            for _ in 0..2 {
+                app.refresh();
+                Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+                assert_eq!(app.screen, Screen::Browse);
+                assert_eq!(app.selected(), None);
+                assert_eq!(app.status, "Select a snippet");
+            }
+            Fixture::key(&mut app, KeyCode::Char('/'), KeyModifiers::NONE);
+            Fixture::key(&mut app, KeyCode::Left, KeyModifiers::NONE);
+            app.handle(Event::Paste(String::new()));
+            Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+            Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+            assert_eq!(app.screen, Screen::Browse);
+            assert_eq!(app.selected(), None);
+
+            Fixture::key(&mut app, KeyCode::Down, KeyModifiers::NONE);
+            Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+            assert_eq!(app.screen, Screen::Edit);
+            assert_eq!(app.file.as_ref().unwrap().ids[app.editing.unwrap()], remaining);
+        }
     }
     #[test]
     fn back_to_back_saves_survive_background_sync() {

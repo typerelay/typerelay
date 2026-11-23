@@ -59,7 +59,7 @@ Press Ctrl+P and type to find commands for connection, enrollment, import, expor
 
 ## Concurrent changes
 
-External database changes refresh lists without discarding an active draft. Saving a stale editor is rejected so it cannot overwrite a newer revision. Use Commands to review the saved version, export the draft, or save it as a new snippet. On Windows, continuous expansion is paused while the TUI is focused; on Omarchy only the registered TUI terminal window is suppressed.
+External database changes refresh lists without discarding an active draft. If the highlighted snippet disappears from the open library or its search results, select another snippet before pressing Enter. Saving a stale editor is rejected so it cannot overwrite a newer revision. Use Commands to review the saved version, export the draft, or save it as a new snippet. On Windows, continuous expansion is paused while the TUI is focused; on Omarchy only the registered TUI terminal window is suppressed.
 
 The TUI requests enhanced keyboard reporting when supported so Ctrl+M remains distinct from Enter, and restores terminal keyboard mode on exit. F8 remains the move shortcut in terminals without that protocol.
 
