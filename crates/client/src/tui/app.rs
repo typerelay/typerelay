@@ -155,7 +155,9 @@ impl App {
         self.search_done=true;
         if let Some(scope)=&self.search_scope {
             self.search_hits=rows.iter().filter(|row|row.library==*scope).filter_map(|row|self.file.as_ref()?.ids.iter().position(|id|*id==row.id)).collect();
-            let index=self.search_selection.as_ref().and_then(|(_,id)|self.search_hits.iter().position(|index|self.file.as_ref().is_some_and(|file|file.ids[*index]==*id))).unwrap_or(0);self.snippets_state.select((!self.search_hits.is_empty()).then_some(index));
+            let visible = self.filtered();
+            let index = self.search_selection.as_ref().and_then(|(_, id)| visible.iter().position(|index| self.file.as_ref().is_some_and(|file| file.ids[*index] == *id))).unwrap_or(0);
+            self.snippets_state.select((!visible.is_empty()).then_some(index));
         }else{
             self.global_hits=rows.into_iter().filter_map(|row|{let file_index=self.files.iter().position(|file|file.id==row.library)?;let entry_index=self.files[file_index].ids.iter().position(|id|*id==row.id)?;Some(GlobalHit{library_id:row.library,snippet_id:row.id,file_index,entry_index})}).collect();
             let index=self.search_selection.as_ref().and_then(|(library,id)|self.global_hits.iter().position(|hit|hit.library_id==*library&&hit.snippet_id==*id)).unwrap_or(0);self.global_state.select((!self.global_hits.is_empty()).then_some(index));
@@ -778,8 +780,16 @@ impl App {
         if self.screen == Screen::Trash { let _ = self.load_trash(); }
         else if self.screen == Screen::Files { let _ = self.reload_files(); }
         else if self.screen == Screen::Browse && let Some(file) = &self.file {
+            let selected = self.selected().and_then(|index| file.ids.get(index)).cloned();
             match self.store.open(&file.name) {
-                Ok(current) => { if typerelay_client::database::Database::open(&self.store.directory).and_then(|db|db.editable(&current.id)).is_err() { self.selected_ids.clear(); self.selection_anchor = None; } self.file = Some(current); self.retain_selection(); self.rebuild_global_hits(); }
+                Ok(current) => {
+                    if typerelay_client::database::Database::open(&self.store.directory).and_then(|db|db.editable(&current.id)).is_err() { self.selected_ids.clear(); self.selection_anchor = None; }
+                    self.search_selection = selected.map(|id| (current.id.clone(), id));
+                    self.search_done = false;
+                    self.file = Some(current);
+                    self.retain_selection();
+                    self.rebuild_global_hits();
+                }
                 Err(_) => { self.file = None; let _ = self.apply(Destination::Files); }
             }
         }
@@ -1390,7 +1400,8 @@ mod tests {
             assert_eq!(first_change["base_revision"], remote["records"][0]["revision"]);
             assert_eq!(first_change["value"]["content"]["text"], "First edit");
 
-            app.snippets_state.select(Some(1));
+            Fixture::key(&mut app, KeyCode::Down, KeyModifiers::NONE);
+            app.refresh();
             Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
             assert_eq!(app.draft().replace, "Second");
             app.expansion = App::text("Second edit");
@@ -1428,6 +1439,12 @@ mod tests {
             let saved = db.editor_id(&file.id).unwrap();
             assert_eq!(saved.entries[0].replace, "First edit");
             assert_eq!(saved.entries[1].replace, "Second edit");
+
+            Fixture::key(&mut app, KeyCode::Down, KeyModifiers::NONE);
+            remote["records"][0]["position"] = json!(2);
+            db.apply(&json!({"library": remote}), None).unwrap();
+            app.refresh();
+            assert_eq!(app.file.as_ref().unwrap().ids[app.selected().unwrap()], file.ids[1]);
         }
     }
     #[test]

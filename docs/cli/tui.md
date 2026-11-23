@@ -53,7 +53,7 @@ F11 opens the variable picker/settings. Ctrl+S inserts the selected variable; F4
 
 Edits are saved to a local draft while you work. If drafts remain when you start the TUI, resolve each available draft before navigating: Enter resumes it, S saves it, N saves it as a new snippet, C copies it, E exports it, L chooses a destination, and D discards it after confirmation. Q quits and keeps unresolved drafts. A draft open in another terminal stays with that session.
 
-Ctrl+S saves locally. Changes to enrolled libraries are queued for background sync, so a local save does not mean the server has received it. If validation or a save fails, the draft remains available. When leaving an edited snippet, choose Save, Discard, or Cancel. Q in the confirmation quits and keeps the draft.
+Ctrl+S saves locally. Changes to enrolled libraries are queued for background sync. You can open and save another snippet while an earlier edit is still syncing. If validation or a save fails, the draft remains available. When leaving an edited snippet, choose Save, Discard, or Cancel. Q in the confirmation quits and keeps the draft.
 
 Press Ctrl+P and type to find commands for connection, enrollment, import, export, conflict resolution, personal abbreviations, validation, and legacy migration. Espanso conversion produces YAML; import that YAML to create a library. Use the web app for billing and team administration, and the desktop app for OS permissions and autostart. `typerelay doctor` remains a CLI command.
 
