@@ -1363,6 +1363,74 @@ mod tests {
         assert_eq!(app.screen, Screen::Files); assert_eq!(app.store.open("sales").unwrap().entries[0].replace, "Hello\nworld\n");
     }
     #[test]
+    fn back_to_back_saves_survive_background_sync() {
+        use serde_json::json;
+        use typerelay_client::database::Database;
+
+        for ack_before_second_save in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let mut app = Fixture::app(temp.path());
+            let db = Database::open(&app.store.directory).unwrap();
+            let file = db.import("Synced", "matches: [{replace: First}, {replace: Second}]").unwrap();
+            let mut remote = db.library(&file.id).unwrap();
+            remote["records"] = json!(db.records(&file.id).unwrap());
+            db.apply(&json!({"library": remote}), None).unwrap();
+            app.file = Some(db.editor_id(&file.id).unwrap());
+            app.screen = Screen::Browse;
+
+            app.snippets_state.select(Some(0));
+            Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+            app.expansion = App::text("First edit");
+            Fixture::key(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL);
+            assert_eq!(app.screen, Screen::Browse, "{}", app.status);
+            assert_eq!(db.editor_id(&file.id).unwrap().entries[0].replace, "First edit");
+            let (first_seq, first_op) = db.pending().unwrap().remove(0);
+            let first_change = &first_op["body"]["changes"][0];
+            assert_eq!(first_change["id"], file.ids[0]);
+            assert_eq!(first_change["base_revision"], remote["records"][0]["revision"]);
+            assert_eq!(first_change["value"]["content"]["text"], "First edit");
+
+            app.snippets_state.select(Some(1));
+            Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+            assert_eq!(app.draft().replace, "Second");
+            app.expansion = App::text("Second edit");
+            app.persist_draft(false).unwrap();
+
+            remote["revision"] = json!(2);
+            remote["records"][0]["revision"] = json!(2);
+            remote["records"][0]["content"] = first_change["value"]["content"].clone();
+            let acknowledge_first = || db.apply(&json!({"library": remote}), Some((first_seq, &first_op))).unwrap();
+            if ack_before_second_save {
+                acknowledge_first();
+                app.refresh();
+            }
+            Fixture::key(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL);
+            assert_eq!(app.screen, Screen::Browse, "{}", app.status);
+            assert_eq!(db.editor_id(&file.id).unwrap().entries[1].replace, "Second edit");
+            if !ack_before_second_save {
+                assert_eq!(db.pending().unwrap().len(), 2);
+                acknowledge_first();
+            }
+            assert_eq!(db.editor_id(&file.id).unwrap().entries[1].replace, "Second edit");
+
+            let pending = db.pending().unwrap();
+            assert_eq!(pending.len(), 1);
+            let (second_seq, second_op) = &pending[0];
+            let second_change = &second_op["body"]["changes"][0];
+            assert_eq!(second_change["id"], file.ids[1]);
+            assert_eq!(second_change["base_revision"], remote["records"][1]["revision"]);
+            assert_eq!(second_change["value"]["content"]["text"], "Second edit");
+            remote["revision"] = json!(3);
+            remote["records"][1]["revision"] = json!(2);
+            remote["records"][1]["content"] = second_change["value"]["content"].clone();
+            db.apply(&json!({"library": remote}), Some((*second_seq, second_op))).unwrap();
+            assert!(db.pending().unwrap().is_empty());
+            let saved = db.editor_id(&file.id).unwrap();
+            assert_eq!(saved.entries[0].replace, "First edit");
+            assert_eq!(saved.entries[1].replace, "Second edit");
+        }
+    }
+    #[test]
     fn disconnected_sync_settings_and_failed_save_keep_draft() {
         let temp = tempfile::tempdir().unwrap(); let mut app = Fixture::app(temp.path());
         Fixture::key(&mut app, KeyCode::F(5), KeyModifiers::NONE); assert!(app.status.contains("Connect first"));
