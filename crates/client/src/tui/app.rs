@@ -151,32 +151,33 @@ impl App {
     fn value(field: &TextArea<'_>) -> String { field.lines().join("\n") }
     fn global_active(&self) -> bool { !Self::value(&self.global_search).is_empty() }
     fn selected_global(&self) -> Option<&GlobalHit> { if !self.search_done{return None;}self.global_hits.get(self.global_state.selected()?) }
-    fn publish_search(&mut self, rows: Vec<typerelay_client::panel::Hit>, preserve_browse_selection: bool) {
+    fn publish_search(&mut self, rows: Vec<typerelay_client::panel::Hit>, preserve_selection: bool) {
         self.search_done=true;
         if let Some(scope)=&self.search_scope {
             self.search_hits=rows.iter().filter(|row|row.library==*scope).filter_map(|row|self.file.as_ref()?.ids.iter().position(|id|*id==row.id)).collect();
             let visible = self.filtered();
             let index = self.search_selection.as_ref().and_then(|(_, id)| visible.iter().position(|index| self.file.as_ref().is_some_and(|file| file.ids[*index] == *id)));
-            self.snippets_state.select(index.or_else(|| (!preserve_browse_selection && !visible.is_empty()).then_some(0)));
+            self.snippets_state.select(index.or_else(|| (!preserve_selection && !visible.is_empty()).then_some(0)));
         }else{
             self.global_hits=rows.into_iter().filter_map(|row|{let file_index=self.files.iter().position(|file|file.id==row.library)?;let entry_index=self.files[file_index].ids.iter().position(|id|*id==row.id)?;Some(GlobalHit{library_id:row.library,snippet_id:row.id,file_index,entry_index})}).collect();
-            let index=self.search_selection.as_ref().and_then(|(library,id)|self.global_hits.iter().position(|hit|hit.library_id==*library&&hit.snippet_id==*id)).unwrap_or(0);self.global_state.select((!self.global_hits.is_empty()).then_some(index));
+            let index = self.search_selection.as_ref().and_then(|(library, id)| self.global_hits.iter().position(|hit| hit.library_id == *library && hit.snippet_id == *id));
+            self.global_state.select(index.or_else(|| (!preserve_selection && !self.global_hits.is_empty()).then_some(0)));
         }
     }
     fn rebuild_global_hits(&mut self) {
         self.rebuild_search(false);
     }
-    fn rebuild_search(&mut self, preserve_browse_selection: bool) {
+    fn rebuild_search(&mut self, preserve_selection: bool) {
         if !matches!(self.screen,Screen::Files|Screen::Browse){return;}
         if self.search_done {self.search_selection=if self.screen==Screen::Browse{self.file.as_ref().and_then(|file|{let indices=if self.search_query.trim().is_empty(){file.search("")}else{self.search_hits.clone()};let index=*indices.get(self.snippets_state.selected()?)?;Some((file.id.clone(),file.ids.get(index)?.clone()))})}else{self.selected_global().map(|hit|(hit.library_id.clone(),hit.snippet_id.clone()))};}
         self.search_query=if self.screen==Screen::Browse{Self::value(&self.search)}else{Self::value(&self.global_search)};self.search_scope=if self.screen==Screen::Browse{self.file.as_ref().map(|file|file.id.clone())}else{None};self.search_done=false;
         let rows=typerelay_client::panel::Panel::search(&self.store.directory,&self.search_query,self.search_scope.as_deref());
-        match rows {Ok(rows)=>self.publish_search(rows, preserve_browse_selection),Err(error)=>{self.publish_search(Vec::new(), preserve_browse_selection);self.message(error.to_string(),true);}}
+        match rows {Ok(rows)=>self.publish_search(rows, preserve_selection),Err(error)=>{self.publish_search(Vec::new(), preserve_selection);self.message(error.to_string(),true);}}
     }
-    fn reload_files(&mut self) -> Result<()> {
+    fn reload_files(&mut self, preserve_selection: bool) -> Result<()> {
         self.files = Self::load_files(&self.store)?;
         if self.file_state.selected().is_some_and(|index| index > self.files.len()) { self.file_state.select(Some(self.files.len())); }
-        self.rebuild_global_hits();
+        self.rebuild_search(preserve_selection);
         Ok(())
     }
     fn library_label(&self, file: &OpenFile) -> String {
@@ -215,7 +216,7 @@ impl App {
             Destination::Recovery => { self.show_recovery()?; }
             Destination::Trash => { self.load_trash()?; self.screen = Screen::Trash; }
             Destination::Quit => self.quit_preserving()?,
-            Destination::Files => { self.reload_files()?; self.file_state.select(Some(0)); self.global_edit = false; self.screen = Screen::Files; }
+            Destination::Files => { self.reload_files(false)?; self.file_state.select(Some(0)); self.global_edit = false; self.screen = Screen::Files; }
             Destination::Browse => self.screen = if self.file.is_some() { Screen::Browse } else { Screen::Files },
             Destination::Settings => {
                 self.settings.reload()?;
@@ -302,7 +303,7 @@ impl App {
             }
             Screen::NewFile => {
                 self.file = Some(self.store.create(Self::value(&self.name).trim())?);
-                self.reload_files()?;
+                self.reload_files(false)?;
                 self.search = TextArea::default();
                 self.snippets_state.select(None);
                 self.screen = Screen::Browse;
@@ -403,7 +404,7 @@ impl App {
         Ok(())
     }
     fn confirm(&mut self, choice: usize) -> Result<()> {
-		if let Some((source,destination,_))=self.pending_merge.clone(){if choice==0{let queued=typerelay_client::database::Database::open(&self.store.directory)?.merge(&source,&destination)?;if queued{let _=typerelay_client::sync::Sync::trigger(self.settings.config_dir());}self.reload_files()?;self.file_state.select(Some(0));self.screen=Screen::Files;self.message(if queued{"Merge queued"}else{"Libraries merged"},false);}else{self.screen=Screen::Files;}self.pending_merge=None;return Ok(());}
+		if let Some((source,destination,_))=self.pending_merge.clone(){if choice==0{let queued=typerelay_client::database::Database::open(&self.store.directory)?.merge(&source,&destination)?;if queued{let _=typerelay_client::sync::Sync::trigger(self.settings.config_dir());}self.reload_files(false)?;self.file_state.select(Some(0));self.screen=Screen::Files;self.message(if queued{"Merge queued"}else{"Libraries merged"},false);}else{self.screen=Screen::Files;}self.pending_merge=None;return Ok(());}
         if let Some((source, destination, items)) = self.pending_batch.clone() {
             if choice == 0 {
                 typerelay_client::database::Database::open(&self.store.directory)?.batch(&source, destination.as_deref(), &items)?;
@@ -652,7 +653,7 @@ impl App {
                     KeyCode::Enter => self.open_selected_file()?,
                     KeyCode::Char('/') if !self.global_search_focused => self.global_search_focused = true,
                     KeyCode::Tab => self.global_search_focused = !self.global_search_focused,
-                    _ if self.global_search_focused => { Self::single_input(&mut self.global_search, Event::Key(key)); self.rebuild_global_hits(); }
+                    _ if self.global_search_focused => { Self::single_input(&mut self.global_search, Event::Key(key)); }
                     KeyCode::Char('j') => self.move_selection(true),
                     KeyCode::Char('k') => self.move_selection(false),
 					KeyCode::Char('m') if !self.global_active() => self.request_merge()?,
@@ -713,7 +714,7 @@ impl App {
                 Screen::Settings if self.editor_focus == 0 => Self::single_input(&mut self.url, Event::Paste(text)),
                 Screen::Settings => Self::single_input(&mut self.prefix, Event::Paste(text)),
                 Screen::NewFile => Self::single_input(&mut self.name, Event::Paste(text)),
-                Screen::Files if self.global_search_focused => { Self::single_input(&mut self.global_search, Event::Paste(text)); self.rebuild_global_hits(); }
+                Screen::Files if self.global_search_focused => { Self::single_input(&mut self.global_search, Event::Paste(text)); }
                 Screen::Browse if self.search_focused => {
                     Self::single_input(&mut self.search, Event::Paste(text));
                     if Self::value(&self.search) != self.search_query {
@@ -790,7 +791,7 @@ impl App {
     pub fn refresh(&mut self) {
         if let Err(error)=self.refresh_draft() { self.message(error.to_string(),true); }
         if self.screen == Screen::Trash { let _ = self.load_trash(); }
-        else if self.screen == Screen::Files { let _ = self.reload_files(); }
+        else if self.screen == Screen::Files { let _ = self.reload_files(true); }
         else if self.screen == Screen::Browse && let Some(file) = &self.file {
             let selected = self.selected().and_then(|index| file.ids.get(index)).cloned();
             match self.store.open(&file.name) {
@@ -853,7 +854,7 @@ impl App {
                         ListItem::new(format!("{} · {}", file.name, file.entries[hit.entry_index].label()))
                     }).collect::<Vec<_>>();
                     frame.render_stateful_widget(List::new(items).block(Self::border(if !self.search_done{"Searching…".into()}else{format!("{} snippets — enter to edit", self.global_hits.len())}, !self.global_search_focused)).highlight_style(Style::default().bg(Color::DarkGray)).highlight_symbol("› "), columns[0], &mut self.global_state);
-                    let preview = self.selected_global().map(|hit| self.files[hit.file_index].entries[hit.entry_index].replace.clone()).unwrap_or_else(||if !self.search_done{"Searching…".into()}else{"No matching snippets.".into()});
+                    let preview = self.selected_global().map(|hit| self.files[hit.file_index].entries[hit.entry_index].replace.clone()).unwrap_or_else(||if !self.search_done{"Searching…".into()}else if self.global_hits.is_empty(){"No matching snippets.".into()}else{"Select a snippet.".into()});
                     frame.render_widget(Paragraph::new(preview).scroll((0, self.preview_x)).block(Self::border("Preview · ←/→ scroll · ctrl+c Copy", false)), columns[1]);
                 } else {
                     let rows = Layout::vertical([Constraint::Min(3), Constraint::Length(3)]).split(parts[1]);
@@ -1125,6 +1126,52 @@ mod tests {
         assert_eq!(App::value(&app.global_search), "shared");
         assert_eq!(app.selected_global().unwrap().library_id, beta.id);
         assert_eq!(app.store.open("Beta").unwrap().entries[0].replace, "Beta updated");
+    }
+    #[test]
+    fn global_search_requires_reselection_after_sync_removes_the_highlighted_match() {
+        use serde_json::json;
+        use typerelay_client::database::Database;
+
+        let temp = tempfile::tempdir().unwrap();
+        let mut app = Fixture::app(temp.path());
+        let db = Database::open(&app.store.directory).unwrap();
+        let first = db.import("First", "matches: [{trigger: find-first, replace: First}]").unwrap();
+        let second = db.import("Second", "matches: [{trigger: find-second, replace: Second}]").unwrap();
+        let mut remote = db.library(&second.id).unwrap();
+        remote["records"] = json!(db.records(&second.id).unwrap());
+        db.apply(&json!({"library": remote}), None).unwrap();
+        app.refresh();
+
+        Fixture::key(&mut app, KeyCode::Char('/'), KeyModifiers::NONE);
+        app.handle(Event::Paste("find".into()));
+        Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        Fixture::key(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(app.selected_global().unwrap().snippet_id, second.ids[0]);
+
+        remote["revision"] = json!(2);
+        remote["records"] = json!([]);
+        db.apply(&json!({"library": remote}), None).unwrap();
+        for _ in 0..2 {
+            app.refresh();
+            assert_eq!(app.global_hits.len(), 1);
+            Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+            assert_eq!(app.screen, Screen::Files);
+            assert!(app.selected_global().is_none());
+            assert_eq!(app.status, "Select a snippet");
+        }
+
+        Fixture::key(&mut app, KeyCode::Char('/'), KeyModifiers::NONE);
+        Fixture::key(&mut app, KeyCode::Left, KeyModifiers::NONE);
+        app.handle(Event::Paste(String::new()));
+        Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(app.screen, Screen::Files);
+        assert!(app.selected_global().is_none());
+
+        Fixture::key(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(app.screen, Screen::Edit);
+        assert_eq!(app.file.as_ref().unwrap().ids[app.editing.unwrap()], first.ids[0]);
     }
     #[test]
     fn global_search_refreshes_stable_selection_and_active_counts() {
