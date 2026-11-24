@@ -7,7 +7,7 @@ use std::{fs, io::Write, path::Path, sync::Mutex, time::Duration};
 use std::path::PathBuf;
 #[cfg(target_os="linux")]
 use std::{collections::BTreeSet, io::Cursor, process::{Command, Stdio}};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
@@ -16,29 +16,62 @@ use tauri_plugin_updater::{Update, UpdaterExt};
 enum Phase { #[default] Idle, Checking, Downloading, Ready, Prompting, Installing }
 
 #[derive(Default)]
-struct Status { busy: bool, phase: Phase, version: Option<String>, prompted: Option<String> }
+struct Status { busy: bool, manual: bool, phase: Phase, version: Option<String>, prompted: Option<String> }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CheckRequest { Start, Promote, Ignore }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Progress { Checking, Installing }
+
+impl Progress {
+    fn window(self) -> (&'static str, &'static str, &'static str) {
+        match self {
+            Self::Checking => ("update-checking", "update-checking.html", "TypeRelay — Checking for updates"),
+            Self::Installing => ("update-installing", "update-installing.html", "TypeRelay — Installing update"),
+        }
+    }
+}
 
 impl Status {
-    fn begin(&mut self) -> bool { if self.busy { return false; } self.busy=true; self.phase=Phase::Checking; true }
-    fn offer(&mut self, manual: bool) -> bool {
-        if self.phase!=Phase::Ready || self.version.is_none() || !manual && self.prompted==self.version { return false; }
+    fn request(&mut self, manual: bool) -> CheckRequest {
+        if !self.busy {
+            self.busy=true; self.manual=manual; self.phase=Phase::Checking;
+            return CheckRequest::Start;
+        }
+        if manual && self.can_promote() {
+            self.manual=true;
+            return CheckRequest::Promote;
+        }
+        CheckRequest::Ignore
+    }
+    fn can_promote(&self) -> bool { !self.manual && matches!(self.phase,Phase::Checking|Phase::Downloading) }
+    fn offer(&mut self) -> bool {
+        if self.phase!=Phase::Ready || self.version.is_none() || !self.manual && self.prompted==self.version { return false; }
         self.prompted=self.version.clone(); self.phase=Phase::Prompting; true
     }
     fn finish(&mut self, ready: bool) { self.busy=false; self.phase=if ready { Phase::Ready } else { Phase::Idle }; }
+    fn progress(&self) -> Option<Progress> {
+        match self.phase {
+            Phase::Checking|Phase::Downloading if self.manual => Some(Progress::Checking),
+            Phase::Installing => Some(Progress::Installing),
+            _ => None,
+        }
+    }
     fn menu(&self) -> (&'static str, bool) {
         match self.phase {
-            Phase::Downloading => ("Downloading update…", false),
+            Phase::Downloading => ("Downloading update…", self.can_promote()),
             Phase::Installing => ("Installing update…", false),
-            Phase::Checking => ("Checking for updates…", false),
+            Phase::Checking => ("Checking for updates…", self.can_promote()),
             Phase::Prompting => ("Install update…", false),
             Phase::Ready => ("Install update…", !self.busy),
-            Phase::Idle => ("Check for updates", true),
+            Phase::Idle => ("Check for updates", !self.busy),
         }
     }
 }
 
 #[derive(Default)]
-pub struct UpdateState { status: Mutex<Status>, ready: Mutex<Option<Update>> }
+pub struct UpdateState { status: Mutex<Status>, ready: Mutex<Option<Update>>, progress: tauri::async_runtime::Mutex<()> }
 
 // Metadata and payload live in one atomically published file, never a partially written pair.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -80,7 +113,7 @@ impl UpdateState {
     pub fn value(&self) -> Value { let status=self.status.lock().unwrap(); json!({"checking":status.busy,"installing":status.phase==Phase::Installing,"version":status.version,"phase":status.phase}) }
     pub fn menu(&self) -> (&'static str, bool) { self.status.lock().unwrap().menu() }
     fn phase(&self, app: &AppHandle, phase: Phase) { self.status.lock().unwrap().phase=phase; emit(app); }
-    async fn run(&self, app: &AppHandle, manual: bool) -> Result<()> {
+    async fn prepare(&self, app: &AppHandle, manual: bool) -> Result<Option<(Update, Vec<u8>)>> {
         let root=app.path().app_cache_dir()?.join("updates");
         // A tray action can use the feed-validated package already offered this session, even offline.
         let ready=if manual { self.ready.lock().unwrap().clone() } else { None };
@@ -92,8 +125,7 @@ impl UpdateState {
         } };
         let Some(mut update)=update else {
             *self.ready.lock().unwrap()=None; self.status.lock().unwrap().version=None; Package::clear(&root)?;
-            if manual { app.dialog().message("You already have the latest version.").title("Typerelay is up to date").show(|_|{}); }
-            return Ok(());
+            return Ok(None);
         };
         *self.ready.lock().unwrap()=None; self.status.lock().unwrap().version=Some(update.version.clone());
         self.phase(app,Phase::Downloading);
@@ -102,13 +134,71 @@ impl UpdateState {
         let pubkey=app.config().plugins.0.get("updater").and_then(|config|config.get("pubkey")).and_then(Value::as_str).context("Missing updater public key")?;
         let package=Package::from_update(&update);
         let bytes=package.prepare(&root,pubkey,async { Ok(update.download(|_,_|{},||{}).await?) }).await?;
-        *self.ready.lock().unwrap()=Some(update.clone()); self.phase(app,Phase::Ready);
-        if !self.status.lock().unwrap().offer(manual) { return Ok(()); }
+        *self.ready.lock().unwrap()=Some(update.clone());
+        Ok(Some((update,bytes)))
+    }
+    async fn run(&self, app: &AppHandle, manual: bool) -> Result<()> {
+        let prepared=self.prepare(app,manual).await?;
+        let (interactive, offer)={
+            let mut status=self.status.lock().unwrap();
+            status.phase=if prepared.is_some() { Phase::Ready } else { Phase::Idle };
+            (status.manual,status.offer())
+        };
         emit(app);
-        let accepted=tauri::async_runtime::spawn_blocking({ let app=app.clone(); let version=update.version.clone(); move||message(&app,"Typerelay update ready",format!("Typerelay {version} is ready. Install and restart?"),MessageDialogButtons::OkCancelCustom("Install and restart".into(),"Later".into())) }).await?;
-        if accepted { self.phase(app,Phase::Installing); install(app.clone(),update,bytes).await?; }
+        sync_progress(app).await;
+        if let Some((update,bytes))=prepared {
+            if !offer { return Ok(()); }
+            let accepted=tauri::async_runtime::spawn_blocking({ let app=app.clone(); let version=update.version.clone(); move||message(&app,"TypeRelay update ready",format!("TypeRelay {version} is ready. Install and restart?"),MessageDialogButtons::OkCancelCustom("Update & Restart".into(),"Later".into())) }).await?;
+            if accepted {
+                self.phase(app,Phase::Installing);
+                sync_progress(app).await;
+                install(app.clone(),update,bytes).await?;
+            }
+        } else if interactive {
+            tauri::async_runtime::spawn_blocking({ let app=app.clone(); move||message(&app,"TypeRelay is up to date","You already have the latest version.",MessageDialogButtons::Ok) }).await?;
+        }
         Ok(())
     }
+}
+
+async fn sync_progress(app: &AppHandle) {
+    let state=app.state::<UpdateState>();
+    let _progress=state.progress.lock().await;
+    let visible=state.status.lock().unwrap().progress();
+    if let Some(progress)=visible {
+        let (label,page,title)=progress.window();
+        if app.get_webview_window(label).is_none() {
+            let handle=app.clone();
+            // Creating a WebView2 window inside a main-thread event handler can deadlock.
+            let create=tauri::async_runtime::spawn_blocking(move||->tauri::Result<()> {
+                let window=WebviewWindowBuilder::new(&handle,label,WebviewUrl::App(page.into())).title(title).center()
+                    .inner_size(320.0,112.0).resizable(false).decorations(false).always_on_top(true)
+                    .visible(false).skip_taskbar(true).build()?;
+                window.on_window_event(|event|if let tauri::WindowEvent::CloseRequested{api,..}=event { api.prevent_close(); });
+                Ok(())
+            });
+            if let Err(error)=create.await.and_then(|result|result) { eprintln!("TypeRelay update progress window: {error}"); }
+        }
+    }
+    let (done,mut result)=tauri::async_runtime::channel(1);
+    let handle=app.clone();
+    // Wait for show/hide on the UI thread before starting work or opening a native dialog.
+    let dispatched=app.run_on_main_thread(move|| { let _=done.try_send(render_progress(&handle)); });
+    if let Err(error)=match dispatched { Ok(())=>result.recv().await.unwrap_or(Ok(())), Err(error)=>Err(error) } {
+        eprintln!("TypeRelay update progress window: {error}");
+    }
+}
+
+fn render_progress(app: &AppHandle) -> tauri::Result<()> {
+    let visible=app.state::<UpdateState>().status.lock().unwrap().progress();
+    for progress in [Progress::Checking,Progress::Installing] {
+        let (label,_,_)=progress.window();
+        if let Some(window)=app.get_webview_window(label) {
+            if visible==Some(progress) { window.show()?; window.set_focus()?; }
+            else { window.hide()?; }
+        }
+    }
+    Ok(())
 }
 
 fn emit(app: &AppHandle) { let _=app.emit("update-status",app.state::<UpdateState>().value()); crate::tray::Tray::update(app); }
@@ -134,24 +224,39 @@ async fn install(app: AppHandle, update: Update, bytes: Vec<u8>) -> Result<()> {
             let directory=unpack_linux(&bytes,&update.version)?;let engine=directory.join("typerelay");if let Err(error)=Command::new(engine).arg("update").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn(){let _=fs::remove_dir_all(directory);return Err(error.into());}app.exit(0);Ok(())
         }
         #[cfg(target_os="windows")]
-        {let _=app;update.install(bytes)?;Ok(())}
+        { let _=app; update.install(bytes)?; Ok(()) }
         #[cfg(target_os="macos")]
         {update.install(bytes)?;app.restart();}
     }).await?
 }
 
 pub fn check(app: AppHandle, manual: bool) {
-    if !app.state::<UpdateState>().status.lock().unwrap().begin() { return; }
+    let request=app.state::<UpdateState>().status.lock().unwrap().request(manual);
+    if request==CheckRequest::Ignore { return; }
     // Linux menu callbacks run on the tray thread; emit only after dispatch to avoid a tray update deadlock.
     tauri::async_runtime::spawn(async move {
         emit(&app);
+        if manual { sync_progress(&app).await; }
+        if request==CheckRequest::Promote { return; }
         let state=app.state::<UpdateState>(); let result=state.run(&app,manual).await;
-        let interactive=manual || matches!(state.status.lock().unwrap().phase,Phase::Prompting|Phase::Installing);
-        let ready=state.ready.lock().unwrap().is_some(); state.status.lock().unwrap().finish(ready); emit(&app);
+        let ready=state.ready.lock().unwrap().is_some();
         if let Err(error)=result {
-            eprintln!("Typerelay update failed: {error:#}");
-            if interactive { app.dialog().message(format!("{error:#}\nTry again from the update menu.")).title("Update failed").kind(tauri_plugin_dialog::MessageDialogKind::Error).show(|_|{}); }
+            let interactive={
+                let mut status=state.status.lock().unwrap();
+                let interactive=status.manual || matches!(status.phase,Phase::Prompting|Phase::Installing);
+                status.phase=if ready { Phase::Ready } else { Phase::Idle };
+                interactive
+            };
+            sync_progress(&app).await;
+            eprintln!("TypeRelay update failed: {error:#}");
+            if interactive {
+                let _=tauri::async_runtime::spawn_blocking({ let app=app.clone(); move||app.dialog().message(format!("{error:#}\nTry again from the update menu.")).title("Update failed").kind(tauri_plugin_dialog::MessageDialogKind::Error).blocking_show() }).await;
+            }
+        } else if state.status.lock().unwrap().phase==Phase::Installing {
+            // The installer has taken over. Keep progress visible until the app closes.
+            return;
         }
+        state.status.lock().unwrap().finish(ready); emit(&app);
     });
 }
 

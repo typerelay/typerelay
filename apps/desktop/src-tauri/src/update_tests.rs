@@ -18,32 +18,75 @@ impl Drop for Fixture { fn drop(&mut self) { let _=fs::remove_dir_all(&self.root
 #[test]
 fn download_then_one_prompt_later_manual_and_next_launch() {
     let fixture=Fixture::new(); let calls=AtomicUsize::new(0); let mut status=Status::default();
-    assert!(status.begin()); assert!(!status.offer(false));
-    status.phase=Phase::Downloading; assert_eq!(status.menu(),("Downloading update…",false));
+    assert_eq!(status.request(false),CheckRequest::Start); assert!(!status.offer());
+    status.phase=Phase::Downloading; assert_eq!(status.menu(),("Downloading update…",true));
     fixture.prepare(&calls,false).unwrap(); status.version=Some(fixture.package.version.clone()); status.phase=Phase::Ready;
-    assert!(status.offer(false)); assert_eq!(status.phase,Phase::Prompting); status.finish(true);
+    assert!(status.offer()); assert_eq!(status.phase,Phase::Prompting); status.finish(true);
     assert_eq!(status.menu(),("Install update…",true));
-    assert!(status.begin()); fixture.prepare(&calls,true).unwrap(); status.phase=Phase::Ready; assert!(!status.offer(false)); status.finish(true);
-    assert!(status.begin()); fixture.prepare(&calls,true).unwrap(); status.phase=Phase::Ready; assert!(status.offer(true)); status.finish(true);
-    let mut next_launch=Status::default(); assert!(next_launch.begin()); fixture.prepare(&calls,true).unwrap(); next_launch.version=Some(fixture.package.version.clone()); next_launch.phase=Phase::Ready; assert!(next_launch.offer(false));
+    assert_eq!(status.request(false),CheckRequest::Start); fixture.prepare(&calls,true).unwrap(); status.phase=Phase::Ready; assert!(!status.offer()); status.finish(true);
+    assert_eq!(status.request(true),CheckRequest::Start); fixture.prepare(&calls,true).unwrap(); status.phase=Phase::Ready; assert!(status.offer()); status.finish(true);
+    let mut next_launch=Status::default(); assert_eq!(next_launch.request(false),CheckRequest::Start); fixture.prepare(&calls,true).unwrap(); next_launch.version=Some(fixture.package.version.clone()); next_launch.phase=Phase::Ready; assert!(next_launch.offer());
     assert_eq!(calls.load(Ordering::SeqCst),1,"Later, manual retry and next launch must reuse the signed package");
 }
 
 #[test]
 fn concurrent_checks_and_menu_clicks_acquire_one_operation() {
     let state=Arc::new(UpdateState::default()); let barrier=Arc::new(Barrier::new(12));
-    let handles:Vec<_>=(0..12).map(|_| { let state=state.clone(); let barrier=barrier.clone(); std::thread::spawn(move|| { barrier.wait(); state.status.lock().unwrap().begin() }) }).collect();
-    assert_eq!(handles.into_iter().filter_map(|thread|thread.join().ok()).filter(|started|*started).count(),1);
-    for phase in [Phase::Checking,Phase::Downloading,Phase::Prompting,Phase::Installing] { let mut status=state.status.lock().unwrap(); status.phase=phase; assert!(!status.begin()); assert!(!status.menu().1); }
-    state.status.lock().unwrap().finish(false); assert!(state.status.lock().unwrap().begin());
+    let handles:Vec<_>=(0..12).map(|_| { let state=state.clone(); let barrier=barrier.clone(); std::thread::spawn(move|| { barrier.wait(); state.status.lock().unwrap().request(false) }) }).collect();
+    assert_eq!(handles.into_iter().filter_map(|thread|thread.join().ok()).filter(|request|*request==CheckRequest::Start).count(),1);
+    for phase in [Phase::Checking,Phase::Downloading,Phase::Prompting,Phase::Installing] { let mut status=state.status.lock().unwrap(); status.phase=phase; assert_eq!(status.request(false),CheckRequest::Ignore); assert_eq!(status.menu().1,status.can_promote()); }
+    state.status.lock().unwrap().finish(false); assert_eq!(state.status.lock().unwrap().request(false),CheckRequest::Start);
+}
+
+#[test]
+fn manual_check_promotes_current_automatic_check_once() {
+    for phase in [Phase::Checking,Phase::Downloading] {
+        let mut status=Status::default();
+        assert_eq!(status.request(false),CheckRequest::Start);
+        status.phase=phase;
+        assert!(status.menu().1);
+        assert_eq!(status.progress(),None);
+        assert_eq!(status.request(true),CheckRequest::Promote);
+        assert_eq!(status.phase,phase);
+        assert_eq!(status.progress(),Some(Progress::Checking));
+        assert_eq!(status.request(true),CheckRequest::Ignore);
+        assert!(!status.menu().1);
+        status.version=Some("9.0.0".into());
+        status.prompted=status.version.clone();
+        status.phase=Phase::Ready;
+        assert!(status.offer(),"Manual check can offer a version the user previously deferred");
+        assert_eq!(status.progress(),None);
+        status.phase=Phase::Installing;
+        assert_eq!(status.progress(),Some(Progress::Installing));
+        assert_eq!(status.request(true),CheckRequest::Ignore);
+        status.finish(true);
+        assert_eq!(status.progress(),None);
+        assert_eq!(status.request(false),CheckRequest::Start);
+        assert_eq!(status.progress(),None);
+    }
+}
+
+#[test]
+fn manual_check_clears_progress_before_showing_result() {
+    let mut status=Status::default();
+    assert_eq!(status.request(true),CheckRequest::Start);
+    for phase in [Phase::Checking,Phase::Downloading] {
+        status.phase=phase;
+        assert_eq!(status.progress(),Some(Progress::Checking));
+    }
+    status.phase=Phase::Idle;
+    assert_eq!(status.progress(),None);
+    assert_eq!(status.request(true),CheckRequest::Ignore);
+    status.finish(false);
+    assert_eq!(status.request(true),CheckRequest::Start);
 }
 
 #[test]
 fn failed_download_never_caches_or_offers_and_can_retry() {
     let fixture=Fixture::new(); let calls=AtomicUsize::new(0); let mut status=Status::default();
-    assert!(status.begin()); assert!(fixture.prepare(&calls,true).is_err()); status.finish(false);
-    assert_eq!(status.phase,Phase::Idle); assert!(!fixture.root.join("ready").exists()); assert!(!status.offer(false));
-    assert!(status.begin()); assert_eq!(fixture.prepare(&calls,false).unwrap(),b"test"); status.version=Some(fixture.package.version.clone()); status.phase=Phase::Ready; assert!(status.offer(false)); assert_eq!(calls.load(Ordering::SeqCst),2);
+    assert_eq!(status.request(false),CheckRequest::Start); assert!(fixture.prepare(&calls,true).is_err()); status.finish(false);
+    assert_eq!(status.phase,Phase::Idle); assert!(!fixture.root.join("ready").exists()); assert!(!status.offer());
+    assert_eq!(status.request(false),CheckRequest::Start); assert_eq!(fixture.prepare(&calls,false).unwrap(),b"test"); status.version=Some(fixture.package.version.clone()); status.phase=Phase::Ready; assert!(status.offer()); assert_eq!(calls.load(Ordering::SeqCst),2);
 }
 
 #[test]
@@ -83,15 +126,15 @@ fn successful_cache_write_is_complete_and_clear_removes_installed_update() {
 #[test]
 fn failed_install_keeps_package_for_manual_retry_without_auto_nag() {
     let fixture=Fixture::new(); let calls=AtomicUsize::new(0); fixture.prepare(&calls,false).unwrap();
-    let mut status=Status { version:Some(fixture.package.version.clone()),..Status::default() }; assert!(status.begin()); status.phase=Phase::Ready; assert!(status.offer(false)); status.phase=Phase::Installing;
-    status.finish(true); assert_eq!(status.menu(),("Install update…",true)); assert!(!status.offer(false));
-    assert!(status.begin()); status.phase=Phase::Ready; assert!(status.offer(true)); fixture.prepare(&calls,true).unwrap(); assert_eq!(calls.load(Ordering::SeqCst),1);
+    let mut status=Status { version:Some(fixture.package.version.clone()),..Status::default() }; assert_eq!(status.request(false),CheckRequest::Start); status.phase=Phase::Ready; assert!(status.offer()); status.phase=Phase::Installing;
+    status.finish(true); assert_eq!(status.menu(),("Install update…",true)); assert!(!status.offer());
+    assert_eq!(status.request(true),CheckRequest::Start); status.phase=Phase::Ready; assert!(status.offer()); fixture.prepare(&calls,true).unwrap(); assert_eq!(calls.load(Ordering::SeqCst),1);
 }
 
 #[test]
 fn state_payload_keeps_legacy_fields_and_reports_phase() {
     let state=UpdateState::default(); assert_eq!(state.value(),json!({"checking":false,"installing":false,"version":null,"phase":"idle"}));
-    {let mut status=state.status.lock().unwrap(); status.begin(); status.phase=Phase::Installing; status.version=Some("9.0.0".into());}
+    {let mut status=state.status.lock().unwrap(); status.request(false); status.phase=Phase::Installing; status.version=Some("9.0.0".into());}
     assert_eq!(state.value(),json!({"checking":true,"installing":true,"version":"9.0.0","phase":"installing"}));
 }
 

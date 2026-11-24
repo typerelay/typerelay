@@ -1,0 +1,12 @@
+doctype html
+html(lang="en")
+	head
+		meta(charset="utf-8")
+		meta(name="viewport" content="width=device-width, initial-scale=1")
+		title TypeRelay Update
+		link(rel="stylesheet" href="update-progress.css")
+	body
+		main
+			.update-progress(role="status")
+				span.spinner(aria-hidden="true")
+				h1= message
