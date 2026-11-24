@@ -10,6 +10,15 @@
       "binaries/typerelay-ai"
     ],
     "linux": {
+      "appimage": {
+        "files": {
+          "/usr/bin/notify-send": "linux/appimage-host-command.sh",
+          "/usr/bin/pkexec": "linux/appimage-host-command.sh",
+          "/usr/bin/update-desktop-database": "linux/appimage-host-command.sh",
+          "/usr/bin/xdg-mime": "linux/appimage-host-command.sh",
+          "/usr/bin/xdg-open": "linux/appimage-host-command.sh"
+        }
+      },
       "deb": {
         "depends": [
           "libc6 (>= 2.36)",

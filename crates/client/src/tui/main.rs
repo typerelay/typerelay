@@ -26,7 +26,7 @@ impl Cli {
         let mut generation = database.generation()?;
         let mut app = app::App::new(store, settings)?;
         #[cfg(target_os = "linux")]
-        let _registration = if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some() {
+        let _registration = if typerelay_client::desktop::Hyprland::session_active() {
             Some(typerelay_client::desktop::Registration::current_window()?)
         } else {
             None
