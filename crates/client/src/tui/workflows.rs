@@ -325,7 +325,7 @@ impl App {
             let labels:Vec<&str>=if self.pending_merge.is_some(){vec!["Merge [m]","Cancel [esc]"]}else if let Some((_,destination,_))=&self.pending_batch{vec![if destination.is_some(){"Move [m]"}else{"Trash [d]"},"Cancel [esc]"]}else if let Some((action,_))=&self.pending_trash{vec![if action=="restore"{"Restore [r]"}else if action=="purge"{"Empty [e]"}else{"Trash [d]"},"Cancel [esc]"]}else if self.pending_delete.is_some(){vec!["Trash [d]","Cancel [esc]"]}else{vec!["Save [s]","Discard [d]","Cancel [esc]"]};
             self.confirm_buttons=Layout::horizontal(labels.iter().map(|_|Constraint::Ratio(1,labels.len()as u32))).split(rows[1]).to_vec();
             for(index,label)in labels.iter().enumerate(){frame.render_widget(Paragraph::new(*label),self.confirm_buttons[index]);}
-        }else{frame.render_widget(Paragraph::new(format!("TypeRelay · Ctrl+P Commands · Ctrl+S Save · Ctrl+Q Quit\n{}\n{}\n{}",self.sync_status(),self.status,if self.screen==Screen::Edit{Self::value(&self.expansion)}else{String::new()})).wrap(Wrap{trim:false}),area);}
+        }else{frame.render_widget(Paragraph::new(format!("TypeRelay · Ctrl+P Commands · Ctrl+S Save · Ctrl+Q Quit\n{}\n{}\n{}",self.sync_status(false),self.status,if self.screen==Screen::Edit{Self::value(&self.expansion)}else{String::new()})).wrap(Wrap{trim:false}),area);}
     }
 }
 
@@ -381,7 +381,7 @@ mod tests {
     }
     #[test]
     fn autosave_failure_never_labels_latest_changes_durable() {
-        let root=tempfile::tempdir().unwrap();let mut app=app(root.path());new_draft(&mut app,"Stored");let db=Database::open(&app.store.directory).unwrap();db.connection.execute_batch("CREATE TRIGGER fail_draft BEFORE UPDATE ON tui_drafts BEGIN SELECT RAISE(ABORT,'write failed'); END;").unwrap();app.handle(Event::Paste(" new text".into()));assert!(app.error);assert!(app.status.contains("Draft NOT saved"));assert!(app.sync_status().contains("Latest changes NOT stored"));assert_eq!(db.drafts(&Value::Null).unwrap()[0].entry.replace,"Stored");
+        let root=tempfile::tempdir().unwrap();let mut app=app(root.path());new_draft(&mut app,"Stored");let db=Database::open(&app.store.directory).unwrap();db.connection.execute_batch("CREATE TRIGGER fail_draft BEFORE UPDATE ON tui_drafts BEGIN SELECT RAISE(ABORT,'write failed'); END;").unwrap();app.handle(Event::Paste(" new text".into()));assert!(app.error);assert!(app.status.contains("Draft NOT saved"));assert!(app.sync_status(false).contains("Latest changes NOT stored"));assert_eq!(db.drafts(&Value::Null).unwrap()[0].entry.replace,"Stored");
     }
     #[test]
     fn pending_authentication_cancels_without_blocking_commands_or_quit() {
@@ -403,7 +403,7 @@ mod tests {
     }
     #[test]
     fn quit_still_exits_after_storage_failure_without_claiming_latest_text_saved() {
-        let root=tempfile::tempdir().unwrap();let mut app=app(root.path());new_draft(&mut app,"Durable text");let db=Database::open(&app.store.directory).unwrap();db.connection.execute_batch("CREATE TRIGGER fail_exit BEFORE UPDATE ON tui_drafts BEGIN SELECT RAISE(ABORT,'disk failed'); END;").unwrap();app.handle(Event::Paste(" not durable".into()));key(&mut app,KeyCode::Char('q'),KeyModifiers::CONTROL);key(&mut app,KeyCode::Char('q'),KeyModifiers::NONE);assert!(app.quit);assert!(app.error);assert!(app.status.contains("NOT saved"));assert!(app.sync_status().contains("Latest changes NOT stored"));assert_eq!(db.drafts(&Value::Null).unwrap()[0].entry.replace,"Durable text");assert!(app.quit_preserving().is_err());
+        let root=tempfile::tempdir().unwrap();let mut app=app(root.path());new_draft(&mut app,"Durable text");let db=Database::open(&app.store.directory).unwrap();db.connection.execute_batch("CREATE TRIGGER fail_exit BEFORE UPDATE ON tui_drafts BEGIN SELECT RAISE(ABORT,'disk failed'); END;").unwrap();app.handle(Event::Paste(" not durable".into()));key(&mut app,KeyCode::Char('q'),KeyModifiers::CONTROL);key(&mut app,KeyCode::Char('q'),KeyModifiers::NONE);assert!(app.quit);assert!(app.error);assert!(app.status.contains("NOT saved"));assert!(app.sync_status(false).contains("Latest changes NOT stored"));assert_eq!(db.drafts(&Value::Null).unwrap()[0].entry.replace,"Durable text");assert!(app.quit_preserving().is_err());
     }
     #[test]
     fn merge_resolution_rejects_changed_connection_before_sending() {

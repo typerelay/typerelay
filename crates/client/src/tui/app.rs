@@ -21,14 +21,14 @@ struct SyncDetails {
     recovery: Option<String>,
     failure: Option<String>,
     conflicts: usize,
+    recovery_reports_failure: bool,
 }
 
 impl SyncDetails {
     fn load(db: &Database) -> Result<Self> {
-        let recovery = db.latest_recovery_reason()?;
-        let failure = db.meta("last_failure")?.and_then(|value| value.as_str().filter(|reason| !reason.is_empty()).map(str::to_owned));
+        let (recovery, failure, recovery_reports_failure) = db.latest_recovery_failure()?;
         let conflicts = db.meta("conflicts")?.and_then(|value| value.as_array().map(Vec::len)).unwrap_or(0);
-        Ok(Self { recovery, failure, conflicts })
+        Ok(Self { recovery, failure, conflicts, recovery_reports_failure })
     }
 }
 
@@ -850,22 +850,30 @@ impl App {
             }
         }
     }
-    fn sync_status(&self) -> String {
+    fn sync_status(&self, brief: bool) -> String {
         let worker = std::fs::read_to_string(self.settings.config_dir().join("sync/status")).ok();
         let failure = self.sync_details.failure.as_deref().unwrap_or_default();
         let draft = if self.draft_record.as_ref().is_some_and(|draft|draft.entry==self.draft()&&draft.destination==self.move_destination) { "Draft stored locally · " } else if self.draft_record.is_some() { "Latest changes NOT stored · " } else { "" };
         if let Some(reason) = &self.sync_details.recovery {
-            let action = if self.effective_screen() == Screen::Edit { "Leave the editor for Recovery (F12)." } else { "Open Recovery (F12)." };
+            let editing = self.effective_screen() == Screen::Edit;
+            let duplicate_failure = self.sync_details.recovery_reports_failure && failure == reason;
+            let current_error = worker.as_deref().filter(|status| !status.starts_with("Synced.")).map(|status| status.trim_start_matches("Sync: ")).or_else(|| (!failure.is_empty() && !duplicate_failure).then_some(failure));
+            let count = self.sync_details.conflicts;
+            let label = if count == 1 { "conflict" } else { "conflicts" };
+            if brief {
+                let action = if editing { "Recovery (Ctrl+P)" } else { "Recovery (F12)" };
+                let error = if current_error.is_some() { " · Sync error" } else { "" };
+                let conflicts = if count > 0 { format!(" · {count} {label}") } else { String::new() };
+                let draft = draft.trim_end_matches(" · ");
+                return format!("{action}{error}{conflicts}\n{draft}");
+            }
+            let action = if editing { "Leave the editor for Recovery (F12)." } else { "Open Recovery (F12)." };
             let reason_summary = reason.char_indices().nth(120).map_or_else(|| reason.clone(), |(end, _)| format!("{}…", &reason[..end]));
             let mut status = format!("{draft}Sync: {action} {reason_summary}");
-            if let Some(worker) = worker.filter(|worker| !worker.starts_with("Synced.")) {
-                status.push_str(&format!("\n{}", worker.trim_start_matches("Sync: ")));
-            } else if !failure.is_empty() && failure != reason {
-                status.push_str(&format!("\n{failure}"));
+            if let Some(error) = current_error {
+                status.push_str(&format!("\n{error}"));
             }
-            let count = self.sync_details.conflicts;
             if count > 0 {
-                let label = if count == 1 { "conflict" } else { "conflicts" };
                 let destination = self.identity["server"].as_str().map_or_else(|| "Open Conflicts from Commands.".into(), |server| format!("Resolve: {server}/"));
                 status.push_str(&format!("\n{count} {label}. {destination}"));
             }
@@ -893,10 +901,11 @@ impl App {
         let browse_labels=["Select (space)","Select all (ctrl+a)","Clear (ctrl+d)","Edit (enter)","Move (f8)","Trash (f3)"];let browse_height=Self::button_layout(Rect::new(0,0,area.width,0),&browse_labels).last().unwrap().bottom();
         let editing = self.effective_screen() == Screen::Edit;
         let recovery_visible = self.sync_details.recovery.is_some();
-        let sync_height = if recovery_visible { 5 } else { 2 };
-        let footer_height = sync_height + u16::from(recovery_visible && !editing);
-        let minimum_height=if editing{2+toolbar_height+6+3+2+1+controls_height+actions_height+footer_height}else if self.effective_screen()==Screen::Browse{2+toolbar_height+3+browse_height+3+footer_height}else if self.effective_screen()==Screen::Settings{2+toolbar_height+12+footer_height}else if self.effective_screen()==Screen::Image{2+toolbar_height+17+footer_height}else{20};
+        let minimum_height=if editing{2+toolbar_height+6+3+2+1+controls_height+actions_height+2}else if self.effective_screen()==Screen::Browse{2+toolbar_height+3+browse_height+3+2}else if self.effective_screen()==Screen::Settings{2+toolbar_height+12+2}else if self.effective_screen()==Screen::Image{2+toolbar_height+17+2}else{20};
         if area.width<60||area.height<minimum_height { self.draw_compact(frame,area); return; }
+        let expanded_height = if editing { 5 } else { 6 };
+        let expanded_recovery = recovery_visible && area.height >= minimum_height + expanded_height - 2;
+        let footer_height = if expanded_recovery { expanded_height } else { 2 };
         let rows=Layout::vertical([Constraint::Length(2),Constraint::Length(toolbar_height),Constraint::Min(8),Constraint::Length(footer_height)]).split(area);
         let title = if self.effective_screen() == Screen::Files { "TypeRelay  /  Snippet editor · Commands (ctrl+p)".into() } else { self.file.as_ref().map(|file| format!("TypeRelay  /  {} · Commands (ctrl+p)", file.name)).unwrap_or("TypeRelay  /  Snippet editor · Commands (ctrl+p)".into()) };
         frame.render_widget(Paragraph::new(title).style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)), rows[0]);
@@ -993,11 +1002,11 @@ impl App {
         }
         let footer_style = Style::default().fg(if self.error { Color::Red } else { Color::Gray });
         if !editing && recovery_visible {
-            let footer = Layout::vertical([Constraint::Length(1), Constraint::Length(sync_height)]).split(rows[3]);
+            let footer = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(rows[3]);
             frame.render_widget(Paragraph::new(self.status.as_str()).style(footer_style), footer[0]);
-            frame.render_widget(Paragraph::new(self.sync_status()).wrap(Wrap { trim: false }), footer[1]);
+            frame.render_widget(Paragraph::new(self.sync_status(!expanded_recovery)).wrap(Wrap { trim: false }), footer[1]);
         } else {
-            let status = if editing { self.sync_status() } else { format!("{}\n{}", self.status, self.sync_status()) };
+            let status = if editing { self.sync_status(!expanded_recovery) } else { format!("{}\n{}", self.status, self.sync_status(false)) };
             frame.render_widget(Paragraph::new(status).style(footer_style).wrap(Wrap { trim: false }), rows[3]);
         }
         if self.screen == Screen::Confirm {
@@ -1047,20 +1056,20 @@ mod tests {
         let file = db.import("Synced", "matches: [{trigger: str, replace: '$task-router'}]").unwrap();
         app.file = Some(file.clone());
         app.screen = Screen::Browse;
+        app.snippets_state.select(Some(0));
         app.status = "Saved locally. Enrolled-library changes are queued for background sync.".into();
         let source = "$task-router{{key:tab}}";
         let reason = "Server 422: Use a variable name such as {{name}}, {{key:enter}}, or {{cursor:here}}";
         let edit = Match { trigger: "str".into(), kind: "template".into(), replace: source.into(), ..Default::default() };
-        db.recover(&file.id, Some(&file.ids[0]), &serde_json::json!({"value":edit.value()}), reason).unwrap();
-        db.set_meta("last_failure", &serde_json::json!(reason)).unwrap();
+        db.record_failed_operation(&serde_json::json!({"kind":"edit","library":file.id,"body":{"changes":[{"id":file.ids[0],"value":edit.value()}]}}), reason).unwrap();
         db.set_meta("conflicts", &serde_json::json!([{"library":file.id,"snippet":file.ids[0]}])).unwrap();
         let status_file = sync_dir.join("status");
         let worker_status = format!("Synced. 1 conflicts. {reason} Resolve: https://example.test/");
         std::fs::write(&status_file, &worker_status).unwrap();
         app.refresh();
-        assert!(app.sync_status().contains(reason));
-        assert!(!app.sync_status().contains("Synced."));
-        assert!(app.sync_status().contains("1 conflict. Resolve: https://example.test/"));
+        assert!(app.sync_status(false).contains(reason));
+        assert!(!app.sync_status(false).contains("Synced."));
+        assert!(app.sync_status(false).contains("1 conflict. Resolve: https://example.test/"));
         std::fs::write(&status_file, "Sync: Connection timed out").unwrap();
 
         for (width, height) in [(140, 40), (60, 30), (48, 12)] {
@@ -1072,11 +1081,21 @@ mod tests {
             assert!(text.contains("Connection timed out"), "{width}×{height}");
             assert!(text.contains("1 conflict. Resolve: https://example.test/"), "{width}×{height}");
         }
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 19)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let text = screen_text(&terminal, 100);
+        assert!(text.contains("Preview") && text.contains("$task-router"));
+        assert!(text.contains("Recovery (F12) · Sync error · 1 conflict"));
         Fixture::key(&mut app, KeyCode::F(12), KeyModifiers::NONE);
         assert!(app.workflow.is_some());
         Fixture::key(&mut app, KeyCode::Char('r'), KeyModifiers::NONE);
         assert_eq!(app.screen, Screen::Edit, "{}", app.status);
         assert_eq!(app.draft().replace, source);
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let text = screen_text(&terminal, 100);
+        assert!(text.contains("Abbreviation") && text.contains(source));
+        assert!(text.contains("Recovery (Ctrl+P) · Sync error · 1 conflict"));
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, 48)).unwrap();
         terminal.draw(|frame| app.draw(frame)).unwrap();
         assert!(!app.field_areas.is_empty(), "must exercise the normal editor layout");
@@ -1087,15 +1106,20 @@ mod tests {
         assert_eq!(rows.len(), 1);
         db.dismiss_recovery(rows[0]["id"].as_str().unwrap()).unwrap();
         app.refresh();
-        assert!(!app.sync_status().contains("Open Recovery"));
-        assert!(app.sync_status().contains("Connection timed out"));
+        assert!(!app.sync_status(false).contains("Open Recovery"));
+        assert!(app.sync_status(false).contains("Connection timed out"));
         std::fs::write(&status_file, worker_status).unwrap();
         let mut reopened = Fixture::app(temp.path());
-        assert!(!reopened.sync_status().contains(reason));
-        assert!(reopened.sync_status().contains("1 conflicts.  Resolve: https://example.test/"));
+        assert!(!reopened.sync_status(false).contains(reason));
+        assert!(reopened.sync_status(false).contains("1 conflicts.  Resolve: https://example.test/"));
         db.set_meta("last_failure", &serde_json::json!("A later change was denied")).unwrap();
         reopened.refresh();
-        assert!(reopened.sync_status().contains("A later change was denied"));
+        assert!(reopened.sync_status(false).contains("A later change was denied"));
+        db.recover(&file.id, Some(&file.ids[0]), &serde_json::json!({"value":edit.value()}), reason).unwrap();
+        db.set_meta("last_failure", &serde_json::json!(reason)).unwrap();
+        reopened.refresh();
+        assert_eq!(reopened.sync_status(false).matches(reason).count(), 2);
+        assert!(reopened.sync_status(true).contains("Sync error"));
 
         fn screen_text(terminal: &ratatui::Terminal<ratatui::backend::TestBackend>, width: u16) -> String {
             terminal.backend().buffer().content().chunks(usize::from(width)).map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>()).map(|line| line.trim().to_owned()).collect::<Vec<_>>().join(" ")
