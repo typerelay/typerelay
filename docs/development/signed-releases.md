@@ -67,6 +67,17 @@ node scripts/release-panel.mjs linux --appimage
 
 Add `--dry-run` to preview the build command. This skips DEB, RPM, and the legacy archive (including its engine rebuild), and does not require `rpm`. Without the flag, Linux still builds all formats. Signing credentials, clean `develop`, and version/architecture checks still apply. Builds still use a fresh Cargo output directory, so native compilation remains part of each run. The partial verification report covers only the AppImage; use the default full build for publication.
 
+## Verify the installed Linux upgrade before publishing
+
+Build and sign the candidate without `--publish`. Install it in an isolated Linux environment over a managed standalone installation. For the AppImage, use Omarchy with legacy 1.3.3 and a fresh terminal that puts `~/.local/bin` first. Check DEB and RPM upgrades on their supported distributions.
+
+1. Launch the candidate and finish setup. Open a fresh terminal. Check `type -a typerelay typerelay-tui` and run both commands with `--version`. Both must report the candidate version when invoked by name.
+2. In the TUI, edit a text snippet, open F11, and select **Tab key**. Save with Ctrl+S and reopen the snippet. Confirm `{{key:tab}}` remains in the text.
+3. Confirm snippets and settings survive, the managed legacy commands are in the backup directory, and a second launch makes no duplicate backup.
+4. Repeat on a clean profile and with an unmanaged command in `~/.local/bin`. The clean install must use the candidate, and the unmanaged file must remain intact with its path shown in the warning.
+
+Publish the same signed artifacts after these checks pass. Use `--publish-only` to reuse their verified build receipts.
+
 ## Outputs and boundaries
 
 The Linux build creates x86_64 AppImage, deb and rpm packages, each containing matching engine, TUI and panel binaries. Each package has its own signed updater target. A signed legacy archive remains internal to the updater feed for existing standalone installations; it is not advertised as a download. Native packages compile the engine without the legacy-install feature, excluding the embedded Python installer. deb/rpm install their service and device rules through package-managed files; AppImage starts its bundled engine directly. Missing keyboard access uses pkexec and the native input-access command. Only the compatibility archive rebuilds the engine with legacy-install enabled.

@@ -21,18 +21,24 @@ struct Runtime { root:PathBuf, #[cfg(any(target_os="windows",target_os="macos"))
 impl Runtime {
 	#[cfg(target_os="linux")]
 	fn setup_linux(app: tauri::AppHandle) {
-		if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_none()&&!app.try_state::<std::sync::Arc<observation::Observation>>().is_some_and(|state|state.native()){update::schedule(app);return;}
+		use tauri::utils::config::BundleType;
 		let bundle=tauri::utils::platform::bundle_type();
-		if bundle.is_none() { update::schedule(app); return; }
+		if !matches!(bundle, Some(BundleType::AppImage|BundleType::Deb|BundleType::Rpm)) { update::schedule(app); return; }
+		let supports_expansion=std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some()||app.try_state::<std::sync::Arc<observation::Observation>>().is_some_and(|state|state.native());
 		if app.state::<Runtime>().linux_setup.swap(true,Ordering::SeqCst) { return; }
 		app.state::<Runtime>().closing.store(false,Ordering::SeqCst);
 		std::thread::spawn(move || {
+			use typerelay_client::installation::Installer;
+			let package=matches!(bundle,Some(BundleType::Deb|BundleType::Rpm));
+			let appimage=std::env::var_os("APPIMAGE").map(PathBuf::from);
+			let registration=(||->Result<()> {
+				if !package { Installer::register_appimage(appimage.as_deref().context("AppImage location is unavailable")?, include_bytes!("../icons/128x128.png"))?; }
+				Ok(())
+			})();
 			let result=(||->Result<()> {
-				use typerelay_client::installation::Installer;
+				if registration.is_err() || !supports_expansion { return Ok(()); }
 				let engine=std::env::current_exe()?.with_file_name("typerelay");
 				ensure!(engine.is_file(),"The Linux package is missing the expansion engine");
-				let appimage=std::env::var_os("APPIMAGE").map(PathBuf::from);
-				if let Some(launcher)=&appimage {Installer::register_appimage(launcher,include_bytes!("../icons/128x128.png"))?;}
 				let keyboard=Installer::keyboard_mode()?;
 				if !Installer::has_access(&keyboard)? || !Installer::persistent_access(&keyboard) || appimage.is_some() && !Installer::appimage_commands(std::path::Path::new("/"),false)? {
 					let message=if appimage.is_some(){"Allow Typerelay to retain access to physical keyboards after reboot and install the typerelay and typerelay-tui terminal commands? Linux will ask for administrator authentication."}else{"Allow Typerelay to read physical keyboards and insert text? Keyboard access will persist after reboot. Linux will ask for administrator authentication."};
@@ -43,7 +49,6 @@ impl Runtime {
 					ensure!(permission.status()?.success(),"Keyboard access was not granted");
 					ensure!(Installer::has_access(&keyboard)?,"Keyboard access is still unavailable");
 				}
-				let package=matches!(bundle,Some(tauri::utils::config::BundleType::Deb|tauri::utils::config::BundleType::Rpm));
 				Installer::prepare_package_service(package)?;
 				if !package {
 					let mut child=std::process::Command::new(&engine).args(["run","--device-name","auto"]).arg("--dir").arg(app.state::<Runtime>().root.join("snippets")).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped()).spawn()?;
@@ -53,10 +58,16 @@ impl Runtime {
 					*running=Some(child);drop(running);
 					let handle=app.clone();std::thread::spawn(move||{use std::io::BufRead;let mut lines=std::collections::VecDeque::new();for line in std::io::BufReader::new(errors).lines().map_while(Result::ok){if lines.len()==32{lines.pop_front();}lines.push_back(line);}let message=lines.into_iter().collect::<Vec<_>>().join("\n");let state=handle.state::<Runtime>();if !state.closing.load(Ordering::SeqCst)&&state.engine.lock().unwrap().as_ref().is_some_and(|child|child.id()==pid)&&!message.trim().is_empty(){*state.status.lock().unwrap()=message.clone();let _=handle.emit("panel-error",message);}});
 				}
-				app.state::<Runtime>().status.lock().unwrap().clear();
 				Ok(())
 			})();
-			if let Err(error)=result { *app.state::<Runtime>().status.lock().unwrap()=error.to_string(); let _=app.emit("panel-error",error.to_string()); }
+			let migration=registration.and_then(|()| {
+				let migration=Installer::migrate_terminal_commands(package, &app.package_info().version.to_string());
+				if let Err(error)=&migration { app.dialog().message(format!("{error:#}")).title("TypeRelay terminal commands").kind(tauri_plugin_dialog::MessageDialogKind::Warning).show(|_|{}); }
+				migration
+			});
+			let message=[result, migration].into_iter().filter_map(Result::err).map(|error|format!("{error:#}")).collect::<Vec<_>>().join("\n");
+			*app.state::<Runtime>().status.lock().unwrap()=message.clone();
+			if !message.is_empty() { let _=app.emit("panel-error",message); }
 			app.state::<Runtime>().linux_setup.store(false,Ordering::SeqCst);
 			update::schedule(app);
 		});
