@@ -435,9 +435,9 @@ export class Libraries {
 			return source?.includes('{{key:tab}}') && source.matchAll(/(\\\\|\\\{\{)|\{\{key:tab\}\}/g).some(match => !match[1]);
 		};
 		const libraries = [result.library, ...(result.libraries || [])];
-		const hasTabLibrary = libraries.some(library => (library?.records || library?.snippets || []).some(hasTab));
-		const hasTabConflict = (result.conflicts || []).some(conflict => [conflict.local, conflict.base, conflict.server].some(hasTab));
-		Support.assert(!hasTabLibrary && !hasTabConflict, 'Update TypeRelay to a version that supports Tab keypress snippets (desktop 1.4.2 or later), then sync again.', 412);
+		// Only active records in active libraries enter the desktop's expansion snapshot.
+		const hasTabLibrary = libraries.some(library => library?.state === 'active' && (library.records || library.snippets || []).some(record => record.state === 'active' && hasTab(record)));
+		Support.assert(!hasTabLibrary, 'Update TypeRelay to a version that supports Tab keypress snippets (desktop 1.4.2 or later), then sync again.', 412);
 	}
 
 	static async mutate(ctx, operation, body, action, options = {}) {

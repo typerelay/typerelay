@@ -799,6 +799,29 @@ test('two offline clients retain templates and conflicts; protocol 4 is rejected
 	const conflict=await Conflict.findOne({library:library._id,resolved:false}).lean();assert.ok(conflict);assert.equal(conflict.local.content.type,'template');assert.equal(conflict.local.content.variables.name.label,'Customer');
 	const stored=(await Libraries.get(ctx,library._id)).snippets[0].content;assert.equal(stored.variables.name.default,'Nitai');assert.equal(stored.text,'Hello {{name}}{{key:tab}}{{key:enter}}');
 	const rejected=await fetch(Fixture.origin+'/api/v2/sync',{headers:{Authorization:'Bearer '+credential.access_token,'X-TypeRelay-Sync-Protocol':'4'}});assert.equal(rejected.status,426);assert.equal((await rejected.json()).protocol,6);
+	const trashAction=async (target,action,headers=oldHeaders)=>{
+		const response=await fetch(Fixture.origin+'/api/v2/trash/action',{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({operation_id:randomUUID(),target,action})});
+		const result=await response.json();
+		assert.equal(response.status,200,JSON.stringify(result));
+		return result.library;
+	};
+	const oldDownload=()=>fetch(Fixture.origin+'/api/v2/sync?cursor='+oldCursor,{headers:oldHeaders});
+	const snippetTarget={type:'snippet',id:body.snippets[0].id,library:library._id,revision:(await Libraries.get(ctx,library._id)).snippets[0].revision};
+	const trashed=await trashAction(snippetTarget,'trash');
+	const afterSnippetTrash=await oldDownload();
+	assert.equal(afterSnippetTrash.status,200);
+	const archived=(await afterSnippetTrash.json()).libraries.find(row=>row._id===library._id).records[0];
+	assert.equal(archived.state,'trashed');
+	assert.equal(archived.content.text,stored.text);
+	const restored=await trashAction({...snippetTarget,revision:trashed.records[0].revision},'restore',{...oldHeaders,'X-TypeRelay-Tab-Actions':'1'});
+	assert.equal((await oldDownload()).status,412);
+	await trashAction({type:'library',id:library._id,library:library._id,revision:restored.revision},'trash');
+	const afterLibraryTrash=await oldDownload();
+	assert.equal(afterLibraryTrash.status,200);
+	const archivedLibrary=(await afterLibraryTrash.json()).libraries.find(row=>row._id===library._id);
+	assert.equal(archivedLibrary.state,'trashed');
+	assert.equal(archivedLibrary.records[0].content.text,stored.text);
+
 });
 test('rich text, templates and binary assets sync without embedding bytes in library JSON', async () => {
 	const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
