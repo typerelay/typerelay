@@ -14,6 +14,9 @@ const FAILURE_CTE: &str = "WITH failure AS (
         END AS provenance
     FROM meta stored LEFT JOIN meta link ON link.key='last_failure_link' WHERE stored.key='last_failure'
 )";
+const LINKED_FAILURE_CTE: &str = ", linked AS (
+    SELECT ids.value FROM failure, json_each(failure.provenance,'$.recovery_ids') ids
+)";
 
 pub struct Database { pub connection: Connection, directory: PathBuf }
 impl Database {
@@ -37,24 +40,11 @@ impl Database {
             CREATE TABLE IF NOT EXISTS snippet_assets(snippet TEXT NOT NULL,asset TEXT NOT NULL,PRIMARY KEY(snippet,asset));
             CREATE INDEX IF NOT EXISTS snippet_asset_asset ON snippet_assets(asset);")?;
         if !connection.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('recovery') WHERE name='reason')",[],|row|row.get::<_,bool>(0))? { connection.execute("ALTER TABLE recovery ADD COLUMN reason TEXT NOT NULL DEFAULT ''",[])?; }
-        connection.execute_batch(&format!("CREATE TRIGGER IF NOT EXISTS recovery_clear_failure AFTER DELETE ON recovery BEGIN
-            DELETE FROM meta WHERE key='last_failure' AND EXISTS(
-                {FAILURE_CTE}, linked AS (SELECT ids.value FROM failure, json_each(failure.provenance,'$.recovery_ids') ids)
-                SELECT 1 WHERE OLD.id IN (SELECT value FROM linked)
-                    AND NOT EXISTS(SELECT 1 FROM linked JOIN recovery ON recovery.id=linked.value)
-            );
-            DELETE FROM meta WHERE key='last_failure_link' AND changes()>0;
-            -- A legacy write can replace a linked error with identical text.
-            -- Keep that replacement readable and distinct from both the old link and the legacy DELETE.
-            UPDATE meta SET value=value||char(9) WHERE key='last_failure' AND substr(value,-1)='\"'
-                AND json_type(value)='text' AND json_extract(value,'$')=OLD.reason
-                AND EXISTS(SELECT 1 FROM meta link, json_each(link.value,'$.recovery_ids') ids
-                    WHERE link.key='last_failure_link' AND ids.value=OLD.id);
-        END;"))?;
         connection.execute("DELETE FROM meta WHERE key='staged'",[])?;
         let db = Self { connection, directory: directory.to_owned() };
         db.migrate()?;
         db.migrate_last_failure()?;
+        db.install_recovery_cleanup()?;
         Ok(db)
     }
     pub fn search_index(&self) -> Result<()> {
@@ -103,6 +93,7 @@ impl Database {
         let mut stored_message = json!(message).to_string();
         // JSON whitespace keeps the text readable and distinguishes it from a legacy write.
         stored_message.push(' ');
+        self.connection.execute("DELETE FROM meta WHERE key='legacy_failure_recovery'", [])?;
         self.connection.execute("DELETE FROM meta WHERE key='last_failure_recovery'", [])?;
         if recovery_ids.is_empty() {
             self.connection.execute("DELETE FROM meta WHERE key='last_failure_link'", [])?;
@@ -119,6 +110,29 @@ impl Database {
         let transaction = rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?;
         if transaction.query_row("SELECT EXISTS(SELECT 1 FROM meta WHERE key='last_failure' AND value=?1)", [&stored], |row| row.get::<_, bool>(0))? {
             self.write_last_failure(message, &recovery_ids)?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+    fn install_recovery_cleanup(&self) -> Result<()> {
+        let installed = "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='legacy_failure_write')";
+        if self.connection.query_row(installed, [], |row| row.get::<_, bool>(0))? { return Ok(()); }
+        let transaction = rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?;
+        if !transaction.query_row(installed, [], |row| row.get::<_, bool>(0))? {
+            let clear_failure = |linked| format!("DELETE FROM meta WHERE key='last_failure' AND EXISTS(
+                {FAILURE_CTE}{LINKED_FAILURE_CTE}
+                SELECT 1 WHERE {linked} AND NOT EXISTS(SELECT 1 FROM linked JOIN recovery ON recovery.id=linked.value)
+            )");
+            transaction.execute(&clear_failure("EXISTS(SELECT 1 FROM linked)"), [])?;
+            transaction.execute("DELETE FROM meta WHERE key='last_failure_link' AND changes()>0", [])?;
+            transaction.execute_batch(&format!("DROP TRIGGER IF EXISTS recovery_clear_failure;
+                CREATE TRIGGER recovery_clear_failure AFTER DELETE ON recovery BEGIN
+                    {};
+                    DELETE FROM meta WHERE key='last_failure_link' AND changes()>0;
+                END;", clear_failure("OLD.id IN (SELECT value FROM linked)")))?;
+            // Legacy clients recover the rejected operation, delete it from the outbox, then write the warning.
+            // Match its saved content here, including rows that the older client reused instead of inserting.
+            transaction.execute_batch(include_str!("legacy_failure.sql"))?;
         }
         transaction.commit()?;
         Ok(())
@@ -1537,9 +1551,9 @@ mod tests {
             assert_eq!(old_reader_value.as_str(), Some(reason));
             assert_eq!(db.meta("last_failure").unwrap(), Some(json!(reason)));
 
-            // The old CLI writes a JSON string directly and leaves any split-key metadata behind.
-            assert_eq!(legacy.execute("INSERT INTO meta(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value<>excluded.value", params!["last_failure",json!(latest).to_string()]).unwrap(), 1);
-            assert!(db.meta("last_failure_link").unwrap().is_some());
+            // The older writer leaves split-key metadata behind. SQLite discards the outdated link.
+            legacy.execute("INSERT INTO meta(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value<>excluded.value", params!["last_failure",json!(latest).to_string()]).unwrap();
+            assert!(db.meta("last_failure_link").unwrap().is_none());
             assert_eq!(db.latest_recovery_failure().unwrap(), (Some(reason.into()), Some(latest.into()), false));
             legacy.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('last_failure_recovery',?1)", [json!([id]).to_string()]).unwrap();
             assert_eq!(db.latest_recovery_failure().unwrap(), (Some(reason.into()), Some(latest.into()), false));
@@ -1548,6 +1562,79 @@ mod tests {
             assert_eq!(db.meta("last_failure").unwrap(), Some(json!(latest)));
             assert_eq!(db.latest_recovery_failure().unwrap(), (None, Some(latest.into()), false));
         }
+    }
+
+    #[test]
+    fn legacy_rejection_links_its_own_recovery_in_either_dismissal_order() {
+        for mode in ["old-first", "new-first", "reused"] {
+            let root = tempfile::tempdir().unwrap();
+            let db = Database::open(root.path()).unwrap();
+            let legacy = Connection::open(root.path().join("typerelay.sqlite")).unwrap();
+            let reason = "Server 403: Library is read-only";
+            let first = json!({"id":"snippet","value":{"text":"First edit"}});
+            let latest = if mode == "reused" { first.clone() } else { json!({"id":"snippet","value":{"text":"New edit"}}) };
+            db.record_failed_operation(&json!({"kind":"edit","library":"library","body":{"changes":[first]}}), reason).unwrap();
+            let original = db.recovery().unwrap()[0]["id"].as_str().unwrap().to_owned();
+            let rejected = json!({"kind":"edit","library":"library","body":{"changes":[latest]}});
+            db.queue(&rejected).unwrap();
+
+            let transaction = legacy.unchecked_transaction().unwrap();
+            let data = latest.to_string();
+            transaction.execute("INSERT INTO recovery(id,library,snippet,data,reason)
+                SELECT 'new-edit','library','snippet',?1,?2 WHERE NOT EXISTS(SELECT 1 FROM recovery WHERE library='library' AND snippet='snippet' AND data=?1)", params![data, reason]).unwrap();
+            transaction.execute("DELETE FROM outbox", []).unwrap();
+            transaction.execute("INSERT INTO meta(key,value) VALUES('last_failure',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value<>excluded.value", [json!(reason).to_string()]).unwrap();
+            transaction.commit().unwrap();
+
+            let linked_id = if mode == "reused" { original.as_str() } else { "new-edit" };
+            assert_eq!(db.meta("last_failure_link").unwrap().unwrap()["recovery_ids"], json!([linked_id]));
+            if mode == "old-first" {
+                legacy_dismiss(&legacy, &original);
+                assert_eq!(db.meta("last_failure").unwrap(), Some(json!(reason)));
+            }
+            legacy_dismiss(&legacy, linked_id);
+            assert_eq!(db.meta("last_failure").unwrap(), None);
+            if mode == "new-first" { db.dismiss_recovery(&original).unwrap(); }
+            assert!(db.recovery().unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn upgrade_clears_only_orphaned_exact_failure_links() {
+        for case in ["dismissed", "remaining", "legacy-overwrite"] {
+            let root = tempfile::tempdir().unwrap();
+            let db = Database::open(root.path()).unwrap();
+            let reason = "Server 403: Library is read-only";
+            db.record_failed_operation(&json!({"kind":"edit","library":"library","body":{"changes":[{"id":"snippet"}]}}), reason).unwrap();
+            let original = db.recovery().unwrap()[0]["id"].as_str().unwrap().to_owned();
+            // Model the previous schema and a dismissal before the cleanup triggers were installed.
+            db.connection.execute_batch("DROP TRIGGER legacy_failure_write; DROP TRIGGER legacy_failure_capture; DROP TRIGGER recovery_clear_failure;").unwrap();
+            if case == "legacy-overwrite" { db.set_meta("last_failure", &json!(reason)).unwrap(); }
+            if case != "remaining" { db.dismiss_recovery(&original).unwrap(); }
+            assert_eq!(db.meta("last_failure").unwrap(), Some(json!(reason)));
+            let reopened = Database::open(root.path()).unwrap();
+            assert_eq!(reopened.meta("last_failure").unwrap(), (case != "dismissed").then(|| json!(reason)));
+            assert_eq!(reopened.meta("last_failure_link").unwrap().is_some(), case != "dismissed");
+        }
+    }
+
+    #[test]
+    fn legacy_batch_rejection_matches_saved_item_and_record() {
+        let root = tempfile::tempdir().unwrap();
+        let db = Database::open(root.path()).unwrap();
+        let item = json!({"id":"snippet","base_revision":2});
+        let record = json!({"id":"snippet","content":{"text":"Saved text"}});
+        let operation = json!({"kind":"batch","library":"library","body":{"action":"move","items":[item]},"records":[record]});
+        let reason = "Server 403: Library is read-only";
+        let unrelated = db.recover("library", Some("snippet"), &json!({"action":"move","item":item,"record":null}), reason).unwrap();
+        let expected = db.recover_operation(&operation, reason).unwrap();
+        db.queue(&operation).unwrap();
+        db.connection.execute("DELETE FROM outbox", []).unwrap();
+        db.set_meta("last_failure", &json!(reason)).unwrap();
+        assert_eq!(db.meta("last_failure_link").unwrap().unwrap()["recovery_ids"], json!(expected));
+        db.dismiss_recovery(&expected[0]).unwrap();
+        assert_eq!(db.meta("last_failure").unwrap(), None);
+        assert_eq!(db.recovery().unwrap()[0]["id"], unrelated);
     }
 
     #[test]
