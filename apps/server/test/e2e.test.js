@@ -774,10 +774,23 @@ test('integration approval uses native form submission and allows its approved r
 test('two offline clients retain templates and conflicts; protocol 4 is rejected', async () => {
 	const account=await Account.create({name:'Template devices'});await Member.create({account:account._id,user:Fixture.actor.user,role:'owner'});
 	const ctx=await Support.context(Fixture.actor.user,String(account._id));
+	const one=await Fixture.device('template-one',ctx.user,ctx.account);const two=await Fixture.device('template-two',ctx.user,ctx.account);
+	const credential=JSON.parse(await readFile(join(one.config,'sync/credentials.json'),'utf8'));
+	const oldHeaders={Authorization:'Bearer '+credential.access_token,'X-TypeRelay-Sync-Protocol':'6'};
+	const literal={name:'Literal Tab',snippets:[{id:randomUUID(),trigger:'literal-tab',content:{version:1,type:'template',text:String.raw`Before \{{key:tab}} and \{{{key:tab}} after`}}]};
+	await Libraries.mutate(ctx,randomUUID(),literal,async(fresh,session)=>({library:await Libraries.create(fresh,literal,session)}));
+	const older=await fetch(Fixture.origin+'/api/v2/sync',{headers:oldHeaders});
+	assert.equal(older.status,200);
+	const oldCursor=(await older.json()).cursor;
 	const content={version:1,type:'template',text:'Hi {{name}}{{key:tab}}{{timestamp}}{{key:enter}}',variables:{name:{label:'Customer',default:'Nitai',required:true,multiline:false},timestamp:{timezone:'utc'}}};
 	const body={name:'Template devices',snippets:[{id:randomUUID(),trigger:'templatedevice',content}]};
 	const {library}=await Libraries.mutate(ctx,randomUUID(),body,async(fresh,session)=>({library:await Libraries.create(fresh,body,session)}));
-	const one=await Fixture.device('template-one',ctx.user,ctx.account);const two=await Fixture.device('template-two',ctx.user,ctx.account);
+	const blocked=await fetch(Fixture.origin+'/api/v2/sync?cursor='+oldCursor,{headers:oldHeaders});
+	assert.equal(blocked.status,412);
+	assert.deepEqual(await blocked.json(),{error:'Update TypeRelay to a version that supports Tab keypress snippets (desktop 1.4.2 or later), then sync again.'});
+	const patch=await fetch(Fixture.origin+'/api/v2/libraries/'+library._id,{method:'PATCH',headers:{...oldHeaders,'Content-Type':'application/json'},body:JSON.stringify({operation_id:randomUUID(),base_revision:library.revision,name:'Would be renamed',shared:false,editable:false,members:[],groups:[]})});
+	assert.equal(patch.status,412);
+	assert.equal((await Libraries.get(ctx,library._id)).name,body.name);
 	await Fixture.cli(one,'sync');await Fixture.cli(two,'sync');
 	const synced=(await Fixture.state(two)).libraries.find(row=>row._id===library._id).records[0].content;assert.equal(synced.variables.name.label,'Customer');assert.equal(synced.text,content.text);
 	await Fixture.edit(one,library.name,'templatedevice','Hello {{name}}{{key:tab}}{{key:enter}}');
@@ -785,7 +798,6 @@ test('two offline clients retain templates and conflicts; protocol 4 is rejected
 	await Fixture.cli(one,'sync');await Fixture.cli(two,'sync');
 	const conflict=await Conflict.findOne({library:library._id,resolved:false}).lean();assert.ok(conflict);assert.equal(conflict.local.content.type,'template');assert.equal(conflict.local.content.variables.name.label,'Customer');
 	const stored=(await Libraries.get(ctx,library._id)).snippets[0].content;assert.equal(stored.variables.name.default,'Nitai');assert.equal(stored.text,'Hello {{name}}{{key:tab}}{{key:enter}}');
-	const credential=JSON.parse(await readFile(join(one.config,'sync/credentials.json'),'utf8'));
 	const rejected=await fetch(Fixture.origin+'/api/v2/sync',{headers:{Authorization:'Bearer '+credential.access_token,'X-TypeRelay-Sync-Protocol':'4'}});assert.equal(rejected.status,426);assert.equal((await rejected.json()).protocol,6);
 });
 test('rich text, templates and binary assets sync without embedding bytes in library JSON', async () => {

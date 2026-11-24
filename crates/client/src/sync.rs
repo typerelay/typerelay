@@ -67,7 +67,7 @@ impl Sync {
     }
     fn request(&self, credentials: &mut Credentials, method: reqwest::Method, path: &str, body: Option<&Value>) -> Result<Value> {
         let send = |credentials: &Credentials| {
-            let request = self.client.request(method.clone(), format!("{}/api/v2/{path}", credentials.server)).bearer_auth(&credentials.access_token).header("X-TypeRelay-Sync-Protocol", "6").header("X-TypeRelay-Personal-Abbreviations", "1");
+            let request = self.client.request(method.clone(), format!("{}/api/v2/{path}", credentials.server)).bearer_auth(&credentials.access_token).header("X-TypeRelay-Sync-Protocol", "6").header("X-TypeRelay-Personal-Abbreviations", "1").header("X-TypeRelay-Tab-Actions", "1");
             let request = if path.starts_with("ai/") { request.timeout(Duration::from_secs(100)) } else { request };
             if let Some(body) = body { request.json(body).send() } else { request.send() }
         };
