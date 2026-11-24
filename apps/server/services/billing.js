@@ -1,7 +1,8 @@
 import Stripe from 'stripe';
 import { AccountAccess } from './account_access.js';
 import { randomBytes } from 'node:crypto';
-import { Account, Device, Library, Member, Snippet, Ticket, User } from '../model/index.js';
+import { mongoose, Account, Device, Library, Member, Snippet, Ticket, User } from '../model/index.js';
+import { Helpmonks } from './helpmonks.js';
 import { Support } from './support.js';
 
 export class Billing {
@@ -164,9 +165,9 @@ export class Billing {
 		throw Billing.error(409, `Account allows ${capacity} people, including pending invitations`, 'plan_limit', { resource: 'people', limit: capacity, usage: usage.people + usage.invitations, upgrade_url: '/#settings-subscription' });
 	}
 
-	static async owner(accountId) {
-		const member = await Member.findOne({ account: accountId, role: 'owner' }).lean();
-		return member ? User.findById(member.user).lean() : null;
+	static async owner(accountId, session = null) {
+		const member = await Support.transactionRead(Member.findOne({ account: accountId, role: 'owner' }).session(session), session).lean();
+		return member ? Support.transactionRead(User.findById(member.user).session(session), session).lean() : null;
 	}
 
 	static async ensureCustomer(account, user, options = {}) {
@@ -429,9 +430,15 @@ export class Billing {
 		if (account) await AccountAccess.acquire(account._id);
 		if (!account || Billing.entitlements(account, now).plan !== 'free' || account.billing?.trial_started_at) throw Billing.error(409, 'The Pro trial is no longer available', 'trial_unavailable');
 		const ends = new Date(now.getTime() + Billing.trialDays() * 86400000);
-		const result = await Account.updateOne({ _id: accountId, plan: { $in: ['free', null] }, 'billing.trial_started_at': null, $or: [{ 'billing.status': { $in: ['incomplete', 'trial_expired', 'canceled'] } }, { 'billing.status': { $exists: false } }] }, { $set: { plan: 'free', 'billing.status': 'trialing', 'billing.trial_source': 'no_card', 'billing.trial_started_at': now, 'billing.trial_ends_at': ends, 'billing.status_changed_at': now, 'billing.helpmonks_sequence.status': 'pending', 'billing.helpmonks_sequence.attempts': 0, 'billing.helpmonks_sequence.next_attempt_at': now, 'billing.helpmonks_sequence.last_error': '', 'billing.helpmonks_sequence.contact_id': '', 'billing.helpmonks_sequence.enrolled_at': null }, $inc: { 'billing.revision': 1 } });
-		if (result.modifiedCount !== 1) throw Billing.error(409, 'The Pro trial is no longer available', 'trial_unavailable');
-		return Billing.account(accountId);
+		return mongoose.connection.transaction(async session => {
+			if (account.billing?.helpmonks_sequence?.status == null) {
+				const owner = await Billing.owner(accountId, session);
+				if (owner?.email && !owner.email_confirm_by && !owner.deletion?.requested_at) await Helpmonks.queue(accountId, session, now);
+			}
+			const trial = await Account.findOneAndUpdate({ _id: accountId, ...AccountAccess.available, plan: { $in: ['free', null] }, 'billing.trial_started_at': null, $or: [{ 'billing.status': { $in: ['incomplete', 'trial_expired', 'canceled'] } }, { 'billing.status': { $exists: false } }] }, { $set: { plan: 'free', 'billing.status': 'trialing', 'billing.trial_source': 'no_card', 'billing.trial_started_at': now, 'billing.trial_ends_at': ends, 'billing.status_changed_at': now }, $inc: { 'billing.revision': 1 } }, { session, returnDocument: 'after' }).lean();
+			if (!trial) throw Billing.error(409, 'The Pro trial is no longer available', 'trial_unavailable');
+			return trial;
+		});
 	}
 
 	static async runTrialExpiry(now = new Date(), options = {}) {

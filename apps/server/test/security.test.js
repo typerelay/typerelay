@@ -51,9 +51,10 @@ class Browser {
 }
 class Fixture {
 	static origin = 'http://127.0.0.1:3150'; static server; static mails = [];
+	static nextClient = 1;
 	static mailUrl(mail) { const match = mail.text.match(/https?:\/\/[^\s]+/); assert.ok(match, 'Email contains an action URL'); return new URL(match[0]); }
 	static async account() {
-		const browser = new Browser();
+		const browser = Object.assign(new Browser(), { ip: `198.51.100.${Fixture.nextClient++}` });
 		await browser.page();
 		const email = randomUUID() + '@example.test';
 		assert.equal((await browser.json('/auth/signup', 'POST', { name: 'Original Name', email })).redirect, '/');
@@ -83,6 +84,7 @@ class Fixture {
 }
 before(async () => {
 	process.env.NODE_ENV = 'test';
+	process.env.IS_DOCKER = 'true';
 	process.env.PORT = '3150';
 	process.env.MONGO_URI = TestDatabase.uri(process.env.MONGO_URI, 'typerelay_security_test');
 	process.env.SESSION_SECRET = Support.token();
@@ -136,6 +138,8 @@ test('confirmed hosted signups notify Type Relay through a durable retrying outb
 	let record;
 	for (let attempt = 0; attempt < 100; attempt++) { record = await SignupNotification.findOne({ user: user._id }).lean(); if (record?.attempts) break; await new Promise(resolve => setTimeout(resolve, 10)); }
 	assert.equal(record.status, 'pending'); assert.equal(record.attempts, 1);
+	const sequence = (await Account.findById(record.account).lean()).billing.helpmonks_sequence;
+	assert.equal(sequence.status, 'pending'); assert.equal(sequence.attempts, 0); assert.ok(sequence.next_attempt_at instanceof Date);
 	assert.equal(await Library.countDocuments({ account: record.account, state: 'active' }), 1); assert.equal(await Snippet.countDocuments({ account: record.account, state: 'active' }), 6);
 	await SignupNotification.updateOne({ _id: record._id }, { $set: { next_attempt_at: new Date(0) } });
 	const delivered = [];
@@ -155,6 +159,7 @@ test('self-hosted signup confirmation creates no operational notification', asyn
 	const user = await User.findById(await Auth.consume(confirmation.searchParams.get('token'))).lean();
 	assert.equal(await SignupNotification.exists({ user: user._id }), null);
 	const member = await Member.findOne({ user: user._id, role: 'owner' }).lean();
+	assert.equal((await Account.findById(member.account).lean()).billing.helpmonks_sequence.status, null);
 	const library = await Library.findOne({ account: member.account, creator: user._id }).lean();
 	assert.equal(library.name, 'My snippets'); assert.equal(library.shared, false); assert.equal(library.state, 'active');
 	const snippets = await Snippet.find({ library: library._id, state: 'active' }).sort({ position: 1 }).lean();
@@ -239,6 +244,46 @@ test('unconfirmed signups get access, confirm once through the form, and existin
 	const claimed = await User.findById(owner).select('+password').lean();
 	assert.equal(claimed.email_confirm_by, undefined); assert.equal(claimed.password, undefined); assert.equal(claimed.auth_version, before + 1);
 	squatter.account = ''; await squatter.page(); assert.equal(squatter.account, '', 'the earlier session no longer works');
+});
+
+test('hosted signups queue the Helpmonks sequence once with first email confirmation', async t => {
+	t.mock.method(Billing, 'hosted', () => true);
+	t.mock.method(Billing, 'initializeAccount', async () => {});
+	for (const method of ['confirmation form', 'Magic Link', 'profile email change']) {
+		const user = await Auth.signup(randomUUID() + '@example.test', method);
+		const member = await Member.findOne({ user: user._id, role: 'owner' }).lean();
+		const account = () => Account.findById(member.account).lean();
+		assert.equal((await account()).billing.helpmonks_sequence.status, null);
+		const email = method === 'profile email change' ? randomUUID() + '@example.test' : user.email;
+		const session = { user: String(user._id) };
+		if (method === 'Magic Link') await Auth.login(user.email);
+		if (email !== user.email) await Security.profile({ ctx: { user: session.user }, session, body: { email } });
+		const token = Fixture.mailUrl(Fixture.mails.findLast(mail => mail.to === email)).searchParams.get('token');
+		const confirm = () => method === 'Magic Link' ? Auth.consume(token) : method === 'profile email change' ? Security.confirmEmail({ session, body: { token } }) : Auth.confirmSignup(token);
+		const notification = t.mock.method(SignupNotifications, 'create', async () => { throw new Error('Outbox unavailable'); });
+		await assert.rejects(confirm(), /Outbox unavailable/);
+		notification.mock.restore();
+		const rolledBack = await User.findById(user._id).lean();
+		assert.ok(rolledBack.email_confirm_by); assert.equal(rolledBack.email, user.email);
+		assert.equal((await account()).billing.helpmonks_sequence.status, null);
+		await confirm();
+		const confirmed = await User.findById(user._id).lean();
+		assert.equal(confirmed.email_confirm_by, undefined); assert.equal(confirmed.email, email);
+		const queued = (await account()).billing.helpmonks_sequence;
+		assert.equal(queued.status, 'pending'); assert.equal(queued.attempts, 0); assert.ok(queued.next_attempt_at instanceof Date);
+		await assert.rejects(confirm(), /expired or already used/);
+		await Auth.login(email);
+		await Auth.consume(Fixture.mailUrl(Fixture.mails.findLast(mail => mail.to === email)).searchParams.get('token'));
+		assert.deepEqual((await account()).billing.helpmonks_sequence, queued);
+		if (method === 'profile email change') {
+			const replacement = randomUUID() + '@example.test';
+			await Security.profile({ ctx: { user: session.user }, session, body: { email: replacement } });
+			const token = Fixture.mailUrl(Fixture.mails.findLast(mail => mail.to === replacement)).searchParams.get('token');
+			await Security.confirmEmail({ session, body: { token } });
+			assert.equal((await User.findById(user._id).lean()).email, replacement);
+			assert.deepEqual((await account()).billing.helpmonks_sequence, queued);
+		}
+	}
 });
 
 test('unconfirmed signups are purged silently after the deadline; confirmed and team users stay', async () => {

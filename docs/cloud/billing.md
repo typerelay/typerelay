@@ -19,7 +19,9 @@ Opening Checkout reserves its selected capacity during a trial. Finish the exist
 
 If retained memberships exceed a plan's capacity, the owner and earliest members within that capacity keep access. Other memberships remain stored and regain access when enough seats become available; a Pro trial never activates more than five people.
 
-The no-card Pro trial becomes paid immediately when Checkout completes. Without Checkout, request-time checks end Pro access at the exact expiry timestamp and a protected scheduler persists the return to Free every five minutes. Trial owners are enrolled into the configured Helpmonks sequence by a durable worker with twelve attempts at five-minute intervals. A canceled paid subscription returns to Free after Stripe confirms the subscription ended.
+The no-card Pro trial becomes paid immediately when Checkout completes. Without Checkout, request-time checks end Pro access at the exact expiry timestamp and a protected scheduler persists the return to Free every five minutes. A canceled paid subscription returns to Free after Stripe confirms the subscription ended.
+
+TypeRelay Cloud queues the getting-started emails when a new account owner confirms their email address. TypeRelay retries failed enrollments every five minutes, up to twelve attempts. Starting a Pro trial preserves any existing enrollment. For an older account without an enrollment, starting a trial queues the emails if the owner's address is confirmed.
 
 Stripe Tax is enabled for Checkout. Keep the live account's registrations active. Prices exclude applicable taxes. Existing product tax categories are preserved when updating the catalog.
 

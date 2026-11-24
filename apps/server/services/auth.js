@@ -8,6 +8,7 @@ import { mongoose, User, Account, Member, Ticket, Device, Integration, Integrati
 import { Support } from './support.js';
 import { Security } from './security.js';
 import { Billing } from './billing.js';
+import { Helpmonks } from './helpmonks.js';
 import { SignupNotifications } from './signup_notifications.js';
 import { StarterContent } from './starter_content.js';
 import bcrypt from 'bcryptjs';
@@ -125,7 +126,11 @@ export class Auth {
 		const [account] = await Account.create([{ name: user.name + '’s team', ...(tracking ? { acquisition: tracking } : {}) }], { session });
 		await Member.create([{ account: account._id, user: user._id, role: 'owner' }], { session });
 		await StarterContent.create(account, user, session);
-		const notification = confirmed && Billing.hosted() ? await SignupNotifications.create(user, account, session) : null;
+		let notification = null;
+		if (confirmed && Billing.hosted()) {
+			await Helpmonks.queue(account._id, session);
+			notification = await SignupNotifications.create(user, account, session);
+		}
 		return { user, account, notification };
 	}
 	static confirmWindow = 86400000;
@@ -175,7 +180,9 @@ export class Auth {
 		const account = owner ? await Account.findOne({ _id: owner.account, 'deletion.requested_at': null }).select('+acquisition').session(session).read('primary').lean() : null;
 		if (!account) return { user };
 		if (account.acquisition?.transaction_id) await Account.updateOne({ _id: account._id }, { $set: { 'acquisition.confirmed_at': new Date() } }, { session });
-		return { user, account, notification: Billing.hosted() ? await SignupNotifications.create(user, account, session) : null };
+		if (!Billing.hosted()) return { user, account };
+		await Helpmonks.queue(account._id, session);
+		return { user, account, notification: await SignupNotifications.create(user, account, session) };
 	}
 	static notifySignup(notification) { if (notification) { const sendMail = Auth.mail.sendMail; void SignupNotifications.deliver(notification._id, message => sendMail(message)).catch(error => console.error(`Type Relay signup notification deferred: ${error.message}`)); } }
 	static redirect(uri, client = 'typerelay-desktop') {

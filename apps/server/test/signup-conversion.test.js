@@ -7,6 +7,7 @@ import session from 'express-session';
 import MongoStore from 'connect-mongo';
 import { Auth } from '../services/auth.js';
 import { Billing } from '../services/billing.js';
+import { Helpmonks } from '../services/helpmonks.js';
 import { AdminSettings } from '../services/admin_settings.js';
 import { AccountAccess } from '../services/account_access.js';
 import { WhiteLabel } from '../services/white_label.js';
@@ -55,6 +56,7 @@ before(async () => {
 	mock.method(AdminSettings, 'middleware', (req, res, next) => next());
 	mock.method(AdminSettings, 'send', async () => {});
 	mock.method(Billing, 'initializeAccount', async () => {});
+	mock.method(Helpmonks, 'queue', async () => {});
 	mock.method(SignupNotifications, 'create', async () => null);
 	mock.method(StarterContent, 'create', async () => {});
 	mock.method(User, 'updateOne', async filter => ({ matchedCount: Number(!!Fixture.user && String(Fixture.user._id) === String(filter._id) && !Fixture.user.deletion?.requested_at) }));

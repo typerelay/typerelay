@@ -108,15 +108,17 @@ export class Security {
 	}
 	static async confirmEmail(req) {
 		Security.browserSession(req);
-		await mongoose.connection.transaction(async session => {
+		const confirmed = await mongoose.connection.transaction(async session => {
 			const ticket = await Ticket.findOneAndDelete({ hash: Support.hash(Support.text(req.body.token, 256)), kind: 'email-change', 'data.user': req.session.user, expires: { $gt: new Date() } }, { session }).lean();
 			Support.assert(ticket, 'Email link expired or already used', 400);
 			const user = await User.findById(req.session.user).session(session).read('primary').lean();
 			Support.assert(user.email === ticket.data.old && (user.auth_version || 0) === ticket.data.version, 'Email link no longer valid');
 			Support.assert(!await User.exists({ email: ticket.email }).session(session).read('primary'), 'Email address unavailable', 409);
-			await User.updateOne({ _id: user._id }, { $set: { email: ticket.email }, $unset: { email_confirm_by: 1 } }, { session });
+			await User.updateOne({ _id: user._id }, { $set: { email: ticket.email } }, { session });
 			await Ticket.deleteMany({ email: user.email, kind: { $in: ['login', 'password-reset', 'email-change'] } }, { session });
+			return user.email_confirm_by ? Auth.markConfirmed(user._id, ticket.email, session) : null;
 		});
+		Auth.notifySignup(confirmed?.notification);
 		return { redirect: '/' };
 	}
 	static async resetPassword(userId, session) {
