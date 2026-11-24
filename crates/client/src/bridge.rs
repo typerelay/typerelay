@@ -19,7 +19,11 @@ impl Bridge {
             ensure!(entry.title.len() <= 500 && !entry.title.chars().any(char::is_control), "Title must be at most 500 bytes without control characters");
             ensure!(!entry.language.is_empty() && entry.language.len() <= 100 && !entry.language.chars().any(char::is_control), "Invalid language");
             if entry.kind == "template" { typerelay_core::template::Template { text: entry.replace.clone(), variables: entry.variables.clone() }.normalize().map_err(anyhow::Error::msg)?; }
-            let replacement=if entry.kind=="rich_text" {typerelay_core::rich_text::RichText::render(typerelay_core::rich_text::RichRequest{markdown:entry.replace.clone(),variables:entry.variables.clone(),preview:true,..Default::default()}).map_err(anyhow::Error::msg)?.text}else{entry.replace.clone()};
+            let replacement=if entry.kind=="rich_text" {
+                let rendered=typerelay_core::rich_text::RichText::render(typerelay_core::rich_text::RichRequest{markdown:entry.replace.clone(),variables:entry.variables.clone(),preview:true,..Default::default()}).map_err(anyhow::Error::msg)?;
+                // Action-only snippets still need a matching entry. The native path resolves the stored rich steps.
+                if rendered.text.is_empty()&&(rendered.enter_actions>0||rendered.tab_actions>0) { rendered.markdown } else { rendered.text }
+            } else { entry.replace.clone() };
             let snippet = Snippet { trigger: if entry.trigger.is_empty() { "validation".into() } else { entry.trigger.clone() }, replacement };
             Snapshot::new(vec![snippet.clone()]).map_err(anyhow::Error::msg)?;
             if !entry.trigger.is_empty() { snippets.push(snippet); }

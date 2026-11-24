@@ -23,6 +23,17 @@ test('shared renderers expose prompts, dates, Enter actions and rich formatting'
 	assert.match(image.html, /src="data:image\/png;base64,AA=="/);
 });
 
+test('the shared WASM exposes ordered Tab actions and omits them from copied text', async () => {
+	const template = await Runtime.template({ text: '{{name}}{{key:tab}}Last{{key:enter}}' }, { name: '{{key:tab}}' }, false);
+	assert.equal(template.tab_actions, 1);
+	assert.equal(template.text, '{{key:tab}}Last');
+	assert.deepEqual(template.steps.map(step => step.kind), ['text', 'tab', 'text', 'enter']);
+	const rich = await Runtime.rich({ markdown: '**First**\n\n{{key:tab}}\n\nLast' }, {}, false, {});
+	assert.equal(rich.tab_actions, 1);
+	assert.deepEqual(rich.steps.map(step => step.kind), ['content', 'tab', 'content']);
+	assert.doesNotMatch(rich.html, /key:tab/);
+});
+
 test('cursor metadata counts rendered UTF-16 and leaves answer tokens literal', async () => {
  const result = await Runtime.template({ text: '😀{{name}}{{cursor:here}}e\u0301\n👩‍💻', variables: {} }, { name: '{{cursor:here}}' }, false);
  assert.equal(result.text, '😀{{cursor:here}}e\u0301\n👩‍💻'); assert.equal(result.cursor.utf16, 17); assert.equal(result.cursor.backward_graphemes, 3);

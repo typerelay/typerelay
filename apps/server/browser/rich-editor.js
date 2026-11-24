@@ -44,10 +44,10 @@ export class RichEditor {
 		this.editor = new Editor({
 			element: host,
 			extensions: [StarterKit.configure({ underline: false, paragraph: false, heading: false, codeBlock: {}, link: { openOnClick: false } }), AlignedParagraph, AlignedHeading, Markdown, Underline, TextAlign.configure({ types: ['heading', 'paragraph'] }), AssetImage.configure({ inline: true, allowBase64: false }), TaskList, TaskItem.configure({ nested: true }), TableKit.configure({ table: { resizable: true } }), RawHtml],
-			content: protectRaw(field.value),
+			content: this.prepareMarkdown(field.value),
 			contentType: 'markdown',
 			editable: !options.readonly,
-			onUpdate: ({ editor }) => { field.value = restoreRaw(editor.getMarkdown()); field.dispatchEvent(new Event('input', { bubbles: true })); this.refresh(); },
+			onUpdate: ({ editor }) => { field.value = this.serializeMarkdown(editor); field.dispatchEvent(new Event('input', { bubbles: true })); this.refresh(); },
 			onSelectionUpdate: () => this.refresh(),
 		});
 		field.hidden = true; host.hidden = false; toolbar.hidden = false;
@@ -94,9 +94,37 @@ export class RichEditor {
 	async image() { const modalElement = document.querySelector('#rich-image-modal'); const form = document.querySelector('#rich-image-form'); form.reset(); document.querySelector('#rich-image-width').value = '640'; const editorModal = document.querySelector('#form-modal'); const restore = editorModal.classList.contains('show'); if (restore) { editorModal.dataset.preserveEditor = 'true'; await new Promise(resolve => { editorModal.addEventListener('hidden.bs.modal', resolve, { once: true }); bootstrap.Modal.getInstance(editorModal).hide(); }); } const modal = bootstrap.Modal.getOrCreateInstance(modalElement); const result = await new Promise(resolve => { const finish = value => { form.removeEventListener('submit', submit); modalElement.removeEventListener('hidden.bs.modal', cancel); resolve(value); }; const cancel = () => finish(null); const submit = async event => { event.preventDefault(); const button = event.submitter; if (button) button.disabled = true; try { const file = document.querySelector('#rich-image-file').files[0]; const url = document.querySelector('#rich-image-url').value.trim(); if (!file && !url) throw new Error('Choose a file or enter a remote URL'); const asset = file ? await this.options.upload(file) : await this.options.remote(url); finish({ asset, alt: document.querySelector('#rich-image-alt').value, title: document.querySelector('#rich-image-title').value, placement: document.querySelector('#rich-image-placement').value, width: Number(document.querySelector('#rich-image-width').value) }); modal.hide(); } catch (error) { this.options.onError?.(error); } finally { if (button) button.disabled = false; } }; form.addEventListener('submit', submit); modalElement.addEventListener('hidden.bs.modal', cancel, { once: true }); modal.show(); }); if (restore) bootstrap.Modal.getOrCreateInstance(editorModal).show(); if (!result) { this.editor.commands.focus(); return; } const source = `typerelay-asset:${result.asset.id}`; if (result.placement === 'inline' && result.width === 640) this.editor.chain().focus().setImage({ src: source, alt: result.alt, title: result.title }).run(); else { const image = document.querySelector('#rich-image-html-template').content.firstElementChild.cloneNode(); image.src = source; image.alt = result.alt; image.title = result.title; image.width = result.width; image.dataset.placement = result.placement; this.editor.chain().focus().insertContent({ type: 'rawHtml', attrs: { html: image.outerHTML } }).run(); } }
 	async refreshImage() { const source = String(this.editor.getAttributes('image').src || ''); if (!source.startsWith('typerelay-asset:')) throw new Error('Select a cached remote image first'); const asset = await this.options.refresh(source.slice(16)); this.editor.chain().focus().updateAttributes('image', { src: `typerelay-asset:${asset.id}` }).run(); }
 	async html() { const previous = this.editor.isActive('rawHtml') ? this.editor.getAttributes('rawHtml').html : ''; const result = await Swal.fire({ title: previous ? 'Edit raw HTML' : 'Insert raw HTML', input: 'textarea', inputLabel: 'HTML is preserved and sanitized when rendered', inputValue: previous, showCancelButton: true, confirmButtonText: 'Apply', target: document.querySelector('#form-modal'), preConfirm: async value => { try { await RichTextRuntime.render({ markdown: String(value || '') }, {}, true); return String(value || ''); } catch (error) { Swal.showValidationMessage(error.message); return false; } } }); if (!result.isConfirmed) return; if (previous) this.editor.chain().focus().updateAttributes('rawHtml', { html: String(result.value || '') }).run(); else this.editor.chain().focus().insertContent({ type: 'rawHtml', attrs: { html: String(result.value || '') } }).run(); }
-	toggleSource() { if (this.source) { this.editor.commands.setContent(protectRaw(this.field.value), { contentType: 'markdown' }); this.field.hidden = true; this.host.hidden = false; } else { this.field.value = restoreRaw(this.editor.getMarkdown()); this.host.hidden = true; this.field.hidden = false; this.field.focus(); } this.source = !this.source; }
-	insertText(value) { this.editor.chain().focus().insertContent(value, { contentType: 'markdown' }).run(); }
-	content() { if (!this.source) this.field.value = restoreRaw(this.editor.getMarkdown()); return this.field.value; }
+	prepareMarkdown(source) {
+		// Keep Markdown from consuming key-action escapes when TipTap parses them as text.
+		this.actionEscapeSeparator = '\u2060';
+		for (let attempt = 0; source.includes(this.actionEscapeSeparator); attempt++) this.actionEscapeSeparator = '\u2060' + attempt.toString(2).replaceAll('0', '\u2060').replaceAll('1', '\u2063');
+		return this.protectKeyActions(protectRaw(source));
+	}
+	protectKeyActions(source) {
+		return source.replace(/(\\+)(\{\{key:(?:enter|tab)\}\})?/g, (match, slashes, marker) => marker ? ('\\' + this.actionEscapeSeparator).repeat(slashes.length) + marker : match);
+	}
+	serializeMarkdown(editor = this.editor) {
+		const snapshot = editor.getJSON();
+		const protectVisualText = node => {
+			if (node.type === 'codeBlock') return;
+			if (node.type === 'text' && !node.marks?.some(mark => mark.type === 'code')) node.text = this.protectKeyActions(node.text);
+			node.content?.forEach(protectVisualText);
+		};
+		protectVisualText(snapshot);
+		// TipTap doubles the protected backslash in Markdown text and leaves it unchanged in code and HTML.
+		const separator = this.actionEscapeSeparator;
+		return restoreRaw(editor.markdown.serialize(snapshot).replace(new RegExp('\\\\{1,2}' + separator, 'g'), '\\'));
+	}
+	toggleSource() { if (this.source) { this.editor.commands.setContent(this.prepareMarkdown(this.field.value), { contentType: 'markdown' }); this.field.hidden = true; this.host.hidden = false; } else { this.field.value = this.serializeMarkdown(); this.host.hidden = true; this.field.hidden = false; this.field.focus(); } this.source = !this.source; }
+	insertText(value, standalone = false) {
+		const chain = this.editor.chain().focus();
+		if (!standalone) { chain.insertContent(value, { contentType: 'markdown' }).run(); return; }
+		const { $from, from, to } = this.editor.state.selection;
+		const topLevelParagraph = $from.depth === 1 && $from.parent.type.name === 'paragraph' && [null, 'left'].includes($from.parent.attrs.textAlign);
+		const range = topLevelParagraph ? { from, to } : $from.depth > 0 ? $from.after(1) : to;
+		chain.insertContentAt(range, { type: 'paragraph', content: [{ type: 'text', text: value }] }).run();
+	}
+	content() { if (!this.source) this.field.value = this.serializeMarkdown(); return this.field.value; }
 	setReadonly(readonly) { this.options.readonly = readonly; this.editor.setEditable(!readonly); }
 	refresh() { for (const button of this.toolbar.querySelectorAll('[data-rich-command]')) { const command = button.dataset.richCommand; const active = ['bold', 'italic', 'underline', 'strike', 'code', 'bulletList', 'orderedList', 'taskList', 'blockquote', 'codeBlock'].includes(command) && this.editor.isActive(command); button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active)); } const tableTools = this.toolbar.querySelector('[data-rich-table-tools]'); if (tableTools) tableTools.hidden = !this.editor.isActive('table'); const source = this.toolbar.querySelector('[data-rich-command="source"]'); if (source) { source.classList.toggle('active', this.source); source.textContent = this.source ? 'V' : 'M↓'; source.setAttribute('aria-label', this.source ? 'Use visual editor' : 'Edit Markdown'); source.title = this.source ? 'Use visual editor' : 'Edit Markdown'; } }
 	destroy() { this.editor.destroy(); this.field.hidden = false; this.fieldAnchor.before(this.field); this.fieldAnchor.remove(); this.host.replaceChildren(); this.toolbar.hidden = true; }

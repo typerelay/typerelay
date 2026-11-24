@@ -232,10 +232,17 @@ final class KeyboardViewController: UIInputViewController {
         guard validAnchor() else { if mode == .search { showTyping() }; status.text = "Text changed. Select the snippet again."; status.isHidden = false; return }
         guard let record = recordFor(match) else { return }
         selection = record; selectionLibrary = match.library; values.removeAll(); previewReturnMode = returnMode
-        do { let rendered = try render(preview: true); if !(rendered["fields"] as? [String] ?? []).isEmpty || rendered["html"] != nil || !(rendered["assets"] as? [String] ?? []).isEmpty || (rendered["enter_actions"] as? Int ?? 0) != 0 { showPreview() } else { insert() } }
+        do { let rendered = try render(preview: true); if !(rendered["fields"] as? [String] ?? []).isEmpty || rendered["html"] != nil || !(rendered["assets"] as? [String] ?? []).isEmpty || !keyActions(rendered).isEmpty { showPreview() } else { insert() } }
         catch { status.text = error.localizedDescription; status.isHidden = false }
     }
     private func render(preview: Bool) throws -> [String: Any] { try TypeRelayCore.execute(["action": "keyboard_render", "generation": snapshot["generation"] ?? "", "library": selectionLibrary, "id": selection?["id"] ?? "", "values": values, "preview": preview], keyboard: true)["data"] as? [String: Any] ?? [:] }
+    private func keyActions(_ rendered: [String: Any]) -> String { [("enter_actions", "Enter"), ("tab_actions", "Tab")].compactMap { (rendered[$0.0] as? Int ?? 0) > 0 ? $0.1 : nil }.joined(separator: " and ") }
+    private func previewText(_ rendered: [String: Any]) -> String {
+        let text = rendered["text"] as? String ?? ""
+        if let cursor = rendered["cursor"] as? [String: Any], let offset = cursor["utf16"] as? Int { let source = text as NSString; return source.substring(to: offset) + "▏ [Cursor position]" + source.substring(from: offset) }
+        guard let steps = rendered["steps"] as? [[String: Any]] else { return text }
+        return steps.map { step in switch step["kind"] as? String { case "enter": return "⏎ [Enter key]"; case "tab": return "⇥ [Tab key]"; default: return step["text"] as? String ?? "" } }.joined()
+    }
     private func showPreview(message: String? = nil) {
         guard let selection else { return showTyping() }
         mode = .preview; field = nil
@@ -247,9 +254,9 @@ final class KeyboardViewController: UIInputViewController {
             let definitions = rendered["variables"] as? [String: [String: Any]] ?? (rendered["template"] as? [String: Any])?["variables"] as? [String: [String: Any]] ?? [:]
             for name in rendered["fields"] as? [String] ?? [] { let definition = definitions[name] ?? [:]; if values[name] == nil { values[name] = definition["default"] as? String ?? "" }; let label = definition["label"] as? String ?? name; let item = choiceButton((label.isEmpty ? name : label) + ": " + (values[name] ?? "")) { [weak self] in self?.showFieldEditing(name: name, label: label.isEmpty ? name : label) }; item.heightAnchor.constraint(equalToConstant: 48).isActive = true; overlayBody.addArrangedSubview(item) }
             if let message { let warning = UILabel(); warning.text = message; warning.textColor = .systemRed; warning.numberOfLines = 2; warning.font = .preferredFont(forTextStyle: .caption1); overlayBody.addArrangedSubview(warning) }
-            let preview = UILabel(); preview.numberOfLines = 0; preview.font = .preferredFont(forTextStyle: .body); let text = rendered["text"] as? String ?? ""; if let cursor = rendered["cursor"] as? [String: Any], let offset = cursor["utf16"] as? Int { let source = text as NSString; preview.text = source.substring(to: offset) + "▏ [Cursor position]" + source.substring(from: offset) } else { preview.text = text }; overlayBody.addArrangedSubview(preview)
-            let supported = (rendered["enter_actions"] as? Int ?? 0) == 0
-            let guidance = UILabel(); guidance.text = supported ? "iOS inserts plain text. Use TypeRelay for rich copy." : "Desktop Enter actions cannot run on mobile."; guidance.font = .preferredFont(forTextStyle: .caption1); guidance.numberOfLines = 2; overlayBody.addArrangedSubview(guidance)
+            let preview = UILabel(); preview.numberOfLines = 0; preview.font = .preferredFont(forTextStyle: .body); preview.text = previewText(rendered); overlayBody.addArrangedSubview(preview)
+            let keys = keyActions(rendered); let supported = keys.isEmpty
+            let guidance = UILabel(); guidance.text = supported ? "iOS inserts plain text. Use TypeRelay for rich copy." : "\(keys) key actions cannot run on mobile."; guidance.font = .preferredFont(forTextStyle: .caption1); guidance.numberOfLines = 2; overlayBody.addArrangedSubview(guidance)
             let cancel = button("Cancel") { [weak self] in self?.values.removeAll(); self?.showTyping() }; overlayFooter.addArrangedSubview(cancel)
             let insert = button("Insert text") { [weak self] in self?.insert() }; insert.isEnabled = supported; overlayFooter.addArrangedSubview(insert)
         } catch {
@@ -267,7 +274,8 @@ final class KeyboardViewController: UIInputViewController {
     private func insert() {
         do {
             let rendered = try render(preview: false)
-            guard (rendered["enter_actions"] as? Int ?? 0) == 0, textDocumentProxy.isSecureTextEntry != true else { return }
+            guard textDocumentProxy.isSecureTextEntry != true else { return }
+            guard keyActions(rendered).isEmpty else { showPreview(); return }
             guard validAnchor() else { throw NSError(domain: "TypeRelay", code: 1, userInfo: [NSLocalizedDescriptionKey: "Text changed. Select the snippet again."]) }
             changingHost = true
             for _ in anchorFragment { textDocumentProxy.deleteBackward() }

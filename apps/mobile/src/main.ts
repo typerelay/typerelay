@@ -6,6 +6,7 @@ import { App } from '@capacitor/app';
 import { Browser } from '@capacitor/browser';
 import { Network } from '@capacitor/network';
 import { RichEditor } from '@server/browser/rich-editor.js';
+import { TemplateRuntime } from '@server/public/template-runtime.js';
 import { TemplateEditor } from '@server/public/template-editor.js';
 import { Auth } from './auth';
 import { Native } from './native';
@@ -210,16 +211,16 @@ export class MobileApp {
  static async use(library: Library, snippet: Snippet) {
   const selection = { library: library._id, id: snippet.id, generation: MobileApp.state.generation };
   const rendered = await Native.call('keyboard_render', { ...selection, preview: true });
-  MobileApp.$('detail-content').replaceChildren(MobileApp.fragment(fill({ snippet, rendered, variables: rendered.variables || rendered.template?.variables || {}, canEdit: library.permissions.edit })));
+  MobileApp.$('detail-content').replaceChildren(MobileApp.fragment(fill({ snippet, rendered, preview: TemplateRuntime.preview(rendered), keys: TemplateRuntime.keyNames(rendered), variables: rendered.variables || rendered.template?.variables || {}, canEdit: library.permissions.edit })));
   const form = MobileApp.$('fill-form') as HTMLFormElement; let previewVersion = 0;
   form.oninput = () => {
    const version = ++previewVersion; const values = Object.fromEntries(new FormData(form));
    void Native.call('keyboard_render', { ...selection, values, preview: true }).then(output => {
     if (version !== previewVersion || !form.isConnected || !MobileApp.$('detail-modal').classList.contains('show')) return;
-    form.querySelector('#insert-preview')!.textContent = output.cursor ? output.text.slice(0, output.cursor.utf16) + '▏ [Cursor position]' + output.text.slice(output.cursor.utf16) : output.text;
+    form.querySelector('#insert-preview')!.textContent = TemplateRuntime.preview(output);
    }).catch(error => { if (version === previewVersion && form.isConnected && MobileApp.$('detail-modal').classList.contains('show')) MobileApp.error(error); });
   };
-  MobileApp.$('fill-form').onsubmit = event => { event.preventDefault(); const button = (event.target as HTMLFormElement).querySelector<HTMLButtonElement>('[type=submit]')!; void MobileApp.busy(button, async () => { const values = Object.fromEntries(new FormData(event.target as HTMLFormElement)); const output = await Native.call('keyboard_render', { ...selection, values, clipboard: true }); if (output.enter_actions) throw new Error('Desktop Enter actions are unsupported on mobile'); await Native.plugin.copy({ text: output.text, html: output.html, rtf: output.rtf }); await Native.call('keyboard_usage', { ...selection, kind: 'copy', characters: output.characters ?? [...output.text].length }).catch(() => undefined); MobileApp.toast(output.cursor ? 'Copied text. Cursor positioning was omitted.' : 'Copied'); }); };
+  MobileApp.$('fill-form').onsubmit = event => { event.preventDefault(); const button = (event.target as HTMLFormElement).querySelector<HTMLButtonElement>('[type=submit]')!; void MobileApp.busy(button, async () => { const values = Object.fromEntries(new FormData(event.target as HTMLFormElement)); const output = await Native.call('keyboard_render', { ...selection, values, clipboard: true }); const keys = TemplateRuntime.keyNames(output); if (keys) throw new Error(keys + ' key actions cannot run on mobile.'); await Native.plugin.copy({ text: output.text, html: output.html, rtf: output.rtf }); await Native.call('keyboard_usage', { ...selection, kind: 'copy', characters: output.characters ?? [...output.text].length }).catch(() => undefined); MobileApp.toast(output.cursor ? 'Copied text. Cursor positioning was omitted.' : 'Copied'); }); };
   const edit = document.getElementById('edit-from-detail'); if (edit) edit.onclick = () => { const modal = MobileApp.$('detail-modal'); modal.addEventListener('hidden.bs.modal', () => { void MobileApp.openEditor(library, snippet).catch(MobileApp.error); }, { once: true }); Modal.getInstance(modal)?.hide(); };
   MobileApp.$('detail-modal').classList.add('is-drawer'); Modal.getOrCreateInstance(MobileApp.$('detail-modal')).show();
  }
@@ -273,7 +274,7 @@ export class MobileApp {
   const variables = snippet.content.variables || {};
   const values = Object.fromEntries(Object.entries(variables).map(([name, definition]) => [name, definition.default || '']));
   const output = await Native.call('keyboard_render', { library: library._id, id: snippet.id, generation: MobileApp.state.generation, values, clipboard: true });
-  if (output.enter_actions) throw new Error('This snippet contains desktop Enter actions and cannot be copied directly on mobile.');
+  const keys = TemplateRuntime.keyNames(output); if (keys) throw new Error('Snippets with ' + keys + ' key actions cannot be copied on mobile.');
   await Native.plugin.copy({ text: output.text, html: output.html, rtf: output.rtf });
   await Native.call('keyboard_usage', { library: library._id, id: snippet.id, generation: MobileApp.state.generation, kind: 'copy', characters: output.characters ?? [...output.text].length }).catch(() => undefined);
   MobileApp.toast(output.cursor ? 'Copied text. Cursor positioning was omitted.' : 'Snippet copied');

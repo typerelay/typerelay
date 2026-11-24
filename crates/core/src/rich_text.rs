@@ -48,7 +48,7 @@ pub struct RichRequest {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum RichStep { Content { markdown: String, text: String, html: String, rtf: String, #[serde(default)] characters: usize }, Enter }
+pub enum RichStep { Content { markdown: String, text: String, html: String, rtf: String, #[serde(default)] characters: usize }, Enter, Tab }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RichRendered {
@@ -62,6 +62,8 @@ pub struct RichRendered {
     pub fields: Vec<String>,
     pub steps: Vec<RichStep>,
     pub enter_actions: usize,
+    #[serde(default, skip_serializing_if = "crate::template::no_tab_actions")]
+    pub tab_actions: usize,
 }
 
 pub struct RichText;
@@ -120,8 +122,33 @@ impl RichText {
         }}Ok(serde_json::json!(images))})();result.unwrap_or_else(|error|serde_json::json!({"error":error})).to_string()}
 
     fn validate_actions(markdown: &str) -> Result<(), String> {
-        for line in markdown.replace("\\{{", "").lines().filter(|line| line.contains("{{key:enter}}")) {
-            if line.trim() != "{{key:enter}}" { return Err("Rich-text Enter actions must be on their own line between blocks".into()); }
+        let mut top_level_tabs = BTreeSet::new();
+        if markdown.contains("{{key:tab}}") {
+            let mut depth = 0;
+            for (event, range) in Parser::new_ext(markdown, Self::options()).into_offset_iter() {
+                match event {
+                    Event::Start(tag) => {
+                        if depth == 0 && matches!(tag, Tag::Paragraph) && markdown[range.clone()].trim() == "{{key:tab}}" {
+                            top_level_tabs.insert(range.start);
+                        }
+                        depth += 1;
+                    }
+                    Event::End(_) => depth -= 1,
+                    _ => ()
+                }
+            }
+        }
+        let mut line_start = 0;
+        for line in markdown.split_inclusive('\n') {
+            for (marker, key) in [("{{key:enter}}", "Enter"), ("{{key:tab}}", "Tab")] {
+                for (offset, _) in line.match_indices(marker) {
+                    let escaped = line[..offset].bytes().rev().take_while(|&byte| byte == b'\\').count() % 2 != 0;
+                    if !escaped && (line.trim() != marker || (key == "Tab" && !top_level_tabs.contains(&(line_start + offset)))) {
+                        return Err(format!("Rich-text {key} actions must be on their own line between blocks"));
+                    }
+                }
+            }
+            line_start += line.len();
         }
         Ok(())
     }
@@ -204,6 +231,8 @@ impl RichText {
         for step in &rendered.steps {
             match step {
                 Step::Enter => steps.push(RichStep::Enter),
+                Step::Tab => steps.push(RichStep::Tab),
+                Step::Text { text } if rendered.tab_actions > 0 && text.trim().is_empty() => (),
 				Step::Text { text: source } => {
                     // Resolved HTML is valid Markdown; retain the original Markdown only on the saved document.
 					let (text, html, rtf, assets, count) = Self::render_fragment(source, &request.assets, &replacements)?;let markdown=html.clone();
@@ -217,7 +246,7 @@ impl RichText {
             }
         }
 		let rtf=format!("{{\\rtf1\\ansi\\deff0\\uc1 {full_rtf}}}");
-        Ok(RichRendered { characters, markdown: request.markdown, text: full_text, html: full_html, rtf, assets: all_assets.into_iter().collect(), variables: rendered.template.variables, fields: rendered.fields, steps, enter_actions: rendered.enter_actions })
+        Ok(RichRendered { characters, markdown: request.markdown, text: full_text, html: full_html, rtf, assets: all_assets.into_iter().collect(), variables: rendered.template.variables, fields: rendered.fields, steps, enter_actions: rendered.enter_actions, tab_actions: rendered.tab_actions })
     }
 
     pub fn json(input: &str) -> String {
@@ -288,6 +317,21 @@ mod tests {
         assert_eq!(value.enter_actions, 1);
         assert!(RichText::render(RichRequest { markdown: "Before {{key:enter}} after".into(), ..Default::default() }).is_err());
     }
+    #[test]
+    fn tab_actions_separate_rich_fragments() {
+        let value = render("**Jane**\n\n{{key:tab}}\n\n*Doe*\n\n{{key:tab}}\n\n{{key:tab}}");
+        assert_eq!(value.tab_actions, 3);
+        assert_eq!(value.enter_actions, 0);
+        assert!(matches!(&value.steps[..], [RichStep::Content { .. }, RichStep::Tab, RichStep::Content { .. }, RichStep::Tab, RichStep::Tab]));
+        assert!(value.html.contains("<strong>Jane</strong>"));
+        assert!(value.html.contains("<em>Doe</em>"));
+        assert!(!value.text.contains("key:tab"));
+        assert_eq!(render(r"Before \{{key:tab}} after").tab_actions, 0);
+        for markdown in ["Before {{key:tab}} after", r"Before \\{{key:tab}} after", "```text\n{{key:tab}}\n```", "<pre>\n{{key:tab}}\n</pre>", "Before\n{{key:tab}}\nAfter"] {
+            assert!(RichText::render(RichRequest { markdown: markdown.into(), ..Default::default() }).is_err());
+        }
+    }
+
 	#[test]
 	fn template_values_are_escaped_by_context(){let mut request=RichRequest{markdown:"[Profile]({{url}})\n\nHello {{name}}\n\n<span title=\"{{name}}\">raw</span>".into(),preview:false,..Default::default()};request.values.insert("url".into(),"https://example.com/a?q=1".into());request.values.insert("name".into(),"<b>*literal*</b>".into());let value=RichText::render(request).unwrap();assert!(value.html.contains("href=\"https://example.com/a?q=1\""));assert!(!value.html.contains("<strong>literal</strong>"));assert!(!value.html.contains("<b>"));let mut bad=RichRequest{markdown:"[Bad]({{url}})".into(),preview:false,..Default::default()};bad.values.insert("url".into(),"javascript:alert(1)".into());assert!(RichText::render(bad).is_err());}
 	#[test]

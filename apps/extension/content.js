@@ -125,15 +125,20 @@ function insert(editor, saved, expected, erase, rendered, rich) {
 	if (rendered.cursor) { for (let index = 0; index < rendered.cursor.backward_graphemes; index++) selection.modify('move', 'backward', 'character'); }
 }
 
+function requireSupported(rendered) {
+	const keys = [rendered.enter_actions && 'Enter', rendered.tab_actions && 'Tab'].filter(Boolean).join(' and ');
+	if (keys) throw new Error('Chrome cannot perform ' + keys + ' key actions. The field was left unchanged.');
+}
+
 async function expand(editor, saved, id, expected = '', erase = 0) {
 	const preview = await send({ type: 'prepare', id, preview: true });
-	if (preview.rendered.enter_actions) throw new Error('This snippet uses an Enter key action, which Chrome cannot perform safely. The field was left unchanged.');
+	requireSupported(preview.rendered);
 	if (expected && (document.activeElement !== editor || !document.hasFocus())) throw new Error('The original field lost focus; abbreviation left unchanged');
 	const fields = preview.rendered.fields || [];
 	const values = fields.length ? await promptFields(fields, preview.rendered.variables, editor) : {};
 	if (values === null) { if (editor.isConnected && saved) restore(editor, saved); return; }
 	const result = await send({ type: 'prepare', id, values, preview: false });
-	if (result.rendered.enter_actions) throw new Error('This snippet uses an Enter key action, which Chrome cannot perform safely. The field was left unchanged.');
+	requireSupported(result.rendered);
 	if (expected && !fields.length && (document.activeElement !== editor || !document.hasFocus())) throw new Error('The original field lost focus; abbreviation left unchanged');
 	insert(editor, saved, expected, erase, result.rendered, result.item.content.type === 'rich_text');
 	await send({ type: 'usage', event: { event_id: crypto.randomUUID(), identity: result.statisticsIdentity, library: result.item.library_id, snippet: result.item.id, shared: result.item.shared, action: 'insert', client: 'extension', occurred_at: new Date().toISOString(), characters: Math.max(0, (result.rendered.characters ?? [...result.rendered.text].length) - erase) } }).catch(() => undefined);

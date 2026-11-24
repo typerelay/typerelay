@@ -1,6 +1,8 @@
 use anyhow::Result;
 #[cfg(not(target_os="linux"))]
 use anyhow::ensure;
+#[cfg(not(target_os="linux"))]
+use typerelay_client::clipboard_payload::ClipboardStep;
 #[cfg(target_os = "linux")]
 #[path = "platform_linux.rs"] mod native;
 #[cfg(target_os = "macos")]
@@ -44,8 +46,17 @@ pub fn copy_payload(payload:typerelay_client::clipboard_payload::ClipboardPayloa
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn paste(target: &Target, erase: usize, payload: Option<typerelay_client::clipboard_payload::ClipboardPayload>, current:impl Fn()->bool) -> Result<()> {
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Stroke { Paste, Enter, Tab }
+
+#[cfg(not(target_os = "linux"))]
+pub fn insert_step(target: &Target, erase: usize, step: ClipboardStep, current:impl Fn()->bool) -> Result<()> {
     use std::time::{Duration, Instant};
+    let (stroke, payload) = match step {
+        ClipboardStep::Payload(payload) => (Stroke::Paste, Some(payload)),
+        ClipboardStep::Enter => (Stroke::Enter, None),
+        ClipboardStep::Tab => (Stroke::Tab, None),
+    };
     #[cfg(target_os="macos")]
     if payload.as_ref().is_some_and(|payload|payload.cursor.is_some()){ensure!(native::input_monitoring(false)&&Target::input_ready().load(std::sync::atomic::Ordering::SeqCst),"Cursor positioning requires active keyboard monitoring. Allow Input Monitoring and restart TypeRelay, or use Copy; nothing inserted");}
     let marked=payload.as_ref().is_some_and(|payload|payload.cursor.is_some());let epoch=Target::input_epoch().load(std::sync::atomic::Ordering::SeqCst);let guarded=||current()&&(!marked||Target::input_epoch().load(std::sync::atomic::Ordering::SeqCst)==epoch);
@@ -56,7 +67,7 @@ pub fn paste(target: &Target, erase: usize, payload: Option<typerelay_client::cl
     #[cfg(target_os="windows")]
 	if let Some(payload)=payload.as_ref()&&payload.cursor.is_none()&&payload.html.is_none()&&payload.rtf.is_none()&&target.replace_text(erase,&payload.plain)?{return Ok(());}
 	if payload.as_ref().is_some_and(|payload|payload.cursor.is_some()){ensure!(Target::input_ready().load(std::sync::atomic::Ordering::SeqCst),"Cursor positioning requires active keyboard monitoring. Restart TypeRelay or use Copy; nothing inserted");}
-	let mut clipboard=None;let has_text=payload.is_some();let cursor=payload.as_ref().and_then(|payload|payload.cursor.clone().map(|cursor|(cursor,payload.plain.clone())));
+	let mut clipboard=None;let cursor=payload.as_ref().and_then(|payload|payload.cursor.clone().map(|cursor|(cursor,payload.plain.clone())));
 	if let Some(payload)=payload {
         #[cfg(target_os="windows")]
         let preserve=!native::remote_session();
@@ -69,12 +80,10 @@ pub fn paste(target: &Target, erase: usize, payload: Option<typerelay_client::cl
         ensure!(guarded(), "Expansion cancelled; nothing inserted");
         ensure!(target.focused()?, "Original window lost focus; nothing inserted");
         if let Some(direct)=&direct{ensure!(direct.focused(target)?,"Original text field lost focus; nothing inserted");}
-        #[cfg(target_os="windows")]
-        {native::insert(target,erase,has_text)?;std::thread::sleep(Duration::from_millis(if has_text{350}else{100}));Ok(())}
-        #[cfg(target_os="macos")]
-        {
-        native::insert(target,erase,has_text)?;std::thread::sleep(Duration::from_millis(if has_text{350}else{100}));Ok(())
-        }
+        native::insert(target,erase,stroke,&guarded)?;
+        // Let a keypress change the focused control before the next step.
+        std::thread::sleep(Duration::from_millis(if stroke==Stroke::Paste {350} else {100}));
+        Ok(())
     })();
     if let Some(clipboard)=&mut clipboard { clipboard.restore()?; }
     insertion?;

@@ -1,4 +1,5 @@
 use anyhow::{Context,Result,ensure};
+use super::Stroke;
 use core_foundation::runloop::CFRunLoop;
 use core_graphics::{event::{CallbackResult,CGEvent,CGEventFlags,CGEventTap,CGEventTapLocation,CGEventTapOptions,CGEventTapPlacement,CGEventType,EventField,KeyCode},event_source::{CGEventSource,CGEventSourceStateID},geometry::CGPoint};
 use foreign_types::ForeignType;
@@ -93,7 +94,7 @@ impl Target {
     pub fn restore(&self)->Result<()> { unsafe { let application=NSRunningApplication::runningApplicationWithProcessIdentifier(self.pid).context("Original application closed")?; let name=CString::new("AXRaise")?; let action=CFStringCreateWithCString(std::ptr::null(),name.as_ptr(),0x08000100); let result=AXUIElementPerformAction(self.window.0 as Ref,action); CFRelease(action); ensure!(result==0,"Original window is unavailable"); #[allow(deprecated)] let _=application.activateWithOptions(NSApplicationActivationOptions::ActivateIgnoringOtherApps); } for _ in 0..40 { if self.focused()? { return Ok(()); } std::thread::sleep(std::time::Duration::from_millis(15)); } anyhow::bail!("Could not restore original window; use Copy") }
     pub fn focused(&self)->Result<bool> { unsafe { if NSWorkspace::sharedWorkspace().frontmostApplication().map(|app|app.processIdentifier()) != Some(self.pid) {return Ok(false);} let app=AXUIElementCreateApplication(self.pid); let current=Self::attribute(app,"AXFocusedWindow"); CFRelease(app); let current=current?; let equal=CFEqual(current,self.window.0 as Ref); CFRelease(current); Ok(equal) } }
 }
-pub fn keys_down()->bool { [56,60,59,62,58,61,55,54,36,76,43].iter().any(|key|unsafe{CGEventSourceKeyState(1,*key)}) }
+pub fn keys_down()->bool { [56,60,59,62,58,61,55,54,36,76,43,KeyCode::TAB].iter().any(|key|unsafe{CGEventSourceKeyState(1,*key)}) }
 pub fn fallback_allowed()->bool { NSWorkspace::sharedWorkspace().frontmostApplication().is_some_and(|app|app.processIdentifier()==std::process::id() as i32) }
 pub fn accessibility(prompt:bool)->bool { let trusted=unsafe{AXIsProcessTrusted()};if !trusted&&prompt{let _=enigo::Enigo::new(&enigo::Settings::default());}trusted }
 pub fn input_monitoring(prompt:bool)->bool { let _=prompt;unsafe{IOHIDCheckAccess(1)==0} }
@@ -101,7 +102,35 @@ pub fn open_accessibility_settings()->Result<()> { let status=Command::new("/usr
 pub fn open_input_monitoring_settings()->Result<()> { let status=Command::new("/usr/bin/open").arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent").status()?;ensure!(status.success(),"Could not open Input Monitoring settings");Ok(()) }
 pub fn open_url(url:&str)->Result<()> { let status=Command::new("/usr/bin/open").arg(url).status()?;ensure!(status.success(),"Could not open link");Ok(()) }
 pub fn open_tui()->Result<()> { let executable=std::env::current_exe()?.with_file_name("typerelay-tui");ensure!(executable.is_file(),"TypeRelay TUI is missing from this application");let status=Command::new("/usr/bin/open").arg(executable).status()?;ensure!(status.success(),"Could not open TypeRelay TUI");Ok(()) }
-pub fn insert(target:&Target,erase:usize,has_text:bool)->Result<()> { let source=CGEventSource::new(CGEventSourceStateID::Private).map_err(|_|anyhow::anyhow!("Cannot create keyboard event source; allow TypeRelay Accessibility permission"))?;let event=|key,down,flags|->Result<CGEvent>{let event=CGEvent::new_keyboard_event(source.clone(),key,down).map_err(|_|anyhow::anyhow!("Cannot create keyboard event"))?;event.set_flags(flags|CGEventFlags::CGEventFlagNonCoalesced);event.set_location(CGPoint::new(-27469.,0.));Ok(event)};let mut events=Vec::new();for _ in 0..erase{events.push(event(KeyCode::DELETE,true,CGEventFlags::empty())?);events.push(event(KeyCode::DELETE,false,CGEventFlags::empty())?);}if !has_text{events.push(event(KeyCode::RETURN,true,CGEventFlags::empty())?);events.push(event(KeyCode::RETURN,false,CGEventFlags::empty())?);}else{let command=CGEventFlags::CGEventFlagCommand;events.push(event(KeyCode::COMMAND,true,command)?);events.push(event(KeyCode::ANSI_V,true,command)?);events.push(event(KeyCode::ANSI_V,false,command)?);events.push(event(KeyCode::COMMAND,false,CGEventFlags::empty())?);}for event in events{event.post_to_pid(target.pid);std::thread::sleep(Duration::from_millis(2));}Ok(()) }
+pub fn insert(target:&Target,erase:usize,stroke:Stroke,current:impl Fn()->bool)->Result<()> {
+    let source=CGEventSource::new(CGEventSourceStateID::Private).map_err(|_|anyhow::anyhow!("Cannot create keyboard event source; allow TypeRelay Accessibility permission"))?;
+    let event=|key,down,flags|->Result<CGEvent>{
+        let event=CGEvent::new_keyboard_event(source.clone(),key,down).map_err(|_|anyhow::anyhow!("Cannot create keyboard event"))?;
+        event.set_flags(flags|CGEventFlags::CGEventFlagNonCoalesced);
+        event.set_location(CGPoint::new(-27469.,0.));
+        Ok(event)
+    };
+    let post=|event:CGEvent| { event.post_to_pid(target.pid); std::thread::sleep(Duration::from_millis(2)); };
+    let flags=CGEventFlags::empty();
+    let events=match stroke {
+        Stroke::Paste=>{
+            let command=CGEventFlags::CGEventFlagCommand;
+            vec![event(KeyCode::COMMAND,true,command)?,event(KeyCode::ANSI_V,true,command)?,event(KeyCode::ANSI_V,false,command)?,event(KeyCode::COMMAND,false,flags)?]
+        },
+        Stroke::Enter | Stroke::Tab=>{
+            let key=if stroke==Stroke::Tab {KeyCode::TAB} else {KeyCode::RETURN};
+            vec![event(key,true,flags)?,event(key,false,flags)?]
+        },
+    };
+    for _ in 0..erase {
+        ensure!(current()&&target.focused()?,"Original window or input changed; remaining actions cancelled");
+        post(event(KeyCode::DELETE,true,flags)?);
+        post(event(KeyCode::DELETE,false,flags)?);
+    }
+    ensure!(current()&&target.focused()?,"Original window or input changed; remaining actions cancelled");
+    for event in events {post(event);}
+    Ok(())
+}
 pub fn release_modifiers()->Result<()> { let source=CGEventSource::new(CGEventSourceStateID::HIDSystemState).map_err(|_|anyhow::anyhow!("Cannot create keyboard event source"))?;for key in [KeyCode::COMMAND,KeyCode::RIGHT_COMMAND,KeyCode::SHIFT,KeyCode::RIGHT_SHIFT,KeyCode::CONTROL,KeyCode::RIGHT_CONTROL,KeyCode::OPTION,KeyCode::RIGHT_OPTION]{let event=CGEvent::new_keyboard_event(source.clone(),key,false).map_err(|_|anyhow::anyhow!("Cannot create keyboard event"))?;event.set_flags(CGEventFlags::empty());event.post(CGEventTapLocation::HID);}Ok(()) }
 
 struct DeferredEvent { key:u16,down:bool,flags:CGEventFlags,text:Vec<u16>,repeat:i64,keyboard:i64 }
@@ -125,9 +154,33 @@ impl DeferredInput {
         if state.events.len()==4096{state.cancelled=true;Target::input_epoch().fetch_add(1,std::sync::atomic::Ordering::SeqCst);}
         state.events.push(DeferredEvent{key,down,flags:event.get_flags(),text:text[..length.min(text.len())].to_vec(),repeat:event.get_integer_value_field(EventField::KEYBOARD_EVENT_AUTOREPEAT),keyboard:event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYBOARD_TYPE)});true
     }
-    pub fn finish(&self,target:&Target)->Result<usize>{
-        let result=(||->Result<usize>{let source=CGEventSource::new(CGEventSourceStateID::Private).map_err(|_|anyhow::anyhow!("Cannot create keyboard event source"))?;let mut replayed=0;loop {let events={let mut state=self.0.lock().unwrap();state.phase=DeferredPhase::Replaying;if state.events.is_empty(){state.phase=DeferredPhase::Finished;return Ok(replayed);}mem::take(&mut state.events)};for deferred in events {let event=CGEvent::new_keyboard_event(source.clone(),deferred.key,deferred.down).map_err(|_|anyhow::anyhow!("Cannot replay buffered keyboard input"))?;event.set_flags(deferred.flags|CGEventFlags::CGEventFlagNonCoalesced);event.set_string_from_utf16_unchecked(&deferred.text);event.set_integer_value_field(EventField::KEYBOARD_EVENT_AUTOREPEAT,deferred.repeat);event.set_integer_value_field(EventField::KEYBOARD_EVENT_KEYBOARD_TYPE,deferred.keyboard);event.set_location(CGPoint::new(-27469.,0.));event.post_to_pid(target.pid);replayed+=usize::from(deferred.down);std::thread::sleep(Duration::from_millis(2));}}})();
-        if result.is_err(){self.0.lock().unwrap().phase=DeferredPhase::Finished;}result
+    pub fn finish(&self,target:&Target,require_focus:bool)->Result<usize>{
+        let result=(||->Result<usize>{
+            let source=CGEventSource::new(CGEventSourceStateID::Private).map_err(|_|anyhow::anyhow!("Cannot create keyboard event source"))?;
+            let mut replayed=0;
+            loop {
+                let events={
+                    let mut state=self.0.lock().unwrap();
+                    state.phase=DeferredPhase::Replaying;
+                    if state.events.is_empty(){state.phase=DeferredPhase::Finished;return Ok(replayed);}
+                    mem::take(&mut state.events)
+                };
+                for deferred in events {
+                    let event=CGEvent::new_keyboard_event(source.clone(),deferred.key,deferred.down).map_err(|_|anyhow::anyhow!("Cannot replay buffered keyboard input"))?;
+                    event.set_flags(deferred.flags|CGEventFlags::CGEventFlagNonCoalesced);
+                    event.set_string_from_utf16_unchecked(&deferred.text);
+                    event.set_integer_value_field(EventField::KEYBOARD_EVENT_AUTOREPEAT,deferred.repeat);
+                    event.set_integer_value_field(EventField::KEYBOARD_EVENT_KEYBOARD_TYPE,deferred.keyboard);
+                    event.set_location(CGPoint::new(-27469.,0.));
+                    if require_focus&&target.focused().ok()!=Some(true){self.discard();return Ok(replayed);}
+                    event.post_to_pid(target.pid);
+                    replayed+=usize::from(deferred.down);
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+            }
+        })();
+        if result.is_err(){self.0.lock().unwrap().phase=DeferredPhase::Finished;}
+        result
     }
 }
 pub struct ExpansionRequest { pub target:Target,pub expansion:Expansion,pub released:Receiver<()>,pub confirm_enter:bool,pub deferred:DeferredInput }
@@ -314,6 +367,18 @@ mod expansion_tests {
     use super::*;
     #[test]
     fn prompt_guard_passes_editing_then_buffers_and_cancels_without_replaying_held_enter(){let deferred=DeferredInput::new();let retained=deferred.clone();deferred.discard();assert!(!deferred.finished());drop(retained);assert!(deferred.finished());let source=CGEventSource::new(CGEventSourceStateID::HIDSystemState).unwrap();let down=CGEvent::new_keyboard_event(source.clone(),36,true).unwrap();let up=CGEvent::new_keyboard_event(source,36,false).unwrap();deferred.observe();assert!(!deferred.capture(CGEventType::KeyDown,&down));assert!(deferred.cancelled());deferred.begin();assert!(!deferred.cancelled());deferred.0.lock().unwrap().confirmers.push(36);assert!(deferred.capture(CGEventType::KeyDown,&down));assert!(deferred.capture(CGEventType::KeyUp,&up));assert!(deferred.0.lock().unwrap().events.is_empty());deferred.cancel();assert!(deferred.cancelled());deferred.discard();assert!(!deferred.capture(CGEventType::KeyDown,&down));}
+    #[test]
+    fn guarded_replay_discards_typeahead_when_original_window_is_unavailable() {
+        let deferred=DeferredInput::new();
+        let source=CGEventSource::new(CGEventSourceStateID::Private).unwrap();
+        let event=CGEvent::new_keyboard_event(source,KeyCode::ANSI_A,true).unwrap();
+        assert!(deferred.capture(CGEventType::KeyDown,&event));
+        let window=unsafe{CFStringCreateWithCString(std::ptr::null(),c"Unavailable test window".as_ptr(),0x08000100)};
+        assert!(!window.is_null());
+        let target=Target{pid:std::process::id() as i32,window:Arc::new(Window(window as usize)),bounds:None};
+        assert_eq!(deferred.finish(&target,true).unwrap(),0);
+        assert!(deferred.finished());
+    }
     #[test]
     fn held_right_from_suppressed_boundary_cancels_and_forwards_its_release() {
         let directory=tempfile::tempdir().unwrap();let (sender,_)=sync_channel(1);let mut state=ExpansionState::new(&directory.path().join("snippets"),directory.path().join("settings.yml"),sender).unwrap();

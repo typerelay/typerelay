@@ -92,7 +92,7 @@ impl NativeAi {
     pub fn validate_proposal(original: &Match, proposal: &Match) -> Result<()> {
         ensure!(original.kind == proposal.kind && original.variables == proposal.variables && original.language == proposal.language && original.trigger == proposal.trigger, "AI changed protected snippet fields");
         ensure!(!proposal.replace.trim().is_empty() && proposal.replace.len() <= 65536, "Invalid AI draft length");
-        ensure!(Self::protected(&original.replace)? == Self::protected(&proposal.replace)?, "AI changed template variables, cursor positions, Enter actions or image references");
+        ensure!(Self::protected(&original.replace)? == Self::protected(&proposal.replace)?, "AI changed template variables, cursor positions, Enter or Tab actions, or image references");
         if proposal.kind == "rich_text" {
             let images = [original,proposal].into_iter().map(|draft| {
                 let rendered = typerelay_core::rich_text::RichText::render(typerelay_core::rich_text::RichRequest { markdown:draft.replace.clone(), variables:draft.variables.clone(), preview:true, ..Default::default() }).map_err(anyhow::Error::msg)?;
@@ -135,8 +135,8 @@ mod tests {
     }
     #[test]
     fn proposals_preserve_tokens_actions_images_and_type() {
-        let original = Match { replace: "Hello {{name}}{{key:enter}}Done".into(), kind:"template".into(), ..Default::default() }; let mut proposal = original.clone(); proposal.replace = "Welcome {{name}}{{key:enter}}Finished".into(); assert!(NativeAi::validate_proposal(&original,&proposal).is_ok());
-        for text in ["Welcome {{other}}{{key:enter}}Finished", "Welcome {{name}}Finished", "Welcome {{name}}{{key:enter}}{{key:enter}}"] { proposal.replace=text.into(); assert!(NativeAi::validate_proposal(&original,&proposal).is_err()); }
+        let original = Match { replace: "Hello {{name}}{{key:tab}}{{key:enter}}Done".into(), kind:"template".into(), ..Default::default() }; let mut proposal = original.clone(); proposal.replace = "Welcome {{name}}{{key:tab}}{{key:enter}}Finished".into(); assert!(NativeAi::validate_proposal(&original,&proposal).is_ok());
+        for text in ["Welcome {{other}}{{key:tab}}{{key:enter}}Finished", "Welcome {{name}}{{key:enter}}Finished", "Welcome {{name}}{{key:enter}}{{key:tab}}Finished", "Welcome {{name}}{{key:tab}}{{key:tab}}{{key:enter}}Finished"] { proposal.replace=text.into(); assert!(NativeAi::validate_proposal(&original,&proposal).is_err()); }
         let original = Match { replace:"![Diagram](https://example.com/a.png)".into(), kind:"rich_text".into(), ..Default::default() }; let mut proposal=original.clone(); proposal.replace="![Diagram](https://example.com/b.png)".into(); assert!(NativeAi::validate_proposal(&original,&proposal).is_err()); proposal=original.clone(); proposal.kind="plain_text".into(); assert!(NativeAi::validate_proposal(&original,&proposal).is_err());
     }
     #[test]

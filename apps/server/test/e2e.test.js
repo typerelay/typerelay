@@ -774,17 +774,17 @@ test('integration approval uses native form submission and allows its approved r
 test('two offline clients retain templates and conflicts; protocol 4 is rejected', async () => {
 	const account=await Account.create({name:'Template devices'});await Member.create({account:account._id,user:Fixture.actor.user,role:'owner'});
 	const ctx=await Support.context(Fixture.actor.user,String(account._id));
-	const content={version:1,type:'template',text:'Hi {{name}} {{timestamp}}{{key:enter}}',variables:{name:{label:'Customer',default:'Nitai',required:true,multiline:false},timestamp:{timezone:'utc'}}};
+	const content={version:1,type:'template',text:'Hi {{name}}{{key:tab}}{{timestamp}}{{key:enter}}',variables:{name:{label:'Customer',default:'Nitai',required:true,multiline:false},timestamp:{timezone:'utc'}}};
 	const body={name:'Template devices',snippets:[{id:randomUUID(),trigger:'templatedevice',content}]};
 	const {library}=await Libraries.mutate(ctx,randomUUID(),body,async(fresh,session)=>({library:await Libraries.create(fresh,body,session)}));
 	const one=await Fixture.device('template-one',ctx.user,ctx.account);const two=await Fixture.device('template-two',ctx.user,ctx.account);
 	await Fixture.cli(one,'sync');await Fixture.cli(two,'sync');
-	assert.equal((await Fixture.state(two)).libraries.find(row=>row._id===library._id).records[0].content.variables.name.label,'Customer');
-	await Fixture.edit(one,library.name,'templatedevice','Hello {{name}}{{key:enter}}');
+	const synced=(await Fixture.state(two)).libraries.find(row=>row._id===library._id).records[0].content;assert.equal(synced.variables.name.label,'Customer');assert.equal(synced.text,content.text);
+	await Fixture.edit(one,library.name,'templatedevice','Hello {{name}}{{key:tab}}{{key:enter}}');
 	await Fixture.edit(two,library.name,'templatedevice','Dear {{name}}');
 	await Fixture.cli(one,'sync');await Fixture.cli(two,'sync');
 	const conflict=await Conflict.findOne({library:library._id,resolved:false}).lean();assert.ok(conflict);assert.equal(conflict.local.content.type,'template');assert.equal(conflict.local.content.variables.name.label,'Customer');
-	assert.equal((await Libraries.get(ctx,library._id)).snippets[0].content.variables.name.default,'Nitai');
+	const stored=(await Libraries.get(ctx,library._id)).snippets[0].content;assert.equal(stored.variables.name.default,'Nitai');assert.equal(stored.text,'Hello {{name}}{{key:tab}}{{key:enter}}');
 	const credential=JSON.parse(await readFile(join(one.config,'sync/credentials.json'),'utf8'));
 	const rejected=await fetch(Fixture.origin+'/api/v2/sync',{headers:{Authorization:'Bearer '+credential.access_token,'X-TypeRelay-Sync-Protocol':'4'}});assert.equal(rejected.status,426);assert.equal((await rejected.json()).protocol,6);
 });
@@ -792,11 +792,11 @@ test('rich text, templates and binary assets sync without embedding bytes in lib
 	const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
 	const upload = await fetch(Fixture.origin + '/api/v2/assets', { method: 'POST', headers: { Cookie: Fixture.cookie, 'Content-Type': 'image/png', 'X-CSRF-Token': Fixture.csrf, 'X-Account-Id': Fixture.account }, body: png });
 	assert.equal(upload.status, 200); const asset = await upload.json();
-	const markdown = `# Welcome **{{name}}**\n\n| A | B |\n|---|---|\n| C | D |\n\n<u onclick="bad()">underlined</u>\n\n<img src="typerelay-asset:${asset.id}" alt="Dot" width="64">\n\n{{key:enter}}\n\nDone`;
+	const markdown = `# Welcome **{{name}}**\n\n| A | B |\n|---|---|\n| C | D |\n\n<u onclick="bad()">underlined</u>\n\n<img src="typerelay-asset:${asset.id}" alt="Dot" width="64">\n\n{{key:enter}}\n\n{{key:tab}}\n\nDone`;
 	const content = { version: 2, type: 'rich_text', markdown, variables: { name: { label: 'Name', default: 'Nitai', required: true, multiline: false } } };
 	const { library } = await Fixture.json('libraries', 'POST', { name: 'Rich sync', snippets: [{ id: randomUUID(), title: 'Rich', trigger: 'rich', content }] });
 	const stored = library.snippets[0].content;
-	assert.equal(stored.version, 2); assert.equal(stored.type, 'rich_text'); assert.deepEqual(stored.assets, [asset.id]); assert.match(stored.text, /Welcome/); assert.doesNotMatch(JSON.stringify(library), /iVBOR/);
+	assert.equal(stored.version, 2); assert.equal(stored.type, 'rich_text'); assert.deepEqual(stored.assets, [asset.id]); assert.match(stored.text, /Welcome/); assert.doesNotMatch(JSON.stringify(library), /iVBOR/); assert.doesNotMatch(stored.text, /key:tab/);
 	await Fixture.cli(Fixture.one, 'sync'); await Fixture.cli(Fixture.two, 'sync');
 	for (const device of [Fixture.one, Fixture.two]) { const state = await Fixture.state(device); const entry = state.libraries.find(item => item._id === library._id).records[0]; assert.equal(entry.content.markdown, markdown); assert.deepEqual(entry.content.assets, [asset.id]); }
 	const rendered = await (await Fixture.request('/api/v2/editor/' + library._id + '?format=json')).json();

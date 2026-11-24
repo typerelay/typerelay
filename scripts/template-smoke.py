@@ -27,6 +27,45 @@ desktop = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(desktop)
 
 
+class TemplateBrowserFixture(desktop.BrowserFixture):
+    form_output = None
+
+    def do_GET(self):
+        if self.path != '/tab-form':
+            return super().do_GET()
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/html')
+        self.end_headers()
+        self.wfile.write(b"""<!doctype html><title>TypeRelay Tab Form Test</title>
+          <form><input id="first" autofocus><input id="second"><input id="third"><button>Submit</button></form>
+          <script>
+          const fields = Array.from(document.querySelectorAll('input'));
+          let tabs = 0, enters = 0, submits = 0, pending = Promise.resolve();
+          const record = () => {
+            const body = JSON.stringify({
+              values: fields.map(field => field.value), focus: document.activeElement.id, tabs, enters, submits
+            });
+            pending = pending.then(() => fetch('/tab-result', {method:'POST', body}));
+          };
+          document.addEventListener('input', record);
+          document.addEventListener('focusin', record);
+          document.addEventListener('keydown', event => {
+            if (event.key === 'Tab') { tabs++; record(); }
+            if (event.key === 'Enter') { enters++; record(); }
+          });
+          document.querySelector('form').addEventListener('submit', event => {
+            event.preventDefault(); submits++; record();
+          });
+          </script>""")
+
+    def do_POST(self):
+        if self.path != '/tab-result':
+            return super().do_POST()
+        self.form_output.write_bytes(self.rfile.read(int(self.headers['Content-Length'])))
+        self.send_response(204)
+        self.end_headers()
+
+
 class TemplateSmoke(desktop.Smoke):
     def __init__(self, binary_dir=None, cursor_accessibility='auto'):
         super().__init__()
@@ -110,6 +149,9 @@ class TemplateSmoke(desktop.Smoke):
 - trigger: action
   type: template
   replace: 'one{{key:enter}}two'
+- trigger: tabform
+  type: template
+  replace: 'Jane{{key:tab}}Doe{{key:tab}}'
 ''')
             cursor_cases = cursor_cases or [('start', '', 'a' * 2808), ('middle', 'before\n😀', ('e\u0301 tail\n' * (40 if desktop.BrowserFixture.contenteditable else 1800))), ('end', 'a' * 12000, ''), ('cancel', '', 'a' * 12000)]
             with (snippets / 'test.yml').open('a') as fixtures:
@@ -233,12 +275,30 @@ class TemplateSmoke(desktop.Smoke):
                 self.wait(lambda: self.record(terminal_output) and json.loads(self.record(terminal_output)) == {'text': 'Static works.one\ntwo', 'enters': 1})
                 print('PASS: terminal receives exactly one real Enter outside paste', flush=True)
                 browser_output = root / 'browser.txt'; desktop.BrowserFixture.output = browser_output
-                server = http.server.HTTPServer(('127.0.0.1', 0), desktop.BrowserFixture)
+                TemplateBrowserFixture.form_output = root / 'tab-form.json'
+                server = http.server.HTTPServer(('127.0.0.1', 0), TemplateBrowserFixture)
                 threading.Thread(target=server.serve_forever, daemon=True).start()
                 self.start('chromium', '--user-data-dir=' + str(root / 'browser'), '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--disable-sync', '--ozone-platform=wayland', '--app=http://127.0.0.1:' + str(server.server_port), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 self.focus('TypeRelay Browser Test'); self.keys(',action ')
                 self.wait(lambda: self.record(browser_output) == 'one\ntwo')
                 print('PASS: ordered insertion into browser textarea', flush=True)
+                for label, delimiter in [('Space', ' '), ('Enter', '\n')]:
+                    form_output = TemplateBrowserFixture.form_output
+                    form_output.write_text('')
+                    form = self.start('chromium', '--user-data-dir=' + str(root / ('tab-form-' + label)), '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--disable-sync', '--ozone-platform=wayland', '--app=http://127.0.0.1:' + str(server.server_port) + '/tab-form', stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    self.focus('TypeRelay Tab Form Test')
+                    self.keys(',tabform' + delimiter)
+                    expected = {'values': ['Jane', 'Doe', ''], 'focus': 'third', 'tabs': 2, 'enters': 0, 'submits': 0}
+                    def matches_form():
+                        try:
+                            return json.loads(self.record(form_output)) == expected
+                        except json.JSONDecodeError:
+                            return False
+                    self.wait(matches_form)
+                    time.sleep(.3)
+                    assert matches_form(), self.record(form_output)
+                    form.terminate(); form.wait(timeout=5)
+                    print(f'PASS: {label} expands across form fields and leaves focus in the third field', flush=True)
                 self.focus('TypeRelay GTK Test'); target = self.active(); gtk.send_signal(signal.SIGUSR1); self.wait(lambda: self.record(output) == '')
                 self.keys(',ask ', target); window = self.panel_window(panel.pid)
                 gtk.terminate(); gtk.wait(timeout=3)
@@ -248,7 +308,7 @@ class TemplateSmoke(desktop.Smoke):
                 assert json.loads(self.record(terminal_output))['text'] == 'Static works.one\ntwo'
                 print('PASS: a removed original target never redirects insertion elsewhere', flush=True)
             except Exception:
-                for name in ['engine.log', 'panel.log', 'gtk.txt', 'terminal.json']:
+                for name in ['engine.log', 'panel.log', 'gtk.txt', 'terminal.json', 'tab-form.json']:
                     path = root / name
                     if path.exists(): print(name + ': length=' + str(len(path.read_text())) + ' x-index=' + str(path.read_text().find('x')) + '\n' + path.read_text()[-3000:], file=sys.stderr)
                 raise

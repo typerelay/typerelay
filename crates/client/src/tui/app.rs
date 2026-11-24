@@ -454,6 +454,16 @@ impl App {
     fn record_copy(&self, characters: usize) {
         if let Some((library,snippet))=&self.copy_identity && let Err(error)=typerelay_client::database::Database::open(&self.store.directory).and_then(|db|db.usage(library,snippet,"copy","terminal",characters)) { eprintln!("TypeRelay usage could not be queued: {error}"); }
     }
+    fn copy_status(rich:bool,cursor:bool,enter:usize,tab:usize)->&'static str {
+        match (cursor,enter>0,tab>0) {
+            (true,_,_)=>"Copied text; cursor positioning omitted",
+            (false,true,true)=>"Copied; Enter and Tab key actions omitted",
+            (false,true,false)=>"Copied; Enter key actions omitted",
+            (false,false,true)=>"Copied; Tab key actions omitted",
+            _ if rich=>"Copied rich text",
+            _=>"Copied",
+        }
+    }
     fn copy_current(&mut self) -> Result<()> {
         if self.screen==Screen::Recovery { typerelay_client::clipboard::PasteJob::copy_text(Self::value(&self.recovery_text))?; self.message("Copied recovery records",false); return Ok(()); }
         self.copy_identity=match self.screen { Screen::Edit=>self.file.as_ref().and_then(|file|self.editing.and_then(|index|file.ids.get(index)).map(|id|(file.id.clone(),id.clone()))), Screen::Browse=>self.file.as_ref().and_then(|file|self.selected().and_then(|index|file.ids.get(index)).map(|id|(file.id.clone(),id.clone()))), Screen::Files=>self.selected_global().map(|hit|(hit.library_id.clone(),hit.snippet_id.clone())), _=>None };
@@ -477,7 +487,7 @@ impl App {
             if result.fields.is_empty() {
                 let (result, payload) = typerelay_client::panel::Panel::rich_payload(&self.store.directory, &content, Default::default(), false)?;
                 typerelay_client::clipboard::PasteJob::copy_payload(payload)?;self.record_copy(result.characters);
-                self.message(if result.enter_actions > 0 { "Copied rich text; enter key actions omitted" } else { "Copied rich text" }, false);
+                self.message(Self::copy_status(true,false,result.enter_actions,result.tab_actions), false);
             } else {
                 self.fill_base = base;
                 self.rich_fill = Some(content);
@@ -488,7 +498,7 @@ impl App {
             if template.fields().map_err(anyhow::Error::msg)?.is_empty() {
                 let rendered = typerelay_client::templates::Templates::render(&entry.value()["content"], Default::default(), false)?;
                 let characters=rendered.text.chars().count();typerelay_client::clipboard::PasteJob::copy_text(rendered.text)?;self.record_copy(characters);
-                self.message(if rendered.cursor.is_some() { "Copied text; cursor positioning omitted" } else if rendered.enter_actions > 0 { "Copied text; enter key actions omitted" } else { "Copied" }, false);
+                self.message(Self::copy_status(false,rendered.cursor.is_some(),rendered.enter_actions,rendered.tab_actions), false);
             } else {
                 self.fill_base = base;
                 self.template_dialog = Some(crate::template_dialog::Dialog::fill(template)?);
@@ -562,11 +572,25 @@ impl App {
         if let Some(dialog)=&mut self.template_dialog {
             if let Some(outcome)=dialog.event(event) { match outcome {
                 crate::template_dialog::Outcome::Cancel=>(),
-				crate::template_dialog::Outcome::Definition{name,variable,insert}=>{if let Some(variable)=variable{self.variables.insert(name.clone(),variable);if !self.rich{self.template=true;}}
-                    if insert{self.expansion.insert_str(format!("{{{{{name}}}}}"));}},
+                crate::template_dialog::Outcome::Definition{name,variable,insert}=>{
+                    if let Some(variable)=variable{self.variables.insert(name.clone(),variable);if !self.rich{self.template=true;}}
+                    if insert {
+                        let token=format!("{{{{{name}}}}}");
+                        if self.rich&&matches!(name.as_str(),"key:enter"|"key:tab") {
+                            let cursor=self.expansion.cursor();
+                            let (start,end)=self.expansion.selection_range().unwrap_or(((cursor.0,cursor.1),(cursor.0,cursor.1)));
+                            let lines=self.expansion.lines();
+                            let before=if start.1>0 {"\n\n"} else if start.0>0&&!lines[start.0-1].trim().is_empty() {"\n"} else {""};
+                            let after=if end.1<lines[end.0].chars().count() {"\n\n"} else if lines.get(end.0+1).is_some_and(|line|!line.trim().is_empty()) {"\n"} else {""};
+                            self.expansion.insert_str(format!("{before}{token}{after}"));
+                        } else {
+                            self.expansion.insert_str(token);
+                        }
+                    }
+                },
 				crate::template_dialog::Outcome::Copy{rendered,values}=>{
 					if let Some((name,revision))=&self.fill_base{let current=self.store.open(name)?;anyhow::ensure!(current.revision==*revision,"Library changed; reopen the template before copying");}
-					if let Some(content)=self.rich_fill.take(){let(result,payload)=typerelay_client::panel::Panel::rich_payload(&self.store.directory,&content,values,false)?;typerelay_client::clipboard::PasteJob::copy_payload(payload)?;self.record_copy(result.characters);self.message(if result.enter_actions>0{"Copied rich text; enter key actions omitted"}else{"Copied rich text"},false);}else{let characters=rendered.text.chars().count();typerelay_client::clipboard::PasteJob::copy_text(rendered.text)?;self.record_copy(characters);self.message(if rendered.cursor.is_some(){"Copied text; cursor positioning omitted"}else if rendered.enter_actions>0{"Copied text; enter key actions omitted"}else{"Copied"},false);}
+					if let Some(content)=self.rich_fill.take(){let(result,payload)=typerelay_client::panel::Panel::rich_payload(&self.store.directory,&content,values,false)?;typerelay_client::clipboard::PasteJob::copy_payload(payload)?;self.record_copy(result.characters);self.message(Self::copy_status(true,false,result.enter_actions,result.tab_actions),false);}else{let characters=rendered.text.chars().count();typerelay_client::clipboard::PasteJob::copy_text(rendered.text)?;self.record_copy(characters);self.message(Self::copy_status(false,rendered.cursor.is_some(),rendered.enter_actions,rendered.tab_actions),false);}
 				}
 			} self.template_dialog=None; self.fill_base=None;self.rich_fill=None; } return Ok(());
         }
@@ -997,6 +1021,33 @@ mod tests {
     fn escape_cancels_writing_without_leaving_editor() {
         let temp=tempfile::tempdir().unwrap();let mut app=Fixture::app(temp.path());app.screen=Screen::Edit;app.expansion=App::text("Original");let(_sender,receiver)=std::sync::mpsc::channel();app.writing=Some(("cancel".into(),app.draft(),"rewrite".into(),receiver));Fixture::key(&mut app,KeyCode::Esc,KeyModifiers::NONE);assert_eq!(app.screen,Screen::Edit);assert_eq!(App::value(&app.expansion),"Original");assert!(app.writing.is_none());
     }
+    #[test]
+    fn tab_picker_inserts_a_renderable_action() {
+        for (rich,source,steps,expected) in [
+            (false,"FirstSecond",5,"First{{key:tab}}Second"),
+            (true,"FirstSecond",5,"First\n\n{{key:tab}}\n\nSecond"),
+            (true,"First\nSecond",6,"First\n\n{{key:tab}}\n\nSecond"),
+            (true,"First\n\nSecond",7,"First\n\n{{key:tab}}\n\nSecond"),
+        ] {
+            let root=tempfile::tempdir().unwrap();
+            let mut app=Fixture::app(root.path());
+            app.screen=Screen::Edit;
+            app.rich=rich;
+            app.expansion=App::text(source);
+            for _ in 0..steps {app.expansion.move_cursor(ratatui_textarea::CursorMove::Forward);}
+            Fixture::key(&mut app,KeyCode::F(11),KeyModifiers::NONE);
+            for _ in 0..6 {Fixture::key(&mut app,KeyCode::Down,KeyModifiers::NONE);}
+            Fixture::key(&mut app,KeyCode::Enter,KeyModifiers::NONE);
+            let expansion=App::value(&app.expansion);
+            assert_eq!(expansion,expected);
+            if rich {
+                use typerelay_core::rich_text::{RichRequest, RichText};
+                let rendered=RichText::render(RichRequest { markdown:expansion, ..Default::default() }).unwrap();
+                assert_eq!(rendered.tab_actions,1);
+            }
+        }
+    }
+
     #[test]
     fn code_enter_retains_exact_leading_whitespace() {
         let temp = tempfile::tempdir().unwrap(); let mut app = Fixture::app(temp.path());

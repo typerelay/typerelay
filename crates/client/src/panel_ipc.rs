@@ -89,16 +89,19 @@ impl PanelIpc {
     }
     pub fn execute(tx: &mpsc::SyncSender<Insertion>, hit: &Hit, target: &str, steps: Vec<ClipboardStep>, erase: usize, generation: Option<u64>) -> Result<()> {
 		let steps = if steps.is_empty() { vec![ClipboardStep::Payload(crate::clipboard_payload::ClipboardPayload::text(String::new()))] } else { steps };
-        let record_usage=steps.iter().any(|step| match step { ClipboardStep::Payload(payload)=> !payload.plain.is_empty() || payload.html.is_some(), ClipboardStep::Enter=>true });let characters=Panel::usage_characters(&steps,erase);
+        let record_usage=steps.iter().any(|step| match step { ClipboardStep::Payload(payload)=> !payload.plain.is_empty() || payload.html.is_some(), ClipboardStep::Enter | ClipboardStep::Tab=>true });let characters=Panel::usage_characters(&steps,erase);
         let mut expected_generation=generation;
         for (index, step) in steps.into_iter().enumerate() {
             Panel::content(&Paths::config_dir()?.join("snippets"),hit)?;
             let (reply, wait)=mpsc::channel();
             let marked=matches!(&step,ClipboardStep::Payload(payload) if payload.cursor.is_some());
+            let focus_change=matches!(step,ClipboardStep::Tab);
             let queued = Instant::now();
             let completion_deadline = queued + Duration::from_secs(5);
             tx.try_send(Insertion { deadline: queued + Duration::from_secs(2), completion_deadline, step, erase: if index == 0 {erase} else {0}, generation:expected_generation, target:target.into(), reply }).context("Expansion service is busy")?;
             expected_generation=Some((if marked{wait.recv().context("Insertion service stopped; no automatic retry")}else{wait.recv_timeout(completion_deadline.saturating_duration_since(Instant::now())).context("Insertion timed out; no automatic retry")})?.map_err(anyhow::Error::msg)?);
+            // Let the compositor and target apply Tab before the next request checks focus.
+            if focus_change { std::thread::sleep(Duration::from_millis(100)); }
         }
         if record_usage { Panel::record_usage(&Paths::config_dir()?.join("snippets"),hit,"insert","desktop",characters); }
         Ok(())

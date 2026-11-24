@@ -22,6 +22,13 @@ async function openSettings() {
 	catch (error) { openingOptions = false; status(error.message); }
 }
 
+function keyNames(rendered) { return [rendered.enter_actions && 'Enter', rendered.tab_actions && 'Tab'].filter(Boolean).join(' and '); }
+
+function requireCopyable(rendered) {
+	const keys = keyNames(rendered);
+	if (keys) throw new Error('Snippets with ' + keys + ' key actions cannot be copied. Clipboard unchanged.');
+}
+
 async function copy(item) {
 	if (copying) return;
 	copying = true;
@@ -30,7 +37,7 @@ async function copy(item) {
 	row?.setAttribute('aria-busy', 'true');
 	try {
 		const preview = await send({ type: 'prepare', id: item.id, preview: true });
-		if (preview.rendered.enter_actions) throw new Error('This snippet uses an Enter key action, which cannot be copied. Clipboard unchanged.');
+		requireCopyable(preview.rendered);
 		const fields = preview.rendered.fields || [];
 		let values = {};
 		if (fields.length) {
@@ -43,7 +50,7 @@ async function copy(item) {
 			if (values === null) return;
 		}
 		const result = await send({ type: 'prepare', id: item.id, values, preview: false });
-		if (result.rendered.enter_actions) throw new Error('This snippet uses an Enter key action, which cannot be copied. Clipboard unchanged.');
+		requireCopyable(result.rendered);
 		if (result.item.content.type === 'rich_text' && result.rendered.html) {
 			await window.navigator.clipboard.write([new window.ClipboardItem({ 'text/plain': new Blob([result.rendered.text], { type: 'text/plain' }), 'text/html': new Blob([result.rendered.html], { type: 'text/html' }) })]);
 		} else await window.navigator.clipboard.writeText(result.rendered.text);
@@ -106,7 +113,9 @@ function results() {
 					rich.srcdoc = shell.documentElement.outerHTML;
 					rich.hidden = false;
 				} else { plain.textContent = result.rendered.cursor ? result.rendered.text.slice(0, result.rendered.cursor.utf16) + '▏ [Cursor position]' + result.rendered.text.slice(result.rendered.cursor.utf16) : result.rendered.text; plain.hidden = false; }
-				message.hidden = true;
+				const keys = keyNames(result.rendered);
+				message.textContent = keys ? 'This snippet uses ' + keys + ' key actions. Use the desktop app to run them.' : '';
+				message.hidden = !keys;
 			} catch (error) { if (row.isConnected && serial === previewSerial) message.textContent = error.message; }
 		});
 		fragment.append(row);
