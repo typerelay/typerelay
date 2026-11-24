@@ -64,7 +64,7 @@ When a server rejects a stale or unauthorized operation, TypeRelay keeps recover
 
 ## Recover rejected edits
 
-Open **Desktop Settings → Sync → Recovered edits** to read the saved content and rejection reason. Choose **Copy** before dismissing an item. Dismiss removes that recovery record from this device. Sync errors from other operations stay visible, including errors recorded by older desktop tools.
+Open **Desktop Settings → Sync → Recovered edits** to read the saved content and rejection reason. Choose **Copy** before dismissing an item. Dismiss removes that recovery record from this device. Sync errors from other operations stay visible. Older desktop tools can still read the sync error while the tools share the local database during an upgrade.
 
 In the TUI, choose **Recovery (F12)** outside the editor. Use the arrow or Page Up/Page Down keys to read the records, `r` to resume one as a draft, `c` to copy, `e` to export, `d` to dismiss a preserved record, and Esc to return.
 
