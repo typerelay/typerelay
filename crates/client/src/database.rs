@@ -7,6 +7,14 @@ use std::{fs,io::{Read,Write}, path::{Path, PathBuf}, time::Duration as StdDurat
 use typerelay_core::Snapshot;
 use uuid::Uuid;
 
+const FAILURE_CTE: &str = "WITH failure AS (
+    SELECT CASE json_type(stored.value) WHEN 'text' THEN json_extract(stored.value,'$') ELSE json_extract(stored.value,'$.message') END AS message,
+        CASE WHEN json_type(stored.value)='object' THEN stored.value
+            WHEN substr(stored.value,-1)=' ' AND json_extract(link.value,'$.stored_message')=stored.value THEN link.value
+        END AS provenance
+    FROM meta stored LEFT JOIN meta link ON link.key='last_failure_link' WHERE stored.key='last_failure'
+)";
+
 pub struct Database { pub connection: Connection, directory: PathBuf }
 impl Database {
     pub fn open(directory: &Path) -> Result<Self> {
@@ -32,6 +40,7 @@ impl Database {
         connection.execute("DELETE FROM meta WHERE key='staged'",[])?;
         let db = Self { connection, directory: directory.to_owned() };
         db.migrate()?;
+        db.migrate_last_failure()?;
         Ok(db)
     }
     pub fn search_index(&self) -> Result<()> {
@@ -70,14 +79,35 @@ impl Database {
         Ok(Some(value))
     }
     pub fn set_meta(&self, key: &str, value: &Value) -> Result<()> {
-        self.connection.execute("INSERT INTO meta(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value<>excluded.value", params![key, value.to_string()])?;
+        self.set_meta_text(key, &value.to_string())
+    }
+    fn set_meta_text(&self, key: &str, value: &str) -> Result<()> {
+        self.connection.execute("INSERT INTO meta(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value<>excluded.value", params![key, value])?;
         Ok(())
     }
     fn write_last_failure(&self, message: &str, recovery_ids: &[String]) -> Result<()> {
-        // Older clients overwrite the message alone, so provenance must be part of that same value.
-        let value = if recovery_ids.is_empty() { json!(message) } else { json!({"message":message,"recovery_ids":recovery_ids}) };
+        let mut stored_message = json!(message).to_string();
         self.connection.execute("DELETE FROM meta WHERE key='last_failure_recovery'", [])?;
-        self.set_meta("last_failure", &value)
+        if recovery_ids.is_empty() {
+            self.connection.execute("DELETE FROM meta WHERE key='last_failure_link'", [])?;
+        } else {
+            // JSON whitespace keeps the text readable and makes even a same-text legacy write replace it.
+            stored_message.push(' ');
+            self.set_meta("last_failure_link", &json!({"stored_message":stored_message,"recovery_ids":recovery_ids}))?;
+        }
+        self.set_meta_text("last_failure", &stored_message)
+    }
+    fn migrate_last_failure(&self) -> Result<()> {
+        let Some(stored) = self.connection.query_row("SELECT value FROM meta WHERE key='last_failure' AND substr(value,1,1)='{'", [], |row| row.get::<_, String>(0)).optional()? else { return Ok(()); };
+        let Ok(value) = serde_json::from_str::<Value>(&stored) else { return Ok(()); };
+        let Some(message) = value["message"].as_str() else { return Ok(()); };
+        let recovery_ids: Vec<String> = serde_json::from_value(value["recovery_ids"].clone()).unwrap_or_default();
+        let transaction = rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?;
+        if transaction.query_row("SELECT EXISTS(SELECT 1 FROM meta WHERE key='last_failure' AND value=?1)", [&stored], |row| row.get::<_, bool>(0))? {
+            self.write_last_failure(message, &recovery_ids)?;
+        }
+        transaction.commit()?;
+        Ok(())
     }
     pub fn usage(&self, library: &str, snippet: &str, action: &str, client: &str, characters: usize) -> Result<()> {
         if !self.synced(library)? { return Ok(()); }
@@ -343,7 +373,7 @@ impl Database {
         Ok(())
     }
 	pub fn merge_destinations(&self,source:&str)->Result<Vec<Value>>{let library=self.library(source)?;ensure!(library["state"]=="active","Source library is unavailable");ensure!(library["permissions"]["manage"]==true,"Manage permission required to merge this library");let merging=self.pending_merges()?;ensure!(!merging.contains(source),"Library merge is pending");let synced=self.synced(source)?;let rows=self.libraries()?.into_iter().filter(|destination|{let id=destination["_id"].as_str().unwrap_or("");id!=source&&destination["state"]=="active"&&destination["permissions"]["edit"]==true&&!merging.contains(id)&&!(synced&&!self.synced(id).unwrap_or(false))}).collect();Ok(rows)}
-	pub fn merge(&self,source:&str,destination:&str)->Result<bool>{let transaction=rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?;ensure!(source!=destination,"Choose another library");let mut source_library=self.library(source)?;let destination_library=self.library(destination)?;ensure!(source_library["state"]=="active"&&destination_library["state"]=="active","Library is unavailable");ensure!(source_library["permissions"]["manage"]==true,"Manage permission required to merge this library");ensure!(destination_library["permissions"]["edit"]==true,"Destination library is read-only");ensure!(!self.pending_merge(source)?&&!self.pending_merge(destination)?,"A library merge is already pending");let records:Vec<Value>=self.records(source)?.into_iter().filter(|record|record["state"]=="active").collect();ensure!(!records.is_empty(),"Source library has no active snippets");ensure!(records.len()<=10000,"Library merge exceeds 10,000 snippets");let source_synced=self.synced(source)?;let destination_synced=self.synced(destination)?;ensure!(!source_synced||destination_synced,"Upload the destination before merging a synced library into it");let queued=source_synced||destination_synced;if !queued{let items=records.iter().map(|record|json!({"id":record["id"],"base_revision":record["revision"]})).collect::<Vec<_>>();self.batch_inner(source,Some(destination),&items,false)?;source_library=self.library(source)?;Self::mark_trash(&mut source_library,true);source_library["revision"]=json!(source_library["revision"].as_i64().unwrap_or(0)+1);self.connection.execute("UPDATE libraries SET data=?2,version=version+1 WHERE id=?1",params![source,source_library.to_string()])?;}else if !source_synced{let changes=records.iter().map(|record|json!({"id":record["id"],"base_revision":Value::Null,"base":Value::Null,"value":Self::sync_value(record)})).collect::<Vec<_>>();self.queue(&json!({"kind":"merge_local","library":destination,"source":source,"records":records,"body":{"operation_id":Uuid::new_v4().to_string(),"base_revision":destination_library["revision"],"changes":changes}}))?;}else{let items=records.iter().map(|record|json!({"id":record["id"],"base_revision":record["revision"]})).collect::<Vec<_>>();self.queue(&json!({"kind":"merge_synced","library":source,"source":source,"destination":destination,"records":records,"move_body":{"operation_id":Uuid::new_v4().to_string(),"action":"move","source_library":source,"destination_library":destination,"items":items},"trash_operation_id":Uuid::new_v4().to_string()}))?;}self.set_meta("last_failure",&json!(""))?;self.validate_transaction()?;transaction.commit()?;Ok(queued)}
+	pub fn merge(&self,source:&str,destination:&str)->Result<bool>{let transaction=rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?;ensure!(source!=destination,"Choose another library");let mut source_library=self.library(source)?;let destination_library=self.library(destination)?;ensure!(source_library["state"]=="active"&&destination_library["state"]=="active","Library is unavailable");ensure!(source_library["permissions"]["manage"]==true,"Manage permission required to merge this library");ensure!(destination_library["permissions"]["edit"]==true,"Destination library is read-only");ensure!(!self.pending_merge(source)?&&!self.pending_merge(destination)?,"A library merge is already pending");let records:Vec<Value>=self.records(source)?.into_iter().filter(|record|record["state"]=="active").collect();ensure!(!records.is_empty(),"Source library has no active snippets");ensure!(records.len()<=10000,"Library merge exceeds 10,000 snippets");let source_synced=self.synced(source)?;let destination_synced=self.synced(destination)?;ensure!(!source_synced||destination_synced,"Upload the destination before merging a synced library into it");let queued=source_synced||destination_synced;if !queued{let items=records.iter().map(|record|json!({"id":record["id"],"base_revision":record["revision"]})).collect::<Vec<_>>();self.batch_inner(source,Some(destination),&items,false)?;source_library=self.library(source)?;Self::mark_trash(&mut source_library,true);source_library["revision"]=json!(source_library["revision"].as_i64().unwrap_or(0)+1);self.connection.execute("UPDATE libraries SET data=?2,version=version+1 WHERE id=?1",params![source,source_library.to_string()])?;}else if !source_synced{let changes=records.iter().map(|record|json!({"id":record["id"],"base_revision":Value::Null,"base":Value::Null,"value":Self::sync_value(record)})).collect::<Vec<_>>();self.queue(&json!({"kind":"merge_local","library":destination,"source":source,"records":records,"body":{"operation_id":Uuid::new_v4().to_string(),"base_revision":destination_library["revision"],"changes":changes}}))?;}else{let items=records.iter().map(|record|json!({"id":record["id"],"base_revision":record["revision"]})).collect::<Vec<_>>();self.queue(&json!({"kind":"merge_synced","library":source,"source":source,"destination":destination,"records":records,"move_body":{"operation_id":Uuid::new_v4().to_string(),"action":"move","source_library":source,"destination_library":destination,"items":items},"trash_operation_id":Uuid::new_v4().to_string()}))?;}self.write_last_failure("", &[])?;self.validate_transaction()?;transaction.commit()?;Ok(queued)}
     fn check_target(&self, file: &OpenFile, index: usize) -> Result<Value> {
         let id = file.ids.get(index).context("Snippet no longer exists")?;
         let record = self.records(&file.id)?.into_iter().find(|row|row["id"]==*id && row["state"]=="active").context("Snippet moved or removed; review the draft or save as new")?;
@@ -617,18 +647,19 @@ impl Database {
     }
     /// Returns the newest Recovery reason, the last failure message, and whether the entry represents that failure.
     pub fn latest_recovery_failure(&self) -> Result<(Option<String>, Option<String>, bool)> {
-        Ok(self.connection.query_row("WITH newest AS (SELECT id,reason FROM recovery ORDER BY rowid DESC LIMIT 1),
-            failure AS (SELECT value FROM meta WHERE key='last_failure')
+        Ok(self.connection.query_row(&format!("{FAILURE_CTE}, newest AS (SELECT id,reason FROM recovery ORDER BY rowid DESC LIMIT 1)
             SELECT (SELECT reason FROM newest),
-                (SELECT CASE json_type(value) WHEN 'text' THEN json_extract(value,'$') ELSE json_extract(value,'$.message') END FROM failure),
-                EXISTS(SELECT 1 FROM failure, json_each(failure.value,'$.recovery_ids') ids JOIN newest ON newest.id=ids.value)", [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?)
+                (SELECT message FROM failure),
+                EXISTS(SELECT 1 FROM failure, json_each(failure.provenance,'$.recovery_ids') ids JOIN newest ON newest.id=ids.value)"), [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?)
     }
     pub fn dismiss_recovery(&self, id: &str) -> Result<()> {
         let transaction = self.connection.unchecked_transaction()?;
         if transaction.execute("DELETE FROM recovery WHERE id=?1", [id])? > 0 {
-            transaction.execute("DELETE FROM meta WHERE key='last_failure'
-                AND ?1 IN (SELECT ids.value FROM json_each(meta.value,'$.recovery_ids') ids)
-                AND NOT EXISTS(SELECT 1 FROM json_each(meta.value,'$.recovery_ids') ids JOIN recovery ON recovery.id=ids.value)", [id])?;
+            let cleared = transaction.execute(&format!("{FAILURE_CTE}, linked AS (SELECT ids.value FROM failure, json_each(failure.provenance,'$.recovery_ids') ids)
+                DELETE FROM meta WHERE key='last_failure'
+                AND ?1 IN (SELECT value FROM linked)
+                AND NOT EXISTS(SELECT 1 FROM linked JOIN recovery ON recovery.id=linked.value)"), [id])?;
+            if cleared > 0 { transaction.execute("DELETE FROM meta WHERE key='last_failure_link'", [])?; }
         }
         transaction.commit()?;
         Ok(())
@@ -1449,6 +1480,7 @@ mod tests {
         other_connection.dismiss_recovery(rows[2]["id"].as_str().unwrap()).unwrap();
         assert_eq!(db.recovery().unwrap()[0]["id"], unrelated);
         assert_eq!(db.meta("last_failure").unwrap(), None);
+        assert_eq!(db.meta("last_failure_link").unwrap(), None);
         db.set_meta("staged", &json!({"large":true})).unwrap();
         assert!(Database::open(root.path()).unwrap().meta("staged").unwrap().is_none());
     }
@@ -1479,16 +1511,21 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let db = Database::open(root.path()).unwrap();
         let legacy = Connection::open(root.path().join("typerelay.sqlite")).unwrap();
-        let reason = "Server 422: Invalid snippet";
+        let reason = "Server 422: Invalid snippet \"é\"\nCheck its content ";
         let edit = json!({"kind":"edit","library":"library","body":{"changes":[{"id":"snippet"}]}});
         for latest in ["Server 403: Library is read-only", reason] {
             db.record_failed_operation(&edit, reason).unwrap();
             assert_eq!(db.latest_recovery_failure().unwrap(), (Some(reason.into()), Some(reason.into()), true));
             let rows = db.recovery().unwrap();
             let id = rows[0]["id"].as_str().unwrap();
+            let stored: String = legacy.query_row("SELECT value FROM meta WHERE key='last_failure'", [], |row| row.get(0)).unwrap();
+            let old_reader_value: Value = serde_json::from_str(&stored).unwrap();
+            assert_eq!(old_reader_value.as_str(), Some(reason));
+            assert_eq!(db.meta("last_failure").unwrap(), Some(json!(reason)));
 
             // The old CLI writes a JSON string directly and leaves any split-key metadata behind.
-            legacy.execute("INSERT INTO meta(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value<>excluded.value", params!["last_failure",json!(latest).to_string()]).unwrap();
+            assert_eq!(legacy.execute("INSERT INTO meta(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value<>excluded.value", params!["last_failure",json!(latest).to_string()]).unwrap(), 1);
+            assert!(db.meta("last_failure_link").unwrap().is_some());
             assert_eq!(db.latest_recovery_failure().unwrap(), (Some(reason.into()), Some(latest.into()), false));
             legacy.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('last_failure_recovery',?1)", [json!([id]).to_string()]).unwrap();
             assert_eq!(db.latest_recovery_failure().unwrap(), (Some(reason.into()), Some(latest.into()), false));
@@ -1496,6 +1533,45 @@ mod tests {
             assert!(db.recovery().unwrap().is_empty());
             assert_eq!(db.meta("last_failure").unwrap(), Some(json!(latest)));
         }
+    }
+
+    #[test]
+    fn packed_failure_is_migrated_for_legacy_readers_and_still_matches_recovery() {
+        let root = tempfile::tempdir().unwrap();
+        let db = Database::open(root.path()).unwrap();
+        let reason = "Server 422: Invalid snippet";
+        for reopen in [true, false] {
+            let id = db.recover("library", Some("snippet"), &json!({"content":"Rejected"}), reason).unwrap();
+            db.set_meta("last_failure", &json!({"message":reason,"recovery_ids":[id]})).unwrap();
+            let migrated = reopen.then(|| Database::open(root.path()).unwrap());
+            let reader = migrated.as_ref().unwrap_or(&db);
+            if reopen {
+                let stored: String = db.connection.query_row("SELECT value FROM meta WHERE key='last_failure'", [], |row| row.get(0)).unwrap();
+                assert_eq!(serde_json::from_str::<String>(&stored).unwrap(), reason);
+            }
+            assert_eq!(reader.latest_recovery_failure().unwrap(), (Some(reason.into()), Some(reason.into()), true));
+            assert_eq!(reader.meta("last_failure").unwrap(), Some(json!(reason)));
+            reader.dismiss_recovery(&id).unwrap();
+            assert_eq!(reader.meta("last_failure").unwrap(), None);
+        }
+    }
+
+    #[test]
+    fn failed_operation_rolls_back_recovery_and_provenance_if_message_write_fails() {
+        let fixture = Fixture::new();
+        let db = fixture.db();
+        let old = json!({"kind":"edit","library":"library","body":{"changes":[{"id":"old"}]}});
+        db.record_failed_operation(&old, "Previous failure").unwrap();
+        let recovery_before = db.recovery().unwrap();
+        let link_before = db.meta("last_failure_link").unwrap();
+        db.connection.execute_batch("CREATE TRIGGER reject_failure_write BEFORE UPDATE OF value ON meta
+            WHEN NEW.key='last_failure' BEGIN SELECT RAISE(ABORT, 'test write failure'); END;").unwrap();
+
+        let new = json!({"kind":"edit","library":"library","body":{"changes":[{"id":"new"}]}});
+        assert!(db.record_failed_operation(&new, "New failure").is_err());
+        assert_eq!(db.meta("last_failure").unwrap(), Some(json!("Previous failure")));
+        assert_eq!(db.meta("last_failure_link").unwrap(), link_before);
+        assert_eq!(db.recovery().unwrap(), recovery_before);
     }
 
     #[test]
