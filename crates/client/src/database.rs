@@ -37,6 +37,20 @@ impl Database {
             CREATE TABLE IF NOT EXISTS snippet_assets(snippet TEXT NOT NULL,asset TEXT NOT NULL,PRIMARY KEY(snippet,asset));
             CREATE INDEX IF NOT EXISTS snippet_asset_asset ON snippet_assets(asset);")?;
         if !connection.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('recovery') WHERE name='reason')",[],|row|row.get::<_,bool>(0))? { connection.execute("ALTER TABLE recovery ADD COLUMN reason TEXT NOT NULL DEFAULT ''",[])?; }
+        connection.execute_batch(&format!("CREATE TRIGGER IF NOT EXISTS recovery_clear_failure AFTER DELETE ON recovery BEGIN
+            DELETE FROM meta WHERE key='last_failure' AND EXISTS(
+                {FAILURE_CTE}, linked AS (SELECT ids.value FROM failure, json_each(failure.provenance,'$.recovery_ids') ids)
+                SELECT 1 WHERE OLD.id IN (SELECT value FROM linked)
+                    AND NOT EXISTS(SELECT 1 FROM linked JOIN recovery ON recovery.id=linked.value)
+            );
+            DELETE FROM meta WHERE key='last_failure_link' AND changes()>0;
+            -- A legacy write can replace a linked error with identical text.
+            -- Keep that replacement readable and distinct from both the old link and the legacy DELETE.
+            UPDATE meta SET value=value||char(9) WHERE key='last_failure' AND substr(value,-1)='\"'
+                AND json_type(value)='text' AND json_extract(value,'$')=OLD.reason
+                AND EXISTS(SELECT 1 FROM meta link, json_each(link.value,'$.recovery_ids') ids
+                    WHERE link.key='last_failure_link' AND ids.value=OLD.id);
+        END;"))?;
         connection.execute("DELETE FROM meta WHERE key='staged'",[])?;
         let db = Self { connection, directory: directory.to_owned() };
         db.migrate()?;
@@ -87,12 +101,12 @@ impl Database {
     }
     fn write_last_failure(&self, message: &str, recovery_ids: &[String]) -> Result<()> {
         let mut stored_message = json!(message).to_string();
+        // JSON whitespace keeps the text readable and distinguishes it from a legacy write.
+        stored_message.push(' ');
         self.connection.execute("DELETE FROM meta WHERE key='last_failure_recovery'", [])?;
         if recovery_ids.is_empty() {
             self.connection.execute("DELETE FROM meta WHERE key='last_failure_link'", [])?;
         } else {
-            // JSON whitespace keeps the text readable and makes even a same-text legacy write replace it.
-            stored_message.push(' ');
             self.set_meta("last_failure_link", &json!({"stored_message":stored_message,"recovery_ids":recovery_ids}))?;
         }
         self.set_meta_text("last_failure", &stored_message)
@@ -653,15 +667,7 @@ impl Database {
                 EXISTS(SELECT 1 FROM failure, json_each(failure.provenance,'$.recovery_ids') ids JOIN newest ON newest.id=ids.value)"), [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?)
     }
     pub fn dismiss_recovery(&self, id: &str) -> Result<()> {
-        let transaction = self.connection.unchecked_transaction()?;
-        if transaction.execute("DELETE FROM recovery WHERE id=?1", [id])? > 0 {
-            let cleared = transaction.execute(&format!("{FAILURE_CTE}, linked AS (SELECT ids.value FROM failure, json_each(failure.provenance,'$.recovery_ids') ids)
-                DELETE FROM meta WHERE key='last_failure'
-                AND ?1 IN (SELECT value FROM linked)
-                AND NOT EXISTS(SELECT 1 FROM linked JOIN recovery ON recovery.id=linked.value)"), [id])?;
-            if cleared > 0 { transaction.execute("DELETE FROM meta WHERE key='last_failure_link'", [])?; }
-        }
-        transaction.commit()?;
+        self.connection.execute("DELETE FROM recovery WHERE id=?1", [id])?;
         Ok(())
     }
     pub fn record_failed_operation(&self, operation: &Value, reason: &str) -> Result<()> {
@@ -1457,11 +1463,18 @@ mod tests {
         db.retain_usage(Some(&identity)).unwrap(); assert!(db.pending_usage(&other).unwrap().is_empty()); assert_eq!(db.pending_usage(&identity).unwrap().len(),1);
         db.retain_usage(None).unwrap(); assert!(db.pending_usage(&identity).unwrap().is_empty());
     }
+    fn legacy_dismiss(connection: &Connection, id: &str) {
+        let transaction = connection.unchecked_transaction().unwrap();
+        let reason: String = transaction.query_row("DELETE FROM recovery WHERE id=?1 RETURNING reason", [id], |row| row.get(0)).unwrap();
+        transaction.execute("DELETE FROM meta WHERE key='last_failure' AND value=?1 AND NOT EXISTS(SELECT 1 FROM recovery WHERE reason=?2)", params![json!(reason).to_string(), reason]).unwrap();
+        transaction.commit().unwrap();
+    }
+
     #[test]
     fn recovery_lists_reason_and_dismisses() {
         let root = tempfile::tempdir().unwrap();
         let db = Database::open(root.path()).unwrap();
-        let other_connection = Database::open(root.path()).unwrap();
+        let other_connection = Connection::open(root.path().join("typerelay.sqlite")).unwrap();
         let reason = "Server 410: Library is gone";
         let operation = json!({"kind":"edit","library":"library","body":{"changes":[{"id":"first","value":{"trigger":"hi","content":{"text":"Hi"}}},{"id":"second"}]}});
         let unrelated = db.recover("library", Some("other"), &json!({"content":{"text":"Other edit"}}), reason).unwrap();
@@ -1475,9 +1488,9 @@ mod tests {
         assert_eq!(rows[1]["snippet"], "first");
         assert_eq!(rows[1]["data"]["value"]["content"]["text"], "Hi");
         assert_eq!(db.latest_recovery_failure().unwrap(), (Some(reason.into()), Some(reason.into()), true));
-        other_connection.dismiss_recovery(rows[1]["id"].as_str().unwrap()).unwrap();
+        legacy_dismiss(&other_connection, rows[1]["id"].as_str().unwrap());
         assert_eq!(db.meta("last_failure").unwrap(), Some(json!(reason)));
-        other_connection.dismiss_recovery(rows[2]["id"].as_str().unwrap()).unwrap();
+        legacy_dismiss(&other_connection, rows[2]["id"].as_str().unwrap());
         assert_eq!(db.recovery().unwrap()[0]["id"], unrelated);
         assert_eq!(db.meta("last_failure").unwrap(), None);
         assert_eq!(db.meta("last_failure_link").unwrap(), None);
@@ -1489,6 +1502,7 @@ mod tests {
     fn dismiss_keeps_unlinked_failures_with_the_same_reason() {
         let root = tempfile::tempdir().unwrap();
         let db = Database::open(root.path()).unwrap();
+        let legacy = Connection::open(root.path().join("typerelay.sqlite")).unwrap();
         let reason = "Server 403: Library is read-only";
         let edit = json!({"kind":"edit","library":"library","body":{"changes":[{"id":"snippet"}]}});
         for kind in ["merge_local", "merge_synced", "unlinked"] {
@@ -1501,7 +1515,7 @@ mod tests {
             assert_eq!(db.latest_recovery_failure().unwrap(), (Some(reason.into()), Some(reason.into()), false));
             let rows = db.recovery().unwrap();
             assert_eq!(rows.len(), 1);
-            db.dismiss_recovery(rows[0]["id"].as_str().unwrap()).unwrap();
+            legacy_dismiss(&legacy, rows[0]["id"].as_str().unwrap());
             assert_eq!(db.meta("last_failure").unwrap(), Some(json!(reason)));
         }
     }
@@ -1529,9 +1543,10 @@ mod tests {
             assert_eq!(db.latest_recovery_failure().unwrap(), (Some(reason.into()), Some(latest.into()), false));
             legacy.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('last_failure_recovery',?1)", [json!([id]).to_string()]).unwrap();
             assert_eq!(db.latest_recovery_failure().unwrap(), (Some(reason.into()), Some(latest.into()), false));
-            db.dismiss_recovery(id).unwrap();
+            legacy_dismiss(&legacy, id);
             assert!(db.recovery().unwrap().is_empty());
             assert_eq!(db.meta("last_failure").unwrap(), Some(json!(latest)));
+            assert_eq!(db.latest_recovery_failure().unwrap(), (None, Some(latest.into()), false));
         }
     }
 
