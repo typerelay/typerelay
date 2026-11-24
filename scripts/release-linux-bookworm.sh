@@ -76,6 +76,6 @@ mounts=(--bind "$repo" "$repo" --ro-bind "$git_common" "$git_common" --bind "$re
 
 umask 022
 exec "${sandbox[@]}" --overlay-src "$root" --tmp-overlay / "${system_mounts[@]}" --tmpfs /tmp --bind "$cache/home" /build-home \
-    "${mounts[@]}" --setenv HOME /build-home --setenv PATH /opt/cargo/bin:/usr/local/bin:/usr/bin:/bin \
+    "${mounts[@]}" --setenv HOME /build-home --setenv XDG_CACHE_HOME /build-home/.cache --setenv PATH /opt/cargo/bin:/usr/local/bin:/usr/bin:/bin \
     --setenv CARGO_HOME /build-home/.cargo --setenv RUSTUP_HOME /opt/rustup --setenv APPIMAGE_EXTRACT_AND_RUN 1 \
     --setenv TYPERELAY_BOOKWORM_COMMIT "$commit" --chdir "$repo" -- node scripts/release-panel.mjs "$@"

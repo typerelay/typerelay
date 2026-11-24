@@ -24,6 +24,7 @@ test('build children never receive the hardware PIN or publishing credentials', 
 test('Linux release ABI check rejects glibc requirements above Debian 12', () => {
 	assert.doesNotThrow(() => PanelRelease.verifyLinuxAbi('typerelay-tui', 'Name: GLIBC_2.2.5\nName: GLIBC_2.36\nName: GLIBC_ABI_DT_RELR'));
 	assert.throws(() => PanelRelease.verifyLinuxAbi('typerelay-tui', 'Name: GLIBC_2.39'), /typerelay-tui requires GLIBC_2.39/);
+	assert.throws(() => PanelRelease.verifyLinuxAbi('typerelay-tui', 'Name: GLIBC_2.34\nName: GLIBC_ABI_GNU2_TLS'), /GLIBC_ABI_GNU2_TLS/);
 	assert.throws(() => PanelRelease.verifyLinuxAbi('typerelay-tui', ''), /No glibc requirements/);
 });
 test('build children ignore a parent AppImage so linuxdeploy runs itself', () => {
@@ -178,6 +179,9 @@ for (const appimageOnly of [true, false]) test(`Linux release artifacts and veri
 		assert.equal(commands.some(([command]) => command === 'rpm'), !appimageOnly);
 		assert.equal(commands.some(([command]) => command === 'tar'), !appimageOnly);
 		assert.equal(commands.some(([command, ...args]) => command === 'cargo' && args.includes('legacy-install')), !appimageOnly);
+		const firstSigner = commands.findIndex(([command, , action]) => command === 'pnpm' && action === 'signer');
+		const checkedBinaries = commands.slice(0, firstSigner).filter(([command]) => command === 'readelf').map(command => path.basename(command.at(-1)));
+		assert.deepEqual(checkedBinaries, ['typerelay', 'typerelay-tui', 'typerelay-panel', 'typerelay-ai', ...appimageOnly ? [] : ['typerelay']]);
 		if (appimageOnly) assert.ok(report.artifacts.every(item => /\.AppImage(\.sig)?$/.test(item.file)));
 	} finally { PanelRelease.root = originalRoot; if (originalKey === undefined) delete process.env.TAURI_SIGNING_PRIVATE_KEY; else process.env.TAURI_SIGNING_PRIVATE_KEY = originalKey; if (originalCommit === undefined) delete process.env.TYPERELAY_BOOKWORM_COMMIT; else process.env.TYPERELAY_BOOKWORM_COMMIT = originalCommit; await fs.rm(root, { recursive: true, force: true }); }
 });

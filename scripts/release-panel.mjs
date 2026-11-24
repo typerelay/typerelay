@@ -192,10 +192,14 @@ export class PanelRelease {
 		return commit;
 	}
 	static verifyLinuxAbi(file, versions) {
-		const requirements = [...versions.matchAll(/\bName: (GLIBC_(\d+)\.(\d+)(?:\.\d+)?|GLIBC_ABI_DT_RELR)\b/g)];
+		const requirements = [...versions.matchAll(/\bName: (GLIBC_\S+)/g)].map(([, version]) => version);
 		if (!requirements.length) throw new Error(`No glibc requirements found for ${file}`);
-		const incompatible = requirements.find(([, version, major, minor]) => version !== 'GLIBC_ABI_DT_RELR' && (Number(major) > 2 || (Number(major) === 2 && Number(minor) > 36)));
-		if (incompatible) throw new Error(`${file} requires ${incompatible[1]}. Debian 12 provides glibc 2.36.`);
+		const incompatible = requirements.find(version => {
+			if (version === 'GLIBC_ABI_DT_RELR') return false;
+			const numeric = /^GLIBC_2\.(\d+)(?:\.(\d+))?$/.exec(version);
+			return !numeric || Number(numeric[1]) > 36 || (Number(numeric[1]) === 36 && Number(numeric[2] || 0) > 0);
+		});
+		if (incompatible) throw new Error(`${file} requires ${incompatible}. Debian 12 provides glibc 2.36.`);
 	}
 	static async files(directory, extension) {
 		const entries = await fs.readdir(directory, { withFileTypes: true }); const files = [];
@@ -318,13 +322,13 @@ export class PanelRelease {
 				artifacts = [dmg, archive, signature]; updater = { target: options.target.startsWith('aarch64') ? 'darwin-aarch64' : 'darwin-x86_64', file: archive, signature };
 			} else {
 				const engine = path.join(release, 'typerelay'); const tui = path.join(release, 'typerelay-tui'); const panel = path.join(release, 'typerelay-panel'); const ai = path.join(release, 'typerelay-ai');
-				for (const file of [engine, tui, panel, ai]) PanelRelease.verifyLinuxAbi(file, await PanelRelease.run('readelf', ['--wide', '--version-info', file], { capture: true }));
-				for (const [name, file] of [['typerelay', engine], ['typerelay-tui', tui], ['typerelay-panel', panel], ['typerelay-ai', ai]]) { const version = await PanelRelease.run(file, ['--version'], { capture: true }); if (version !== `${name} ${config.version}`) throw new Error(`${name} version does not match ${config.version}`); const type = await PanelRelease.run('file', ['--brief', file], { capture: true }); if (!/ELF 64-bit.*x86-64/i.test(type)) throw new Error(`${name} is not an x86-64 ELF binary`); }
+				for (const file of [engine, tui, panel, ai]) PanelRelease.verifyLinuxAbi(file, await PanelRelease.run('readelf', ['--wide', '--version-info', file], { capture: true, environment }));
+				for (const [name, file] of [['typerelay', engine], ['typerelay-tui', tui], ['typerelay-panel', panel], ['typerelay-ai', ai]]) { const version = await PanelRelease.run(file, ['--version'], { capture: true, environment }); if (version !== `${name} ${config.version}`) throw new Error(`${name} version does not match ${config.version}`); const type = await PanelRelease.run('file', ['--brief', file], { capture: true, environment }); if (!/ELF 64-bit.*x86-64/i.test(type)) throw new Error(`${name} is not an x86-64 ELF binary`); }
 				let archive;
 				if (!options.appimageOnly) {
 					// Only the compatibility archive retains the standalone installer; native packages exclude it.
 					await PanelRelease.run('cargo', ['build', '--release', '--locked', '--target', options.target, '--features', 'legacy-install', '--bin', 'typerelay'], { cwd: PanelRelease.root, environment });
-					PanelRelease.verifyLinuxAbi(engine, await PanelRelease.run('readelf', ['--wide', '--version-info', engine], { capture: true }));
+					PanelRelease.verifyLinuxAbi(engine, await PanelRelease.run('readelf', ['--wide', '--version-info', engine], { capture: true, environment }));
 					const bundle = path.join(release, 'bundle/legacy'); await fs.mkdir(bundle, { recursive: true }); for (const file of [engine, tui, panel, ai]) await fs.copyFile(file, path.join(bundle, path.basename(file)));
 					// Tauri patches the release binary while bundling; legacy installs must keep their archive updater.
 					const legacyPanel = path.join(bundle, 'typerelay-panel'); await fs.writeFile(legacyPanel, PanelRelease.legacyPanel(await fs.readFile(legacyPanel)));
