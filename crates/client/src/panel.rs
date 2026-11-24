@@ -1,5 +1,5 @@
 //! Shared, offline-only search and immutable selection validation for desktop panels.
-use crate::{database::Database, editor::Paths};
+use crate::{clipboard_payload::{ClipboardPayload, ClipboardStep}, database::Database, editor::Paths};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
@@ -91,20 +91,65 @@ impl Panel {
         std::thread::spawn(move || { let mut db = None; for (hit, action, characters) in receiver { let result = match db.take() { Some(open) => Ok(open), None => Database::open(&directory) }.and_then(|open| { open.usage(&hit.library, &hit.id, action, "desktop", characters)?; Ok(open) }); match result { Ok(open) => db = Some(open), Err(error) => eprintln!("TypeRelay usage could not be queued: {error}") } } });
         sender
     }
-    pub fn usage_characters(steps: &[crate::clipboard_payload::ClipboardStep], erase: usize) -> usize { steps.iter().map(|step| match step { crate::clipboard_payload::ClipboardStep::Payload(payload) => payload.characters, crate::clipboard_payload::ClipboardStep::Enter => 0 }).sum::<usize>().saturating_sub(erase) }
+    pub fn usage_characters(steps: &[ClipboardStep], erase: usize) -> usize { steps.iter().map(|step| match step { ClipboardStep::Payload(payload) => payload.characters, ClipboardStep::Enter | ClipboardStep::Tab => 0 }).sum::<usize>().saturating_sub(erase) }
     pub fn selected(directory: &Path, hit: &Hit) -> Result<String> { let content = Self::content(directory, hit)?; ensure!(content["type"] != "template", "Fill this template before copying/inserting"); Ok(content["text"].as_str().context("Missing text")?.into()) }
     pub fn render(directory: &Path, hit: &Hit, values: std::collections::BTreeMap<String,String>, preview: bool) -> Result<typerelay_core::template::Rendered> { Self::render_at(directory,hit,values,preview,crate::templates::Templates::clock()) }
 
     pub fn render_at(directory:&Path,hit:&Hit,values:std::collections::BTreeMap<String,String>,preview:bool,clock:(i64,i32))->Result<typerelay_core::template::Rendered>{crate::templates::Templates::render_at(&Self::content(directory,hit)?,values,preview,clock)}
 	pub fn rich_render(directory:&Path,content:&serde_json::Value,values:std::collections::BTreeMap<String,String>,preview:bool,clock:(i64,i32))->Result<typerelay_core::rich_text::RichRendered>{ensure!(content["type"]=="rich_text","Snippet is not rich text");let db=Database::open(directory)?;let mut assets=std::collections::BTreeMap::new();for id in content["assets"].as_array().into_iter().flatten(){let id=id.as_str().context("Invalid asset ID")?;let(metadata,bytes)=db.asset(id)?.context("Rich-text image is unavailable")?;assets.insert(id.into(),format!("data:{};base64,{}",metadata["mime_type"].as_str().context("Missing asset MIME")?,STANDARD.encode(bytes)));}typerelay_core::rich_text::RichText::render(typerelay_core::rich_text::RichRequest{markdown:content["markdown"].as_str().context("Missing rich text")?.into(),variables:serde_json::from_value(content.get("variables").cloned().unwrap_or_else(||serde_json::json!({})))?,values,assets,now_ms:clock.0,offset_minutes:clock.1,preview}).map_err(anyhow::Error::msg)}
 	pub fn rich_payload(directory:&Path,content:&serde_json::Value,values:std::collections::BTreeMap<String,String>,preview:bool)->Result<(typerelay_core::rich_text::RichRendered,crate::clipboard_payload::ClipboardPayload)>{let rendered=Self::rich_render(directory,content,values,preview,crate::templates::Templates::clock())?;let payload=crate::clipboard_payload::ClipboardPayload{characters:rendered.characters,plain:rendered.text.clone(),html:Some(rendered.html.clone()),rtf:Some(rendered.rtf.clone()),cursor:None};Ok((rendered,payload))}
-	pub fn steps_at(directory:&Path,hit:&Hit,values:std::collections::BTreeMap<String,String>,preview:bool,clock:(i64,i32))->Result<Vec<crate::clipboard_payload::ClipboardStep>>{let content=Self::content(directory,hit)?;if content["type"]=="rich_text"{let rendered=Self::rich_render(directory,&content,values,preview,clock)?;Ok(rendered.steps.into_iter().map(|step|match step{typerelay_core::rich_text::RichStep::Content{text,html,rtf,characters,..}=>crate::clipboard_payload::ClipboardStep::Payload(crate::clipboard_payload::ClipboardPayload{characters,plain:text,html:Some(html),rtf:Some(rtf),cursor:None}),typerelay_core::rich_text::RichStep::Enter=>crate::clipboard_payload::ClipboardStep::Enter}).collect())}else{let rendered=crate::templates::Templates::render_at(&content,values,preview,clock)?;Ok(rendered.steps.into_iter().map(|step|match step{typerelay_core::template::Step::Text{text}=>crate::clipboard_payload::ClipboardStep::Payload({let mut payload=crate::clipboard_payload::ClipboardPayload::text(text);payload.cursor=rendered.cursor.clone();payload}),typerelay_core::template::Step::Enter=>crate::clipboard_payload::ClipboardStep::Enter}).collect())}}
+    pub fn steps_at(directory:&Path, hit:&Hit, values:std::collections::BTreeMap<String,String>, preview:bool, clock:(i64,i32)) -> Result<Vec<ClipboardStep>> {
+        use typerelay_core::{rich_text::RichStep, template::Step};
+        let content=Self::content(directory,hit)?;
+        if content["type"]=="rich_text" {
+            let rendered=Self::rich_render(directory,&content,values,preview,clock)?;
+            Ok(rendered.steps.into_iter().map(|step|match step {
+                RichStep::Content{text,html,rtf,characters,..}=>ClipboardStep::Payload(ClipboardPayload{characters,plain:text,html:Some(html),rtf:Some(rtf),cursor:None}),
+                RichStep::Enter=>ClipboardStep::Enter,
+                RichStep::Tab=>ClipboardStep::Tab,
+            }).collect())
+        } else {
+            let rendered=crate::templates::Templates::render_at(&content,values,preview,clock)?;
+            Ok(rendered.steps.into_iter().map(|step|match step {
+                Step::Text{text}=>{
+                    let mut payload=ClipboardPayload::text(text);
+                    payload.cursor=rendered.cursor.clone();
+                    ClipboardStep::Payload(payload)
+                },
+                Step::Enter=>ClipboardStep::Enter,
+                Step::Tab=>ClipboardStep::Tab,
+            }).collect())
+        }
+    }
 
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn panel_converts_template_and_rich_tab_actions_in_order() {
+        let root=tempfile::tempdir().unwrap();
+        let db=Database::open(root.path()).unwrap();
+        db.import("Actions", "matches:\n- trigger: fields\n  type: template\n  replace: 'First{{key:tab}}{{name}}{{key:enter}}Last'\n- trigger: blocks\n  type: rich_text\n  replace: |\n    **First**\n\n    {{key:tab}}\n\n    {{name}}\n\n    {{key:enter}}\n\n    Last\n- trigger: onlytabs\n  type: rich_text\n  replace: |\n    {{key:tab}}\n\n    {{key:tab}}\n").unwrap();
+        for trigger in ["fields","blocks"] {
+            let hit=Panel::search(root.path(),trigger,None).unwrap().remove(0);
+            let values=[("name".into(),"Second\tField".into())].into();
+            let steps=Panel::steps_at(root.path(),&hit,values,false,(0,0)).unwrap();
+            let [ClipboardStep::Payload(first),ClipboardStep::Tab,ClipboardStep::Payload(second),ClipboardStep::Enter,ClipboardStep::Payload(last)] = steps.as_slice() else {panic!("Unexpected steps: {steps:?}")};
+            assert_eq!(first.plain,"First");
+            assert_eq!(second.plain,"Second\tField");
+            assert_eq!(last.plain,"Last");
+            assert_eq!(first.html.is_some(),trigger=="blocks");
+            assert_eq!(Panel::usage_characters(&steps,0), first.characters+second.characters+last.characters);
+        }
+        let only=Panel::search(root.path(),"onlytabs",None).unwrap().remove(0);
+        assert_eq!(Panel::steps_at(root.path(),&only,Default::default(),false,(0,0)).unwrap(),[ClipboardStep::Tab,ClipboardStep::Tab]);
+        use typerelay_core::{Engine, Input};
+        let mut engine=Engine::new(db.snapshot().unwrap());
+        for key in ";onlytabs".chars() {engine.feed(Input::Character(key));}
+        assert!(engine.feed(Input::Space).unwrap().template.unwrap().rich);
+    }
     #[test]
     fn indexed_words_typos_unicode_scope_and_refresh() {
         let temp=tempfile::tempdir().unwrap();let db=Database::open(temp.path()).unwrap();let local=db.import("Local","matches: [{trigger: missed, title: Missed meeting, replace: Please reschedule our meeting}, {trigger: cafe, replace: Café résumé}]").unwrap();let other=db.import("Other","matches: [{trigger: other, replace: Missed meeting elsewhere}]").unwrap();

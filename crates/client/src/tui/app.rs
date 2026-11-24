@@ -7,7 +7,7 @@ use ratatui::{Frame, layout::{Constraint, Layout, Rect, Position}, style::{Color
 use ratatui::crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, KeyEvent, MouseButton, MouseEventKind};
 use ratatui_textarea::TextArea;
 use typerelay_core::Engine;
-use typerelay_client::{config::Match, editor::{EditorStore, OpenFile}, settings::SettingsStore};
+use typerelay_client::{config::Match, database::Database, editor::{EditorStore, OpenFile}, settings::SettingsStore};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Screen { Files, Browse, Edit, Image, NewFile, Settings, Trash, Recovery, Move, Confirm }
@@ -17,9 +17,25 @@ enum Destination { Files, Browse, Settings, Trash, Recovery, Quit }
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct GlobalHit { library_id: String, snippet_id: String, file_index: usize, entry_index: usize }
 
+struct SyncDetails {
+    recovery: Option<String>,
+    failure: Option<String>,
+    conflicts: usize,
+    recovery_reports_failure: bool,
+}
+
+impl SyncDetails {
+    fn load(db: &Database) -> Result<Self> {
+        let (recovery, failure, recovery_reports_failure) = db.latest_recovery_failure()?;
+        let conflicts = db.meta("conflicts")?.and_then(|value| value.as_array().map(Vec::len)).unwrap_or(0);
+        Ok(Self { recovery, failure, conflicts, recovery_reports_failure })
+    }
+}
+
 pub struct App {
     workflow: Option<Workflow>,
     draft_record: Option<Draft>,
+    sync_details: SyncDetails,
     draft_lock: Option<std::fs::File>,
     identity: serde_json::Value,
     draft_gate: bool,
@@ -117,9 +133,11 @@ impl App {
         let mut file_state = ListState::default();
         file_state.select(Some(0));
         let identity = Draft::identity(settings.config_dir())?;
-        let drafts = Draft::available(&store.directory, typerelay_client::database::Database::open(&store.directory)?.drafts(&identity)?)?;
+        let db = Database::open(&store.directory)?;
+        let drafts = Draft::available(&store.directory, db.drafts(&identity)?)?;
+        let sync_details = SyncDetails::load(&db)?;
         let draft_gate = !drafts.is_empty();
-        Ok(Self { workflow: draft_gate.then(||Workflow::drafts(drafts)), draft_record: None, draft_lock: None, identity, draft_gate, operation: None, indent: "\t".into(), ai_dialog:None, writing:None, writing_undo:Vec::new(), writing_buttons:Vec::new(), editor_buttons:Vec::new(), model_button:Rect::default(), selection_buttons:Vec::new(), move_buttons:Vec::new(), search_query:String::new(), search_scope:None,  search_hits:Vec::new(), search_selection:None,  search_done:true, store, settings, screen: Screen::Files, files, file_state, global_search: TextArea::default(), global_search_focused: false, global_hits: Vec::new(), global_state: ListState::default(), global_edit: false, snippets_state: ListState::default(), file: None, search: TextArea::default(), search_focused: false, trigger: TextArea::default(), title: TextArea::default(), language: "plain_text".into(), code: false, template:false, rich:false, rich_preview:false,rich_image:None,image_source:TextArea::default(),image_alt:TextArea::default(),image_title:TextArea::default(),image_width:Self::text("640"),image_focus:0, variables:Default::default(), template_dialog:None, fill_base:None, copy_identity:None, rich_fill:None, preview_x: 0, expansion: TextArea::default(), name: TextArea::default(), url: TextArea::default(), editor_focus: 0, editing: None, original_entry: None, original_url: String::new(), prefix: TextArea::default(), original_prefix: String::new(), pending: None, pending_delete: None, selected_ids: std::collections::BTreeSet::new(), selection_anchor: None, move_destination: None, move_choices: Vec::new(), move_state: ListState::default(), move_from: Screen::Browse, move_items: Vec::new(), pending_batch: None,pending_merge:None, bulk_buttons: Vec::new(), pending_trash: None, recovery_text: TextArea::default(), trash_rows: Vec::new(), trash_state: ListState::default(), trash_buttons: Vec::new(), confirm_from: Screen::Files, status: "Choose a file, or create a new one".into(), error: false, quit: false, toolbar: Vec::new(), list_area: Rect::default(), field_areas: Vec::new(), save_area: Rect::default(), cancel_area: Rect::default(), confirm_buttons: Vec::new(),merge_button:Rect::default() })
+        Ok(Self { workflow: draft_gate.then(||Workflow::drafts(drafts)), draft_record: None, sync_details, draft_lock: None, identity, draft_gate, operation: None, indent: "\t".into(), ai_dialog:None, writing:None, writing_undo:Vec::new(), writing_buttons:Vec::new(), editor_buttons:Vec::new(), model_button:Rect::default(), selection_buttons:Vec::new(), move_buttons:Vec::new(), search_query:String::new(), search_scope:None,  search_hits:Vec::new(), search_selection:None,  search_done:true, store, settings, screen: Screen::Files, files, file_state, global_search: TextArea::default(), global_search_focused: false, global_hits: Vec::new(), global_state: ListState::default(), global_edit: false, snippets_state: ListState::default(), file: None, search: TextArea::default(), search_focused: false, trigger: TextArea::default(), title: TextArea::default(), language: "plain_text".into(), code: false, template:false, rich:false, rich_preview:false,rich_image:None,image_source:TextArea::default(),image_alt:TextArea::default(),image_title:TextArea::default(),image_width:Self::text("640"),image_focus:0, variables:Default::default(), template_dialog:None, fill_base:None, copy_identity:None, rich_fill:None, preview_x: 0, expansion: TextArea::default(), name: TextArea::default(), url: TextArea::default(), editor_focus: 0, editing: None, original_entry: None, original_url: String::new(), prefix: TextArea::default(), original_prefix: String::new(), pending: None, pending_delete: None, selected_ids: std::collections::BTreeSet::new(), selection_anchor: None, move_destination: None, move_choices: Vec::new(), move_state: ListState::default(), move_from: Screen::Browse, move_items: Vec::new(), pending_batch: None,pending_merge:None, bulk_buttons: Vec::new(), pending_trash: None, recovery_text: TextArea::default(), trash_rows: Vec::new(), trash_state: ListState::default(), trash_buttons: Vec::new(), confirm_from: Screen::Files, status: "Choose a file, or create a new one".into(), error: false, quit: false, toolbar: Vec::new(), list_area: Rect::default(), field_areas: Vec::new(), save_area: Rect::default(), cancel_area: Rect::default(), confirm_buttons: Vec::new(),merge_button:Rect::default() })
     }
     fn cancel_writing(&mut self) {
         if let Some((id,_,_,_))=self.writing.take(){let root=self.settings.config_dir().to_path_buf();std::thread::spawn(move||{let _=typerelay_client::native_ai::NativeAi::request(&root,serde_json::json!({"op":"cancel","id":id}));});self.message("Refinement cancelled",false);}
@@ -151,27 +169,33 @@ impl App {
     fn value(field: &TextArea<'_>) -> String { field.lines().join("\n") }
     fn global_active(&self) -> bool { !Self::value(&self.global_search).is_empty() }
     fn selected_global(&self) -> Option<&GlobalHit> { if !self.search_done{return None;}self.global_hits.get(self.global_state.selected()?) }
-    fn publish_search(&mut self, rows: Vec<typerelay_client::panel::Hit>) {
+    fn publish_search(&mut self, rows: Vec<typerelay_client::panel::Hit>, preserve_selection: bool) {
         self.search_done=true;
         if let Some(scope)=&self.search_scope {
             self.search_hits=rows.iter().filter(|row|row.library==*scope).filter_map(|row|self.file.as_ref()?.ids.iter().position(|id|*id==row.id)).collect();
-            let index=self.search_selection.as_ref().and_then(|(_,id)|self.search_hits.iter().position(|index|self.file.as_ref().is_some_and(|file|file.ids[*index]==*id))).unwrap_or(0);self.snippets_state.select((!self.search_hits.is_empty()).then_some(index));
+            let visible = self.filtered();
+            let index = self.search_selection.as_ref().and_then(|(_, id)| visible.iter().position(|index| self.file.as_ref().is_some_and(|file| file.ids[*index] == *id)));
+            self.snippets_state.select(index.or_else(|| (!preserve_selection && !visible.is_empty()).then_some(0)));
         }else{
             self.global_hits=rows.into_iter().filter_map(|row|{let file_index=self.files.iter().position(|file|file.id==row.library)?;let entry_index=self.files[file_index].ids.iter().position(|id|*id==row.id)?;Some(GlobalHit{library_id:row.library,snippet_id:row.id,file_index,entry_index})}).collect();
-            let index=self.search_selection.as_ref().and_then(|(library,id)|self.global_hits.iter().position(|hit|hit.library_id==*library&&hit.snippet_id==*id)).unwrap_or(0);self.global_state.select((!self.global_hits.is_empty()).then_some(index));
+            let index = self.search_selection.as_ref().and_then(|(library, id)| self.global_hits.iter().position(|hit| hit.library_id == *library && hit.snippet_id == *id));
+            self.global_state.select(index.or_else(|| (!preserve_selection && !self.global_hits.is_empty()).then_some(0)));
         }
     }
     fn rebuild_global_hits(&mut self) {
+        self.rebuild_search(false);
+    }
+    fn rebuild_search(&mut self, preserve_selection: bool) {
         if !matches!(self.screen,Screen::Files|Screen::Browse){return;}
         if self.search_done {self.search_selection=if self.screen==Screen::Browse{self.file.as_ref().and_then(|file|{let indices=if self.search_query.trim().is_empty(){file.search("")}else{self.search_hits.clone()};let index=*indices.get(self.snippets_state.selected()?)?;Some((file.id.clone(),file.ids.get(index)?.clone()))})}else{self.selected_global().map(|hit|(hit.library_id.clone(),hit.snippet_id.clone()))};}
         self.search_query=if self.screen==Screen::Browse{Self::value(&self.search)}else{Self::value(&self.global_search)};self.search_scope=if self.screen==Screen::Browse{self.file.as_ref().map(|file|file.id.clone())}else{None};self.search_done=false;
         let rows=typerelay_client::panel::Panel::search(&self.store.directory,&self.search_query,self.search_scope.as_deref());
-        match rows {Ok(rows)=>self.publish_search(rows),Err(error)=>{self.publish_search(Vec::new());self.message(error.to_string(),true);}}
+        match rows {Ok(rows)=>self.publish_search(rows, preserve_selection),Err(error)=>{self.publish_search(Vec::new(), preserve_selection);self.message(error.to_string(),true);}}
     }
-    fn reload_files(&mut self) -> Result<()> {
+    fn reload_files(&mut self, preserve_selection: bool) -> Result<()> {
         self.files = Self::load_files(&self.store)?;
         if self.file_state.selected().is_some_and(|index| index > self.files.len()) { self.file_state.select(Some(self.files.len())); }
-        self.rebuild_global_hits();
+        self.rebuild_search(preserve_selection);
         Ok(())
     }
     fn library_label(&self, file: &OpenFile) -> String {
@@ -201,7 +225,7 @@ impl App {
     fn message(&mut self, text: impl Into<String>, error: bool) { self.status = text.into(); self.error = error; }
     fn filtered(&self) -> Vec<usize> { if Self::value(&self.search).trim().is_empty(){return self.file.as_ref().map(|file|file.search("")).unwrap_or_default();}
     if !self.search_done||self.search_query!=Self::value(&self.search)||self.search_scope.as_deref()!=self.file.as_ref().map(|file|file.id.as_str()){return Vec::new();}self.search_hits.clone() }
-    fn selected(&self) -> Option<usize> { self.filtered().get(self.snippets_state.selected().unwrap_or(0)).copied() }
+    fn selected(&self) -> Option<usize> { self.filtered().get(self.snippets_state.selected()?).copied() }
     fn apply(&mut self, destination: Destination) -> Result<()> {
         self.cancel_writing();
         if destination != Destination::Quit && self.draft_gate { self.show_drafts()?; if self.draft_gate { return Ok(()); } }
@@ -210,7 +234,7 @@ impl App {
             Destination::Recovery => { self.show_recovery()?; }
             Destination::Trash => { self.load_trash()?; self.screen = Screen::Trash; }
             Destination::Quit => self.quit_preserving()?,
-            Destination::Files => { self.reload_files()?; self.file_state.select(Some(0)); self.global_edit = false; self.screen = Screen::Files; }
+            Destination::Files => { self.reload_files(false)?; self.file_state.select(Some(0)); self.global_edit = false; self.screen = Screen::Files; }
             Destination::Browse => self.screen = if self.file.is_some() { Screen::Browse } else { Screen::Files },
             Destination::Settings => {
                 self.settings.reload()?;
@@ -297,7 +321,7 @@ impl App {
             }
             Screen::NewFile => {
                 self.file = Some(self.store.create(Self::value(&self.name).trim())?);
-                self.reload_files()?;
+                self.reload_files(false)?;
                 self.search = TextArea::default();
                 self.snippets_state.select(None);
                 self.screen = Screen::Browse;
@@ -398,7 +422,7 @@ impl App {
         Ok(())
     }
     fn confirm(&mut self, choice: usize) -> Result<()> {
-		if let Some((source,destination,_))=self.pending_merge.clone(){if choice==0{let queued=typerelay_client::database::Database::open(&self.store.directory)?.merge(&source,&destination)?;if queued{let _=typerelay_client::sync::Sync::trigger(self.settings.config_dir());}self.reload_files()?;self.file_state.select(Some(0));self.screen=Screen::Files;self.message(if queued{"Merge queued"}else{"Libraries merged"},false);}else{self.screen=Screen::Files;}self.pending_merge=None;return Ok(());}
+		if let Some((source,destination,_))=self.pending_merge.clone(){if choice==0{let queued=typerelay_client::database::Database::open(&self.store.directory)?.merge(&source,&destination)?;if queued{let _=typerelay_client::sync::Sync::trigger(self.settings.config_dir());}self.reload_files(false)?;self.file_state.select(Some(0));self.screen=Screen::Files;self.message(if queued{"Merge queued"}else{"Libraries merged"},false);}else{self.screen=Screen::Files;}self.pending_merge=None;return Ok(());}
         if let Some((source, destination, items)) = self.pending_batch.clone() {
             if choice == 0 {
                 typerelay_client::database::Database::open(&self.store.directory)?.batch(&source, destination.as_deref(), &items)?;
@@ -448,6 +472,16 @@ impl App {
     fn record_copy(&self, characters: usize) {
         if let Some((library,snippet))=&self.copy_identity && let Err(error)=typerelay_client::database::Database::open(&self.store.directory).and_then(|db|db.usage(library,snippet,"copy","terminal",characters)) { eprintln!("TypeRelay usage could not be queued: {error}"); }
     }
+    fn copy_status(rich:bool,cursor:bool,enter:usize,tab:usize)->&'static str {
+        match (cursor,enter>0,tab>0) {
+            (true,_,_)=>"Copied text; cursor positioning omitted",
+            (false,true,true)=>"Copied; Enter and Tab key actions omitted",
+            (false,true,false)=>"Copied; Enter key actions omitted",
+            (false,false,true)=>"Copied; Tab key actions omitted",
+            _ if rich=>"Copied rich text",
+            _=>"Copied",
+        }
+    }
     fn copy_current(&mut self) -> Result<()> {
         if self.screen==Screen::Recovery { typerelay_client::clipboard::PasteJob::copy_text(Self::value(&self.recovery_text))?; self.message("Copied recovery records",false); return Ok(()); }
         self.copy_identity=match self.screen { Screen::Edit=>self.file.as_ref().and_then(|file|self.editing.and_then(|index|file.ids.get(index)).map(|id|(file.id.clone(),id.clone()))), Screen::Browse=>self.file.as_ref().and_then(|file|self.selected().and_then(|index|file.ids.get(index)).map(|id|(file.id.clone(),id.clone()))), Screen::Files=>self.selected_global().map(|hit|(hit.library_id.clone(),hit.snippet_id.clone())), _=>None };
@@ -471,7 +505,7 @@ impl App {
             if result.fields.is_empty() {
                 let (result, payload) = typerelay_client::panel::Panel::rich_payload(&self.store.directory, &content, Default::default(), false)?;
                 typerelay_client::clipboard::PasteJob::copy_payload(payload)?;self.record_copy(result.characters);
-                self.message(if result.enter_actions > 0 { "Copied rich text; enter key actions omitted" } else { "Copied rich text" }, false);
+                self.message(Self::copy_status(true,false,result.enter_actions,result.tab_actions), false);
             } else {
                 self.fill_base = base;
                 self.rich_fill = Some(content);
@@ -482,7 +516,7 @@ impl App {
             if template.fields().map_err(anyhow::Error::msg)?.is_empty() {
                 let rendered = typerelay_client::templates::Templates::render(&entry.value()["content"], Default::default(), false)?;
                 let characters=rendered.text.chars().count();typerelay_client::clipboard::PasteJob::copy_text(rendered.text)?;self.record_copy(characters);
-                self.message(if rendered.cursor.is_some() { "Copied text; cursor positioning omitted" } else if rendered.enter_actions > 0 { "Copied text; enter key actions omitted" } else { "Copied" }, false);
+                self.message(Self::copy_status(false,rendered.cursor.is_some(),rendered.enter_actions,rendered.tab_actions), false);
             } else {
                 self.fill_base = base;
                 self.template_dialog = Some(crate::template_dialog::Dialog::fill(template)?);
@@ -520,8 +554,8 @@ impl App {
         let count = if self.screen == Screen::Files { if self.global_active() { self.global_hits.len() } else { self.files.len() + 1 } } else { self.filtered().len() };
         let state = if self.screen == Screen::Files { if self.global_active() { &mut self.global_state } else { &mut self.file_state } } else { &mut self.snippets_state };
         if count == 0 { state.select(None); return; }
-        let current = state.selected().unwrap_or(0);
-        state.select(Some(if down { (current + 1).min(count - 1) } else { current.saturating_sub(1) }));
+        let next = state.selected().map_or(0, |current| if down { (current + 1).min(count - 1) } else { current.saturating_sub(1) });
+        state.select(Some(next));
     }
     fn abbreviation_input(&mut self, event: Event) {
         match event {
@@ -556,11 +590,25 @@ impl App {
         if let Some(dialog)=&mut self.template_dialog {
             if let Some(outcome)=dialog.event(event) { match outcome {
                 crate::template_dialog::Outcome::Cancel=>(),
-				crate::template_dialog::Outcome::Definition{name,variable,insert}=>{if let Some(variable)=variable{self.variables.insert(name.clone(),variable);if !self.rich{self.template=true;}}
-                    if insert{self.expansion.insert_str(format!("{{{{{name}}}}}"));}},
+                crate::template_dialog::Outcome::Definition{name,variable,insert}=>{
+                    if let Some(variable)=variable{self.variables.insert(name.clone(),variable);if !self.rich{self.template=true;}}
+                    if insert {
+                        let token=format!("{{{{{name}}}}}");
+                        if self.rich&&matches!(name.as_str(),"key:enter"|"key:tab") {
+                            let cursor=self.expansion.cursor();
+                            let (start,end)=self.expansion.selection_range().unwrap_or(((cursor.0,cursor.1),(cursor.0,cursor.1)));
+                            let lines=self.expansion.lines();
+                            let before=if start.1>0 {"\n\n"} else if start.0>0&&!lines[start.0-1].trim().is_empty() {"\n"} else {""};
+                            let after=if end.1<lines[end.0].chars().count() {"\n\n"} else if lines.get(end.0+1).is_some_and(|line|!line.trim().is_empty()) {"\n"} else {""};
+                            self.expansion.insert_str(format!("{before}{token}{after}"));
+                        } else {
+                            self.expansion.insert_str(token);
+                        }
+                    }
+                },
 				crate::template_dialog::Outcome::Copy{rendered,values}=>{
 					if let Some((name,revision))=&self.fill_base{let current=self.store.open(name)?;anyhow::ensure!(current.revision==*revision,"Library changed; reopen the template before copying");}
-					if let Some(content)=self.rich_fill.take(){let(result,payload)=typerelay_client::panel::Panel::rich_payload(&self.store.directory,&content,values,false)?;typerelay_client::clipboard::PasteJob::copy_payload(payload)?;self.record_copy(result.characters);self.message(if result.enter_actions>0{"Copied rich text; enter key actions omitted"}else{"Copied rich text"},false);}else{let characters=rendered.text.chars().count();typerelay_client::clipboard::PasteJob::copy_text(rendered.text)?;self.record_copy(characters);self.message(if rendered.cursor.is_some(){"Copied text; cursor positioning omitted"}else if rendered.enter_actions>0{"Copied text; enter key actions omitted"}else{"Copied"},false);}
+					if let Some(content)=self.rich_fill.take(){let(result,payload)=typerelay_client::panel::Panel::rich_payload(&self.store.directory,&content,values,false)?;typerelay_client::clipboard::PasteJob::copy_payload(payload)?;self.record_copy(result.characters);self.message(Self::copy_status(true,false,result.enter_actions,result.tab_actions),false);}else{let characters=rendered.text.chars().count();typerelay_client::clipboard::PasteJob::copy_text(rendered.text)?;self.record_copy(characters);self.message(Self::copy_status(false,rendered.cursor.is_some(),rendered.enter_actions,rendered.tab_actions),false);}
 				}
 			} self.template_dialog=None; self.fill_base=None;self.rich_fill=None; } return Ok(());
         }
@@ -647,7 +695,7 @@ impl App {
                     KeyCode::Enter => self.open_selected_file()?,
                     KeyCode::Char('/') if !self.global_search_focused => self.global_search_focused = true,
                     KeyCode::Tab => self.global_search_focused = !self.global_search_focused,
-                    _ if self.global_search_focused => { Self::single_input(&mut self.global_search, Event::Key(key)); self.rebuild_global_hits(); }
+                    _ if self.global_search_focused => { Self::single_input(&mut self.global_search, Event::Key(key)); }
                     KeyCode::Char('j') => self.move_selection(true),
                     KeyCode::Char('k') => self.move_selection(false),
 					KeyCode::Char('m') if !self.global_active() => self.request_merge()?,
@@ -669,7 +717,10 @@ impl App {
                     KeyCode::Delete if !self.search_focused => self.request_delete()?,
                     KeyCode::Char('/') if !self.search_focused => self.search_focused = true,
                     KeyCode::Tab => self.search_focused = !self.search_focused,
-                    _ if self.search_focused => { Self::single_input(&mut self.search, Event::Key(key)); self.snippets_state.select(Some(0)); }
+                    _ if self.search_focused => {
+                        Self::single_input(&mut self.search, Event::Key(key));
+                        if Self::value(&self.search) != self.search_query { self.snippets_state.select(Some(0)); }
+                    }
                     _ => (),
                 },
                 Screen::Edit => match key.code {
@@ -705,8 +756,14 @@ impl App {
                 Screen::Settings if self.editor_focus == 0 => Self::single_input(&mut self.url, Event::Paste(text)),
                 Screen::Settings => Self::single_input(&mut self.prefix, Event::Paste(text)),
                 Screen::NewFile => Self::single_input(&mut self.name, Event::Paste(text)),
-                Screen::Files if self.global_search_focused => { Self::single_input(&mut self.global_search, Event::Paste(text)); self.rebuild_global_hits(); }
-                Screen::Browse if self.search_focused => { Self::single_input(&mut self.search, Event::Paste(text)); self.snippets_state.select(Some(0)); self.rebuild_global_hits(); }
+                Screen::Files if self.global_search_focused => { Self::single_input(&mut self.global_search, Event::Paste(text)); }
+                Screen::Browse if self.search_focused => {
+                    Self::single_input(&mut self.search, Event::Paste(text));
+                    if Self::value(&self.search) != self.search_query {
+                        self.snippets_state.select(Some(0));
+                        self.rebuild_global_hits();
+                    }
+                }
                 _ => (),
             }
         } else if let Event::Mouse(mouse) = event {
@@ -774,18 +831,61 @@ impl App {
         let mut x=area.x;let mut y=area.y;let mut rows=Vec::new();for label in labels{let width=(label.chars().count() as u16+2).min(area.width);if x>area.x&&x+width>area.right(){x=area.x;y+=3;}rows.push(Rect::new(x,y,width,3));x+=width;}rows
     }
     pub fn refresh(&mut self) {
+        if let Ok(details) = Database::open(&self.store.directory).and_then(|db| SyncDetails::load(&db)) { self.sync_details = details; }
         if let Err(error)=self.refresh_draft() { self.message(error.to_string(),true); }
         if self.screen == Screen::Trash { let _ = self.load_trash(); }
-        else if self.screen == Screen::Files { let _ = self.reload_files(); }
+        else if self.screen == Screen::Files { let _ = self.reload_files(true); }
         else if self.screen == Screen::Browse && let Some(file) = &self.file {
+            let selected = self.selected().and_then(|index| file.ids.get(index)).cloned();
             match self.store.open(&file.name) {
-                Ok(current) => { if typerelay_client::database::Database::open(&self.store.directory).and_then(|db|db.editable(&current.id)).is_err() { self.selected_ids.clear(); self.selection_anchor = None; } self.file = Some(current); self.retain_selection(); self.rebuild_global_hits(); }
+                Ok(current) => {
+                    if typerelay_client::database::Database::open(&self.store.directory).and_then(|db|db.editable(&current.id)).is_err() { self.selected_ids.clear(); self.selection_anchor = None; }
+                    self.search_selection = selected.map(|id| (current.id.clone(), id));
+                    self.search_done = false;
+                    self.file = Some(current);
+                    self.retain_selection();
+                    self.rebuild_search(true);
+                }
                 Err(_) => { self.file = None; let _ = self.apply(Destination::Files); }
             }
         }
     }
-    fn sync_status(&self) -> String {
-        format!("{}Sync: {}",if self.draft_record.as_ref().is_some_and(|draft|draft.entry==self.draft()&&draft.destination==self.move_destination){"Draft stored locally · "}else if self.draft_record.is_some(){"Latest changes NOT stored · "}else{""},std::fs::read_to_string(self.settings.config_dir().join("sync/status")).unwrap_or_else(|_|"local only / waiting for connection".into()))
+    fn sync_status(&self, brief: bool) -> String {
+        let worker = std::fs::read_to_string(self.settings.config_dir().join("sync/status")).ok();
+        let failure = self.sync_details.failure.as_deref().unwrap_or_default();
+        let draft = if self.draft_record.as_ref().is_some_and(|draft|draft.entry==self.draft()&&draft.destination==self.move_destination) { "Draft stored locally · " } else if self.draft_record.is_some() { "Latest changes NOT stored · " } else { "" };
+        if let Some(reason) = &self.sync_details.recovery {
+            let editing = self.effective_screen() == Screen::Edit;
+            let duplicate_failure = self.sync_details.recovery_reports_failure && failure == reason;
+            let current_error = worker.as_deref().filter(|status| !status.starts_with("Synced.")).map(|status| status.trim_start_matches("Sync: ")).or_else(|| (!failure.is_empty() && !duplicate_failure).then_some(failure));
+            let count = self.sync_details.conflicts;
+            let label = if count == 1 { "conflict" } else { "conflicts" };
+            if brief {
+                let action = if editing { "Recovery (Ctrl+P)" } else { "Recovery (F12)" };
+                let error = if current_error.is_some() { " · Sync error" } else { "" };
+                let conflicts = if count > 0 { format!(" · {count} {label}") } else { String::new() };
+                let draft = draft.trim_end_matches(" · ");
+                return format!("{action}{error}{conflicts}\n{draft}");
+            }
+            let action = if editing { "Leave the editor for Recovery (F12)." } else { "Open Recovery (F12)." };
+            let reason_summary = reason.char_indices().nth(120).map_or_else(|| reason.clone(), |(end, _)| format!("{}…", &reason[..end]));
+            let mut status = format!("{draft}Sync: {action} {reason_summary}");
+            if let Some(error) = current_error {
+                status.push_str(&format!("\n{error}"));
+            }
+            if count > 0 {
+                let destination = self.identity["server"].as_str().map_or_else(|| "Open Conflicts from Commands.".into(), |server| format!("Resolve: {server}/"));
+                status.push_str(&format!("\n{count} {label}. {destination}"));
+            }
+            return status;
+        }
+        let mut worker = worker.unwrap_or_else(|| "local only / waiting for connection".into());
+        // A worker status written before dismissal can still contain the old last failure.
+        if worker.starts_with("Synced. ") && let Some((summary, destination)) = worker.rsplit_once(" Resolve: ")
+            && let Some((prefix, _)) = summary.split_once(" conflicts. ") {
+            worker = format!("{prefix} conflicts. {failure} Resolve: {destination}");
+        }
+        format!("{draft}Sync: {worker}")
     }
     pub fn draw(&mut self, frame: &mut Frame) {
         if let Some(dialog)=&mut self.ai_dialog {dialog.draw(frame);return;}
@@ -799,9 +899,14 @@ impl App {
         let action_labels=Self::EDITOR_ACTIONS;
         let controls_height=Self::button_layout(Rect::new(0,0,area.width,0),&editor_labels).last().unwrap().bottom();let actions_height=Self::button_layout(Rect::new(0,0,area.width,0),&action_labels).last().unwrap().bottom();
         let browse_labels=["Select (space)","Select all (ctrl+a)","Clear (ctrl+d)","Edit (enter)","Move (f8)","Trash (f3)"];let browse_height=Self::button_layout(Rect::new(0,0,area.width,0),&browse_labels).last().unwrap().bottom();
-        let minimum_height=if self.effective_screen()==Screen::Edit{2+toolbar_height+6+3+2+1+controls_height+actions_height+2}else if self.effective_screen()==Screen::Browse{2+toolbar_height+3+browse_height+3+2}else if self.effective_screen()==Screen::Settings{2+toolbar_height+12+2}else if self.effective_screen()==Screen::Image{2+toolbar_height+17+2}else{20};
+        let editing = self.effective_screen() == Screen::Edit;
+        let recovery_visible = self.sync_details.recovery.is_some();
+        let minimum_height=if editing{2+toolbar_height+6+3+2+1+controls_height+actions_height+2}else if self.effective_screen()==Screen::Browse{2+toolbar_height+3+browse_height+3+2}else if self.effective_screen()==Screen::Settings{2+toolbar_height+12+2}else if self.effective_screen()==Screen::Image{2+toolbar_height+17+2}else{20};
         if area.width<60||area.height<minimum_height { self.draw_compact(frame,area); return; }
-        let rows=Layout::vertical([Constraint::Length(2),Constraint::Length(toolbar_height),Constraint::Min(8),Constraint::Length(2)]).split(area);
+        let expanded_height = if editing { 5 } else { 6 };
+        let expanded_recovery = recovery_visible && area.height >= minimum_height + expanded_height - 2;
+        let footer_height = if expanded_recovery { expanded_height } else { 2 };
+        let rows=Layout::vertical([Constraint::Length(2),Constraint::Length(toolbar_height),Constraint::Min(8),Constraint::Length(footer_height)]).split(area);
         let title = if self.effective_screen() == Screen::Files { "TypeRelay  /  Snippet editor · Commands (ctrl+p)".into() } else { self.file.as_ref().map(|file| format!("TypeRelay  /  {} · Commands (ctrl+p)", file.name)).unwrap_or("TypeRelay  /  Snippet editor · Commands (ctrl+p)".into()) };
         frame.render_widget(Paragraph::new(title).style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)), rows[0]);
         self.toolbar=Self::button_layout(rows[1],&toolbar_labels);
@@ -831,7 +936,7 @@ impl App {
                         ListItem::new(format!("{} · {}", file.name, file.entries[hit.entry_index].label()))
                     }).collect::<Vec<_>>();
                     frame.render_stateful_widget(List::new(items).block(Self::border(if !self.search_done{"Searching…".into()}else{format!("{} snippets — enter to edit", self.global_hits.len())}, !self.global_search_focused)).highlight_style(Style::default().bg(Color::DarkGray)).highlight_symbol("› "), columns[0], &mut self.global_state);
-                    let preview = self.selected_global().map(|hit| self.files[hit.file_index].entries[hit.entry_index].replace.clone()).unwrap_or_else(||if !self.search_done{"Searching…".into()}else{"No matching snippets.".into()});
+                    let preview = self.selected_global().map(|hit| self.files[hit.file_index].entries[hit.entry_index].replace.clone()).unwrap_or_else(||if !self.search_done{"Searching…".into()}else if self.global_hits.is_empty(){"No matching snippets.".into()}else{"Select a snippet.".into()});
                     frame.render_widget(Paragraph::new(preview).scroll((0, self.preview_x)).block(Self::border("Preview · ←/→ scroll · ctrl+c Copy", false)), columns[1]);
                 } else {
                     let rows = Layout::vertical([Constraint::Min(3), Constraint::Length(3)]).split(parts[1]);
@@ -856,7 +961,7 @@ impl App {
                 let entries = self.file.as_ref().map(|file| file.entries.as_slice()).unwrap_or(&[]);
                 let items = filtered.iter().map(|index| ListItem::new(format!("[{}] {}", if self.selected_ids.contains(&self.file.as_ref().unwrap().ids[*index]) { "x" } else { " " }, entries[*index].label()))).collect::<Vec<_>>();
                 frame.render_stateful_widget(List::new(items).block(Self::border(if !self.search_done{"Searching…".into()}else{format!("{} snippets — enter to edit", filtered.len())}, !self.search_focused)).highlight_style(Style::default().bg(Color::DarkGray)).highlight_symbol("› "), columns[0], &mut self.snippets_state);
-                let preview = self.selected().map(|index| self.file.as_ref().unwrap().entries[index].replace.clone()).unwrap_or_else(||if !self.search_done{"Searching…".into()}else{"No matching snippets.".into()});
+                let preview = self.selected().map(|index| self.file.as_ref().unwrap().entries[index].replace.clone()).unwrap_or_else(||if !self.search_done{"Searching…".into()}else if filtered.is_empty(){"No matching snippets.".into()}else{"Select a snippet.".into()});
                 frame.render_widget(Paragraph::new(preview).scroll((0, self.preview_x)).block(Self::border("Preview · ←/→ scroll · ctrl+c Copy", false)), columns[1]);
             }
 			Screen::Image=>{let parts=Layout::vertical([Constraint::Length(3),Constraint::Length(3),Constraint::Length(3),Constraint::Length(3),Constraint::Min(2),Constraint::Length(3)]).split(body);self.image_source.set_block(Self::border("Local path or HTTP/HTTPS URL",self.image_focus==0));self.image_alt.set_block(Self::border("Alt text",self.image_focus==1));self.image_title.set_block(Self::border("Title",self.image_focus==2));self.image_width.set_block(Self::border("Display width (32–2048)",self.image_focus==3));frame.render_widget(&self.image_source,parts[0]);frame.render_widget(&self.image_alt,parts[1]);frame.render_widget(&self.image_title,parts[2]);frame.render_widget(&self.image_width,parts[3]);frame.render_widget(Paragraph::new("PNG, JPEG, WebP, and GIF · 5 MiB input · remote images are cached for offline insertion"),parts[4]);self.field_areas.extend([parts[0],parts[1],parts[2],parts[3]]);self.form_buttons(frame,parts[5]);}
@@ -895,7 +1000,15 @@ impl App {
             }
             Screen::Confirm => (),
         }
-        frame.render_widget(Paragraph::new(if self.effective_screen()==Screen::Edit{self.sync_status()}else{format!("{}\n{}",self.status,self.sync_status())}).style(Style::default().fg(if self.error { Color::Red } else { Color::Gray })).wrap(Wrap { trim: false }), rows[3]);
+        let footer_style = Style::default().fg(if self.error { Color::Red } else { Color::Gray });
+        if !editing && recovery_visible {
+            let footer = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(rows[3]);
+            frame.render_widget(Paragraph::new(self.status.as_str()).style(footer_style), footer[0]);
+            frame.render_widget(Paragraph::new(self.sync_status(!expanded_recovery)).wrap(Wrap { trim: false }), footer[1]);
+        } else {
+            let status = if editing { self.sync_status(!expanded_recovery) } else { format!("{}\n{}", self.status, self.sync_status(false)) };
+            frame.render_widget(Paragraph::new(status).style(footer_style).wrap(Wrap { trim: false }), rows[3]);
+        }
         if self.screen == Screen::Confirm {
             let dialog = Rect::new(area.x + (area.width - 56) / 2, area.y + (area.height - 7) / 2, 56, 7);
             frame.render_widget(Clear, dialog);
@@ -933,13 +1046,84 @@ mod tests {
     use super::*;
     use ratatui::crossterm::event::KeyEvent;
     #[test]
-    fn recovery_view_reads_preserved_edits_without_mutating_them() {
-        let temp=tempfile::tempdir().unwrap();let mut app=Fixture::app(temp.path());let db=typerelay_client::database::Database::open(&app.store.directory).unwrap();
-        db.recover("library",Some("snippet"),&serde_json::json!({"content":{"text":"Keep this"}}),"Server 410").unwrap();
-        Fixture::key(&mut app,KeyCode::F(12),KeyModifiers::NONE);assert!(app.workflow.is_some());
-        let before=App::value(&app.recovery_text);Fixture::key(&mut app,KeyCode::Char('x'),KeyModifiers::NONE);assert_eq!(App::value(&app.recovery_text),before);assert_eq!(db.recovery().unwrap().len(),1);
-        let mut terminal=ratatui::Terminal::new(ratatui::backend::TestBackend::new(140,40)).unwrap();terminal.draw(|frame|app.draw(frame)).unwrap();
-        Fixture::key(&mut app,KeyCode::Esc,KeyModifiers::NONE);assert_eq!(app.screen,Screen::Files);
+    fn recovery_status_is_visible_and_recovery_resumes_exact_tab_source() {
+        let temp = tempfile::tempdir().unwrap();
+        let sync_dir = temp.path().join("sync");
+        std::fs::create_dir(&sync_dir).unwrap();
+        std::fs::write(sync_dir.join("credentials.json"), r#"{"server":"https://example.test","account":"account"}"#).unwrap();
+        let mut app = Fixture::app(temp.path());
+        let db = typerelay_client::database::Database::open(&app.store.directory).unwrap();
+        let file = db.import("Synced", "matches: [{trigger: str, replace: '$task-router'}]").unwrap();
+        app.file = Some(file.clone());
+        app.screen = Screen::Browse;
+        app.snippets_state.select(Some(0));
+        app.status = "Saved locally. Enrolled-library changes are queued for background sync.".into();
+        let source = "$task-router{{key:tab}}";
+        let reason = "Server 422: Use a variable name such as {{name}}, {{key:enter}}, or {{cursor:here}}";
+        let edit = Match { trigger: "str".into(), kind: "template".into(), replace: source.into(), ..Default::default() };
+        db.record_failed_operation(&serde_json::json!({"kind":"edit","library":file.id,"body":{"changes":[{"id":file.ids[0],"value":edit.value()}]}}), reason).unwrap();
+        db.set_meta("conflicts", &serde_json::json!([{"library":file.id,"snippet":file.ids[0]}])).unwrap();
+        let status_file = sync_dir.join("status");
+        let worker_status = format!("Synced. 1 conflicts. {reason} Resolve: https://example.test/");
+        std::fs::write(&status_file, &worker_status).unwrap();
+        app.refresh();
+        assert!(app.sync_status(false).contains(reason));
+        assert!(!app.sync_status(false).contains("Synced."));
+        assert!(app.sync_status(false).contains("1 conflict. Resolve: https://example.test/"));
+        std::fs::write(&status_file, "Sync: Connection timed out").unwrap();
+
+        for (width, height) in [(140, 40), (60, 30), (48, 12)] {
+            let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+            terminal.draw(|frame| app.draw(frame)).unwrap();
+            let text = screen_text(&terminal, width);
+            assert!(text.contains("Open Recovery (F12)"), "{width}×{height}");
+            assert!(text.contains(reason), "{width}×{height}");
+            assert!(text.contains("Connection timed out"), "{width}×{height}");
+            assert!(text.contains("1 conflict. Resolve: https://example.test/"), "{width}×{height}");
+        }
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 19)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let text = screen_text(&terminal, 100);
+        assert!(text.contains("Preview") && text.contains("$task-router"));
+        assert!(text.contains("Recovery (F12) · Sync error · 1 conflict"));
+        Fixture::key(&mut app, KeyCode::F(12), KeyModifiers::NONE);
+        assert!(app.workflow.is_some());
+        Fixture::key(&mut app, KeyCode::Char('r'), KeyModifiers::NONE);
+        assert_eq!(app.screen, Screen::Edit, "{}", app.status);
+        assert_eq!(app.draft().replace, source);
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let text = screen_text(&terminal, 100);
+        assert!(text.contains("Abbreviation") && text.contains(source));
+        assert!(text.contains("Recovery (Ctrl+P) · Sync error · 1 conflict"));
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, 48)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        assert!(!app.field_areas.is_empty(), "must exercise the normal editor layout");
+        let text = screen_text(&terminal, 60);
+        assert!(text.contains("Leave the editor for Recovery"));
+        assert!(text.contains(reason));
+        let rows = db.recovery().unwrap();
+        assert_eq!(rows.len(), 1);
+        db.dismiss_recovery(rows[0]["id"].as_str().unwrap()).unwrap();
+        app.refresh();
+        assert!(!app.sync_status(false).contains("Open Recovery"));
+        assert!(app.sync_status(false).contains("Connection timed out"));
+        std::fs::write(&status_file, worker_status).unwrap();
+        let mut reopened = Fixture::app(temp.path());
+        assert!(!reopened.sync_status(false).contains(reason));
+        assert!(reopened.sync_status(false).contains("1 conflicts.  Resolve: https://example.test/"));
+        db.set_meta("last_failure", &serde_json::json!("A later change was denied")).unwrap();
+        reopened.refresh();
+        assert!(reopened.sync_status(false).contains("A later change was denied"));
+        db.recover(&file.id, Some(&file.ids[0]), &serde_json::json!({"value":edit.value()}), reason).unwrap();
+        db.set_meta("last_failure", &serde_json::json!(reason)).unwrap();
+        reopened.refresh();
+        assert_eq!(reopened.sync_status(false).matches(reason).count(), 2);
+        assert!(reopened.sync_status(true).contains("Sync error"));
+
+        fn screen_text(terminal: &ratatui::Terminal<ratatui::backend::TestBackend>, width: u16) -> String {
+            terminal.backend().buffer().content().chunks(usize::from(width)).map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>()).map(|line| line.trim().to_owned()).collect::<Vec<_>>().join(" ")
+        }
     }
     #[test]
     fn editor_shows_shortcuts_on_buttons_and_status_once() {
@@ -974,6 +1158,33 @@ mod tests {
     fn escape_cancels_writing_without_leaving_editor() {
         let temp=tempfile::tempdir().unwrap();let mut app=Fixture::app(temp.path());app.screen=Screen::Edit;app.expansion=App::text("Original");let(_sender,receiver)=std::sync::mpsc::channel();app.writing=Some(("cancel".into(),app.draft(),"rewrite".into(),receiver));Fixture::key(&mut app,KeyCode::Esc,KeyModifiers::NONE);assert_eq!(app.screen,Screen::Edit);assert_eq!(App::value(&app.expansion),"Original");assert!(app.writing.is_none());
     }
+    #[test]
+    fn tab_picker_inserts_a_renderable_action() {
+        for (rich,source,steps,expected) in [
+            (false,"FirstSecond",5,"First{{key:tab}}Second"),
+            (true,"FirstSecond",5,"First\n\n{{key:tab}}\n\nSecond"),
+            (true,"First\nSecond",6,"First\n\n{{key:tab}}\n\nSecond"),
+            (true,"First\n\nSecond",7,"First\n\n{{key:tab}}\n\nSecond"),
+        ] {
+            let root=tempfile::tempdir().unwrap();
+            let mut app=Fixture::app(root.path());
+            app.screen=Screen::Edit;
+            app.rich=rich;
+            app.expansion=App::text(source);
+            for _ in 0..steps {app.expansion.move_cursor(ratatui_textarea::CursorMove::Forward);}
+            Fixture::key(&mut app,KeyCode::F(11),KeyModifiers::NONE);
+            for _ in 0..6 {Fixture::key(&mut app,KeyCode::Down,KeyModifiers::NONE);}
+            Fixture::key(&mut app,KeyCode::Enter,KeyModifiers::NONE);
+            let expansion=App::value(&app.expansion);
+            assert_eq!(expansion,expected);
+            if rich {
+                use typerelay_core::rich_text::{RichRequest, RichText};
+                let rendered=RichText::render(RichRequest { markdown:expansion, ..Default::default() }).unwrap();
+                assert_eq!(rendered.tab_actions,1);
+            }
+        }
+    }
+
     #[test]
     fn code_enter_retains_exact_leading_whitespace() {
         let temp = tempfile::tempdir().unwrap(); let mut app = Fixture::app(temp.path());
@@ -1103,6 +1314,52 @@ mod tests {
         assert_eq!(App::value(&app.global_search), "shared");
         assert_eq!(app.selected_global().unwrap().library_id, beta.id);
         assert_eq!(app.store.open("Beta").unwrap().entries[0].replace, "Beta updated");
+    }
+    #[test]
+    fn global_search_requires_reselection_after_sync_removes_the_highlighted_match() {
+        use serde_json::json;
+        use typerelay_client::database::Database;
+
+        let temp = tempfile::tempdir().unwrap();
+        let mut app = Fixture::app(temp.path());
+        let db = Database::open(&app.store.directory).unwrap();
+        let first = db.import("First", "matches: [{trigger: find-first, replace: First}]").unwrap();
+        let second = db.import("Second", "matches: [{trigger: find-second, replace: Second}]").unwrap();
+        let mut remote = db.library(&second.id).unwrap();
+        remote["records"] = json!(db.records(&second.id).unwrap());
+        db.apply(&json!({"library": remote}), None).unwrap();
+        app.refresh();
+
+        Fixture::key(&mut app, KeyCode::Char('/'), KeyModifiers::NONE);
+        app.handle(Event::Paste("find".into()));
+        Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        Fixture::key(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(app.selected_global().unwrap().snippet_id, second.ids[0]);
+
+        remote["revision"] = json!(2);
+        remote["records"] = json!([]);
+        db.apply(&json!({"library": remote}), None).unwrap();
+        for _ in 0..2 {
+            app.refresh();
+            assert_eq!(app.global_hits.len(), 1);
+            Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+            assert_eq!(app.screen, Screen::Files);
+            assert!(app.selected_global().is_none());
+            assert_eq!(app.status, "Select a snippet");
+        }
+
+        Fixture::key(&mut app, KeyCode::Char('/'), KeyModifiers::NONE);
+        Fixture::key(&mut app, KeyCode::Left, KeyModifiers::NONE);
+        app.handle(Event::Paste(String::new()));
+        Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(app.screen, Screen::Files);
+        assert!(app.selected_global().is_none());
+
+        Fixture::key(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(app.screen, Screen::Edit);
+        assert_eq!(app.file.as_ref().unwrap().ids[app.editing.unwrap()], first.ids[0]);
     }
     #[test]
     fn global_search_refreshes_stable_selection_and_active_counts() {
@@ -1308,6 +1565,7 @@ mod tests {
         app.file = Some(app.store.save(app.file.as_ref().unwrap(), None, Match { variables: Default::default(), trigger: "shared".into(), replace: "Read only".into(), ..Match::default() }).unwrap());
         let db = typerelay_client::database::Database::open(&app.store.directory).unwrap();
         db.connection.execute("UPDATE libraries SET data=json_set(data,'$.permissions.edit',json('false'))", []).unwrap();
+        Fixture::key(&mut app, KeyCode::Down, KeyModifiers::NONE);
         Fixture::key(&mut app, KeyCode::F(3), KeyModifiers::NONE);
         assert_eq!(app.screen, Screen::Browse);
         assert!(app.status.contains("read-only"));
@@ -1361,6 +1619,133 @@ mod tests {
         assert!(!app.dirty());
         app.expansion.insert_str("changed"); Fixture::key(&mut app, KeyCode::F(1), KeyModifiers::NONE); Fixture::key(&mut app, KeyCode::Char('d'), KeyModifiers::NONE);
         assert_eq!(app.screen, Screen::Files); assert_eq!(app.store.open("sales").unwrap().entries[0].replace, "Hello\nworld\n");
+    }
+    #[test]
+    fn enter_requires_a_new_selection_after_sync_removes_the_highlighted_snippet() {
+        use serde_json::json;
+        use typerelay_client::database::Database;
+
+        for query in ["", "shared"] {
+            let temp = tempfile::tempdir().unwrap();
+            let mut app = Fixture::app(temp.path());
+            let db = Database::open(&app.store.directory).unwrap();
+            let file = db.import("Synced", "matches: [{replace: Shared first}, {replace: Shared second}]").unwrap();
+            let mut remote = db.library(&file.id).unwrap();
+            remote["records"] = json!(db.records(&file.id).unwrap());
+            db.apply(&json!({"library": remote}), None).unwrap();
+            app.file = Some(db.editor_id(&file.id).unwrap());
+            app.screen = Screen::Browse;
+            app.search = App::text(query);
+            app.rebuild_global_hits();
+            Fixture::key(&mut app, KeyCode::Down, KeyModifiers::NONE);
+            let removed = app.file.as_ref().unwrap().ids[app.selected().unwrap()].clone();
+            let records = remote["records"].as_array_mut().unwrap();
+            records.retain(|row| row["id"] != removed);
+            let remaining = records[0]["id"].as_str().unwrap().to_owned();
+            remote["revision"] = json!(2);
+            db.apply(&json!({"library": remote}), None).unwrap();
+
+            for _ in 0..2 {
+                app.refresh();
+                Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+                assert_eq!(app.screen, Screen::Browse);
+                assert_eq!(app.selected(), None);
+                assert_eq!(app.status, "Select a snippet");
+            }
+            Fixture::key(&mut app, KeyCode::Char('/'), KeyModifiers::NONE);
+            Fixture::key(&mut app, KeyCode::Left, KeyModifiers::NONE);
+            app.handle(Event::Paste(String::new()));
+            Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+            Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+            assert_eq!(app.screen, Screen::Browse);
+            assert_eq!(app.selected(), None);
+
+            Fixture::key(&mut app, KeyCode::Down, KeyModifiers::NONE);
+            Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+            assert_eq!(app.screen, Screen::Edit);
+            assert_eq!(app.file.as_ref().unwrap().ids[app.editing.unwrap()], remaining);
+        }
+    }
+    #[test]
+    fn back_to_back_saves_survive_background_sync() {
+        use serde_json::json;
+        use typerelay_client::database::Database;
+
+        let tab_source = "$task-router{{key:tab}}";
+        for ack_before_second_save in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let mut app = Fixture::app(temp.path());
+            let db = Database::open(&app.store.directory).unwrap();
+            let file = db.import("Synced", "matches: [{trigger: str, replace: '$task-router'}, {replace: Second}]").unwrap();
+            let mut remote = db.library(&file.id).unwrap();
+            remote["records"] = json!(db.records(&file.id).unwrap());
+            db.apply(&json!({"library": remote}), None).unwrap();
+            app.file = Some(db.editor_id(&file.id).unwrap());
+            app.screen = Screen::Browse;
+
+            app.snippets_state.select(Some(0));
+            Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+            app.expansion = App::text(tab_source);
+            Fixture::key(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL);
+            assert_eq!(app.screen, Screen::Browse, "{}", app.status);
+            assert_eq!(db.editor_id(&file.id).unwrap().entries[0].replace, tab_source);
+            let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+            terminal.draw(|frame| app.draw(frame)).unwrap();
+            let screen = terminal.backend().buffer().content().iter().map(|cell| cell.symbol()).collect::<String>();
+            assert!(screen.contains(tab_source));
+            let (first_seq, first_op) = db.pending().unwrap().remove(0);
+            let first_change = &first_op["body"]["changes"][0];
+            assert_eq!(first_change["id"], file.ids[0]);
+            assert_eq!(first_change["base_revision"], remote["records"][0]["revision"]);
+            assert_eq!(first_change["value"]["content"]["type"], "template");
+            assert_eq!(first_change["value"]["content"]["text"], tab_source);
+
+            Fixture::key(&mut app, KeyCode::Down, KeyModifiers::NONE);
+            app.refresh();
+            Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+            assert_eq!(app.draft().replace, "Second");
+            app.expansion = App::text("Second edit");
+            app.persist_draft(false).unwrap();
+
+            remote["revision"] = json!(2);
+            remote["records"][0]["revision"] = json!(2);
+            remote["records"][0]["content"] = first_change["value"]["content"].clone();
+            let acknowledge_first = || db.apply(&json!({"library": remote}), Some((first_seq, &first_op))).unwrap();
+            if ack_before_second_save {
+                acknowledge_first();
+                app.refresh();
+            }
+            Fixture::key(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL);
+            assert_eq!(app.screen, Screen::Browse, "{}", app.status);
+            assert_eq!(db.editor_id(&file.id).unwrap().entries[1].replace, "Second edit");
+            if !ack_before_second_save {
+                assert_eq!(db.pending().unwrap().len(), 2);
+                acknowledge_first();
+            }
+            assert_eq!(db.editor_id(&file.id).unwrap().entries[1].replace, "Second edit");
+
+            let pending = db.pending().unwrap();
+            assert_eq!(pending.len(), 1);
+            let (second_seq, second_op) = &pending[0];
+            let second_change = &second_op["body"]["changes"][0];
+            assert_eq!(second_change["id"], file.ids[1]);
+            assert_eq!(second_change["base_revision"], remote["records"][1]["revision"]);
+            assert_eq!(second_change["value"]["content"]["text"], "Second edit");
+            remote["revision"] = json!(3);
+            remote["records"][1]["revision"] = json!(2);
+            remote["records"][1]["content"] = second_change["value"]["content"].clone();
+            db.apply(&json!({"library": remote}), Some((*second_seq, second_op))).unwrap();
+            assert!(db.pending().unwrap().is_empty());
+            let saved = db.editor_id(&file.id).unwrap();
+            assert_eq!(saved.entries[0].replace, tab_source);
+            assert_eq!(saved.entries[1].replace, "Second edit");
+
+            Fixture::key(&mut app, KeyCode::Down, KeyModifiers::NONE);
+            remote["records"][0]["position"] = json!(2);
+            db.apply(&json!({"library": remote}), None).unwrap();
+            app.refresh();
+            assert_eq!(app.file.as_ref().unwrap().ids[app.selected().unwrap()], file.ids[1]);
+        }
     }
     #[test]
     fn disconnected_sync_settings_and_failed_save_keep_draft() {

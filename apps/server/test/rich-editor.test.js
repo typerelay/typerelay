@@ -21,6 +21,8 @@ test('TipTap rich editor round-trips GFM, raw HTML, asset images and source mode
 	globalThis.requestAnimationFrame = callback => setTimeout(callback, 0);
 	globalThis.cancelAnimationFrame = clearTimeout;
 	const { RichEditor } = await import('../browser/rich-editor.js');
+	const { TemplateEditor } = await import('../public/template-editor.js');
+	const { TemplateRuntime } = await import('../public/template-runtime.js');
 	const field = document.querySelector('#replace');
 	const originalParent = field.parentNode;
 	const editor = new RichEditor(field, document.querySelector('#rich-editor'), document.querySelector('#rich-toolbar'), { readonly: false, onError: error => { throw error; } });
@@ -40,6 +42,57 @@ test('TipTap rich editor round-trips GFM, raw HTML, asset images and source mode
 		assert.match(roundTrip, new RegExp('typerelay-asset:' + 'a'.repeat(64)));
 		editor.toggleSource(); assert.equal(field.hidden, false); assert.equal(field.previousElementSibling.id, 'rich-toolbar'); field.value += '\n\n**Source edit**'; editor.toggleSource(); assert.match(editor.content(), /\*\*Source edit\*\*/);
 		editor.editor.chain().focus().setTextSelection({ from: 1, to: 8 }).toggleUnderline().setTextAlign('center').run(); const formatted = editor.content(); assert.match(formatted, /<u>|text-decoration|underline/); assert.match(formatted, /text-align|align=/);
+		const template = new TemplateEditor({ richView: editor }); template.preview = () => {};
+		template.attach();
+		const picker = document.querySelector('#variable-kind');
+		assert.equal(picker.querySelector('[value="key:tab"]').textContent, 'Tab keypress');
+		picker.value = 'key:tab';
+		editor.editor.commands.setContent('BeforeAfter', { contentType: 'markdown' });
+		editor.editor.commands.setTextSelection(7);
+		document.querySelector('#insert-variable').click();
+		assert.equal(editor.content(), 'Before\n\n{{key:tab}}\n\nAfter');
+		editor.toggleSource(); field.setSelectionRange(field.value.length, field.value.length);
+		document.querySelector('#insert-variable').click();
+		assert.match(editor.content(), /After\n\n\{\{key:tab\}\}$/m);
+		editor.toggleSource();
+		const escaped = [
+			String.raw`\{{key:tab}}`,
+			String.raw`A \{{key:enter}} B and \\\{{key:tab}} C`,
+			String.raw`**Bold\{{key:tab}}** and \{{key:enter}}`,
+			'Keep \u2060 as written. ' + String.raw`A \{{key:enter}}`,
+			String.raw`<p style="text-align:center">A \{{key:tab}} B</p>`,
+			'Inline code: `' + String.raw`\{{key:tab}}` + '`',
+			'```text\n' + String.raw`\{{key:enter}}` + '\n```',
+			'<div data-custom="kept">' + String.raw`\{{key:tab}}` + '</div>',
+			'{{key:tab}}',
+			'After',
+			'{{key:enter}}',
+		].join('\n\n');
+		for (const source of [escaped, String.raw`Before \\{{key:tab}} after \\\\{{key:enter}}`]) {
+			editor.toggleSource(); field.value = source; editor.toggleSource();
+			assert.equal(editor.content(), source);
+			editor.toggleSource();
+			assert.equal(field.value, source);
+			editor.toggleSource();
+			assert.equal(editor.content(), source);
+		}
+		editor.editor.commands.setContent('', { contentType: 'markdown' });
+		const typed = String.raw`Before \{{key:tab}} after \\\{{key:enter}}`;
+		editor.editor.view.dispatch(editor.editor.state.tr.insertText(typed));
+		assert.equal(field.value, typed);
+		assert.equal(editor.content(), typed);
+		assert.equal(editor.editor.getText(), typed);
+		editor.editor.commands.setContent('', { contentType: 'markdown' });
+		const pastedEscape = String.raw`\{{key:enter}} next \\{{key:tab}}`;
+		assert.equal(editor.editor.view.pasteText(pastedEscape, new dom.window.Event('paste')), true);
+		assert.equal(editor.content(), pastedEscape);
+		editor.editor.commands.setContent({ type: 'doc', content: [{ type: 'codeBlock', attrs: { language: 'text' }, content: [{ type: 'text', text: pastedEscape }] }] });
+		assert.equal(editor.content().trimEnd(), '```text\n' + pastedEscape + '\n```');
+		document.querySelector('#snippet-type').value = 'plain_text';
+		field.value = 'Some text'; field.setSelectionRange(4, 4);
+		document.querySelector('#insert-variable').click();
+		assert.equal(field.value, 'Some{{key:tab}} text');
+		assert.equal(TemplateRuntime.preview({ steps: [{ kind: 'text', text: 'A' }, { kind: 'tab' }, { kind: 'text', text: 'B' }, { kind: 'enter' }] }), 'A⇥ [Tab key]B⏎ [Enter key]');
 		editor.setReadonly(true); assert.equal(editor.editor.isEditable, false);
 	} finally { editor.destroy(); assert.equal(field.parentNode, originalParent); dom.window.close(); }
 });

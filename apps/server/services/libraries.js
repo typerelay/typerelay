@@ -427,6 +427,19 @@ export class Libraries {
 		for (const entry of input[Libraries.preparedYaml] || (Array.isArray(input.snippets) ? input.snippets : [])) await prepare(entry);
 		for (const row of [...(Array.isArray(input.changes) ? input.changes : []), ...(Array.isArray(input.items) ? input.items : []), input]) if (row?.value) await prepare(row.value);
 	}
+	static assertTabCompatibility(ctx, result) {
+		if (ctx.tabActions !== false) return;
+		const hasTab = record => {
+			const content = record?.content;
+			const source = content?.type === 'template' ? content.text : content?.type === 'rich_text' ? content.markdown : '';
+			return source?.includes('{{key:tab}}') && source.matchAll(/(\\\\|\\\{\{)|\{\{key:tab\}\}/g).some(match => !match[1]);
+		};
+		const libraries = [result.library, ...(result.libraries || [])];
+		// Only active records in active libraries enter the desktop's expansion snapshot.
+		const hasTabLibrary = libraries.some(library => library?.state === 'active' && (library.records || library.snippets || []).some(record => record.state === 'active' && hasTab(record)));
+		Support.assert(!hasTabLibrary, 'Update TypeRelay to a version that supports Tab keypress snippets (desktop 1.4.2 or later), then sync again.', 412);
+	}
+
 	static async mutate(ctx, operation, body, action, options = {}) {
 		Support.assert(typeof operation === 'string' && /^[a-zA-Z0-9_-]{16,128}$/.test(operation), 'Stable operation ID required');
 		const fingerprint = Support.hash(JSON.stringify(body));
@@ -450,6 +463,7 @@ export class Libraries {
 			await Libraries.stage(ctx, input, budget);
 		}
 		let result;
+		const requested = ctx;
 		await mongoose.connection.transaction(async session => {
 			await Account.updateOne({ _id: ctx.account }, { $inc: { sequence: 1 } }, { session });
 			ctx = await Support.context(ctx.user, ctx.account, session);
@@ -459,9 +473,11 @@ export class Libraries {
 			if (prior) {
 				Support.assert(prior.fingerprint === fingerprint, 'Operation ID already used with different content', 409);
 				result = await Libraries.receipt(ctx, prior.result, session);
+				Libraries.assertTabCompatibility(requested, result);
 				return;
 			}
 			result = await action(ctx, session);
+			Libraries.assertTabCompatibility(requested, result);
 			const stored = { ...result };
 			if (result.library) { stored.library_id = result.library._id; delete stored.library; }
 			if (stored.libraries) { stored.library_ids = stored.libraries.map(library => library._id); delete stored.libraries; }

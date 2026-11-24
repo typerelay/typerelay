@@ -1,0 +1,36 @@
+:root {
+  color-scheme: light dark;
+  background: Canvas;
+  color: CanvasText;
+  font: 1rem system-ui, sans-serif;
+  --spinner: #0a64d8;
+}
+
+body { margin: 0; }
+
+main {
+  min-height: 100vh;
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  border: .0625rem solid GrayText;
+}
+
+.update-progress { display: flex; align-items: center; gap: .875rem; }
+h1 { margin: 0; font-size: 1rem; font-weight: 600; }
+
+.spinner {
+  width: 1.5rem;
+  height: 1.5rem;
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  border: .1875rem solid GrayText;
+  border-top-color: var(--spinner);
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(1turn); } }
+@media (prefers-color-scheme: dark) { :root { --spinner: #71b6ff; } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }

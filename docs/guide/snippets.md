@@ -19,9 +19,9 @@ Backspace, Delete and unmodified Left/Right arrows can edit within a typed abbre
 
 <div v-pre>
 
-On desktop, Enter/Return and keypad Enter expand a matching abbreviation, then send one Enter after successful insertion. In an SSH terminal this executes the expanded command. Space expands without an added Enter. A template ending with explicit `{{key:enter}}` uses that action without an extra Enter; an earlier Enter action does not suppress the final confirmation. Failure, cancellation, changed focus, and held-key repeats never append another Enter. Unmatched Enter behaves normally.
+On desktop, Enter/Return and keypad Enter expand a matching abbreviation, then send one Enter after successful insertion. In an SSH terminal this executes the expanded command. Space expands without an added Enter. A template ending with explicit `{{key:enter}}` uses that action without an extra Enter; an earlier Enter action does not suppress the final confirmation. Failure, cancellation, changed focus, and held-key repeats never append another Enter. Unmatched Enter behaves normally. Snippets containing `{{key:tab}}` consume the trigger Enter and run the explicit keypresses in snippet order.
 
-Chrome Enter expansion continues to consume the key without submitting or adding a newline; Chrome still rejects explicit `{{key:enter}}` actions. Mobile keyboards retain immediate expansion.
+Chrome Enter expansion continues to consume the key without submitting or adding a newline; Chrome rejects explicit `{{key:enter}}` and `{{key:tab}}` actions. Mobile keyboards retain immediate expansion.
 
 </div>
 
@@ -41,11 +41,11 @@ Rich text stores portable Markdown and preserved raw-HTML blocks. The web editor
 
 Uploaded and remote images are normalized, privately cached and synchronized as deduplicated binary assets. This includes reference-style Markdown images, image URLs inside angle brackets, and HTML image tags. Image preparation skips code examples and keeps ordinary links unchanged. Images are not stored as base64 in snippet records. Each paste offers HTML, RTF and plain text, so the destination application chooses the richest format it supports. The plain fallback keeps readable structure and image alt text.
 
-Rich text supports the complete template-variable system. User answers remain literal and are escaped according to their text, link or HTML context. Enter actions must appear on their own line between rich-text blocks.
+Rich text supports the complete template-variable system. User answers remain literal and are escaped according to their text, link or HTML context. Keypress actions must appear on their own line between rich-text blocks.
 
 ## Variables
 
-Text and Rich text support prompted fields, dates and explicit Enter actions through the collapsed **Variables** section. Code keeps double-brace text literal. See [Template variables](./templates).
+Text and Rich text support prompted fields, dates and explicit Enter and Tab actions through the collapsed **Variables** section. Code keeps double-brace text literal. See [Template variables](./templates).
 
 ## Copy, move and Trash
 

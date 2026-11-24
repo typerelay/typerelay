@@ -148,6 +148,20 @@ test('authoring yields a validated proposal without changing snippets', async ()
 	await Fixture.provider(() => assert.rejects(Ai.author(ctx, Fixture.author()), /Enter action/), () => ({ status: 'completed', output_text: '{"title":"Bad","text":"Run {{key:enter}}"}' }));
 });
 
+test('authoring preserves Tab actions without exposing them as text fields', async () => {
+	const ctx = await Fixture.context(); await Fixture.configure(ctx);
+	const proposal = text => () => ({ status: 'completed', output_text: JSON.stringify({ title: 'Greeting', text }) });
+	await Fixture.provider(() => assert.rejects(Ai.author(ctx, Fixture.author()), /Tab action/), proposal('Keep \\\\{{key:tab}}'));
+	const entry = { content: { version: 1, type: 'template', text: 'Hello{{key:tab}}Customer{{key:enter}}', variables: {} } };
+	for (const text of ['Hello Customer{{key:enter}}', 'Hello{{key:tab}}{{key:tab}}Customer{{key:enter}}']) await Fixture.provider(() => assert.rejects(Ai.author(ctx, Fixture.author({ entry })), /Tab action/), proposal(text));
+	await Fixture.provider(() => assert.rejects(Ai.author(ctx, Fixture.author({ entry })), /reordered key actions/), proposal('Hi{{key:enter}}Customer{{key:tab}}'));
+	await Fixture.provider(async () => {
+		const result = await Ai.author(ctx, Fixture.author({ action: 'template', entry }));
+		assert.deepEqual(Object.keys(result.proposal.content.variables), ['name']);
+		assert.equal(result.proposal.content.text, 'Hello{{key:tab}}{{name}}{{key:enter}}');
+	}, proposal('Hello{{key:tab}}{{name}}{{key:enter}}'));
+});
+
 test('ordinary authoring rejects unsolicited fields while preserving existing repeated fields and literal code', async () => {
 	const ctx = await Fixture.context(); await Fixture.configure(ctx);
 	for (const action of ['generate', 'improve', 'translate']) await Fixture.provider(() => assert.rejects(Ai.author(ctx, Fixture.author({ action })), /unexpected template variable/), () => ({ status: 'completed', output_text: '{"title":"Reply","text":"Hello {{customer_name}}"}' }));

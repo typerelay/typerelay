@@ -1,5 +1,6 @@
 use typerelay_client::{database::{DatabaseSnapshot, Watcher}, desktop::{Hyprland, Registration}};
 use crate::clipboard::{PasteJob, Progress};
+use typerelay_client::clipboard_payload::ClipboardStep;
 use anyhow::{Context, Result, bail};
 use evdev::{Device, EventType, InputEvent, KeyCode, InputId, BusType, uinput::VirtualDevice};
 use fs2::FileExt;
@@ -427,11 +428,22 @@ impl Session {
                         capture.reset();engine.feed(Input::Cancel); last_input=Instant::now();
                         if let Some(wait)=&mut template_wait {wait.deadline=Instant::now()+Duration::from_secs(5);}
                         match request.step {
-							typerelay_client::clipboard_payload::ClipboardStep::Payload(payload) if !payload.plain.is_empty()||payload.html.is_some()=>{let text=payload.plain.clone();let cursor=payload.cursor.clone();paste=Some(PasteState{job:PasteJob::start_payload(payload, request.completion_deadline),expansion:Expansion{identity:None,template:None,erase:request.erase,text},target:Some(request.target),reply:Some(request.reply),generation:*input_generation,started:false,sent:false,cancelled:false,restore_space:false,confirm_enter:false,cursor,cursor_remaining:None});}
+							ClipboardStep::Payload(payload) if !payload.plain.is_empty()||payload.html.is_some()=>{let text=payload.plain.clone();let cursor=payload.cursor.clone();paste=Some(PasteState{job:PasteJob::start_payload(payload, request.completion_deadline),expansion:Expansion{identity:None,template:None,erase:request.erase,text},target:Some(request.target),reply:Some(request.reply),generation:*input_generation,started:false,sent:false,cancelled:false,restore_space:false,confirm_enter:false,cursor,cursor_remaining:None});}
                             step => {
                                 if let Some(wait)=&mut template_wait {wait.started=true;}
                                 for _ in 0..request.erase { output.emit(&Self::stroke(KeyCode::KEY_BACKSPACE,false))?; }
-								if matches!(step,typerelay_client::clipboard_payload::ClipboardStep::Enter) { if Self::target()? != Some(request.target) { let _=request.reply.send(Err("Original window lost focus; remaining actions cancelled".into())); continue; } output.emit(&Self::stroke(KeyCode::KEY_ENTER,false))?; }
+                                let key = match step {
+                                    ClipboardStep::Enter => Some(KeyCode::KEY_ENTER),
+                                    ClipboardStep::Tab => Some(KeyCode::KEY_TAB),
+                                    ClipboardStep::Payload(_) => None,
+                                };
+                                if let Some(key) = key {
+                                    if Self::target()?.as_deref() != Some(request.target.as_str()) || context.changed(Some(&request.target))? {
+                                        let _=request.reply.send(Err("Original window or input changed; remaining actions cancelled".into()));
+                                        continue;
+                                    }
+                                    output.emit(&Self::stroke(key,false))?;
+                                }
                                 let _=request.reply.send(Ok(*input_generation));
                             }
                         }
@@ -570,7 +582,7 @@ impl Session {
                                     let accepted = if template.prompted { typerelay_client::panel_ipc::PanelIpc::prompt(typerelay_client::panel_ipc::Prompt { hit, target: destination, erase: expansion.erase, generation:*input_generation, created_ms:std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis(),confirm_enter:matched_enter }) } else {
                                         let tx=template_tx.clone(); let erase=expansion.erase; let generation=*input_generation; let started=Instant::now();
 											let (done,completion)=std::sync::mpsc::channel();template_wait=Some(TemplateWait{done:completion,target:destination.clone(),started:false,generation,deadline:Instant::now()+Duration::from_secs(5),restore_space:code==KeyCode::KEY_SPACE});
-											std::thread::spawn(move || { let result=(||->Result<()>{ let steps=typerelay_client::panel::Panel::steps_at(&Paths::config_dir()?.join("snippets"),&hit,Default::default(),false,typerelay_client::templates::Templates::clock())?; anyhow::ensure!(started.elapsed()<Duration::from_secs(2),"Template preparation expired");typerelay_client::panel_ipc::PanelIpc::execute(&tx,&hit,&destination,typerelay_client::clipboard_payload::ClipboardStep::with_confirmation(steps,matched_enter),erase,Some(generation)) })().map_err(|error|error.to_string()); if let Err(error)=&result { eprintln!("Template insertion cancelled: {error}"); }let _=done.send(result); }); true
+											std::thread::spawn(move || { let result=(||->Result<()>{ let steps=typerelay_client::panel::Panel::steps_at(&Paths::config_dir()?.join("snippets"),&hit,Default::default(),false,typerelay_client::templates::Templates::clock())?; anyhow::ensure!(started.elapsed()<Duration::from_secs(2),"Template preparation expired");typerelay_client::panel_ipc::PanelIpc::execute(&tx,&hit,&destination,ClipboardStep::with_confirmation(steps,matched_enter),erase,Some(generation)) })().map_err(|error|error.to_string()); if let Err(error)=&result { eprintln!("Template insertion cancelled: {error}"); }let _=done.send(result); }); true
                                     };
                                     if accepted { target=None; break; }
                                 }

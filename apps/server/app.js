@@ -208,6 +208,7 @@ export class Server {
 		app.use('/api/v2', async (req, res, next) => {
 			if (req.headers.authorization && req.headers['x-typerelay-sync-protocol'] !== '6') return res.status(426).json({ error: 'Upgrade TypeRelay: rich text requires sync protocol 6', protocol: 6 });
 			req.ctx = req.headers.authorization ? await Auth.bearer(req.headers.authorization.replace(/^Bearer /, '')) : await Security.context(req, req.headers['x-account-id']);
+			if (req.headers.authorization) req.ctx.tabActions = req.headers['x-typerelay-tab-actions'] === '1';
 			if (req.boundAccount) Support.assert(req.ctx.account === req.boundAccount, 'Custom domain account mismatch', 403);
 			next();
 		});
@@ -285,7 +286,9 @@ export class Server {
 		app.delete('/api/v2/white-label/assets/:kind', async (req, res) => { Support.assert(Support.admin(req.ctx), 'Admin required', 403); Server.whiteLabelResult(res, await WhiteLabel.deleteAsset(req.ctx.account, req.params.kind)); });
 		app.get('/api/v2/operations/:id', async (req, res) => {
 			const receipt = await Operation.findOne({ account: req.ctx.account, user: req.ctx.user, operation: req.params.id }).lean();
-			res.json(receipt ? { found: true, ...await Libraries.receipt(req.ctx, receipt.result) } : { found: false });
+			const result = receipt ? { found: true, ...await Libraries.receipt(req.ctx, receipt.result) } : { found: false };
+			Libraries.assertTabCompatibility(req.ctx, result);
+			res.json(result);
 		});
 		app.post('/api/v2/snippets/batch', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.batch(ctx, req.body, session))));
 		app.get('/api/v2/trash', async (req, res) => {
@@ -317,7 +320,11 @@ export class Server {
 			]);
 			res.render('ajax/mobile_apps_modal', { model: { ios: { url: IOS_BETA_URL, qrcode: iosQrcode }, android: { url: ANDROID_STORE_URL, qrcode: androidQrcode } } });
 		});
-		app.get('/api/v2/libraries', async (req, res) => res.json(await Libraries.list(req.ctx)));
+		app.get('/api/v2/libraries', async (req, res) => {
+			const libraries = await Libraries.list(req.ctx);
+			Libraries.assertTabCompatibility(req.ctx, { libraries });
+			res.json(libraries);
+		});
 		app.post('/api/v2/import/:format/preview', uploadLimit, async (req, res) => { const preview = await Libraries.previewImport(req.params.format, req.body); res.json({ ...preview, html: Support.render('./views/ajax/snippetslab.pug', preview) }); });
 		app.post('/api/v2/import/preview', uploadLimit, async (req, res) => res.json(await Yaml.run(req.body.yaml)));
 		app.post('/api/v2/import/:format', uploadLimit, async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.commitImport(ctx, req.params.format, req.body, session), { format: req.params.format })));
@@ -327,9 +334,13 @@ export class Server {
 		app.get('/api/v2/personal-abbreviations', async (req, res) => res.json(await Server.personalPresentation(req.ctx)));
 		app.post('/api/v2/snippets/:id/personal-abbreviation', async (req, res) => {
 			const result = await Libraries.mutate(req.ctx, req.body.operation_id, { ...req.body, snippet: req.params.id }, (ctx, session) => Libraries.personal(ctx, req.params.id, req.body, session));
-			res.json({ ...result, ...await Server.personalPresentation(req.ctx) });
+			res.json(req.ctx.tabActions === false ? result : { ...result, ...await Server.personalPresentation(req.ctx) });
 		});
-		app.get('/api/v2/sync', async (req, res) => res.json({ ...await Libraries.download(req.ctx, Number(req.query.cursor || 0), req.headers['x-typerelay-personal-abbreviations'] === '1'), statistics_identity: { account: req.ctx.account, user: req.ctx.user, device: req.ctx.device || null } }));
+		app.get('/api/v2/sync', async (req, res) => {
+			const result = await Libraries.download(req.ctx, Number(req.query.cursor || 0), req.headers['x-typerelay-personal-abbreviations'] === '1');
+			Libraries.assertTabCompatibility(req.ctx, result);
+			res.json({ ...result, statistics_identity: { account: req.ctx.account, user: req.ctx.user, device: req.ctx.device || null } });
+		});
 		app.post('/api/v2/conflicts/:id', async (req, res) => Server.result(res, req.ctx, await Libraries.mutate(req.ctx, req.body.operation_id, req.body, (ctx, session) => Libraries.resolve(ctx, req.params.id, req.body, session), { conflict: req.params.id })));
 		app.get('/api/v2/team', async (req, res) => res.json(await Team.list(req.ctx)));
 		app.post('/api/v2/team/members', async (req, res) => { const result = await Team.add(req.ctx, req.body); res.json({ ...result, html: Support.render('./views/ajax/member.pug', { member: result.member, ctx: req.ctx, viewerAvatarStyle: (await User.findById(req.ctx.user).select('avatar_style').lean()).avatar_style }) }); });
@@ -433,6 +444,7 @@ export class Server {
 		let result;
 		await mongoose.connection.transaction(async session => {
 			const libraries = await Libraries.list(ctx, session);
+			Libraries.assertTabCompatibility(ctx, { libraries });
 			const account = await Account.findById(ctx.account).select('sequence').session(session).read('primary').lean();
 			result = { personal_sequence: account.sequence, personal_fragments: libraries.flatMap(library => library.snippets.map(snippet => ({ library: library._id, snippet, html: Support.render('./views/ajax/snippet.pug', { snippet, library }) }))) };
 		}, { readConcern: { level: 'snapshot' } });
@@ -442,6 +454,7 @@ export class Server {
 		return { library, html: Support.render('./views/ajax/library.pug', { library }), fragments: library.snippets.map(snippet => ({ id: snippet.id, revision: snippet.revision, html: Support.render('./views/ajax/snippet.pug', { snippet, library }) })) };
 	}
 	static async result(res, ctx, result) {
+		Libraries.assertTabCompatibility(ctx, result);
 		if (result.import_summary) result.import_summary_html = Support.render('./views/ajax/import-summary.pug', result.import_summary);
 		if (result.libraries) result.libraries = await Libraries.personalize(ctx, result.libraries);
 		if (result.library) [result.library] = await Libraries.personalize(ctx, [result.library]);

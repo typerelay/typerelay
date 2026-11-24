@@ -16,5 +16,6 @@ export class TemplateRuntime {
 		if (output.error) throw new Error(output.error);
 		return output;
 	}
-	static preview(result) { if (result.cursor) return result.text.slice(0, result.cursor.utf16) + '▏ [Cursor position]' + result.text.slice(result.cursor.utf16); return result.steps.map(step => step.kind === 'enter' ? '⏎ [Enter key]' : step.text).join(''); }
+	static keyNames(result) { return [result.enter_actions && 'Enter', result.tab_actions && 'Tab'].filter(Boolean).join(' and '); }
+	static preview(result) { if (result.cursor) return result.text.slice(0, result.cursor.utf16) + '▏ [Cursor position]' + result.text.slice(result.cursor.utf16); return result.steps?.map(step => step.kind === 'enter' ? '⏎ [Enter key]' : step.kind === 'tab' ? '⇥ [Tab key]' : step.text).join('') ?? result.text; }
 }

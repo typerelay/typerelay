@@ -8,29 +8,36 @@ use anyhow::{Context, Result, ensure};
 use serde_json::{json,Value};
 use std::{sync::{Mutex,atomic::{AtomicBool,Ordering}},path::PathBuf};
 use tauri::{Manager,Emitter};
-use typerelay_client::{panel::{Panel,PanelSettings,Hit},editor::Paths,database::Database,sync::Sync};
+use typerelay_client::{clipboard_payload::ClipboardStep,panel::{Panel,PanelSettings,Hit},editor::Paths,database::Database,sync::Sync};
 use tauri_plugin_autostart::ManagerExt as _;
 use tauri_plugin_dialog::DialogExt;
+#[cfg(not(target_os="linux"))]
+use typerelay_client::clipboard_payload::ClipboardPayload;
 #[cfg(not(target_os="linux"))]
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 #[derive(Default)]
-struct Runtime { root:PathBuf, #[cfg(any(target_os="windows",target_os="macos"))] usage:Option<std::sync::mpsc::SyncSender<(Hit,&'static str,usize)>>, target:Mutex<Option<platform::Target>>, last:Mutex<Option<platform::Target>>, erase:Mutex<usize>, confirm_enter:Mutex<bool>, #[cfg(target_os="macos")] deferred:Mutex<Option<platform::DeferredInput>>, #[cfg(target_os="windows")] cancelled:Mutex<Option<std::sync::Arc<AtomicBool>>>, busy:AtomicBool, syncing:AtomicBool, authenticating:AtomicBool, cancel_auth:AtomicBool, auth_error:Mutex<String>, prompting:AtomicBool, prompt_hit:Mutex<Option<Hit>>, settings:AtomicBool, suggestions:AtomicBool, status:Mutex<String>, capture_status:Mutex<String>, #[cfg(any(target_os="windows",target_os="macos"))] expansion_started:AtomicBool, #[cfg(target_os="linux")] registration:Mutex<Option<typerelay_client::desktop::Registration>>, #[cfg(target_os="linux")] engine:Mutex<Option<std::process::Child>>, #[cfg(target_os="linux")] closing:AtomicBool, #[cfg(target_os="linux")] linux_setup:AtomicBool }
+struct Runtime { root:PathBuf, #[cfg(any(target_os="windows",target_os="macos"))] usage:Option<std::sync::mpsc::SyncSender<(Hit,&'static str,usize)>>, target:Mutex<Option<platform::Target>>, last:Mutex<Option<platform::Target>>, erase:Mutex<usize>, confirm_enter:Mutex<bool>, #[cfg(target_os="macos")] deferred:Mutex<Option<platform::DeferredInput>>, #[cfg(target_os="windows")] cancelled:Mutex<Option<std::sync::Arc<AtomicBool>>>, busy:AtomicBool, syncing:AtomicBool, authenticating:AtomicBool, cancel_auth:AtomicBool, auth_error:Mutex<String>, prompting:AtomicBool, prompt_hit:Mutex<Option<Hit>>, settings:AtomicBool, suggestions:AtomicBool, status:Mutex<String>, capture_status:Mutex<String>, #[cfg(any(target_os="windows",target_os="macos"))] expansion_started:AtomicBool, #[cfg(target_os="linux")] registration:Mutex<Option<typerelay_client::desktop::Registration>>, #[cfg(target_os="linux")] engine:Mutex<Option<std::process::Child>>, #[cfg(target_os="linux")] closing:AtomicBool, #[cfg(target_os="linux")] linux_setup:AtomicBool, #[cfg(target_os="linux")] keyboard_change:Mutex<()> }
 impl Runtime {
 	#[cfg(target_os="linux")]
-	fn setup_linux(app: tauri::AppHandle) {
-		if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_none()&&!app.try_state::<std::sync::Arc<observation::Observation>>().is_some_and(|state|state.native()){update::schedule(app);return;}
+	fn setup_linux(app: tauri::AppHandle, restart: bool) -> bool {
+		use tauri::utils::config::BundleType;
 		let bundle=tauri::utils::platform::bundle_type();
-		if bundle.is_none() { update::schedule(app); return; }
-		if app.state::<Runtime>().linux_setup.swap(true,Ordering::SeqCst) { return; }
-		app.state::<Runtime>().closing.store(false,Ordering::SeqCst);
+		if !matches!(bundle, Some(BundleType::AppImage|BundleType::Deb|BundleType::Rpm)) { return false; }
+		let supports_expansion=std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some()||app.try_state::<std::sync::Arc<observation::Observation>>().is_some_and(|state|state.native());
+		if !app.state::<Runtime>().begin_linux_setup(restart) { return false; }
 		std::thread::spawn(move || {
+			use typerelay_client::installation::Installer;
+			let package=matches!(bundle,Some(BundleType::Deb|BundleType::Rpm));
+			let appimage=std::env::var_os("APPIMAGE").map(PathBuf::from);
+			let registration=(||->Result<()> {
+				if !package { Installer::register_appimage(appimage.as_deref().context("AppImage location is unavailable")?, include_bytes!("../icons/128x128.png"))?; }
+				Ok(())
+			})();
 			let result=(||->Result<()> {
-				use typerelay_client::installation::Installer;
+				if registration.is_err() || !supports_expansion { return Ok(()); }
 				let engine=std::env::current_exe()?.with_file_name("typerelay");
 				ensure!(engine.is_file(),"The Linux package is missing the expansion engine");
-				let appimage=std::env::var_os("APPIMAGE").map(PathBuf::from);
-				if let Some(launcher)=&appimage {Installer::register_appimage(launcher,include_bytes!("../icons/128x128.png"))?;}
 				let keyboard=Installer::keyboard_mode()?;
 				if !Installer::has_access(&keyboard)? || !Installer::persistent_access(&keyboard) || appimage.is_some() && !Installer::appimage_commands(std::path::Path::new("/"),false)? {
 					let message=if appimage.is_some(){"Allow Typerelay to retain access to physical keyboards after reboot and install the typerelay and typerelay-tui terminal commands? Linux will ask for administrator authentication."}else{"Allow Typerelay to read physical keyboards and insert text? Keyboard access will persist after reboot. Linux will ask for administrator authentication."};
@@ -41,7 +48,6 @@ impl Runtime {
 					ensure!(permission.status()?.success(),"Keyboard access was not granted");
 					ensure!(Installer::has_access(&keyboard)?,"Keyboard access is still unavailable");
 				}
-				let package=matches!(bundle,Some(tauri::utils::config::BundleType::Deb|tauri::utils::config::BundleType::Rpm));
 				Installer::prepare_package_service(package)?;
 				if !package {
 					let mut child=std::process::Command::new(&engine).args(["run","--device-name","auto"]).arg("--dir").arg(app.state::<Runtime>().root.join("snippets")).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped()).spawn()?;
@@ -51,13 +57,26 @@ impl Runtime {
 					*running=Some(child);drop(running);
 					let handle=app.clone();std::thread::spawn(move||{use std::io::BufRead;let mut lines=std::collections::VecDeque::new();for line in std::io::BufReader::new(errors).lines().map_while(Result::ok){if lines.len()==32{lines.pop_front();}lines.push_back(line);}let message=lines.into_iter().collect::<Vec<_>>().join("\n");let state=handle.state::<Runtime>();if !state.closing.load(Ordering::SeqCst)&&state.engine.lock().unwrap().as_ref().is_some_and(|child|child.id()==pid)&&!message.trim().is_empty(){*state.status.lock().unwrap()=message.clone();let _=handle.emit("panel-error",message);}});
 				}
-				app.state::<Runtime>().status.lock().unwrap().clear();
 				Ok(())
 			})();
-			if let Err(error)=result { *app.state::<Runtime>().status.lock().unwrap()=error.to_string(); let _=app.emit("panel-error",error.to_string()); }
+			let migration=registration.and_then(|()| {
+				let migration=Installer::migrate_terminal_commands(package, &app.package_info().version.to_string());
+				if let Err(error)=&migration { app.dialog().message(format!("{error:#}")).title("TypeRelay terminal commands").kind(tauri_plugin_dialog::MessageDialogKind::Warning).show(|_|{}); }
+				migration
+			});
+			let message=[result, migration].into_iter().filter_map(Result::err).map(|error|format!("{error:#}")).collect::<Vec<_>>().join("\n");
+			*app.state::<Runtime>().status.lock().unwrap()=message.clone();
+			if !message.is_empty() { let _=app.emit("panel-error",message); }
 			app.state::<Runtime>().linux_setup.store(false,Ordering::SeqCst);
-			update::schedule(app);
 		});
+		true
+	}
+	#[cfg(target_os="linux")]
+	fn begin_linux_setup(&self, restart: bool) -> bool {
+		if self.linux_setup.swap(true,Ordering::SeqCst) { return false; }
+		if restart { self.stop_engine(); }
+		self.closing.store(false,Ordering::SeqCst);
+		true
 	}
 	#[cfg(target_os="linux")]
 	fn stop_engine(&self) {
@@ -180,47 +199,72 @@ impl Runtime {
         #[cfg(target_os="windows")]
         release?;
         #[cfg(target_os="macos")]
-        if let Err(error)=release{deferred.finish(&target)?;return Err(error);}
+        if let Err(error)=release{deferred.finish(&target,true)?;return Err(error);}
+        let epoch=platform::Target::input_epoch().load(Ordering::SeqCst);
         std::thread::sleep(std::time::Duration::from_millis(75));
         #[cfg(target_os="windows")]
         if confirm_enter&&cancelled.load(Ordering::SeqCst){return Ok(());}
         #[cfg(target_os="macos")]
-        if deferred.cancelled(){deferred.finish(&target)?;return Ok(());}
+        if deferred.cancelled(){deferred.finish(&target,true)?;return Ok(());}
         #[cfg(target_os="macos")]
         let prompted=expansion.template.as_ref().is_some_and(|template|template.prompted);
         #[cfg(target_os="macos")]
-        if prompted&&deferred.finish(&target)?>0{return Ok(());}
+        if prompted {
+            let replayed=deferred.finish(&target,true)?;
+            if replayed>0||!target.focused()? {return Ok(());}
+        }
         #[cfg(target_os="macos")]
-        let current=||!confirm_enter||!deferred.cancelled();
+        let current=|has_tab|!(confirm_enter||has_tab)||!deferred.cancelled();
         #[cfg(target_os="windows")]
-        let current=||!confirm_enter||!cancelled.load(Ordering::SeqCst);
+        let current=|has_tab|!(confirm_enter||has_tab)||!cancelled.load(Ordering::SeqCst);
+        #[cfg(target_os="macos")]
+        let mut has_tab=false;
         let result=(||->Result<()>{
         if let Some(template)=expansion.template {
             let identity=template.identity.context("Template identity unavailable")?;
             let hit=Hit{id:identity.id,library:identity.library,revision:identity.revision,library_name:String::new(),title:template.abbreviation.clone(),abbreviation:template.abbreviation,preview:String::new()};
             if template.prompted {
-				let state=app.state::<Runtime>();if state.busy.load(Ordering::SeqCst)||state.prompting.load(Ordering::SeqCst){#[cfg(target_os="windows")]if restore_space {platform::paste(&target,0,Some(typerelay_client::clipboard_payload::ClipboardPayload::text(" ".into())),||true)?;}return Ok(());}
+                #[cfg(target_os="windows")]
+                if cancelled.load(Ordering::SeqCst)||!target.focused()? {return Ok(());}
+				let state=app.state::<Runtime>();if state.busy.load(Ordering::SeqCst)||state.prompting.load(Ordering::SeqCst){#[cfg(target_os="windows")]if restore_space {platform::insert_step(&target,0,ClipboardStep::Payload(ClipboardPayload::text(" ".into())),||true)?;}return Ok(());}
                 #[cfg(target_os="macos")]
                 if confirm_enter {deferred.observe();}
                 #[cfg(target_os="macos")]
                 let prompt_deferred=deferred.clone();
                 #[cfg(target_os="windows")]
                 let prompt_cancelled=cancelled.clone();
-                let prompt_app=app.clone();let main_app=prompt_app.clone();let prompt_target=target.clone();prompt_app.run_on_main_thread(move||{let state=main_app.state::<Runtime>();*state.target.lock().unwrap()=Some(prompt_target);*state.erase.lock().unwrap()=expansion.erase;*state.confirm_enter.lock().unwrap()=confirm_enter;
+                let prompt_app=app.clone();let main_app=prompt_app.clone();let prompt_target=target.clone();prompt_app.run_on_main_thread(move||{
+                #[cfg(target_os="windows")]
+                if prompt_cancelled.load(Ordering::SeqCst)||prompt_target.focused().ok()!=Some(true){return;}
+                let state=main_app.state::<Runtime>();*state.target.lock().unwrap()=Some(prompt_target);*state.erase.lock().unwrap()=expansion.erase;*state.confirm_enter.lock().unwrap()=confirm_enter;
                 #[cfg(target_os="macos")]
                 if confirm_enter {*state.deferred.lock().unwrap()=Some(prompt_deferred);}
                 #[cfg(target_os="windows")]
                 if confirm_enter {*state.cancelled.lock().unwrap()=Some(prompt_cancelled);}
                 *state.prompt_hit.lock().unwrap()=Some(hit);state.prompting.store(true,Ordering::SeqCst);Runtime::open(&main_app,false);})?;return Ok(());
             }
-			let directory=app.state::<Runtime>().root.join("snippets");let steps=typerelay_client::clipboard_payload::ClipboardStep::with_confirmation(Panel::steps_at(&directory,&hit,Default::default(),false,typerelay_client::templates::Templates::clock())?,confirm_enter);let characters=Panel::usage_characters(&steps,expansion.erase);let mut erase=expansion.erase;
-			for step in steps {Panel::content(&directory,&hit)?;platform::paste(&target,std::mem::take(&mut erase),match step{typerelay_client::clipboard_payload::ClipboardStep::Payload(payload)=>Some(payload),typerelay_client::clipboard_payload::ClipboardStep::Enter=>None},&current)?;}
+            let directory=app.state::<Runtime>().root.join("snippets");
+            let steps=ClipboardStep::with_confirmation(Panel::steps_at(&directory,&hit,Default::default(),false,typerelay_client::templates::Templates::clock())?,confirm_enter);
+            #[cfg(target_os="macos")]
+            {has_tab=steps.contains(&ClipboardStep::Tab);}
+            let characters=Panel::usage_characters(&steps,expansion.erase);
+            Self::insert_steps(&directory,&hit,&target,steps,expansion.erase,epoch,&current)?;
             if let Some(usage)=&app.state::<Runtime>().usage{let _=usage.try_send((hit,"insert",characters));}
-		}else{let characters=expansion.text.chars().count().saturating_sub(expansion.erase);let identity=expansion.identity;platform::paste(&target,expansion.erase,Some(typerelay_client::clipboard_payload::ClipboardPayload::text(expansion.text)),&current)?;if confirm_enter {platform::paste(&target,0,None,&current)?;}if let Some(identity)=identity { let hit=Hit{id:identity.id,library:identity.library,revision:identity.revision,library_name:String::new(),title:String::new(),abbreviation:String::new(),preview:String::new()};if let Some(usage)=&app.state::<Runtime>().usage{let _=usage.try_send((hit,"insert",characters));} }}
+        }else{let characters=expansion.text.chars().count().saturating_sub(expansion.erase);let identity=expansion.identity;platform::insert_step(&target,expansion.erase,ClipboardStep::Payload(ClipboardPayload::text(expansion.text)),||current(false))?;if confirm_enter {platform::insert_step(&target,0,ClipboardStep::Enter,||current(false))?;}if let Some(identity)=identity { let hit=Hit{id:identity.id,library:identity.library,revision:identity.revision,library_name:String::new(),title:String::new(),abbreviation:String::new(),preview:String::new()};if let Some(usage)=&app.state::<Runtime>().usage{let _=usage.try_send((hit,"insert",characters));} }}
         Ok(())})();
         #[cfg(target_os="macos")]
-        if !prompted {let replay=deferred.finish(&target).map(|_|());return result.and(replay);}
+        if !prompted {let replay=deferred.finish(&target,has_tab).map(|_|());return result.and(replay);}
         result
+    }
+    #[cfg(not(target_os="linux"))]
+    fn insert_steps(directory:&std::path::Path,hit:&Hit,target:&platform::Target,steps:Vec<ClipboardStep>,mut erase:usize,epoch:u64,current:impl Fn(bool)->bool)->Result<()> {
+        let has_tab=steps.contains(&ClipboardStep::Tab);
+        let guarded=||current(has_tab)&&(!has_tab||platform::Target::input_epoch().load(Ordering::SeqCst)==epoch);
+        for step in steps {
+            Panel::content(directory,hit)?;
+            platform::insert_step(target,std::mem::take(&mut erase),step,&guarded)?;
+        }
+        Ok(())
     }
     fn hide(app:&tauri::AppHandle) {
         if let Some(window)=app.get_webview_window("panel") {let _=window.hide();}
@@ -333,9 +377,13 @@ async fn insert(app:tauri::AppHandle,hit:Hit,values:Option<std::collections::BTr
         if confirm_enter&&let Some(deferred)=&deferred {deferred.begin();}
         #[cfg(target_os="windows")]
         if confirm_enter&&let Some(cancelled)=&cancelled {cancelled.store(false,Ordering::SeqCst);}
+        #[cfg(target_os="macos")]
+        let mut has_tab=false;
         let insertion=(||->Result<()>{
         let values=values.unwrap_or_default();
-		let steps=typerelay_client::clipboard_payload::ClipboardStep::with_confirmation(Panel::steps_at(&directory,&hit,values.clone(),false,clock)?,confirm_enter);
+		let steps=ClipboardStep::with_confirmation(Panel::steps_at(&directory,&hit,values.clone(),false,clock)?,confirm_enter);
+        #[cfg(target_os="macos")]
+        {has_tab=steps.contains(&ClipboardStep::Tab);}
         #[cfg(target_os="windows")]
         if confirm_enter {let deadline=std::time::Instant::now()+std::time::Duration::from_secs(2);while platform::keys_down(){anyhow::ensure!(std::time::Instant::now()<deadline,"Release prompt keys before inserting");std::thread::sleep(std::time::Duration::from_millis(10));}}
         Runtime::hide(&insertion_app);
@@ -347,10 +395,15 @@ async fn insert(app:tauri::AppHandle,hit:Hit,values:Option<std::collections::BTr
         #[cfg(target_os="linux")]
 		{ let _=steps; typerelay_client::panel_ipc::PanelIpc::insert(typerelay_client::panel_ipc::Request{hit,values,generation:None,clock:Some(clock),erase:0,prepare:false,confirm_enter,target:target.address.clone(),created_ms:std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis()})?; }
         #[cfg(not(target_os="linux"))]
-		{let characters=Panel::usage_characters(&steps,erase);let mut erase=erase;for step in steps { Panel::content(&directory,&hit)?; platform::paste(&target,std::mem::take(&mut erase),match step { typerelay_client::clipboard_payload::ClipboardStep::Payload(payload)=>Some(payload),typerelay_client::clipboard_payload::ClipboardStep::Enter=>None },&current)?; } Panel::record_usage(&directory,&hit,"insert","desktop",characters);}
+        {
+            let epoch=platform::Target::input_epoch().load(Ordering::SeqCst);
+            let characters=Panel::usage_characters(&steps,erase);
+            Runtime::insert_steps(&directory,&hit,&target,steps,erase,epoch,|_|current())?;
+            Panel::record_usage(&directory,&hit,"insert","desktop",characters);
+        }
         Ok(())})();
         #[cfg(target_os="macos")]
-        if let Some(deferred)=&deferred {let replay=deferred.finish(&target).map(|_|());insertion.and(replay)?;}else{insertion?;}
+        if let Some(deferred)=&deferred {let replay=deferred.finish(&target,has_tab).map(|_|());insertion.and(replay)?;}else{insertion?;}
         #[cfg(not(target_os="macos"))]
         insertion?;
         Ok(())
@@ -361,14 +414,44 @@ async fn insert(app:tauri::AppHandle,hit:Hit,values:Option<std::collections::BTr
     result
 }
 #[tauri::command]
-async fn copy_snippet(app:tauri::AppHandle,hit:Hit,values:Option<std::collections::BTreeMap<String,String>>)->std::result::Result<(),String> {
+async fn copy_snippet(app:tauri::AppHandle,hit:Hit,values:Option<std::collections::BTreeMap<String,String>>)->std::result::Result<Value,String> {
     let directory=app.state::<Runtime>().root.join("snippets");
-	 tauri::async_runtime::spawn_blocking(move ||->Result<()>{let content=Panel::content(&directory,&hit)?;if content["type"]=="rich_text"{let(rendered,payload)=Panel::rich_payload(&directory,&content,values.unwrap_or_default(),false)?;platform::copy_payload(payload)?;Panel::record_usage(&directory,&hit,"copy","desktop",rendered.characters);Ok(())}else{let rendered=Panel::render(&directory,&hit,values.unwrap_or_default(),false)?;let characters=rendered.text.chars().count();platform::copy(rendered.text)?;Panel::record_usage(&directory,&hit,"copy","desktop",characters);Ok(())}}).await.map_err(|e|e.to_string())?.map_err(|e|e.to_string())
+    tauri::async_runtime::spawn_blocking(move||->Result<Value>{
+        let content=Panel::content(&directory,&hit)?;
+        let values=values.unwrap_or_default();
+        if content["type"]=="rich_text" {
+            let (rendered,payload)=Panel::rich_payload(&directory,&content,values,false)?;
+            platform::copy_payload(payload)?;
+            Panel::record_usage(&directory,&hit,"copy","desktop",rendered.characters);
+            Ok(json!({"enter_actions":rendered.enter_actions,"tab_actions":rendered.tab_actions}))
+        } else {
+            let rendered=Panel::render(&directory,&hit,values,false)?;
+            let characters=rendered.text.chars().count();
+            platform::copy(rendered.text)?;
+            Panel::record_usage(&directory,&hit,"copy","desktop",characters);
+            Ok(json!({"enter_actions":rendered.enter_actions,"tab_actions":rendered.tab_actions,"cursor":rendered.cursor}))
+        }
+    }).await.map_err(|e|e.to_string())?.map_err(|e|e.to_string())
 }
 #[tauri::command]
 async fn prepare_template(app:tauri::AppHandle,hit:Hit,values:Option<std::collections::BTreeMap<String,String>>)->std::result::Result<Value,String> {
     let directory=app.state::<Runtime>().root.join("snippets");
-	 tauri::async_runtime::spawn_blocking(move||->Result<Value>{let content=Panel::content(&directory,&hit)?;if content["type"]=="rich_text"{let(rendered,_)=Panel::rich_payload(&directory,&content,values.unwrap_or_default(),true)?;Ok(serde_json::json!({"template":{"variables":rendered.variables},"fields":rendered.fields,"steps":rendered.steps.iter().map(|step|match step{typerelay_core::rich_text::RichStep::Content{text,..}=>serde_json::json!({"kind":"text","text":text}),typerelay_core::rich_text::RichStep::Enter=>serde_json::json!({"kind":"enter"})}).collect::<Vec<_>>(),"text":rendered.text,"enter_actions":rendered.enter_actions}))}else{Ok(serde_json::to_value(Panel::render(&directory,&hit,values.unwrap_or_default(),true)?)?)}}).await.map_err(|e|e.to_string())?.map_err(|e|e.to_string())
+    tauri::async_runtime::spawn_blocking(move||->Result<Value>{
+        use typerelay_core::rich_text::RichStep;
+        let content=Panel::content(&directory,&hit)?;
+        let values=values.unwrap_or_default();
+        if content["type"]=="rich_text" {
+            let rendered=Panel::rich_render(&directory,&content,values,true,typerelay_client::templates::Templates::clock())?;
+            let steps=rendered.steps.iter().map(|step|match step {
+                RichStep::Content{text,..}=>json!({"kind":"text","text":text}),
+                RichStep::Enter=>json!({"kind":"enter"}),
+                RichStep::Tab=>json!({"kind":"tab"}),
+            }).collect::<Vec<_>>();
+            Ok(json!({"template":{"variables":rendered.variables},"fields":rendered.fields,"steps":steps,"text":rendered.text,"enter_actions":rendered.enter_actions,"tab_actions":rendered.tab_actions}))
+        } else {
+            Ok(serde_json::to_value(Panel::render(&directory,&hit,values,true)?)?)
+        }
+    }).await.map_err(|e|e.to_string())?.map_err(|e|e.to_string())
 }
 #[tauri::command]
 fn set_prompt_view(app:tauri::AppHandle,enabled:bool){let state=app.state::<Runtime>();state.prompting.store(enabled,Ordering::SeqCst);if !enabled{
@@ -420,13 +503,20 @@ fn save_settings(app:tauri::AppHandle,mut config:PanelSettings)->std::result::Re
     let old=Panel::settings(root).map_err(|e|e.to_string())?;
 	config.keyboard_fallback=if old.keyboard.is_empty(){old.keyboard_fallback.clone()}else{old.keyboard.clone()};
 	#[cfg(target_os="linux")]
-	if config.keyboard!=old.keyboard {if app.state::<Runtime>().linux_setup.load(Ordering::SeqCst){return Err("Keyboard setup is running; finish it before changing keyboards".into());}if !config.keyboard.is_empty(){config.keyboard_fallback=typerelay_client::installation::Installer::configured_keyboard(&typerelay_client::installation::Installer::devices().map_err(|error|error.to_string())?,&config).map_err(|error|error.to_string())?;}}
+	let keyboard_state=app.state::<Runtime>();
+	#[cfg(target_os="linux")]
+	let _keyboard_change=if config.keyboard!=old.keyboard {
+		let change=keyboard_state.keyboard_change.try_lock().map_err(|_|"Keyboard setup is running; finish it before changing keyboards")?;
+		if keyboard_state.linux_setup.load(Ordering::SeqCst){return Err("Keyboard setup is running; finish it before changing keyboards".into());}
+		if !config.keyboard.is_empty(){config.keyboard_fallback=typerelay_client::installation::Installer::configured_keyboard(&typerelay_client::installation::Installer::devices().map_err(|error|error.to_string())?,&config).map_err(|error|error.to_string())?;}
+		Some(change)
+	}else{None};
     Runtime::shortcut(&app,Some(&old.shortcut),&config.shortcut).map_err(|e|e.to_string())?;
     let result=(||->Result<()>{if config.launch_at_login{app.autolaunch().enable()?;}else{app.autolaunch().disable()?;} Panel::save_settings(root,&config)})();
     if result.is_err(){let _=Runtime::shortcut(&app,Some(&config.shortcut),&old.shortcut);if old.launch_at_login{let _=app.autolaunch().enable();}else{let _=app.autolaunch().disable();}}
     result.map_err(|e|e.to_string())?;
 	#[cfg(target_os="linux")]
-	if config.keyboard!=old.keyboard {app.state::<Runtime>().stop_engine();Runtime::setup_linux(app);}
+	if config.keyboard!=old.keyboard {Runtime::setup_linux(app.clone(),true);}
 	Ok(())
 }
 #[tauri::command]
@@ -486,6 +576,9 @@ async fn suggestions(app:tauri::AppHandle,action:String,value:Option<Value>)->st
             #[cfg(target_os="linux")]
             "restart-capture"=>{
                 use typerelay_client::installation::Installer;
+                let runtime=app.state::<Runtime>();
+                let _keyboard_change=runtime.keyboard_change.try_lock().map_err(|_|anyhow::anyhow!("Keyboard setup is running. Try again when it finishes."))?;
+                ensure!(!runtime.linux_setup.load(Ordering::SeqCst),"Keyboard setup is running. Try again when it finishes.");
                 let mode=Installer::keyboard_mode()?;
                 if !Installer::has_access(&mode)? || !Installer::persistent_access(&mode) {
                     let launcher=std::env::var_os("APPIMAGE").map(PathBuf::from);
@@ -493,7 +586,7 @@ async fn suggestions(app:tauri::AppHandle,action:String,value:Option<Value>)->st
                     if let Some(launcher)=launcher {command.arg(launcher).args(["--input-access",&mode]);}else{command.arg(std::env::current_exe()?.with_file_name("typerelay")).args(["input-access","--device-name",&mode]);}
                     ensure!(command.status()?.success(),"Keyboard access was not granted");
                 }
-                if std::env::var_os("APPIMAGE").is_some(){app.state::<Runtime>().stop_engine();Runtime::setup_linux(app.clone());}else{ensure!(std::process::Command::new("systemctl").args(["--user","restart","typerelay"]).status()?.success(),"Could not restart the keyboard worker; install the matching desktop package");}
+                if std::env::var_os("APPIMAGE").is_some(){ensure!(Runtime::setup_linux(app.clone(),true),"Keyboard setup is running. Try again when it finishes.");}else{ensure!(std::process::Command::new("systemctl").args(["--user","restart","typerelay"]).status()?.success(),"Could not restart the keyboard worker; install the matching desktop package");}
                 Ok(json!({"message":"Keyboard input repair started"}))
             },
             "test-notification"=>{observation::Observation::notify(&app,true)?;Ok(json!({"sent":true}))},
@@ -545,7 +638,7 @@ fn main() {
         {use tauri_plugin_deep_link::DeepLinkExt;#[cfg(target_os="linux")]app.deep_link().register_all()?;let callback_root=root.clone();app.deep_link().on_open_url(move|event|for url in event.urls(){let _=Sync::receive_callback(&callback_root,url.as_str());});if let Some(urls)=app.deep_link().get_current()?{for url in urls{let _=Sync::receive_callback(&root,url.as_str());}}}
         Sync::worker(root.clone(),root.join("snippets"));
         let config=Panel::settings(&root)?;
-		app.manage(Runtime{root:root.clone(),#[cfg(any(target_os="windows",target_os="macos"))] usage:Some(Panel::usage_recorder(root.join("snippets"))),target:Mutex::new(None),last:Mutex::new(None),erase:Mutex::new(0),confirm_enter:Mutex::new(false),#[cfg(target_os="macos")] deferred:Mutex::new(None),#[cfg(target_os="windows")] cancelled:Mutex::new(None),busy:AtomicBool::new(false),syncing:AtomicBool::new(false),authenticating:AtomicBool::new(false),cancel_auth:AtomicBool::new(false),auth_error:Mutex::new(String::new()),prompting:AtomicBool::new(false),prompt_hit:Mutex::new(None),settings:AtomicBool::new(false),suggestions:AtomicBool::new(false),status:Mutex::new(String::new()),capture_status:Mutex::new(String::new()),#[cfg(any(target_os="windows",target_os="macos"))] expansion_started:AtomicBool::new(false),#[cfg(target_os="linux")] registration:Mutex::new(None),#[cfg(target_os="linux")] engine:Mutex::new(None),#[cfg(target_os="linux")] closing:AtomicBool::new(false),#[cfg(target_os="linux")] linux_setup:AtomicBool::new(false)});
+		app.manage(Runtime{root:root.clone(),#[cfg(any(target_os="windows",target_os="macos"))] usage:Some(Panel::usage_recorder(root.join("snippets"))),target:Mutex::new(None),last:Mutex::new(None),erase:Mutex::new(0),confirm_enter:Mutex::new(false),#[cfg(target_os="macos")] deferred:Mutex::new(None),#[cfg(target_os="windows")] cancelled:Mutex::new(None),busy:AtomicBool::new(false),syncing:AtomicBool::new(false),authenticating:AtomicBool::new(false),cancel_auth:AtomicBool::new(false),auth_error:Mutex::new(String::new()),prompting:AtomicBool::new(false),prompt_hit:Mutex::new(None),settings:AtomicBool::new(false),suggestions:AtomicBool::new(false),status:Mutex::new(String::new()),capture_status:Mutex::new(String::new()),#[cfg(any(target_os="windows",target_os="macos"))] expansion_started:AtomicBool::new(false),#[cfg(target_os="linux")] registration:Mutex::new(None),#[cfg(target_os="linux")] engine:Mutex::new(None),#[cfg(target_os="linux")] closing:AtomicBool::new(false),#[cfg(target_os="linux")] linux_setup:AtomicBool::new(false), #[cfg(target_os="linux")] keyboard_change:Mutex::new(())});
 		app.manage(update::UpdateState::default());
 		if observation::Observation::start(app.handle()).is_err(){*app.state::<Runtime>().status.lock().unwrap()="Snippet suggestions are unavailable: local storage could not be opened".into();}
 		#[cfg(target_os="macos")]
@@ -560,10 +653,9 @@ fn main() {
         if let Err(error)=Runtime::shortcut(app.handle(),None,&config.shortcut){*app.state::<Runtime>().status.lock().unwrap()=error.to_string();}
         if config.launch_at_login && let Err(error)=app.autolaunch().enable(){*app.state::<Runtime>().status.lock().unwrap()=format!("Could not enable launch at login: {error}");}
 		if let Err(error)=tray::install(app.handle()){*app.state::<Runtime>().status.lock().unwrap()=format!("Tray unavailable: {error}. Use the shortcut or launcher.");}
-		#[cfg(not(target_os="linux"))]
 		update::schedule(app.handle().clone());
 		#[cfg(target_os="linux")]
-		Runtime::setup_linux(app.handle().clone());
+		Runtime::setup_linux(app.handle().clone(),false);
         let handle=app.handle().clone();
         std::thread::spawn(move||loop { if Runtime::capture_supported()&&let Some(window)=handle.get_webview_window("panel")&& !window.is_visible().unwrap_or(false)&& let Ok(target)=platform::Target::capture(){*handle.state::<Runtime>().last.lock().unwrap()=Some(target);} std::thread::sleep(std::time::Duration::from_millis(150)); });
         #[cfg(target_os="linux")]
@@ -587,15 +679,27 @@ fn main() {
             Runtime::open(app.handle(),!Runtime::capture_supported());
         }
         Ok(())
-    }).on_window_event(|window,event|match event {
+    }).on_window_event(|window,event|{ if window.label() != "panel" { return; } match event {
         tauri::WindowEvent::CloseRequested{api,..}=>{api.prevent_close();set_prompt_view(window.app_handle().clone(),false);Runtime::hide(window.app_handle());},
         tauri::WindowEvent::Focused(false)if Runtime::hide_on_focus_loss() && !window.app_handle().state::<Runtime>().busy.load(Ordering::SeqCst) && !window.app_handle().state::<Runtime>().settings.load(Ordering::SeqCst) && !window.app_handle().state::<Runtime>().prompting.load(Ordering::SeqCst)=> {Runtime::hide(window.app_handle());},_=>()
-    }).invoke_handler(tauri::generate_handler![suggestions,initialize,native_ai,search,personal_status,personal_abbreviation,insert,copy_snippet,prepare_template,set_prompt_view,set_settings_view,dismiss,notify,sync_now,save_settings,connect,cancel_connect,disconnect,libraries,merge_destinations,merge_library,conflicts,resolve_conflict,recovery,dismiss_recovery,enroll,open_accessibility_settings,open_input_monitoring_settings,open_notification_settings,open_tui,open_web_app]).build(tauri::generate_context!());
+    }}).invoke_handler(tauri::generate_handler![suggestions,initialize,native_ai,search,personal_status,personal_abbreviation,insert,copy_snippet,prepare_template,set_prompt_view,set_settings_view,dismiss,notify,sync_now,save_settings,connect,cancel_connect,disconnect,libraries,merge_destinations,merge_library,conflicts,resolve_conflict,recovery,dismiss_recovery,enroll,open_accessibility_settings,open_input_monitoring_settings,open_notification_settings,open_tui,open_web_app]).build(tauri::generate_context!());
     match result {Ok(app)=>app.run(|handle,event|{#[cfg(target_os="linux")]if matches!(event,tauri::RunEvent::Exit|tauri::RunEvent::ExitRequested{..}){handle.state::<Runtime>().stop_engine();}if matches!(event,tauri::RunEvent::Exit)&&let Some(runtime)=handle.try_state::<Runtime>(){let _=typerelay_client::native_ai::NativeAi::release(&runtime.root);}}),Err(error)=>{eprintln!("TypeRelay panel: {error}");std::process::exit(1);}}
 }
 
 #[cfg(all(test,target_os="linux"))]
 mod tests {
+    #[test]
+    fn busy_linux_setup_leaves_the_engine_running() {
+        let runtime=super::Runtime::default();
+        assert!(runtime.begin_linux_setup(false));
+        *runtime.engine.lock().unwrap()=Some(std::process::Command::new("sleep").arg("30").spawn().unwrap());
+        let accepted=runtime.begin_linux_setup(true);
+        let still_running=runtime.engine.lock().unwrap().as_mut().is_some_and(|engine| engine.try_wait().is_ok_and(|status| status.is_none()));
+        runtime.stop_engine();
+        assert!(!accepted);
+        assert!(still_running);
+    }
+
     #[cfg(target_os="linux")]
     #[test]
     fn input_notifications_require_persistence_and_sustained_recovery() {

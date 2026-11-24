@@ -245,10 +245,17 @@ class SnippetKeyboard: InputMethodService() {
 		if (returnMode == KeyboardMode.TYPING) captureAnchor(fragment)
 		if (!validAnchor()) { if (mode == KeyboardMode.SEARCH) showTyping(); status.text = "Text changed. Select the snippet again."; status.visibility = View.VISIBLE; return }
 		selected = recordFor(match) ?: return; selectedLibrary = match.library; values = JSONObject(); previewReturnMode = returnMode
-		try { val rendered = render(true); if ((rendered.optJSONArray("fields")?.length() ?: 0) > 0 || rendered.has("html") || (rendered.optJSONArray("assets")?.length() ?: 0) > 0 || rendered.optInt("enter_actions") != 0) showPreview() else insert(false) }
+		try { val rendered = render(true); if ((rendered.optJSONArray("fields")?.length() ?: 0) > 0 || rendered.has("html") || (rendered.optJSONArray("assets")?.length() ?: 0) > 0 || keyActions(rendered).isNotEmpty()) showPreview() else insert(false) }
 		catch (error: Exception) { status.text = error.message ?: "This snippet could not be rendered."; status.visibility = View.VISIBLE }
 	}
 	private fun render(preview: Boolean): JSONObject = NativeCore.execute(this, JSONObject().put("action", "keyboard_render").put("generation", snapshot.getString("generation")).put("library", selectedLibrary).put("id", selected!!.getString("id")).put("values", values).put("preview", preview), true).getJSONObject("data")
+	private fun keyActions(rendered: JSONObject): String = listOfNotNull("Enter".takeIf { rendered.optInt("enter_actions") > 0 }, "Tab".takeIf { rendered.optInt("tab_actions") > 0 }).joinToString(" and ")
+	private fun previewText(rendered: JSONObject): String {
+		val source = rendered.optString("text"); val cursor = rendered.optJSONObject("cursor")
+		if (cursor != null) return source.substring(0, cursor.getInt("utf16")) + "▏ [Cursor position]" + source.substring(cursor.getInt("utf16"))
+		val steps = rendered.optJSONArray("steps") ?: return source
+		return (0 until steps.length()).joinToString("") { index -> val step = steps.getJSONObject(index); when (step.optString("kind")) { "enter" -> "⏎ [Enter key]"; "tab" -> "⇥ [Tab key]"; else -> step.optString("text") } }
+	}
 	private fun showPreview(message: String? = null, messageIsError: Boolean = true) {
 		val record = selected ?: return showTyping()
 		mode = KeyboardMode.PREVIEW; activeField = null
@@ -263,9 +270,9 @@ class SnippetKeyboard: InputMethodService() {
 				overlayBody.addView(button("$label: ${values.optString(name)}") { showFieldEditing(name, label, definition.optBoolean("multiline")) }, LinearLayout.LayoutParams(-1, dp(48)))
 			}
 			if (message != null) overlayBody.addView(TextView(this).apply { text = message; setTextColor(if (messageIsError) Color.RED else palette.muted); setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f); setPadding(dp(8), dp(4), dp(8), dp(4)) })
-			overlayBody.addView(TextView(this).apply { val source = rendered.optString("text"); val cursor = rendered.optJSONObject("cursor"); text = if (cursor != null) source.substring(0, cursor.getInt("utf16")) + "▏ [Cursor position]" + source.substring(cursor.getInt("utf16")) else source; setTextColor(palette.text); setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f); setPadding(dp(8), dp(8), dp(8), dp(8)) })
-			val supported = rendered.optInt("enter_actions") == 0
-			overlayBody.addView(TextView(this).apply { text = if (supported) "Formatting and images depend on the destination app." else "Desktop Enter actions cannot run on mobile."; setTextColor(palette.muted); setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f); setPadding(dp(8), 0, dp(8), dp(4)) })
+			overlayBody.addView(TextView(this).apply { text = previewText(rendered); setTextColor(palette.text); setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f); setPadding(dp(8), dp(8), dp(8), dp(8)) })
+			val keys = keyActions(rendered); val supported = keys.isEmpty()
+			overlayBody.addView(TextView(this).apply { text = if (supported) "Formatting and images depend on the destination app." else "$keys key actions cannot run on mobile."; setTextColor(palette.muted); setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f); setPadding(dp(8), 0, dp(8), dp(4)) })
 			overlayFooter.addView(button("Cancel") { values = JSONObject(); showTyping() }, LinearLayout.LayoutParams(0, dp(48), 1f))
 			val assets = rendered.optJSONArray("assets") ?: JSONArray()
 			if (rendered.has("html") || assets.length() > 0) {
@@ -299,7 +306,7 @@ class SnippetKeyboard: InputMethodService() {
 	}
 	private fun insert(rich: Boolean) {
 		try {
-			val rendered = render(false); if (rendered.optInt("enter_actions") != 0 || blocked) return
+			val rendered = render(false); if (blocked) return; if (keyActions(rendered).isNotEmpty()) { showPreview(); return }
 			if (!validAnchor()) throw Exception("Text changed. Select the snippet again.")
 			val text = if (rich) Html.fromHtml(rendered.getString("html").replace(Regex("<img\\b[^>]*>", RegexOption.IGNORE_CASE), "[Image]"), Html.FROM_HTML_MODE_COMPACT) else rendered.getString("text")
 			val connection = currentInputConnection ?: throw Exception("This field cannot accept the snippet.")
@@ -314,7 +321,7 @@ class SnippetKeyboard: InputMethodService() {
 	private fun insertImage(id: String) {
 		try {
 			if (Build.VERSION.SDK_INT < 25 || blocked) throw Exception("Use copy/paste from TypeRelay for this field.")
-			val rendered = render(false); if (rendered.optInt("enter_actions") != 0) return
+			val rendered = render(false); if (keyActions(rendered).isNotEmpty()) { showPreview(); return }
 			require(id.matches(Regex("[a-f0-9]{64}")))
 			val data = File(NativeCore.shared(this), "assets/$id").readText(); val mime = data.substringAfter("data:").substringBefore(';')
 			if (currentInputEditorInfo.contentMimeTypes?.any { ClipDescription.compareMimeTypes(mime, it) } != true) throw Exception("This app does not accept this image type. Insert plain text instead.")

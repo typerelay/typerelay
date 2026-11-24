@@ -536,3 +536,22 @@ test('keyboard health changes update only the status node and preserve editing s
   f.callbacks['input-health']({payload:{state:'degraded',message:'Stale error',heartbeat_ms:150}});assert.equal(node.hidden,true);assert.equal(node.textContent,'');
  }finally{f.dom.window.close();}
 });
+
+test('Tab is shown in the ordered fill preview and reported when copy omits it',async()=>{
+ const f=await Fixture.create();try{
+  const original=f.panel.invoke;
+  const notices=[];
+  f.panel.notify=async message=>notices.push(message);
+  f.panel.invoke=async(name,args={})=>{
+   if(name==='prepare_template')return{fields:['name'],enter_actions:1,tab_actions:1,template:{variables:{name:{label:'Name',default:'Ada'}}},steps:[{kind:'tab'},{kind:'text',text:args.values?.name||'Ada'},{kind:'enter'}]};
+   if(name==='copy_snippet')return{enter_actions:0,tab_actions:1};
+   return original(name,args);
+  };
+  await f.panel.start(Fixture.hit('template'),'copy');
+  const document=f.dom.window.document;
+  assert.equal(document.querySelector('#fill-preview').textContent,'⇥ [Tab key]Ada⏎ [Enter key]');
+  assert.equal(document.querySelector('#fill-actions').textContent,'Copy omits Enter and Tab key actions.');
+  await f.panel.commit();
+  assert.deepEqual(notices,['Copied text. Tab key actions were omitted.']);
+ }finally{f.dom.window.close();}
+});

@@ -53,16 +53,16 @@ F11 opens the variable picker/settings. Ctrl+S inserts the selected variable; F4
 
 Edits are saved to a local draft while you work. If drafts remain when you start the TUI, resolve each available draft before navigating: Enter resumes it, S saves it, N saves it as a new snippet, C copies it, E exports it, L chooses a destination, and D discards it after confirmation. Q quits and keeps unresolved drafts. A draft open in another terminal stays with that session.
 
-Ctrl+S saves locally. Changes to enrolled libraries are queued for background sync, so a local save does not mean the server has received it. If validation or a save fails, the draft remains available. When leaving an edited snippet, choose Save, Discard, or Cancel. Q in the confirmation quits and keeps the draft.
+Ctrl+S saves locally. Changes to enrolled libraries are queued for background sync. You can open and save another snippet while an earlier edit is still syncing. If validation or a save fails, the draft remains available. When leaving an edited snippet, choose Save, Discard, or Cancel. Q in the confirmation quits and keeps the draft.
 
 Press Ctrl+P and type to find commands for connection, enrollment, import, export, conflict resolution, personal abbreviations, validation, and legacy migration. Espanso conversion produces YAML; import that YAML to create a library. Use the web app for billing and team administration, and the desktop app for OS permissions and autostart. `typerelay doctor` remains a CLI command.
 
 ## Concurrent changes
 
-External database changes refresh lists without discarding an active draft. Saving a stale editor is rejected so it cannot overwrite a newer revision. Use Commands to review the saved version, export the draft, or save it as a new snippet. On Windows, continuous expansion is paused while the TUI is focused; on Omarchy only the registered TUI terminal window is suppressed.
+External database changes refresh lists without discarding an active draft. If the highlighted snippet disappears from the open library or from search results, select another snippet before pressing Enter. Saving a stale editor is rejected so it cannot overwrite a newer revision. Use Commands to review the saved version, export the draft, or save it as a new snippet. On Windows, continuous expansion is paused while the TUI is focused; on Omarchy only the registered TUI terminal window is suppressed.
 
 The TUI requests enhanced keyboard reporting when supported so Ctrl+M remains distinct from Enter, and restores terminal keyboard mode on exit. F8 remains the move shortcut in terminals without that protocol.
 
 ## Rejected offline edits
 
-Choose **Recovery** from Commands to handle edits rejected by the server. Select a record and use R to resume recoverable snippet content, C to copy the record, or E to export it as JSON. After preserving it, use D and confirm to dismiss it. Recovery is separate from unsaved local drafts.
+The sync status points to Recovery when TypeRelay preserves a rejected edit. In a short terminal, open Recovery to read the full reason. Press F12 from Browse or choose **Recovery** from Commands. Select a record and use R to resume recoverable snippet content, C to copy the record, or E to export it as JSON. After preserving it, use D and confirm to dismiss it. Recovery is separate from unsaved local drafts.

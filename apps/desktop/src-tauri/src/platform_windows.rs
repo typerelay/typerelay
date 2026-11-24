@@ -1,11 +1,12 @@
 use anyhow::{Context, Result, ensure};
+use super::Stroke;
 use std::{cell::RefCell,path::PathBuf,sync::{Arc,mpsc::{Receiver,SyncSender,sync_channel}},os::windows::io::{OwnedHandle,FromRawHandle},time::Duration};
 use typerelay_client::{database::{DatabaseSnapshot,Watcher},settings::SettingsStore};
 use typerelay_core::{Engine,Expansion,Input,FeedResult};
 use typerelay_client::browser_lease::BrowserLease;
 use windows::Win32::System::Threading::{OpenProcess,PROCESS_QUERY_LIMITED_INFORMATION};
 use windows::Win32::System::{Com::{DVASPECT_CONTENT,FORMATETC,IDataObject,STGMEDIUM,TYMED_HGLOBAL},Memory::{GlobalLock,GlobalSize,GlobalUnlock},Ole::{OleGetClipboard,OleInitialize,OleUninitialize,ReleaseStgMedium}};
-use windows::Win32::{Foundation::{HWND,LPARAM,LRESULT,RECT,WPARAM}, UI::{WindowsAndMessaging::{CallNextHookEx,DispatchMessageW,GetForegroundWindow,GetGUIThreadInfo,GetMessageW,GetSystemMetrics,GetWindowRect,GetWindowTextW,GetClassNameW,GetWindowThreadProcessId,IsWindow,KBDLLHOOKSTRUCT,KillTimer,MSG,SendMessageTimeoutW,SetForegroundWindow,SetTimer,SetWindowsHookExW,TranslateMessage,UnhookWindowsHookEx,WH_KEYBOARD_LL,WH_MOUSE_LL,WM_KEYDOWN,WM_KEYUP,WM_SYSKEYDOWN,WM_SYSKEYUP,WM_LBUTTONDOWN,WM_RBUTTONDOWN,WM_MBUTTONDOWN,WM_XBUTTONDOWN,WM_TIMER,GUITHREADINFO,HHOOK,SMTO_ABORTIFHUNG,SM_REMOTESESSION}, Input::KeyboardAndMouse::{GetAsyncKeyState,GetKeyboardLayout,GetKeyboardState,SendInput,ToUnicodeEx,INPUT,INPUT_0,INPUT_KEYBOARD,KEYBDINPUT,KEYEVENTF_KEYUP,VIRTUAL_KEY,VK_LEFT,VK_BACK,VK_CONTROL,VK_LWIN,VK_MENU,VK_RETURN,VK_RWIN,VK_SHIFT,VK_V}}};
+use windows::Win32::{Foundation::{HWND,LPARAM,LRESULT,RECT,WPARAM}, UI::{WindowsAndMessaging::{CallNextHookEx,DispatchMessageW,GetForegroundWindow,GetGUIThreadInfo,GetMessageW,GetSystemMetrics,GetWindowRect,GetWindowTextW,GetClassNameW,GetWindowThreadProcessId,IsWindow,KBDLLHOOKSTRUCT,KillTimer,MSG,SendMessageTimeoutW,SetForegroundWindow,SetTimer,SetWindowsHookExW,TranslateMessage,UnhookWindowsHookEx,WH_KEYBOARD_LL,WH_MOUSE_LL,WM_KEYDOWN,WM_KEYUP,WM_SYSKEYDOWN,WM_SYSKEYUP,WM_LBUTTONDOWN,WM_RBUTTONDOWN,WM_MBUTTONDOWN,WM_XBUTTONDOWN,WM_TIMER,GUITHREADINFO,HHOOK,SMTO_ABORTIFHUNG,SM_REMOTESESSION}, Input::KeyboardAndMouse::{GetAsyncKeyState,GetKeyboardLayout,GetKeyboardState,SendInput,ToUnicodeEx,INPUT,INPUT_0,INPUT_KEYBOARD,KEYBDINPUT,KEYEVENTF_KEYUP,VIRTUAL_KEY,VK_LEFT,VK_BACK,VK_CONTROL,VK_LWIN,VK_MENU,VK_RETURN,VK_RWIN,VK_SHIFT,VK_TAB,VK_V}}};
 const TYPERELAY_EVENT_MARKER:usize=0x5452_4c59;
 #[derive(Clone,Debug)]
 pub struct Target { handle: isize, pid: u32, class:String, _process: Arc<OwnedHandle>, pub bounds: Option<(i32,i32,u32,u32)> }
@@ -30,10 +31,27 @@ impl Target {
         Ok(true)
     }
 }
-pub fn keys_down() -> bool { [0x10,0x11,0x12,0x5b,0x5c,0x0d,0x20,0xba,0xbc].iter().any(|key|unsafe { GetAsyncKeyState(*key) < 0 }) }
+pub fn keys_down() -> bool { [0x10,0x11,0x12,0x5b,0x5c,0x0d,0x20,0xba,0xbc,VK_TAB.0 as i32].iter().any(|key|unsafe { GetAsyncKeyState(*key) < 0 }) }
 pub fn remote_session()->bool {unsafe{GetSystemMetrics(SM_REMOTESESSION)!=0}}
-pub fn insert(target:&Target,erase:usize,paste:bool)->Result<()>{ensure!(target.focused()?,"Original window lost focus");fn key(key:VIRTUAL_KEY,up:bool)->INPUT{INPUT{r#type:INPUT_KEYBOARD,Anonymous:INPUT_0{ki:KEYBDINPUT{wVk:key,dwFlags:if up{KEYEVENTF_KEYUP}else{Default::default()},dwExtraInfo:TYPERELAY_EVENT_MARKER,..Default::default()}}}}fn send(input:&[INPUT])->Result<()>{let sent=unsafe{SendInput(input,std::mem::size_of::<INPUT>() as i32)};ensure!(sent as usize==input.len(),"Windows rejected native input");Ok(())}let mut removal=Vec::with_capacity(erase*2);for _ in 0..erase{removal.extend([key(VK_BACK,false),key(VK_BACK,true)]);}if !removal.is_empty(){send(&removal)?;std::thread::sleep(Duration::from_millis(30));}
-    if paste{send(&[key(VK_CONTROL,false),key(VK_V,false),key(VK_V,true),key(VK_CONTROL,true)])}else{send(&[key(VK_RETURN,false),key(VK_RETURN,true)])}}
+pub fn insert(target:&Target,erase:usize,stroke:Stroke,current:impl Fn()->bool)->Result<()> {
+    fn key(key:VIRTUAL_KEY,up:bool)->INPUT{INPUT{r#type:INPUT_KEYBOARD,Anonymous:INPUT_0{ki:KEYBDINPUT{wVk:key,dwFlags:if up{KEYEVENTF_KEYUP}else{Default::default()},dwExtraInfo:TYPERELAY_EVENT_MARKER,..Default::default()}}}}
+    fn send(input:&[INPUT])->Result<()>{let sent=unsafe{SendInput(input,std::mem::size_of::<INPUT>() as i32)};ensure!(sent as usize==input.len(),"Windows rejected native input");Ok(())}
+    ensure!(current()&&target.focused()?,"Original window or input changed; remaining actions cancelled");
+    if erase>0 {
+        let mut removal=Vec::with_capacity(erase*2);
+        for _ in 0..erase {removal.extend([key(VK_BACK,false),key(VK_BACK,true)]);}
+        send(&removal)?;
+        std::thread::sleep(Duration::from_millis(30));
+        ensure!(current()&&target.focused()?,"Original window or input changed; remaining actions cancelled");
+    }
+    match stroke {
+        Stroke::Paste=>send(&[key(VK_CONTROL,false),key(VK_V,false),key(VK_V,true),key(VK_CONTROL,true)]),
+        Stroke::Enter | Stroke::Tab=>{
+            let code=if stroke==Stroke::Tab {VK_TAB} else {VK_RETURN};
+            send(&[key(code,false),key(code,true)])
+        },
+    }
+}
 pub fn fallback_allowed()->bool { unsafe { let window=GetForegroundWindow();let mut pid=0;GetWindowThreadProcessId(window,Some(&mut pid));let mut class=[0u16;256];let length=GetClassNameW(window,&mut class);pid==std::process::id() || ["Shell_TrayWnd","NotifyIconOverflowWindow","#32768"].contains(&String::from_utf16_lossy(&class[..length as usize]).as_str()) } }
 pub fn open_url(url:&str)->Result<()> { std::process::Command::new("rundll32.exe").args(["url.dll,FileProtocolHandler",url]).spawn().context("Could not open link")?;Ok(()) }
 pub fn open_tui()->Result<()> { let executable=std::env::current_exe()?.with_file_name("typerelay-tui.exe");ensure!(executable.is_file(),"TypeRelay TUI is missing from this installation");std::process::Command::new(executable).spawn().context("Could not open TypeRelay TUI")?;Ok(()) }

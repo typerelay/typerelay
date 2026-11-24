@@ -6,7 +6,7 @@ import { JSDOM } from 'jsdom';
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 const css = readFileSync(new URL('../notice.css', import.meta.url), 'utf8');
 
-async function fixture(message, { failFetch = false } = {}) {
+async function fixture(message, { failFetch = false, tabActionsAt } = {}) {
 	const dom = new JSDOM('<textarea></textarea>', { url: 'https://example.test', runScripts: 'outside-only' });
 	const { window } = dom;
 	const document = window.document;
@@ -22,13 +22,15 @@ async function fixture(message, { failFetch = false } = {}) {
 	window.chrome = { storage: { onChanged: { addListener() {} } }, runtime: { getURL: name => name, onMessage: { addListener() {} }, sendMessage: async request => {
 		if (request.type === 'snapshot') return { ok: true, value: { items: [{ id: 'one', trigger: 'brb' }], prefix: ';' } };
 		if (request.type === 'claim') return { ok: true, value: { verified: true } };
-		if (request.type === 'match') return { ok: false, error: message };
+		if (request.type === 'match') return tabActionsAt ? { ok: true, value: { trigger: 'brb', erase: 4 } } : { ok: false, error: message };
+		if (request.type === 'prepare') return { ok: true, value: { rendered: { text: 'replacement', fields: [], tab_actions: Number(request.preview === (tabActionsAt === 'preview')) }, item: { content: { type: 'template' } } } };
 		return { ok: true, value: {} };
 	} } };
 	window.fetch = async name => { if (failFetch) throw new Error('offline'); return { text: async () => (name === 'notice.css' ? css : '') }; };
 	window.eval(readFileSync(new URL('../content.js', import.meta.url), 'utf8'));
 	await tick();
 	const editor = document.querySelector('textarea');
+	if (tabActionsAt) document.execCommand = (command, _showUI, text) => { assert.equal(command, 'insertText'); editor.setRangeText(text, editor.selectionStart, editor.selectionEnd, 'end'); return true; };
 	editor.value = ';brb'; editor.focus(); editor.setSelectionRange(4, 4);
 	await tick();
 	return { window, document, editor, timers, shadow: () => shadow, trigger: async () => { handlers.keydown({ key: 'Enter', target: editor, isTrusted: true, preventDefault() {}, stopImmediatePropagation() {} }); await tick(); await tick(); await tick(); } };
@@ -89,5 +91,15 @@ test('notice fails quietly when its stylesheet cannot load', async () => {
 		await f.trigger();
 		assert.equal(f.document.documentElement.children.length, before);
 		assert.equal(f.document.activeElement, f.editor);
+	} finally { f.window.close(); }
+});
+
+for (const stage of ['preview', 'final']) test('Tab action at ' + stage + ' leaves the typed abbreviation in place', async () => {
+	const f = await fixture('', { tabActionsAt: stage });
+	try {
+		await f.trigger();
+		assert.equal(f.editor.value, ';brb\n');
+		assert.equal(f.document.activeElement, f.editor);
+		assert.match(f.shadow().querySelector('.notice span').textContent, /Chrome cannot perform Tab key actions/);
 	} finally { f.window.close(); }
 });

@@ -59,7 +59,7 @@ async function token(force = false) {
 async function request(path, options = {}) {
 	const version = connection.version;
 	const server = origin;
-	const send = async force => { const access = await token(force); connection.assert(version); return fetch(`${server}${path}`, { ...options, headers: { ...options.headers, Authorization: `Bearer ${access}`, 'X-TypeRelay-Sync-Protocol': '6', 'X-TypeRelay-Personal-Abbreviations': '1' }, redirect: 'error' }); };
+	const send = async force => { const access = await token(force); connection.assert(version); return fetch(`${server}${path}`, { ...options, headers: { ...options.headers, Authorization: `Bearer ${access}`, 'X-TypeRelay-Sync-Protocol': '6', 'X-TypeRelay-Personal-Abbreviations': '1', 'X-TypeRelay-Tab-Actions': '1' }, redirect: 'error' }); };
 	let response = await send(false);
 	connection.assert(version);
 	if (response.status === 401) response = await send(true);

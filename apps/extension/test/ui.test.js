@@ -289,13 +289,13 @@ for (const action of ['cancel', 'escape']) test('variable ' + action + ' returns
 	assert.equal(document.querySelector('#search').value, 'copy');
 });
 
-test('Enter key actions are rejected without writing the clipboard', async () => {
-	const fixture = await copyPopup({ text: 'Test', fields: [], enter_actions: 1 }, 'template');
+for (const [key, stage] of [['Enter', 'preview'], ['Tab', 'preview'], ['Tab', 'final']]) test(key + ' key actions at ' + stage + ' are rejected without writing the clipboard', async () => {
+	const fixture = await copyPopup(message => ({ text: 'Test', fields: [], [(key.toLowerCase() + '_actions')]: Number(message.preview === (stage === 'preview')) }), 'template');
 	fixture.click();
 	await tick();
 	assert.deepEqual(fixture.writes, []);
 	assert.equal(fixture.closed(), 0);
-	assert.match(document.querySelector('#status').textContent, /Enter key action/);
+	assert.match(document.querySelector('#status').textContent, new RegExp(key + ' key action'));
 });
 
 test('rendering failure leaves the clipboard unchanged and popup open', async () => {

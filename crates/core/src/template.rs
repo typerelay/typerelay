@@ -22,7 +22,7 @@ impl Default for Variable {
 pub struct Template { pub text: String, #[serde(default)] pub variables: BTreeMap<String, Variable> }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum Step { Text { text: String }, Enter }
+pub enum Step { Text { text: String }, Enter, Tab }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RenderRequest {
@@ -48,9 +48,10 @@ impl Cursor {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Rendered { pub template: Template, pub fields: Vec<String>, pub steps: Vec<Step>, pub text: String, pub enter_actions: usize, #[serde(default, skip_serializing_if = "Option::is_none")] pub cursor: Option<Cursor> }
+pub struct Rendered { pub template: Template, pub fields: Vec<String>, pub steps: Vec<Step>, pub text: String, pub enter_actions: usize, #[serde(default, skip_serializing_if = "no_tab_actions")] pub tab_actions: usize, #[serde(default, skip_serializing_if = "Option::is_none")] pub cursor: Option<Cursor> }
 #[derive(Debug)]
-enum Token { Literal(String), Variable(String), Enter, Cursor }
+enum Token { Literal(String), Variable(String), Enter, Tab, Cursor }
+pub(crate) fn no_tab_actions(count: &usize) -> bool { *count == 0 }
 impl Template {
     pub fn builtin(name: &str) -> bool { matches!(name, "date" | "time" | "timestamp") }
     fn tokens(&self) -> Result<Vec<Token>, String> {
@@ -65,8 +66,9 @@ impl Template {
                 let name = &next[..end];
                 if name == "cursor:here" { tokens.push(Token::Cursor); }
                 else if name == "key:enter" { tokens.push(Token::Enter); }
+                else if name == "key:tab" { tokens.push(Token::Tab); }
                 else {
-                    if name.is_empty() || name.len() > 63 || !name.bytes().enumerate().all(|(i,c)| c.is_ascii_alphabetic() || c == b'_' || (i > 0 && c.is_ascii_digit())) { return Err("Use a variable name such as {{name}}, {{key:enter}}, or {{cursor:here}}".into()); }
+                    if name.is_empty() || name.len() > 63 || !name.bytes().enumerate().all(|(i,c)| c.is_ascii_alphabetic() || c == b'_' || (i > 0 && c.is_ascii_digit())) { return Err("Use a variable name such as {{name}}, {{key:enter}}, {{key:tab}}, or {{cursor:here}}".into()); }
                     tokens.push(Token::Variable(name.into()));
                 }
                 rest = &next[end + 2..];
@@ -74,9 +76,11 @@ impl Template {
         }
         if !literal.is_empty() { tokens.push(Token::Literal(literal)); }
         if tokens.iter().filter(|token| matches!(token, Token::Enter)).count() > 64 { return Err("A template supports at most 64 Enter actions".into()); }
+        if tokens.iter().filter(|token| matches!(token, Token::Enter | Token::Tab)).count() > 64 { return Err("A template supports at most 64 keypress actions".into()); }
         let cursors = tokens.iter().filter(|token| matches!(token, Token::Cursor)).count();
         if cursors > 1 { return Err("Use only one {{cursor:here}} marker".into()); }
         if cursors > 0 && tokens.iter().any(|token| matches!(token, Token::Enter)) { return Err("Cursor position cannot be combined with Enter key actions".into()); }
+        if cursors > 0 && tokens.iter().any(|token| matches!(token, Token::Tab)) { return Err("Cursor position cannot be combined with Tab key actions".into()); }
         Ok(tokens)
     }
     pub fn normalize(&self) -> Result<Self, String> {
@@ -109,11 +113,12 @@ impl Template {
         let fields = template.fields()?;
         let instant = DateTime::from_timestamp_millis(request.now_ms).ok_or("Invalid timestamp")?;
         let local = FixedOffset::east_opt(request.offset_minutes.checked_mul(60).ok_or("Invalid offset")?).ok_or("Invalid offset")?;
-        let mut steps = Vec::new(); let mut text = String::new(); let mut enter_actions = 0; let mut cursor_byte = None;
+        let mut steps = Vec::new(); let mut text = String::new(); let mut enter_actions = 0; let mut tab_actions = 0; let mut cursor_byte = None;
         for token in template.tokens()? {
             let part = match token {
                 Token::Cursor => { cursor_byte = Some(text.len()); continue; }
                 Token::Enter => { steps.push(Step::Enter); enter_actions += 1; continue; }
+                Token::Tab => { steps.push(Step::Tab); tab_actions += 1; continue; }
                 Token::Literal(text) => text,
                 Token::Variable(name) => {
                     let field = &template.variables[&name];
@@ -138,7 +143,7 @@ impl Template {
             Some(Cursor { utf16: text[..offset].encode_utf16().count(), backward_utf16: text[offset..].encode_utf16().count(), backward_graphemes: text[offset..].graphemes(true).count() })
         } else { None };
         if cursor.is_some() && steps.is_empty() { steps.push(Step::Text { text: String::new() }); }
-        Ok(Rendered { template, fields, steps, text, enter_actions, cursor })
+        Ok(Rendered { template, fields, steps, text, enter_actions, tab_actions, cursor })
     }
     pub fn json(input: &str) -> String {
         let result = serde_json::from_str::<RenderRequest>(input).map_err(|error| error.to_string()).and_then(Self::render);
@@ -157,6 +162,34 @@ mod tests {
     }
     #[test] fn fields_are_shared_and_literal() { let result = render("Hi {{name}} {{name}}", &[("name", "{{key:enter}}")]).unwrap(); assert_eq!(result.fields, ["name"]); assert_eq!(result.enter_actions, 0); assert_eq!(result.text,"Hi {{key:enter}} {{key:enter}}"); }
     #[test] fn dates_and_actions_are_ordered() { let result=render("{{date}} {{time}} {{timestamp}}{{key:enter}}Done", &[]).unwrap(); assert_eq!(result.text,"1969-12-31 19:00 1969-12-31T19:00:00-05:00Done"); assert!(matches!(result.steps[1],Step::Enter)); }
+    #[test]
+    fn tab_actions_preserve_order_and_literal_text() {
+        let result = render("Jane{{key:tab}}Doe{{key:tab}}{{key:tab}}{{key:enter}}", &[]).unwrap();
+        assert_eq!(result.text, "JaneDoe");
+        assert_eq!(result.fields, Vec::<String>::new());
+        assert_eq!(result.tab_actions, 3);
+        assert_eq!(result.enter_actions, 1);
+        assert_eq!(result.steps, [
+            Step::Text { text: "Jane".into() },
+            Step::Tab,
+            Step::Text { text: "Doe".into() },
+            Step::Tab,
+            Step::Tab,
+            Step::Enter,
+        ]);
+        let json = serde_json::to_value(result).unwrap();
+        assert_eq!(json["steps"][1], serde_json::json!({"kind":"tab"}));
+        assert_eq!(json["tab_actions"], 3);
+
+        let literal = render("\\{{key:tab}}\t{{name}}", &[("name", "{{key:tab}}")]).unwrap();
+        assert_eq!(literal.text, "{{key:tab}}\t{{key:tab}}");
+        assert_eq!(literal.tab_actions, 0);
+        let json = serde_json::to_value(literal).unwrap();
+        assert!(json.get("tab_actions").is_none());
+        assert_eq!(serde_json::from_value::<Rendered>(json).unwrap().tab_actions, 0);
+        assert!(render("{{cursor:here}}{{key:tab}}", &[]).is_err());
+        assert!(render(&format!("{}{{{{key:tab}}}}", "{{key:enter}}".repeat(64)), &[]).is_err());
+    }
     #[test] fn escaping_validation_and_defaults() { assert_eq!(render(r"\{{name}} \\ hi", &[]).unwrap().text,r"{{name}} \ hi"); assert!(render("{{name}}", &[]).is_err()); assert!(render("{{shell:cmd}}", &[]).is_err()); assert!(render("{{bad", &[]).is_err()); let mut template=Template{text:"{{name}}".into(),variables:BTreeMap::new()}.normalize().unwrap(); template.variables.get_mut("name").unwrap().default="Nitai".into(); let result=Template::render(RenderRequest{template,values:BTreeMap::new(),now_ms:0,offset_minutes:0,preview:false}).unwrap(); assert_eq!(result.text,"Nitai"); }
     #[test] fn cursor_offsets_use_rendered_text_and_unicode_boundaries() {
         for (source, offset, backwards) in [("{{cursor:here}}abc",0,3),("a{{cursor:here}}bc",1,2),("abc{{cursor:here}}",3,0),("{{cursor:here}}",0,0),("é😀\n{{cursor:here}}e\u{301}👩‍💻\nz",4,4)] {

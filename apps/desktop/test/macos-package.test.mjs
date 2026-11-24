@@ -50,7 +50,7 @@ test('macOS startup checks both permissions and offers settings and TUI launcher
 	assert.match(platform, /KeyCode::COMMAND,false/);
 	assert.match(platform, /post_to_pid\(target\.pid\)/);
 	assert.match(platform, /impl ExpansionSession[^\n]*CGEventTap::with_enabled\([^\n]*CGEventTapOptions::Default[^\n]*CallbackResult::Drop/);
-	assert.match(main, /deferred\.finish\(&target\)/);
+	assert.match(main, /deferred\.finish\(&target,has_tab\)/);
 	assert.match(platform, /CGEventTapLocation::HID/);
 	assert.match(platform, /CGEventType::KeyDown/);
 	assert.match(platform, /event\.location\(\)\.x\+27469/);
