@@ -111,9 +111,11 @@ impl App {
         self.title=Self::text(&draft.entry.title);self.trigger=Self::text(&draft.entry.trigger);self.expansion=Self::text(&draft.entry.replace);self.language=draft.entry.language.clone();self.variables=draft.entry.variables.clone();self.code=draft.entry.kind=="code";self.rich=draft.entry.kind=="rich_text";self.template=draft.entry.kind=="template";self.rich_preview=false;self.move_destination=draft.destination.clone();self.editor_focus=1;self.screen=Screen::Edit;self.workflow=None;self.draft_record=Some(draft);self.draft_lock=Some(lock);self.writing_undo.clear();self.message("Draft resumed. Commands: save as new, destination, code settings, or export.",false);Ok(())
     }
     pub(super) fn show_recovery(&mut self) -> Result<()> {
-        let rows=Database::open(&self.store.directory)?.recovery()?;
+        let db = Database::open(&self.store.directory)?;
+        let rows = db.recovery()?;
         let mut view=Workflow::new(Mode::Recovery,"Recovery · server-rejected edits · preserve before dismissal");
-        view.rows=rows.into_iter().map(|mut row|{row["label"]=json!(format!("{} · {}",row["library_name"].as_str().unwrap_or("Unavailable library"),row["reason"].as_str().unwrap_or("Rejected edit")));row}).collect();self.workflow=Some(view);Ok(())
+        self.sync_details = super::SyncDetails::load(&db)?;
+        view.rows=rows.into_iter().rev().map(|mut row|{row["label"]=json!(format!("{} · {}",row["library_name"].as_str().unwrap_or("Unavailable library"),row["reason"].as_str().unwrap_or("Rejected edit")));row}).collect();self.workflow=Some(view);Ok(())
     }
     pub(super) fn recovered_entry(row: &Value) -> Result<Match> {
         let data=&row["data"];
@@ -323,7 +325,7 @@ impl App {
             let labels:Vec<&str>=if self.pending_merge.is_some(){vec!["Merge [m]","Cancel [esc]"]}else if let Some((_,destination,_))=&self.pending_batch{vec![if destination.is_some(){"Move [m]"}else{"Trash [d]"},"Cancel [esc]"]}else if let Some((action,_))=&self.pending_trash{vec![if action=="restore"{"Restore [r]"}else if action=="purge"{"Empty [e]"}else{"Trash [d]"},"Cancel [esc]"]}else if self.pending_delete.is_some(){vec!["Trash [d]","Cancel [esc]"]}else{vec!["Save [s]","Discard [d]","Cancel [esc]"]};
             self.confirm_buttons=Layout::horizontal(labels.iter().map(|_|Constraint::Ratio(1,labels.len()as u32))).split(rows[1]).to_vec();
             for(index,label)in labels.iter().enumerate(){frame.render_widget(Paragraph::new(*label),self.confirm_buttons[index]);}
-        }else{frame.render_widget(Paragraph::new(format!("TypeRelay · Ctrl+P Commands · Ctrl+S Save · Ctrl+Q Quit\n{}\n{}",self.status,if self.screen==Screen::Edit{Self::value(&self.expansion)}else{String::new()})).wrap(Wrap{trim:false}),area);}
+        }else{frame.render_widget(Paragraph::new(format!("TypeRelay · Ctrl+P Commands · Ctrl+S Save · Ctrl+Q Quit\n{}\n{}\n{}",self.sync_status(),self.status,if self.screen==Screen::Edit{Self::value(&self.expansion)}else{String::new()})).wrap(Wrap{trim:false}),area);}
     }
 }
 

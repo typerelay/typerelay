@@ -7,7 +7,7 @@ use ratatui::{Frame, layout::{Constraint, Layout, Rect, Position}, style::{Color
 use ratatui::crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, KeyEvent, MouseButton, MouseEventKind};
 use ratatui_textarea::TextArea;
 use typerelay_core::Engine;
-use typerelay_client::{config::Match, editor::{EditorStore, OpenFile}, settings::SettingsStore};
+use typerelay_client::{config::Match, database::Database, editor::{EditorStore, OpenFile}, settings::SettingsStore};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Screen { Files, Browse, Edit, Image, NewFile, Settings, Trash, Recovery, Move, Confirm }
@@ -17,9 +17,25 @@ enum Destination { Files, Browse, Settings, Trash, Recovery, Quit }
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct GlobalHit { library_id: String, snippet_id: String, file_index: usize, entry_index: usize }
 
+struct SyncDetails {
+    recovery: Option<String>,
+    failure: Option<String>,
+    conflicts: usize,
+}
+
+impl SyncDetails {
+    fn load(db: &Database) -> Result<Self> {
+        let recovery = db.latest_recovery_reason()?;
+        let failure = db.meta("last_failure")?.and_then(|value| value.as_str().filter(|reason| !reason.is_empty()).map(str::to_owned));
+        let conflicts = db.meta("conflicts")?.and_then(|value| value.as_array().map(Vec::len)).unwrap_or(0);
+        Ok(Self { recovery, failure, conflicts })
+    }
+}
+
 pub struct App {
     workflow: Option<Workflow>,
     draft_record: Option<Draft>,
+    sync_details: SyncDetails,
     draft_lock: Option<std::fs::File>,
     identity: serde_json::Value,
     draft_gate: bool,
@@ -117,9 +133,11 @@ impl App {
         let mut file_state = ListState::default();
         file_state.select(Some(0));
         let identity = Draft::identity(settings.config_dir())?;
-        let drafts = Draft::available(&store.directory, typerelay_client::database::Database::open(&store.directory)?.drafts(&identity)?)?;
+        let db = Database::open(&store.directory)?;
+        let drafts = Draft::available(&store.directory, db.drafts(&identity)?)?;
+        let sync_details = SyncDetails::load(&db)?;
         let draft_gate = !drafts.is_empty();
-        Ok(Self { workflow: draft_gate.then(||Workflow::drafts(drafts)), draft_record: None, draft_lock: None, identity, draft_gate, operation: None, indent: "\t".into(), ai_dialog:None, writing:None, writing_undo:Vec::new(), writing_buttons:Vec::new(), editor_buttons:Vec::new(), model_button:Rect::default(), selection_buttons:Vec::new(), move_buttons:Vec::new(), search_query:String::new(), search_scope:None,  search_hits:Vec::new(), search_selection:None,  search_done:true, store, settings, screen: Screen::Files, files, file_state, global_search: TextArea::default(), global_search_focused: false, global_hits: Vec::new(), global_state: ListState::default(), global_edit: false, snippets_state: ListState::default(), file: None, search: TextArea::default(), search_focused: false, trigger: TextArea::default(), title: TextArea::default(), language: "plain_text".into(), code: false, template:false, rich:false, rich_preview:false,rich_image:None,image_source:TextArea::default(),image_alt:TextArea::default(),image_title:TextArea::default(),image_width:Self::text("640"),image_focus:0, variables:Default::default(), template_dialog:None, fill_base:None, copy_identity:None, rich_fill:None, preview_x: 0, expansion: TextArea::default(), name: TextArea::default(), url: TextArea::default(), editor_focus: 0, editing: None, original_entry: None, original_url: String::new(), prefix: TextArea::default(), original_prefix: String::new(), pending: None, pending_delete: None, selected_ids: std::collections::BTreeSet::new(), selection_anchor: None, move_destination: None, move_choices: Vec::new(), move_state: ListState::default(), move_from: Screen::Browse, move_items: Vec::new(), pending_batch: None,pending_merge:None, bulk_buttons: Vec::new(), pending_trash: None, recovery_text: TextArea::default(), trash_rows: Vec::new(), trash_state: ListState::default(), trash_buttons: Vec::new(), confirm_from: Screen::Files, status: "Choose a file, or create a new one".into(), error: false, quit: false, toolbar: Vec::new(), list_area: Rect::default(), field_areas: Vec::new(), save_area: Rect::default(), cancel_area: Rect::default(), confirm_buttons: Vec::new(),merge_button:Rect::default() })
+        Ok(Self { workflow: draft_gate.then(||Workflow::drafts(drafts)), draft_record: None, sync_details, draft_lock: None, identity, draft_gate, operation: None, indent: "\t".into(), ai_dialog:None, writing:None, writing_undo:Vec::new(), writing_buttons:Vec::new(), editor_buttons:Vec::new(), model_button:Rect::default(), selection_buttons:Vec::new(), move_buttons:Vec::new(), search_query:String::new(), search_scope:None,  search_hits:Vec::new(), search_selection:None,  search_done:true, store, settings, screen: Screen::Files, files, file_state, global_search: TextArea::default(), global_search_focused: false, global_hits: Vec::new(), global_state: ListState::default(), global_edit: false, snippets_state: ListState::default(), file: None, search: TextArea::default(), search_focused: false, trigger: TextArea::default(), title: TextArea::default(), language: "plain_text".into(), code: false, template:false, rich:false, rich_preview:false,rich_image:None,image_source:TextArea::default(),image_alt:TextArea::default(),image_title:TextArea::default(),image_width:Self::text("640"),image_focus:0, variables:Default::default(), template_dialog:None, fill_base:None, copy_identity:None, rich_fill:None, preview_x: 0, expansion: TextArea::default(), name: TextArea::default(), url: TextArea::default(), editor_focus: 0, editing: None, original_entry: None, original_url: String::new(), prefix: TextArea::default(), original_prefix: String::new(), pending: None, pending_delete: None, selected_ids: std::collections::BTreeSet::new(), selection_anchor: None, move_destination: None, move_choices: Vec::new(), move_state: ListState::default(), move_from: Screen::Browse, move_items: Vec::new(), pending_batch: None,pending_merge:None, bulk_buttons: Vec::new(), pending_trash: None, recovery_text: TextArea::default(), trash_rows: Vec::new(), trash_state: ListState::default(), trash_buttons: Vec::new(), confirm_from: Screen::Files, status: "Choose a file, or create a new one".into(), error: false, quit: false, toolbar: Vec::new(), list_area: Rect::default(), field_areas: Vec::new(), save_area: Rect::default(), cancel_area: Rect::default(), confirm_buttons: Vec::new(),merge_button:Rect::default() })
     }
     fn cancel_writing(&mut self) {
         if let Some((id,_,_,_))=self.writing.take(){let root=self.settings.config_dir().to_path_buf();std::thread::spawn(move||{let _=typerelay_client::native_ai::NativeAi::request(&root,serde_json::json!({"op":"cancel","id":id}));});self.message("Refinement cancelled",false);}
@@ -813,6 +831,7 @@ impl App {
         let mut x=area.x;let mut y=area.y;let mut rows=Vec::new();for label in labels{let width=(label.chars().count() as u16+2).min(area.width);if x>area.x&&x+width>area.right(){x=area.x;y+=3;}rows.push(Rect::new(x,y,width,3));x+=width;}rows
     }
     pub fn refresh(&mut self) {
+        if let Ok(details) = Database::open(&self.store.directory).and_then(|db| SyncDetails::load(&db)) { self.sync_details = details; }
         if let Err(error)=self.refresh_draft() { self.message(error.to_string(),true); }
         if self.screen == Screen::Trash { let _ = self.load_trash(); }
         else if self.screen == Screen::Files { let _ = self.reload_files(true); }
@@ -832,7 +851,33 @@ impl App {
         }
     }
     fn sync_status(&self) -> String {
-        format!("{}Sync: {}",if self.draft_record.as_ref().is_some_and(|draft|draft.entry==self.draft()&&draft.destination==self.move_destination){"Draft stored locally · "}else if self.draft_record.is_some(){"Latest changes NOT stored · "}else{""},std::fs::read_to_string(self.settings.config_dir().join("sync/status")).unwrap_or_else(|_|"local only / waiting for connection".into()))
+        let worker = std::fs::read_to_string(self.settings.config_dir().join("sync/status")).ok();
+        let failure = self.sync_details.failure.as_deref().unwrap_or_default();
+        let draft = if self.draft_record.as_ref().is_some_and(|draft|draft.entry==self.draft()&&draft.destination==self.move_destination) { "Draft stored locally · " } else if self.draft_record.is_some() { "Latest changes NOT stored · " } else { "" };
+        if let Some(reason) = &self.sync_details.recovery {
+            let action = if self.effective_screen() == Screen::Edit { "Leave the editor for Recovery (F12)." } else { "Open Recovery (F12)." };
+            let reason_summary = reason.char_indices().nth(120).map_or_else(|| reason.clone(), |(end, _)| format!("{}…", &reason[..end]));
+            let mut status = format!("{draft}Sync: {action} {reason_summary}");
+            if let Some(worker) = worker.filter(|worker| !worker.starts_with("Synced.")) {
+                status.push_str(&format!("\n{}", worker.trim_start_matches("Sync: ")));
+            } else if !failure.is_empty() && failure != reason {
+                status.push_str(&format!("\n{failure}"));
+            }
+            let count = self.sync_details.conflicts;
+            if count > 0 {
+                let label = if count == 1 { "conflict" } else { "conflicts" };
+                let destination = self.identity["server"].as_str().map_or_else(|| "Open Conflicts from Commands.".into(), |server| format!("Resolve: {server}/"));
+                status.push_str(&format!("\n{count} {label}. {destination}"));
+            }
+            return status;
+        }
+        let mut worker = worker.unwrap_or_else(|| "local only / waiting for connection".into());
+        // A worker status written before dismissal can still contain the old last failure.
+        if worker.starts_with("Synced. ") && let Some((summary, destination)) = worker.rsplit_once(" Resolve: ")
+            && let Some((prefix, _)) = summary.split_once(" conflicts. ") {
+            worker = format!("{prefix} conflicts. {failure} Resolve: {destination}");
+        }
+        format!("{draft}Sync: {worker}")
     }
     pub fn draw(&mut self, frame: &mut Frame) {
         if let Some(dialog)=&mut self.ai_dialog {dialog.draw(frame);return;}
@@ -846,9 +891,13 @@ impl App {
         let action_labels=Self::EDITOR_ACTIONS;
         let controls_height=Self::button_layout(Rect::new(0,0,area.width,0),&editor_labels).last().unwrap().bottom();let actions_height=Self::button_layout(Rect::new(0,0,area.width,0),&action_labels).last().unwrap().bottom();
         let browse_labels=["Select (space)","Select all (ctrl+a)","Clear (ctrl+d)","Edit (enter)","Move (f8)","Trash (f3)"];let browse_height=Self::button_layout(Rect::new(0,0,area.width,0),&browse_labels).last().unwrap().bottom();
-        let minimum_height=if self.effective_screen()==Screen::Edit{2+toolbar_height+6+3+2+1+controls_height+actions_height+2}else if self.effective_screen()==Screen::Browse{2+toolbar_height+3+browse_height+3+2}else if self.effective_screen()==Screen::Settings{2+toolbar_height+12+2}else if self.effective_screen()==Screen::Image{2+toolbar_height+17+2}else{20};
+        let editing = self.effective_screen() == Screen::Edit;
+        let recovery_visible = self.sync_details.recovery.is_some();
+        let sync_height = if recovery_visible { 5 } else { 2 };
+        let footer_height = sync_height + u16::from(recovery_visible && !editing);
+        let minimum_height=if editing{2+toolbar_height+6+3+2+1+controls_height+actions_height+footer_height}else if self.effective_screen()==Screen::Browse{2+toolbar_height+3+browse_height+3+footer_height}else if self.effective_screen()==Screen::Settings{2+toolbar_height+12+footer_height}else if self.effective_screen()==Screen::Image{2+toolbar_height+17+footer_height}else{20};
         if area.width<60||area.height<minimum_height { self.draw_compact(frame,area); return; }
-        let rows=Layout::vertical([Constraint::Length(2),Constraint::Length(toolbar_height),Constraint::Min(8),Constraint::Length(2)]).split(area);
+        let rows=Layout::vertical([Constraint::Length(2),Constraint::Length(toolbar_height),Constraint::Min(8),Constraint::Length(footer_height)]).split(area);
         let title = if self.effective_screen() == Screen::Files { "TypeRelay  /  Snippet editor · Commands (ctrl+p)".into() } else { self.file.as_ref().map(|file| format!("TypeRelay  /  {} · Commands (ctrl+p)", file.name)).unwrap_or("TypeRelay  /  Snippet editor · Commands (ctrl+p)".into()) };
         frame.render_widget(Paragraph::new(title).style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)), rows[0]);
         self.toolbar=Self::button_layout(rows[1],&toolbar_labels);
@@ -942,7 +991,15 @@ impl App {
             }
             Screen::Confirm => (),
         }
-        frame.render_widget(Paragraph::new(if self.effective_screen()==Screen::Edit{self.sync_status()}else{format!("{}\n{}",self.status,self.sync_status())}).style(Style::default().fg(if self.error { Color::Red } else { Color::Gray })).wrap(Wrap { trim: false }), rows[3]);
+        let footer_style = Style::default().fg(if self.error { Color::Red } else { Color::Gray });
+        if !editing && recovery_visible {
+            let footer = Layout::vertical([Constraint::Length(1), Constraint::Length(sync_height)]).split(rows[3]);
+            frame.render_widget(Paragraph::new(self.status.as_str()).style(footer_style), footer[0]);
+            frame.render_widget(Paragraph::new(self.sync_status()).wrap(Wrap { trim: false }), footer[1]);
+        } else {
+            let status = if editing { self.sync_status() } else { format!("{}\n{}", self.status, self.sync_status()) };
+            frame.render_widget(Paragraph::new(status).style(footer_style).wrap(Wrap { trim: false }), rows[3]);
+        }
         if self.screen == Screen::Confirm {
             let dialog = Rect::new(area.x + (area.width - 56) / 2, area.y + (area.height - 7) / 2, 56, 7);
             frame.render_widget(Clear, dialog);
@@ -980,13 +1037,69 @@ mod tests {
     use super::*;
     use ratatui::crossterm::event::KeyEvent;
     #[test]
-    fn recovery_view_reads_preserved_edits_without_mutating_them() {
-        let temp=tempfile::tempdir().unwrap();let mut app=Fixture::app(temp.path());let db=typerelay_client::database::Database::open(&app.store.directory).unwrap();
-        db.recover("library",Some("snippet"),&serde_json::json!({"content":{"text":"Keep this"}}),"Server 410").unwrap();
-        Fixture::key(&mut app,KeyCode::F(12),KeyModifiers::NONE);assert!(app.workflow.is_some());
-        let before=App::value(&app.recovery_text);Fixture::key(&mut app,KeyCode::Char('x'),KeyModifiers::NONE);assert_eq!(App::value(&app.recovery_text),before);assert_eq!(db.recovery().unwrap().len(),1);
-        let mut terminal=ratatui::Terminal::new(ratatui::backend::TestBackend::new(140,40)).unwrap();terminal.draw(|frame|app.draw(frame)).unwrap();
-        Fixture::key(&mut app,KeyCode::Esc,KeyModifiers::NONE);assert_eq!(app.screen,Screen::Files);
+    fn recovery_status_is_visible_and_recovery_resumes_exact_tab_source() {
+        let temp = tempfile::tempdir().unwrap();
+        let sync_dir = temp.path().join("sync");
+        std::fs::create_dir(&sync_dir).unwrap();
+        std::fs::write(sync_dir.join("credentials.json"), r#"{"server":"https://example.test","account":"account"}"#).unwrap();
+        let mut app = Fixture::app(temp.path());
+        let db = typerelay_client::database::Database::open(&app.store.directory).unwrap();
+        let file = db.import("Synced", "matches: [{trigger: str, replace: '$task-router'}]").unwrap();
+        app.file = Some(file.clone());
+        app.screen = Screen::Browse;
+        app.status = "Saved locally. Enrolled-library changes are queued for background sync.".into();
+        let source = "$task-router{{key:tab}}";
+        let reason = "Server 422: Use a variable name such as {{name}}, {{key:enter}}, or {{cursor:here}}";
+        let edit = Match { trigger: "str".into(), kind: "template".into(), replace: source.into(), ..Default::default() };
+        db.recover(&file.id, Some(&file.ids[0]), &serde_json::json!({"value":edit.value()}), reason).unwrap();
+        db.set_meta("last_failure", &serde_json::json!(reason)).unwrap();
+        db.set_meta("conflicts", &serde_json::json!([{"library":file.id,"snippet":file.ids[0]}])).unwrap();
+        let status_file = sync_dir.join("status");
+        let worker_status = format!("Synced. 1 conflicts. {reason} Resolve: https://example.test/");
+        std::fs::write(&status_file, &worker_status).unwrap();
+        app.refresh();
+        assert!(app.sync_status().contains(reason));
+        assert!(!app.sync_status().contains("Synced."));
+        assert!(app.sync_status().contains("1 conflict. Resolve: https://example.test/"));
+        std::fs::write(&status_file, "Sync: Connection timed out").unwrap();
+
+        for (width, height) in [(140, 40), (60, 30), (48, 12)] {
+            let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+            terminal.draw(|frame| app.draw(frame)).unwrap();
+            let text = screen_text(&terminal, width);
+            assert!(text.contains("Open Recovery (F12)"), "{width}×{height}");
+            assert!(text.contains(reason), "{width}×{height}");
+            assert!(text.contains("Connection timed out"), "{width}×{height}");
+            assert!(text.contains("1 conflict. Resolve: https://example.test/"), "{width}×{height}");
+        }
+        Fixture::key(&mut app, KeyCode::F(12), KeyModifiers::NONE);
+        assert!(app.workflow.is_some());
+        Fixture::key(&mut app, KeyCode::Char('r'), KeyModifiers::NONE);
+        assert_eq!(app.screen, Screen::Edit, "{}", app.status);
+        assert_eq!(app.draft().replace, source);
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, 48)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        assert!(!app.field_areas.is_empty(), "must exercise the normal editor layout");
+        let text = screen_text(&terminal, 60);
+        assert!(text.contains("Leave the editor for Recovery"));
+        assert!(text.contains(reason));
+        let rows = db.recovery().unwrap();
+        assert_eq!(rows.len(), 1);
+        db.dismiss_recovery(rows[0]["id"].as_str().unwrap()).unwrap();
+        app.refresh();
+        assert!(!app.sync_status().contains("Open Recovery"));
+        assert!(app.sync_status().contains("Connection timed out"));
+        std::fs::write(&status_file, worker_status).unwrap();
+        let mut reopened = Fixture::app(temp.path());
+        assert!(!reopened.sync_status().contains(reason));
+        assert!(reopened.sync_status().contains("1 conflicts.  Resolve: https://example.test/"));
+        db.set_meta("last_failure", &serde_json::json!("A later change was denied")).unwrap();
+        reopened.refresh();
+        assert!(reopened.sync_status().contains("A later change was denied"));
+
+        fn screen_text(terminal: &ratatui::Terminal<ratatui::backend::TestBackend>, width: u16) -> String {
+            terminal.backend().buffer().content().chunks(usize::from(width)).map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>()).map(|line| line.trim().to_owned()).collect::<Vec<_>>().join(" ")
+        }
     }
     #[test]
     fn editor_shows_shortcuts_on_buttons_and_status_once() {
@@ -1534,11 +1647,12 @@ mod tests {
         use serde_json::json;
         use typerelay_client::database::Database;
 
+        let tab_source = "$task-router{{key:tab}}";
         for ack_before_second_save in [false, true] {
             let temp = tempfile::tempdir().unwrap();
             let mut app = Fixture::app(temp.path());
             let db = Database::open(&app.store.directory).unwrap();
-            let file = db.import("Synced", "matches: [{replace: First}, {replace: Second}]").unwrap();
+            let file = db.import("Synced", "matches: [{trigger: str, replace: '$task-router'}, {replace: Second}]").unwrap();
             let mut remote = db.library(&file.id).unwrap();
             remote["records"] = json!(db.records(&file.id).unwrap());
             db.apply(&json!({"library": remote}), None).unwrap();
@@ -1547,15 +1661,20 @@ mod tests {
 
             app.snippets_state.select(Some(0));
             Fixture::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
-            app.expansion = App::text("First edit");
+            app.expansion = App::text(tab_source);
             Fixture::key(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL);
             assert_eq!(app.screen, Screen::Browse, "{}", app.status);
-            assert_eq!(db.editor_id(&file.id).unwrap().entries[0].replace, "First edit");
+            assert_eq!(db.editor_id(&file.id).unwrap().entries[0].replace, tab_source);
+            let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+            terminal.draw(|frame| app.draw(frame)).unwrap();
+            let screen = terminal.backend().buffer().content().iter().map(|cell| cell.symbol()).collect::<String>();
+            assert!(screen.contains(tab_source));
             let (first_seq, first_op) = db.pending().unwrap().remove(0);
             let first_change = &first_op["body"]["changes"][0];
             assert_eq!(first_change["id"], file.ids[0]);
             assert_eq!(first_change["base_revision"], remote["records"][0]["revision"]);
-            assert_eq!(first_change["value"]["content"]["text"], "First edit");
+            assert_eq!(first_change["value"]["content"]["type"], "template");
+            assert_eq!(first_change["value"]["content"]["text"], tab_source);
 
             Fixture::key(&mut app, KeyCode::Down, KeyModifiers::NONE);
             app.refresh();
@@ -1594,7 +1713,7 @@ mod tests {
             db.apply(&json!({"library": remote}), Some((*second_seq, second_op))).unwrap();
             assert!(db.pending().unwrap().is_empty());
             let saved = db.editor_id(&file.id).unwrap();
-            assert_eq!(saved.entries[0].replace, "First edit");
+            assert_eq!(saved.entries[0].replace, tab_source);
             assert_eq!(saved.entries[1].replace, "Second edit");
 
             Fixture::key(&mut app, KeyCode::Down, KeyModifiers::NONE);

@@ -600,7 +600,18 @@ impl Database {
         let rows = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, String>(3)?, row.get::<_, String>(4)?)))?;
         rows.map(|row| { let (id, library, snippet, data, reason) = row?; let library_name = library.as_deref().and_then(|id| self.library(id).ok()).and_then(|library| library["name"].as_str().map(str::to_owned)); Ok(json!({"id":id,"library":library,"library_name":library_name,"snippet":snippet,"reason":reason,"data":serde_json::from_str::<Value>(&data)?})) }).collect()
     }
-    pub fn dismiss_recovery(&self, id: &str) -> Result<()> { self.connection.execute("DELETE FROM recovery WHERE id=?1", [id])?; Ok(()) }
+    pub fn latest_recovery_reason(&self) -> Result<Option<String>> {
+        Ok(self.connection.query_row("SELECT reason FROM recovery ORDER BY rowid DESC LIMIT 1", [], |row| row.get(0)).optional()?)
+    }
+    pub fn dismiss_recovery(&self, id: &str) -> Result<()> {
+        let transaction = self.connection.unchecked_transaction()?;
+        let reason: Option<String> = transaction.query_row("DELETE FROM recovery WHERE id=?1 RETURNING reason", [id], |row| row.get(0)).optional()?;
+        if let Some(reason) = reason {
+            transaction.execute("DELETE FROM meta WHERE key='last_failure' AND value=?1 AND NOT EXISTS(SELECT 1 FROM recovery WHERE reason=?2)", params![json!(reason).to_string(), reason])?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
     pub fn recover_operation(&self, operation: &Value, reason: &str) -> Result<()> {
         let library = operation["library"].as_str().unwrap_or("");
         if operation["kind"]=="personal" { self.set_meta(&format!("personal_rejected:{}", operation["snippet"].as_str().unwrap_or("")), &operation["body"])?; return Ok(()); }
@@ -1391,7 +1402,15 @@ mod tests {
         let root=tempfile::tempdir().unwrap(); let db=Database::open(root.path()).unwrap();
         db.recover_operation(&json!({"kind":"edit","library":"library","body":{"changes":[{"id":"snippet","value":{"trigger":"hi","content":{"text":"Hi"}}}]}}),"Server 410: Library is gone").unwrap();
         let rows=db.recovery().unwrap(); assert_eq!(rows.len(),1); assert_eq!(rows[0]["reason"],"Server 410: Library is gone"); assert_eq!(rows[0]["snippet"],"snippet"); assert_eq!(rows[0]["data"]["value"]["content"]["text"],"Hi");
-        db.dismiss_recovery(rows[0]["id"].as_str().unwrap()).unwrap(); assert!(db.recovery().unwrap().is_empty());
+        let reason = rows[0]["reason"].as_str().unwrap();
+        db.set_meta("last_failure", &json!(reason)).unwrap();
+        db.recover("library", Some("other"), &json!({"content":{"text":"Other edit"}}), reason).unwrap();
+        db.dismiss_recovery(rows[0]["id"].as_str().unwrap()).unwrap();
+        assert_eq!(db.meta("last_failure").unwrap(), Some(json!(reason)));
+        let remaining = db.recovery().unwrap();
+        db.dismiss_recovery(remaining[0]["id"].as_str().unwrap()).unwrap();
+        assert!(db.recovery().unwrap().is_empty());
+        assert_eq!(db.meta("last_failure").unwrap(), None);
         drop(db); let db=Database::open(root.path()).unwrap(); db.set_meta("staged",&json!({"large":true})).unwrap(); drop(db); assert!(Database::open(root.path()).unwrap().meta("staged").unwrap().is_none());
     }
 

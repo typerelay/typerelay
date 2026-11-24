@@ -65,4 +65,4 @@ The TUI requests enhanced keyboard reporting when supported so Ctrl+M remains di
 
 ## Rejected offline edits
 
-Choose **Recovery** from Commands to handle edits rejected by the server. Select a record and use R to resume recoverable snippet content, C to copy the record, or E to export it as JSON. After preserving it, use D and confirm to dismiss it. Recovery is separate from unsaved local drafts.
+The sync status shows the rejection reason when TypeRelay preserves an edit in Recovery. Press F12 from Browse or choose **Recovery** from Commands. Select a record and use R to resume recoverable snippet content, C to copy the record, or E to export it as JSON. After preserving it, use D and confirm to dismiss it. Recovery is separate from unsaved local drafts.

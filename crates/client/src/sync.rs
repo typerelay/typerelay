@@ -341,24 +341,47 @@ mod tests {
     fn rejected_edit_is_recovered_and_fresh_assets_download_before_apply() {
         let root=tempfile::tempdir().unwrap(); let directory=root.path().join("snippets"); let db=Database::open(&directory).unwrap();
         let id="0123456789abcdef01234567"; let snippet="snippet-0000000001";
-        let library=json!({"_id":id,"name":"Mine","revision":1,"state":"active","permissions":{"read":true,"edit":true,"manage":true},"records":[{"id":snippet,"trigger":"one","title":"","content":{"version":1,"type":"plain_text","text":"One"},"revision":1,"state":"active","position":0}]});
+        let source = "$task-router{{key:tab}}";
+        let rejection = "Use a variable name such as {{name}}, {{key:enter}}, or {{cursor:here}}";
+        let library=json!({"_id":id,"name":"Mine","revision":1,"state":"active","permissions":{"read":true,"edit":true,"manage":true},"records":[{"id":snippet,"trigger":"str","title":"","content":{"version":1,"type":"plain_text","text":"$task-router"},"revision":1,"state":"active","position":0}]});
         let initial=json!({"protocol":6,"cursor":1,"libraries":[library],"accessible":[id],"assets":[],"conflicts":[]});
-        db.apply(&initial,None).unwrap(); db.queue(&json!({"kind":"edit","library":id,"body":{"operation_id":"rejected-edit","changes":[{"id":snippet,"base_revision":1,"value":{"trigger":"one","title":"","content":{"version":1,"type":"plain_text","text":"Keep this edit"}}}]}})).unwrap();
+        db.apply(&initial, None).unwrap();
+        let file = db.editor_id(id).unwrap();
+        let edited = db.edit(&file, Some(0), Some(crate::config::Match { trigger: "str".into(), kind: "template".into(), replace: source.into(), ..Default::default() })).unwrap();
+        assert_eq!(edited.entries[0].replace, source);
         let mut bytes=std::io::Cursor::new(Vec::new()); image::RgbaImage::from_pixel(1,1,image::Rgba([0,0,0,255])).write_to(&mut bytes,image::ImageFormat::Png).unwrap(); let bytes=bytes.into_inner(); let asset=format!("{:x}",Sha256::digest(&bytes));
         let mut fresh=initial.clone(); fresh["cursor"]=json!(2); fresh["assets"]=json!([{"id":asset,"mime_type":"image/png","size":bytes.len(),"width":1,"height":1,"animated":false,"source_urls":[]}]);
-        fresh["libraries"][0]["records"][0]["content"]=json!({"version":2,"type":"rich_text","markdown":format!("![](typerelay-asset:{asset})"),"assets":[asset]});
+        fresh["libraries"][0]["records"].as_array_mut().unwrap().push(json!({"id":"snippet-0000000002","trigger":"image","title":"","content":{"version":2,"type":"rich_text","markdown":format!("![](typerelay-asset:{asset})"),"assets":[asset]},"revision":1,"state":"active","position":1}));
         let listener=TcpListener::bind("127.0.0.1:0").unwrap(); let server=format!("http://{}",listener.local_addr().unwrap());
         let worker=std::thread::spawn(move||{
-            for index in 0..5 {
+            for index in 0..7 {
                 let (mut stream,_)=listener.accept().unwrap(); stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap(); let mut headers=Vec::new(); let mut byte=[0];
                 while !headers.ends_with(b"\r\n\r\n") {stream.read_exact(&mut byte).unwrap();headers.push(byte[0]);}
-                let headers=String::from_utf8(headers).unwrap(); let length=headers.lines().find_map(|line|line.to_lowercase().strip_prefix("content-length: ").and_then(|length|length.parse::<usize>().ok())).unwrap_or(0);stream.read_exact(&mut vec![0;length]).unwrap();
-                let (status,mime,body)=match index {0=>("200 OK","application/json",initial.to_string().into_bytes()),1=>{assert!(headers.starts_with("POST /api/v2/libraries/"));("422 Unprocessable Entity","application/json",json!({"error":"Rich text images exceed 8 MiB"}).to_string().into_bytes())},3=>{assert!(headers.starts_with("GET /api/v2/assets/"));("200 OK","image/png",bytes.clone())},_=>("200 OK","application/json",fresh.to_string().into_bytes())};
+                let headers=String::from_utf8(headers).unwrap(); let length=headers.lines().find_map(|line|line.to_lowercase().strip_prefix("content-length: ").and_then(|length|length.parse::<usize>().ok())).unwrap_or(0);let mut request = vec![0; length]; stream.read_exact(&mut request).unwrap();
+                let (status,mime,body)=match index {0=>("200 OK","application/json",initial.to_string().into_bytes()),1=>{assert!(headers.starts_with("POST /api/v2/libraries/"));
+                    assert!(headers.to_lowercase().contains("x-typerelay-tab-actions: 1"));
+                    let request: Value = serde_json::from_slice(&request).unwrap();
+                    assert_eq!(request["changes"][0]["value"]["content"]["type"], "template");
+                    assert_eq!(request["changes"][0]["value"]["content"]["text"], source);
+                    ("422 Unprocessable Entity","application/json",json!({"error":rejection}).to_string().into_bytes())},3=>{assert!(headers.starts_with("GET /api/v2/assets/"));("200 OK","image/png",bytes.clone())},_=>("200 OK","application/json",fresh.to_string().into_bytes())};
                 write!(stream,"HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",body.len()).unwrap();stream.write_all(&body).unwrap();
             }
         });
         let sync=Sync::new(root.path().into(),directory.clone()).unwrap(); sync.secret(&Credentials{server,access_token:"access".into(),refresh_token:"".into(),account:None,device:None}).unwrap();
-        sync.cycle().unwrap();worker.join().unwrap();let db=Database::open(&directory).unwrap();assert!(db.pending().unwrap().is_empty());assert!(db.asset(&asset).unwrap().is_some());let rows=db.recovery().unwrap();assert_eq!(rows[0]["data"]["value"]["content"]["text"],"Keep this edit");assert!(rows[0]["reason"].as_str().unwrap().contains("422"));assert_eq!(db.meta("cursor").unwrap(),Some(json!(2)));
+        let expected_reason = format!("Server 422: {rejection}");
+        for _ in 0..2 {
+            sync.cycle().unwrap();
+            assert_eq!(db.latest_recovery_reason().unwrap().as_deref(), Some(expected_reason.as_str()));
+        }
+        worker.join().unwrap();
+        assert!(db.pending().unwrap().is_empty());
+        assert!(db.asset(&asset).unwrap().is_some());
+        assert_eq!(db.editor_id(id).unwrap().entries[0].replace, "$task-router");
+        let rows = db.recovery().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["data"]["value"]["content"]["text"], source);
+        assert_eq!(rows[0]["reason"], expected_reason);
+        assert_eq!(db.meta("cursor").unwrap(), Some(json!(2)));
     }
     #[test]
     fn personal_offline_reconnect_preserves_conflicts_and_recovers_rejected_values() {
