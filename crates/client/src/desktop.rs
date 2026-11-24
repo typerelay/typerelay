@@ -156,6 +156,11 @@ impl Hyprland {
     pub fn is_terminal(window: &serde_json::Value) -> bool {
         window["tags"].as_array().is_some_and(|tags| tags.iter().any(|tag| tag.as_str().is_some_and(|name| name.trim_end_matches('*') == "terminal")))
     }
+    pub fn session_active() -> bool {
+        if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some() { return true; }
+        let runtime = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(format!("/run/user/{}", unsafe { libc::geteuid() })));
+        fs::read_dir(runtime.join("hypr")).into_iter().flatten().flatten().any(|entry| UnixStream::connect(entry.path().join(".socket.sock")).is_ok())
+    }
     pub fn socket(name: &str) -> Result<PathBuf> {
         Ok(PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").context("XDG_RUNTIME_DIR is missing")?).join("hypr").join(std::env::var("HYPRLAND_INSTANCE_SIGNATURE")?).join(name))
     }

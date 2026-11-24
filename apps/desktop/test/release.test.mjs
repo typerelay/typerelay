@@ -21,6 +21,12 @@ test('build children never receive the hardware PIN or publishing credentials', 
 	const env = PanelRelease.buildEnvironment({ PATH: '/bin', WINDOWS_SIGNING_PIN: 'fixture-pin', BUNNY_STORAGE_PASSWORD_TEST: 'fixture-storage', APPLE_PASSWORD: 'fixture-apple' });
 	assert.deepEqual(env, { PATH: '/bin' });
 });
+test('Linux release ABI check rejects glibc requirements above Debian 12', () => {
+	assert.doesNotThrow(() => PanelRelease.verifyLinuxAbi('typerelay-tui', 'Name: GLIBC_2.2.5\nName: GLIBC_2.36\nName: GLIBC_ABI_DT_RELR'));
+	assert.throws(() => PanelRelease.verifyLinuxAbi('typerelay-tui', 'Name: GLIBC_2.39'), /typerelay-tui requires GLIBC_2.39/);
+	assert.throws(() => PanelRelease.verifyLinuxAbi('typerelay-tui', 'Name: GLIBC_2.34\nName: GLIBC_ABI_GNU2_TLS'), /GLIBC_ABI_GNU2_TLS/);
+	assert.throws(() => PanelRelease.verifyLinuxAbi('typerelay-tui', ''), /No glibc requirements/);
+});
 test('build children ignore a parent AppImage so linuxdeploy runs itself', () => {
 	assert.deepEqual(PanelRelease.buildEnvironment({ PATH: '/bin', APPIMAGE: '/apps/Host.AppImage', APPDIR: '/tmp/.mount_Host', TARGET_APPIMAGE: '/apps/Host.AppImage' }), { PATH: '/bin' });
 });
@@ -136,8 +142,8 @@ test('AppImage-only flag is Linux-only and full releases remain the default', ()
 });
 
 for (const appimageOnly of [true, false]) test(`Linux release artifacts and verification with appimageOnly=${appimageOnly}`, { skip: process.platform !== 'linux' }, async t => {
-	const root = await fs.mkdtemp(path.join(os.tmpdir(), 'typerelay-linux-release-test-')); const originalRoot = PanelRelease.root; const originalKey = process.env.TAURI_SIGNING_PRIVATE_KEY; const commands = []; const version = '9.8.7'; const triple = 'x86_64-unknown-linux-gnu';
-	PanelRelease.root = root; process.env.TAURI_SIGNING_PRIVATE_KEY = 'fixture';
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), 'typerelay-linux-release-test-')); const originalRoot = PanelRelease.root; const originalKey = process.env.TAURI_SIGNING_PRIVATE_KEY; const originalCommit = process.env.TYPERELAY_BOOKWORM_COMMIT; const commands = []; const version = '9.8.7'; const triple = 'x86_64-unknown-linux-gnu';
+	PanelRelease.root = root; process.env.TAURI_SIGNING_PRIVATE_KEY = 'fixture'; process.env.TYPERELAY_BOOKWORM_COMMIT = '12345678901234567890';
 	t.mock.method(PanelRelease, 'repository', async () => '12345678901234567890');
 	t.mock.method(DesktopVersion, 'config', async () => ({ version }));
 	t.mock.method(NativeTools, 'stage', async () => []);
@@ -145,18 +151,21 @@ for (const appimageOnly of [true, false]) test(`Linux release artifacts and veri
 	t.mock.method(PanelRelease, 'run', async (command, args, options = {}) => {
 		commands.push([command, ...args]);
 		if (command === 'git' && args[0] === 'rev-parse') return '12345678901234567890';
+		if (command === 'getconf') return 'glibc 2.36';
+		if (command === 'readelf') return 'Name: GLIBC_2.36';
 		if (command === 'rustup') return triple;
 		if (command === 'file') return 'ELF 64-bit LSB executable, x86-64';
 		if (command === 'rpm') return `${version} x86_64`;
 		if (args[0] === '--version') return `${path.basename(command)} ${version}`;
 		if (command === 'pnpm' && args[0] === 'tauri' && args[1] === 'build') {
+			assert.equal(options.environment.TAURI_SIGNING_PRIVATE_KEY, undefined);
 			assert.equal(args[args.indexOf('--bundles') + 1], appimageOnly ? 'appimage' : 'appimage,deb,rpm');
 			const release = path.join(options.environment.CARGO_TARGET_DIR, triple, 'release'); await fs.mkdir(release, { recursive: true });
 			for (const name of ['typerelay', 'typerelay-tui', 'typerelay-panel', 'typerelay-ai']) await fs.writeFile(path.join(release, name), 'fixture');
 			for (const [format, extension] of appimageOnly ? [['appimage', 'AppImage']] : [['appimage', 'AppImage'], ['deb', 'deb'], ['rpm', 'rpm']]) { const directory = path.join(release, 'bundle', format); await fs.mkdir(directory, { recursive: true }); await fs.writeFile(path.join(directory, `TypeRelay.${extension}`), 'fixture package'); }
 		}
 		if (command === 'tar') await fs.writeFile(args[1], 'fixture archive');
-		if (command === 'pnpm' && args[1] === 'signer') await fs.writeFile(`${args[3]}.sig`, 'fixture signature');
+		if (command === 'pnpm' && args[1] === 'signer') { assert.equal(options.environment.TAURI_SIGNING_PRIVATE_KEY, 'fixture'); await fs.writeFile(`${args[3]}.sig`, 'fixture signature'); }
 		return '';
 	});
 	try {
@@ -170,6 +179,9 @@ for (const appimageOnly of [true, false]) test(`Linux release artifacts and veri
 		assert.equal(commands.some(([command]) => command === 'rpm'), !appimageOnly);
 		assert.equal(commands.some(([command]) => command === 'tar'), !appimageOnly);
 		assert.equal(commands.some(([command, ...args]) => command === 'cargo' && args.includes('legacy-install')), !appimageOnly);
+		const firstSigner = commands.findIndex(([command, , action]) => command === 'pnpm' && action === 'signer');
+		const checkedBinaries = commands.slice(0, firstSigner).filter(([command]) => command === 'readelf').map(command => path.basename(command.at(-1)));
+		assert.deepEqual(checkedBinaries, ['typerelay', 'typerelay-tui', 'typerelay-panel', 'typerelay-ai', ...appimageOnly ? [] : ['typerelay']]);
 		if (appimageOnly) assert.ok(report.artifacts.every(item => /\.AppImage(\.sig)?$/.test(item.file)));
-	} finally { PanelRelease.root = originalRoot; if (originalKey === undefined) delete process.env.TAURI_SIGNING_PRIVATE_KEY; else process.env.TAURI_SIGNING_PRIVATE_KEY = originalKey; await fs.rm(root, { recursive: true, force: true }); }
+	} finally { PanelRelease.root = originalRoot; if (originalKey === undefined) delete process.env.TAURI_SIGNING_PRIVATE_KEY; else process.env.TAURI_SIGNING_PRIVATE_KEY = originalKey; if (originalCommit === undefined) delete process.env.TYPERELAY_BOOKWORM_COMMIT; else process.env.TYPERELAY_BOOKWORM_COMMIT = originalCommit; await fs.rm(root, { recursive: true, force: true }); }
 });

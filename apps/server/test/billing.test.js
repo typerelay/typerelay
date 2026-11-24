@@ -100,7 +100,7 @@ test('one-time Pro trial unlocks API and machines, then expires to Free', async 
 	const account = await Billing.startTrial(Fixture.account._id, startedAt);
 	assert.equal(account.billing.helpmonks_sequence.status, 'pending');
 	let enrollmentRequest;
-	const enrollment = await Helpmonks.enrollTrialUsers(startedAt, { fetch: async (url, options) => { enrollmentRequest = { url, options }; return { ok: true, status: 200, json: async () => ({ success: true, results: { _id: '6a8697777777777777777777' }, sequence_enrollment: { campaign_id: process.env.HELPMONKS_SIGNUP_SEQUENCE_ID } }) }; } });
+	const enrollment = await Helpmonks.enrollPendingUsers(startedAt, { fetch: async (url, options) => { enrollmentRequest = { url, options }; return { ok: true, status: 200, json: async () => ({ success: true, results: { _id: '6a8697777777777777777777' }, sequence_enrollment: { campaign_id: process.env.HELPMONKS_SIGNUP_SEQUENCE_ID } }) }; } });
 	assert.deepEqual(enrollment, { checked: 1, enrolled: 1, retrying: 0, failed: 0, configured: true });
 	assert.equal(enrollmentRequest.url, 'http://helpmonks-signup.test/api/v1/trusted/company_user/create');
 	assert.deepEqual(JSON.parse(enrollmentRequest.options.body), { customer: { email: Fixture.owner.email, labels: [] }, host_id: process.env.HELPMONKS_SIGNUP_HOST_ID, campaign_id: process.env.HELPMONKS_SIGNUP_SEQUENCE_ID });
@@ -129,21 +129,85 @@ test('one-time Pro trial unlocks API and machines, then expires to Free', async 
 	await assert.rejects(Billing.startTrial(Fixture.account._id), error => error.code === 'trial_unavailable');
 });
 
-test('Helpmonks trial enrollment retries every five minutes and fails after twelve attempts', async () => {
+test('a Pro trial preserves existing Helpmonks enrollment and waits for unconfirmed owners', async () => {
+	const now = new Date();
+	const nextAttempt = new Date(now.getTime() + 86400000);
+	for (const status of ['pending', 'completed', 'failed', null]) {
+		const owner = await User.create({ email: `${randomUUID()}@example.test`, ...(status === null ? { email_confirm_by: nextAttempt } : {}) });
+		const sequence = status === null ? {} : { status, attempts: 4, next_attempt_at: nextAttempt, last_error: status === 'completed' ? '' : 'HTTP 503', contact_id: status === 'completed' ? 'sequence-contact' : '', enrolled_at: status === 'completed' ? now : null };
+		const account = await Account.create({ name: 'Trial sequence', billing: { helpmonks_sequence: sequence } });
+		await Member.create({ account: account._id, user: owner._id, role: 'owner' });
+		const trial = await Billing.startTrial(account._id, now);
+		assert.equal(trial.billing.status, 'trialing');
+		assert.deepEqual(trial.billing.helpmonks_sequence, account.toObject().billing.helpmonks_sequence);
+	}
+});
+
+test('legacy pending Helpmonks enrollment defers while the owner is unconfirmed', async t => {
+	const now = new Date();
+	const owner = await User.create({ email: `${randomUUID()}@example.test`, email_confirm_by: new Date(now.getTime() + 86400000) });
+	const account = await Account.create({ name: 'Unconfirmed account', billing: { helpmonks_sequence: { status: 'pending', attempts: 1, next_attempt_at: now } } });
+	t.after(() => Account.deleteOne({ _id: account._id }));
+	await Member.create({ account: account._id, user: owner._id, role: 'owner' });
+	const fetch = async () => assert.fail('Unconfirmed owners must not be enrolled');
+	assert.deepEqual(await Helpmonks.enrollPendingUsers(now, { fetch }), { checked: 1, enrolled: 0, retrying: 0, failed: 0, configured: true, deferred: 1 });
+	const sequence = (await Account.findById(account._id).lean()).billing.helpmonks_sequence;
+	assert.equal(sequence.status, 'pending'); assert.equal(sequence.attempts, 1);
+	assert.equal(sequence.next_attempt_at.getTime(), now.getTime() + Helpmonks.retryDelay);
+});
+
+test('Helpmonks signup enrollment retries every five minutes and fails after twelve attempts', async () => {
 	const user = await User.create({ email: `${randomUUID()}@example.test`, name: 'Retry owner' });
 	const now = new Date();
 	const account = await Account.create({ name: 'Retry account', billing: { helpmonks_sequence: { status: 'pending', attempts: 10, next_attempt_at: now } } });
 	await Member.create({ account: account._id, user: user._id, role: 'owner' });
 	const unavailable = async () => ({ ok: false, status: 503, json: async () => ({}) });
-	assert.deepEqual(await Helpmonks.enrollTrialUsers(now, { fetch: unavailable }), { checked: 1, enrolled: 0, retrying: 1, failed: 0, configured: true });
+	assert.deepEqual(await Helpmonks.enrollPendingUsers(now, { fetch: unavailable }), { checked: 1, enrolled: 0, retrying: 1, failed: 0, configured: true });
 	let stored = await Account.findById(account._id).lean();
 	assert.equal(stored.billing.helpmonks_sequence.attempts, 11);
 	assert.equal(stored.billing.helpmonks_sequence.next_attempt_at.getTime(), now.getTime() + Helpmonks.retryDelay);
-	assert.deepEqual(await Helpmonks.enrollTrialUsers(new Date(now.getTime() + Helpmonks.retryDelay), { fetch: unavailable }), { checked: 1, enrolled: 0, retrying: 0, failed: 1, configured: true });
+	assert.deepEqual(await Helpmonks.enrollPendingUsers(new Date(now.getTime() + Helpmonks.retryDelay), { fetch: unavailable }), { checked: 1, enrolled: 0, retrying: 0, failed: 1, configured: true });
 	stored = await Account.findById(account._id).lean();
 	assert.equal(stored.billing.helpmonks_sequence.status, 'failed');
 	assert.equal(stored.billing.helpmonks_sequence.attempts, 12);
 	assert.equal(Helpmonks.configuration({ env: { HELPMONKS_API_URL: 'http://fallback.test' } }).apiUrl, 'http://fallback.test');
+});
+
+test('self-hosted Helpmonks worker leaves pending rows untouched even with valid settings', async t => {
+	t.mock.method(Billing, 'hosted', () => false);
+	const now = new Date();
+	const account = await Account.create({ name: 'Restored account', billing: { helpmonks_sequence: { status: 'pending', next_attempt_at: now } } });
+	t.after(() => Account.deleteOne({ _id: account._id }));
+	assert.deepEqual(await Helpmonks.enrollPendingUsers(now), { checked: 0, enrolled: 0, retrying: 0, failed: 0, configured: false });
+	assert.deepEqual((await Account.findById(account._id).lean()).billing.helpmonks_sequence, account.toObject().billing.helpmonks_sequence);
+});
+
+test('an expired final Helpmonks attempt becomes failed without another provider request', async () => {
+	const startedAt = new Date();
+	const nextAttempt = new Date(startedAt.getTime() + Helpmonks.retryDelay);
+	const account = await Account.create({ name: 'Abandoned signup enrollment', billing: { helpmonks_sequence: { status: 'pending', attempts: Helpmonks.maxAttempts, next_attempt_at: nextAttempt } } });
+	const fetch = async () => assert.fail('The maximum number of calls has been reached');
+	assert.deepEqual(await Helpmonks.enrollPendingUsers(startedAt, { fetch }), { checked: 0, enrolled: 0, retrying: 0, failed: 0, configured: true });
+	assert.deepEqual(await Helpmonks.enrollPendingUsers(nextAttempt, { fetch }), { checked: 1, enrolled: 0, retrying: 0, failed: 1, configured: true });
+	const sequence = (await Account.findById(account._id).lean()).billing.helpmonks_sequence;
+	assert.equal(sequence.status, 'failed'); assert.equal(sequence.attempts, Helpmonks.maxAttempts); assert.match(sequence.last_error, /expired before completion/);
+});
+
+test('a stale Helpmonks worker cannot overwrite a newer completed enrollment', async () => {
+	const now = new Date();
+	const later = new Date(now.getTime() + Helpmonks.retryDelay);
+	const owner = await User.create({ email: `${randomUUID()}@example.test` });
+	const account = await Account.create({ name: 'Retried signup enrollment', billing: { helpmonks_sequence: { status: 'pending', next_attempt_at: now } } });
+	await Member.create({ account: account._id, user: owner._id, role: 'owner' });
+	const contactId = '6a8697777777777777777777';
+	const success = async () => ({ ok: true, json: async () => ({ success: true, results: { _id: contactId }, sequence_enrollment: { campaign_id: process.env.HELPMONKS_SIGNUP_SEQUENCE_ID } }) });
+	const fetch = async () => {
+		assert.deepEqual(await Helpmonks.enrollPendingUsers(later, { fetch: success }), { checked: 1, enrolled: 1, retrying: 0, failed: 0, configured: true });
+		throw new Error('Stale response');
+	};
+	assert.deepEqual(await Helpmonks.enrollPendingUsers(now, { fetch }), { checked: 1, enrolled: 0, retrying: 0, failed: 0, configured: true });
+	const sequence = (await Account.findById(account._id).lean()).billing.helpmonks_sequence;
+	assert.equal(sequence.status, 'completed'); assert.equal(sequence.attempts, 2); assert.equal(sequence.contact_id, contactId); assert.equal(sequence.last_error, '');
 });
 
 test('new Free account gets one Stripe customer and tracking subscription', async () => {

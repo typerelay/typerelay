@@ -183,11 +183,23 @@ export class PanelRelease {
 	}
 
 	static async requireCommands(names) { for (const name of names) await PanelRelease.run('which', [name], { capture: true }); }
-	static async repository() {
+	static async repository(expectedCommit) {
 		if (await PanelRelease.run('git', ['status', '--porcelain'], { capture: true })) throw new Error('Release requires a clean checkout');
 		if (await PanelRelease.run('git', ['branch', '--show-current'], { capture: true }) !== 'develop') throw new Error('Release requires the develop branch; merge the reviewed feature first');
-		await PanelRelease.run('git', ['pull', '--ff-only']);
-		return PanelRelease.run('git', ['rev-parse', 'HEAD'], { capture: true });
+		if (!expectedCommit) await PanelRelease.run('git', ['pull', '--ff-only']);
+		const commit = await PanelRelease.run('git', ['rev-parse', 'HEAD'], { capture: true });
+		if (expectedCommit && commit !== expectedCommit) throw new Error('Source changed before the Linux build started');
+		return commit;
+	}
+	static verifyLinuxAbi(file, versions) {
+		const requirements = [...versions.matchAll(/\bName: (GLIBC_\S+)/g)].map(([, version]) => version);
+		if (!requirements.length) throw new Error(`No glibc requirements found for ${file}`);
+		const incompatible = requirements.find(version => {
+			if (version === 'GLIBC_ABI_DT_RELR') return false;
+			const numeric = /^GLIBC_2\.(\d+)(?:\.(\d+))?$/.exec(version);
+			return !numeric || Number(numeric[1]) > 36 || (Number(numeric[1]) === 36 && Number(numeric[2] || 0) > 0);
+		});
+		if (incompatible) throw new Error(`${file} requires ${incompatible}. Debian 12 provides glibc 2.36.`);
 	}
 	static async files(directory, extension) {
 		const entries = await fs.readdir(directory, { withFileTypes: true }); const files = [];
@@ -206,17 +218,28 @@ export class PanelRelease {
 	static async main(args = process.argv.slice(2)) {
 		if (args[0] === 'sign-file') { if (args.length !== 4) throw new Error('Invalid signing hook request'); return SigningBridge.requestTauri(args[1],args[2],args[3]); }
 		const options = PanelRelease.options([...args]);
+		const linuxCommit = options.mode === 'linux' ? process.env.TYPERELAY_BOOKWORM_COMMIT : undefined;
+		if (options.mode === 'linux' && !options.dry) {
+			if (!linuxCommit) {
+				if (!process.env.TAURI_SIGNING_PRIVATE_KEY) throw new Error('TAURI_SIGNING_PRIVATE_KEY is required');
+				const commit = await PanelRelease.repository();
+				const reportDirectory = options.report ? path.dirname(options.report) : path.join(PanelRelease.root, 'target');
+				const environment = Object.fromEntries(['HOME', 'PATH', 'XDG_CACHE_HOME', 'TAURI_SIGNING_PRIVATE_KEY', 'TAURI_SIGNING_PRIVATE_KEY_PASSWORD'].map(name => [name, process.env[name]]));
+				return PanelRelease.run('bash', [path.join(PanelRelease.root, 'scripts/release-linux-bookworm.sh'), PanelRelease.root, commit, reportDirectory, ...args], { environment });
+			}
+			if (await PanelRelease.run('getconf', ['GNU_LIBC_VERSION'], { capture: true }) !== 'glibc 2.36') throw new Error('Linux release requires the Debian 12 glibc 2.36 build environment');
+		}
 		if (options.resume && !options.targetExplicit) { options.target = JSON.parse(await fs.readFile(path.join(options.resume, 'notarization.json'), 'utf8')).target; if (!['aarch64-apple-darwin', 'x86_64-apple-darwin', 'universal-apple-darwin'].includes(options.target)) throw new Error('Saved notarization has an unsupported target'); }
 		const working = path.join(PanelRelease.root, 'apps/desktop');
 		let target = path.join(PanelRelease.root, 'target/desktop-releases', options.mode);
 		const build = options.mode === 'windows' ? ['tauri', 'bundle', '--target', options.target, '--bundles', 'nsis', '--config', 'src-tauri/tauri.windows.conf.json'] : ['tauri', 'build', '--target', options.target, '--bundles', options.mode === 'linux' ? options.appimageOnly ? 'appimage' : 'appimage,deb,rpm' : 'app', '--', '--locked'];
 		const compile = options.mode === 'windows' ? ['xwin', 'build', '--manifest-path', 'src-tauri/Cargo.toml', '--release', '--target', options.target, '--locked'] : null;
-		if (options.dry) { console.log(JSON.stringify({ source: 'clean develop + git pull --ff-only', platform: options.mode, target: options.target, install: ['pnpm', 'install', '--frozen-lockfile'], nativeTools: NativeTools.plans(options.target).map(plan => [plan.command, ...plan.args]), compile: compile ? ['cargo', ...compile] : null, build: ['pnpm', ...build], signing: options.mode === 'windows' ? 'Shared Helpmonks YubiKey signer via private socket; hidden PIN and touch in local terminal' : options.mode === 'macos' ? 'Local Developer ID, Apple notarization and Tauri updater signature' : 'Tauri updater signature for the verified engine, TUI and panel bundle', output: target, publish: false }, null, 2)); return; }
+		if (options.dry) { console.log(JSON.stringify({ source: 'clean develop + git pull --ff-only', platform: options.mode, target: options.target, ...(options.mode === 'linux' ? { buildEnvironment: 'Local Debian 12 via Bubblewrap' } : {}), install: ['pnpm', 'install', '--frozen-lockfile'], nativeTools: NativeTools.plans(options.target).map(plan => [plan.command, ...plan.args]), compile: compile ? ['cargo', ...compile] : null, build: ['pnpm', ...build], signing: options.mode === 'windows' ? 'Shared Helpmonks YubiKey signer via private socket; hidden PIN and touch in local terminal' : options.mode === 'macos' ? 'Local Developer ID, Apple notarization and Tauri updater signature' : 'Tauri updater signature for the verified engine, TUI and panel bundle', output: target, publish: false }, null, 2)); return; }
 		if (Number(process.versions.node.split('.')[0]) < 24) throw new Error('Node.js 24 or newer is required');
 		await PanelRelease.requireCommands(['git', 'pnpm', 'cargo', 'rustup', 'tar', 'file', ...(options.mode === 'windows' ? ['cargo-xwin', 'clang', 'lld-link', 'llvm-rc', 'makensis', 'wine'] : options.mode === 'macos' ? ['security', 'codesign', 'spctl', 'xcrun', 'lipo', 'ditto', 'hdiutil'] : options.appimageOnly ? [] : ['rpm'])]);
 		if (!process.env.TAURI_SIGNING_PRIVATE_KEY) throw new Error('TAURI_SIGNING_PRIVATE_KEY is required');
 		if (options.resume && (await PanelRelease.run('git', ['status', '--porcelain'], { capture: true }) || await PanelRelease.run('git', ['branch', '--show-current'], { capture: true }) !== 'develop')) throw new Error('Resume requires a clean develop checkout');
-		const commit = options.resume ? await PanelRelease.run('git', ['rev-parse', 'HEAD'], { capture: true }) : await PanelRelease.repository();
+		const commit = options.resume ? await PanelRelease.run('git', ['rev-parse', 'HEAD'], { capture: true }) : await PanelRelease.repository(linuxCommit);
 		const config = await DesktopVersion.config();
 		const targets = options.target === 'universal-apple-darwin' ? ['aarch64-apple-darwin', 'x86_64-apple-darwin'] : [options.target];
 		const installed = await PanelRelease.run('rustup', ['target', 'list', '--installed'], { capture: true });
@@ -232,6 +255,8 @@ export class PanelRelease {
 		}
 		const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'typerelay-release-')); await fs.chmod(temporary, 0o700);
 		const baseEnvironment = { ...PanelRelease.buildEnvironment(process.env), CARGO_TARGET_DIR: target, TMPDIR: temporary };
+		const linuxSigningEnvironment = options.mode === 'linux' ? { ...baseEnvironment } : undefined;
+		if (linuxSigningEnvironment) { delete baseEnvironment.TAURI_SIGNING_PRIVATE_KEY; delete baseEnvironment.TAURI_SIGNING_PRIVATE_KEY_PASSWORD; }
 		const environment = options.mode === 'windows' ? NativeTools.environment(baseEnvironment) : baseEnvironment;
 		let nativeTools=[]; let signer; let signingEnvironment; let bridge; let lock; let ownsSigningEnvironment = false;
 		try {
@@ -266,7 +291,7 @@ export class PanelRelease {
 					if (!identity || !available.includes(identity)) throw new Error('Set APPLE_SIGNING_IDENTITY to one matching Developer ID Application identity');
 					overlay = { bundle: { createUpdaterArtifacts: false, macOS: { signingIdentity: identity, hardenedRuntime: true } } };
 				} else {
-					overlay = { bundle: { createUpdaterArtifacts: true } };
+					overlay = { bundle: { createUpdaterArtifacts: false } };
 				}
 				const overlayPath = path.join(temporary, 'tauri-signing.json'); await fs.writeFile(overlayPath, JSON.stringify(overlay), { mode: 0o600 });
 				if (options.mode === 'windows') { build.push('--config', overlayPath); await PanelRelease.run('cargo', compile, { cwd: working, environment }); } else build.splice(build.indexOf('--'), 0, '--config', overlayPath);
@@ -297,15 +322,17 @@ export class PanelRelease {
 				artifacts = [dmg, archive, signature]; updater = { target: options.target.startsWith('aarch64') ? 'darwin-aarch64' : 'darwin-x86_64', file: archive, signature };
 			} else {
 				const engine = path.join(release, 'typerelay'); const tui = path.join(release, 'typerelay-tui'); const panel = path.join(release, 'typerelay-panel'); const ai = path.join(release, 'typerelay-ai');
-				for (const [name, file] of [['typerelay', engine], ['typerelay-tui', tui], ['typerelay-panel', panel], ['typerelay-ai', ai]]) { const version = await PanelRelease.run(file, ['--version'], { capture: true }); if (version !== `${name} ${config.version}`) throw new Error(`${name} version does not match ${config.version}`); const type = await PanelRelease.run('file', ['--brief', file], { capture: true }); if (!/ELF 64-bit.*x86-64/i.test(type)) throw new Error(`${name} is not an x86-64 ELF binary`); }
+				for (const file of [engine, tui, panel, ai]) PanelRelease.verifyLinuxAbi(file, await PanelRelease.run('readelf', ['--wide', '--version-info', file], { capture: true, environment }));
+				for (const [name, file] of [['typerelay', engine], ['typerelay-tui', tui], ['typerelay-panel', panel], ['typerelay-ai', ai]]) { const version = await PanelRelease.run(file, ['--version'], { capture: true, environment }); if (version !== `${name} ${config.version}`) throw new Error(`${name} version does not match ${config.version}`); const type = await PanelRelease.run('file', ['--brief', file], { capture: true, environment }); if (!/ELF 64-bit.*x86-64/i.test(type)) throw new Error(`${name} is not an x86-64 ELF binary`); }
 				let archive;
 				if (!options.appimageOnly) {
 					// Only the compatibility archive retains the standalone installer; native packages exclude it.
 					await PanelRelease.run('cargo', ['build', '--release', '--locked', '--target', options.target, '--features', 'legacy-install', '--bin', 'typerelay'], { cwd: PanelRelease.root, environment });
+					PanelRelease.verifyLinuxAbi(engine, await PanelRelease.run('readelf', ['--wide', '--version-info', engine], { capture: true, environment }));
 					const bundle = path.join(release, 'bundle/legacy'); await fs.mkdir(bundle, { recursive: true }); for (const file of [engine, tui, panel, ai]) await fs.copyFile(file, path.join(bundle, path.basename(file)));
 					// Tauri patches the release binary while bundling; legacy installs must keep their archive updater.
 					const legacyPanel = path.join(bundle, 'typerelay-panel'); await fs.writeFile(legacyPanel, PanelRelease.legacyPanel(await fs.readFile(legacyPanel)));
-					archive = path.join(release, 'bundle', `TypeRelay-Linux-legacy-${config.version}-x86_64.tar.gz`); await PanelRelease.run('tar', ['-czf', archive, '-C', bundle, 'typerelay', 'typerelay-tui', 'typerelay-panel', 'typerelay-ai']); await PanelRelease.run('pnpm', ['tauri', 'signer', 'sign', archive], { cwd: working, environment });
+					archive = path.join(release, 'bundle', `TypeRelay-Linux-legacy-${config.version}-x86_64.tar.gz`); await PanelRelease.run('tar', ['-czf', archive, '-C', bundle, 'typerelay', 'typerelay-tui', 'typerelay-panel', 'typerelay-ai']); await PanelRelease.run('pnpm', ['tauri', 'signer', 'sign', archive], { cwd: working, environment: linuxSigningEnvironment });
 				}
 				const appImages = await PanelRelease.files(path.join(release, 'bundle/appimage'), '.AppImage'); const debs = options.appimageOnly ? [] : await PanelRelease.files(path.join(release, 'bundle/deb'), '.deb'); const rpms = options.appimageOnly ? [] : await PanelRelease.files(path.join(release, 'bundle/rpm'), '.rpm');
 				if (appImages.length !== 1 || (!options.appimageOnly && (debs.length !== 1 || rpms.length !== 1))) throw new Error(options.appimageOnly ? 'Expected one Linux AppImage' : 'Expected one Linux AppImage, DEB and RPM');
@@ -315,7 +342,7 @@ export class PanelRelease {
 				}
 				const type = await PanelRelease.run('file', ['--brief', appImages[0]], { capture: true }); if (!/ELF 64-bit.*x86-64/i.test(type)) throw new Error('AppImage is not x86-64');
 				const packages = [...appImages, ...debs, ...rpms];
-				packageUpdaters = await Promise.all(packages.map(async file => { await PanelRelease.run('pnpm', ['tauri', 'signer', 'sign', file], { cwd: working, environment }); return { target: 'linux-x86_64-' + ({ '.AppImage': 'appimage', '.deb': 'deb', '.rpm': 'rpm' }[path.extname(file)]), file: path.relative(target, file), signature: (await fs.readFile(`${file}.sig`, 'utf8')).trim() }; }));
+				packageUpdaters = await Promise.all(packages.map(async file => { await PanelRelease.run('pnpm', ['tauri', 'signer', 'sign', file], { cwd: working, environment: linuxSigningEnvironment }); return { target: 'linux-x86_64-' + ({ '.AppImage': 'appimage', '.deb': 'deb', '.rpm': 'rpm' }[path.extname(file)]), file: path.relative(target, file), signature: (await fs.readFile(`${file}.sig`, 'utf8')).trim() }; }));
 				artifacts = [...packages, ...packages.map(file => `${file}.sig`), ...(archive ? [archive, `${archive}.sig`] : [])]; updater = options.appimageOnly ? { target: 'linux-x86_64-appimage', file: appImages[0], signature: `${appImages[0]}.sig` } : { target: 'linux-x86_64', file: archive, signature: `${archive}.sig` };
 			}
 			if (await PanelRelease.run('git', ['status', '--porcelain'], { capture: true }) || await PanelRelease.run('git', ['rev-parse', 'HEAD'], { capture: true }) !== commit) throw new Error('Build changed source or commit; do not distribute');

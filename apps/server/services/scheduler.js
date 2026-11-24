@@ -10,7 +10,7 @@ import { SignupNotifications } from './signup_notifications.js';
 import { Auth } from './auth.js';
 
 export class Scheduler {
-	static start({ CronClass = Cron, cleanup = () => Libraries.cleanup(), expireTrials = () => Billing.runTrialExpiry(), enrollTrialUsers = () => Helpmonks.enrollTrialUsers(), reconcileSignupNotifications = () => SignupNotifications.reconcile(message => Auth.mail.sendMail(message)), reconcileWhiteLabel = () => WhiteLabel.reconcile(), purgeAccounts = () => AdminAccounts.recover(), expireUnconfirmed = () => AdminAccounts.expireUnconfirmed(), syncProductUpdates = () => ProductUpdates.syncProductUpdates(), productUpdatesEnabled = ProductUpdates.enabled(), logger = console } = {}) {
+	static start({ CronClass = Cron, cleanup = () => Libraries.cleanup(), expireTrials = () => Billing.runTrialExpiry(), enrollPendingUsers = () => Helpmonks.enrollPendingUsers(), reconcileSignupNotifications = () => SignupNotifications.reconcile(message => Auth.mail.sendMail(message)), reconcileWhiteLabel = () => WhiteLabel.reconcile(), purgeAccounts = () => AdminAccounts.recover(), expireUnconfirmed = () => AdminAccounts.expireUnconfirmed(), syncProductUpdates = () => ProductUpdates.syncProductUpdates(), productUpdatesEnabled = ProductUpdates.enabled(), logger = console } = {}) {
 		let running = false;
 		const cleanupJob = new CronClass('30 2 * * *', { protect: true }, async () => {
 			if (running) return;
@@ -29,7 +29,7 @@ export class Scheduler {
 			try { const summary = await expireTrials(); if (summary.expired) logger.log(`Trial lifecycle complete: downgraded ${summary.expired} accounts to Free`); } catch (error) { recordException(error); logger.error(`Trial lifecycle failed: ${error.message}`); }
 		});
 		const helpmonksJob = new CronClass('* * * * *', { protect: true }, async () => {
-			try { const summary = await enrollTrialUsers(); if (summary.checked) logger.log(`Helpmonks trial sequence complete: enrolled ${summary.enrolled}, retrying ${summary.retrying}, failed ${summary.failed}`); } catch (error) { recordException(error); logger.error(`Helpmonks trial sequence failed: ${error.message}`); }
+			try { const summary = await enrollPendingUsers(); if (summary.checked) logger.log(`Helpmonks signup sequence complete: enrolled ${summary.enrolled}, retrying ${summary.retrying}, failed ${summary.failed}`); } catch (error) { recordException(error); logger.error(`Helpmonks signup sequence failed: ${error.message}`); }
 		});
 		const signupNotificationJob = new CronClass('* * * * *', { protect: true }, async () => {
 			try { const summary = await reconcileSignupNotifications(); if (summary.checked) logger.log(`Signup notifications complete: sent ${summary.sent}, retrying ${summary.retrying}, failed ${summary.failed}`); } catch (error) { recordException(error); logger.error(`Signup notification reconciliation failed: ${error.message}`); }

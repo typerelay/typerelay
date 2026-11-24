@@ -26,7 +26,11 @@ impl Cli {
         let mut generation = database.generation()?;
         let mut app = app::App::new(store, settings)?;
         #[cfg(target_os = "linux")]
-        let _registration = typerelay_client::desktop::Registration::current_window()?;
+        let _registration = if typerelay_client::desktop::Hyprland::session_active() {
+            Some(typerelay_client::desktop::Registration::current_window()?)
+        } else {
+            None
+        };
         let (_guard, mut terminal) = terminal::TerminalSession::enter()?;
         let interval = Duration::from_millis(33);
         let mut last_draw = Instant::now() - interval;

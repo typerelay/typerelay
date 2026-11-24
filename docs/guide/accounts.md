@@ -11,6 +11,8 @@ When public sign-up is enabled, choose **Create one** and enter your name and em
 
 We also send a confirmation email. Until you confirm your email address, a banner at the top of the app reminds you; choose **Resend** to get a new email (at most once a minute). Open the link and choose **Confirm email address**. Accounts without a confirmed email address are deleted, with their data, 24 hours after signup. Until you confirm, you can use your snippets and connect the desktop and mobile apps, but you cannot add or invite team members, set a password, set up two-factor authentication or passkeys, create API tokens, or connect integrations. If you sign in with a Magic Link before confirming, that also confirms the address and, for safety, signs out other sessions and devices.
 
+TypeRelay Cloud starts sending getting-started emails after you confirm your address. These emails are included on Free.
+
 If an account already exists for the email address, sign-up does not sign you in. Instead, we email a sign-in link to that address.
 
 In the TypeRelay mobile app, choose **Create account** on the sign-in screen. After you sign up, the app asks you to connect the device and then signs you in; the same confirmation banner appears above your snippets. On iOS, sign-in uses Safari's secure sign-in sheet, so saved passwords and an existing Safari session are available; iOS asks once to allow TypeRelay to use the TypeRelay website to sign in.
