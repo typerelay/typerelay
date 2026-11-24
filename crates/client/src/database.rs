@@ -66,7 +66,15 @@ impl Database {
     pub fn meta(&self, key: &str) -> Result<Option<Value>> {
         self.connection.query_row("SELECT value FROM meta WHERE key=?1", [key], |row| row.get::<_, String>(0)).optional()?.map(|text| serde_json::from_str(&text).map_err(Into::into)).transpose()
     }
-    pub fn set_meta(&self, key: &str, value: &Value) -> Result<()> { self.connection.execute("INSERT INTO meta(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value<>excluded.value", params![key, value.to_string()])?; Ok(()) }
+    pub fn set_meta(&self, key: &str, value: &Value) -> Result<()> {
+        if key == "last_failure" { return self.write_last_failure(value, &[]); }
+        self.connection.execute("INSERT INTO meta(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value<>excluded.value", params![key, value.to_string()])?;
+        Ok(())
+    }
+    fn write_last_failure(&self, message: &Value, recovery_ids: &[String]) -> Result<()> {
+        self.connection.execute("INSERT INTO meta(key,value) VALUES('last_failure',?1),('last_failure_recovery',?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value<>excluded.value", params![message.to_string(), json!(recovery_ids).to_string()])?;
+        Ok(())
+    }
     pub fn usage(&self, library: &str, snippet: &str, action: &str, client: &str, characters: usize) -> Result<()> {
         if !self.synced(library)? { return Ok(()); }
         let Some(identity) = self.meta("statistics_identity")?.filter(|value| value["user"].is_string()) else { return Ok(()); };
@@ -591,41 +599,58 @@ impl Database {
         transaction.commit()?;
         Ok(())
     }
-    pub fn recover(&self, library: &str, snippet: Option<&str>, data: &Value, reason: &str) -> Result<()> {
-        self.connection.execute("INSERT INTO recovery(id,library,snippet,data,reason) SELECT ?1,?2,?3,?4,?5 WHERE NOT EXISTS(SELECT 1 FROM recovery WHERE library=?2 AND snippet IS ?3 AND data=?4)", params![Uuid::new_v4().to_string(),library,snippet,data.to_string(),reason])?;
-        Ok(())
+    pub fn recover(&self, library: &str, snippet: Option<&str>, data: &Value, reason: &str) -> Result<String> {
+        let data = data.to_string();
+        let id = Uuid::new_v4().to_string();
+        Ok(self.connection.query_row("INSERT INTO recovery(id,library,snippet,data,reason)
+            VALUES(COALESCE((SELECT id FROM recovery WHERE library=?2 AND snippet IS ?3 AND data=?4 ORDER BY rowid LIMIT 1),?1),?2,?3,?4,?5)
+            ON CONFLICT(id) DO UPDATE SET id=excluded.id RETURNING id", params![id,library,snippet,data,reason], |row| row.get(0))?)
     }
     pub fn recovery(&self) -> Result<Vec<Value>> {
         let mut statement = self.connection.prepare("SELECT id,library,snippet,data,reason FROM recovery ORDER BY rowid")?;
         let rows = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, String>(3)?, row.get::<_, String>(4)?)))?;
         rows.map(|row| { let (id, library, snippet, data, reason) = row?; let library_name = library.as_deref().and_then(|id| self.library(id).ok()).and_then(|library| library["name"].as_str().map(str::to_owned)); Ok(json!({"id":id,"library":library,"library_name":library_name,"snippet":snippet,"reason":reason,"data":serde_json::from_str::<Value>(&data)?})) }).collect()
     }
-    pub fn latest_recovery_reason(&self) -> Result<Option<String>> {
-        Ok(self.connection.query_row("SELECT reason FROM recovery ORDER BY rowid DESC LIMIT 1", [], |row| row.get(0)).optional()?)
+    /// Returns the newest Recovery reason, the last failure message, and whether the entry represents that failure.
+    pub fn latest_recovery_failure(&self) -> Result<(Option<String>, Option<String>, bool)> {
+        Ok(self.connection.query_row("WITH newest AS (SELECT id,reason FROM recovery ORDER BY rowid DESC LIMIT 1)
+            SELECT (SELECT reason FROM newest),
+                (SELECT json_extract(value,'$') FROM meta WHERE key='last_failure' AND json_type(value)='text'),
+                EXISTS(SELECT 1 FROM newest JOIN json_each((SELECT value FROM meta WHERE key='last_failure_recovery')) ids ON newest.id=ids.value)", [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?)
     }
     pub fn dismiss_recovery(&self, id: &str) -> Result<()> {
         let transaction = self.connection.unchecked_transaction()?;
-        let reason: Option<String> = transaction.query_row("DELETE FROM recovery WHERE id=?1 RETURNING reason", [id], |row| row.get(0)).optional()?;
-        if let Some(reason) = reason {
-            transaction.execute("DELETE FROM meta WHERE key='last_failure' AND value=?1 AND NOT EXISTS(SELECT 1 FROM recovery WHERE reason=?2)", params![json!(reason).to_string(), reason])?;
+        if transaction.execute("DELETE FROM recovery WHERE id=?1", [id])? > 0 {
+            let cleared = transaction.execute("DELETE FROM meta WHERE key='last_failure'
+                AND ?1 IN (SELECT value FROM json_each((SELECT value FROM meta WHERE key='last_failure_recovery')))
+                AND NOT EXISTS(SELECT 1 FROM json_each((SELECT value FROM meta WHERE key='last_failure_recovery')) ids JOIN recovery ON recovery.id=ids.value)", [id])?;
+            if cleared > 0 { transaction.execute("DELETE FROM meta WHERE key='last_failure_recovery'", [])?; }
         }
         transaction.commit()?;
         Ok(())
     }
-    pub fn recover_operation(&self, operation: &Value, reason: &str) -> Result<()> {
+    pub fn record_failed_operation(&self, operation: &Value, reason: &str) -> Result<()> {
+        let transaction = if self.connection.is_autocommit() { Some(rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?) } else { None };
+        let recovery_ids = if matches!(operation["kind"].as_str(), Some("merge_local" | "merge_synced")) { Vec::new() } else { self.recover_operation(operation, reason)? };
+        self.write_last_failure(&json!(reason), &recovery_ids)?;
+        if let Some(transaction) = transaction { transaction.commit()?; }
+        Ok(())
+    }
+    pub fn recover_operation(&self, operation: &Value, reason: &str) -> Result<Vec<String>> {
+        let mut recovery_ids = Vec::new();
         let library = operation["library"].as_str().unwrap_or("");
-        if operation["kind"]=="personal" { self.set_meta(&format!("personal_rejected:{}", operation["snippet"].as_str().unwrap_or("")), &operation["body"])?; return Ok(()); }
+        if operation["kind"]=="personal" { self.set_meta(&format!("personal_rejected:{}", operation["snippet"].as_str().unwrap_or("")), &operation["body"])?; return Ok(recovery_ids); }
         if operation["kind"] == "batch" {
             if let Some(items) = operation["body"]["items"].as_array() { for item in items {
                 let purged: bool = self.connection.query_row("SELECT EXISTS(SELECT 1 FROM snippets WHERE id=?1 AND json_extract(data,'$.state')='purged')", [item["id"].as_str().unwrap_or("")], |row|row.get(0))?;
-                if !purged { self.recover(library, item["id"].as_str(), &json!({"action":operation["body"]["action"],"item":item,"record":operation["records"].as_array().and_then(|rows|rows.iter().find(|row|row["id"] == item["id"]))}), reason)?; }
+                if !purged { recovery_ids.push(self.recover(library, item["id"].as_str(), &json!({"action":operation["body"]["action"],"item":item,"record":operation["records"].as_array().and_then(|rows|rows.iter().find(|row|row["id"] == item["id"]))}), reason)?); }
             } }
         } else if let Some(changes) = operation["body"]["changes"].as_array() {
-            for change in changes { self.recover(library, change["id"].as_str(), change, reason)?; }
+            for change in changes { recovery_ids.push(self.recover(library, change["id"].as_str(), change, reason)?); }
         } else if let Some(records) = operation["body"]["snippets"].as_array() {
-            for record in records { self.recover(library, record["id"].as_str(), record, reason)?; }
-        } else { self.recover(library, None, operation, reason)?; }
-        Ok(())
+            for record in records { recovery_ids.push(self.recover(library, record["id"].as_str(), record, reason)?); }
+        } else { recovery_ids.push(self.recover(library, None, operation, reason)?); }
+        Ok(recovery_ids)
     }
     pub fn remap(&self, old: &str, new: &str) -> Result<()> {
         if old == new { return Ok(()); }
@@ -816,9 +841,9 @@ impl Database {
                 self.put_record(library, &json!({"id":id,"revision":record["revision"],"state":"purged"}))?;
                 for (seq, operation) in self.pending()? {
                     if operation["kind"] == "batch" && operation["body"]["items"].as_array().is_some_and(|items|items.iter().any(|item|item["id"] == id)) {
-                        self.recover_operation(&operation, "A selected snippet was permanently removed")?;
+                        let recovery_ids = self.recover_operation(&operation, "A selected snippet was permanently removed")?;
                         self.connection.execute("DELETE FROM outbox WHERE seq=?1", [seq])?;
-                        self.set_meta("last_failure", &json!("A selected snippet was permanently removed; the bulk action was cancelled"))?;
+                        self.write_last_failure(&json!("A selected snippet was permanently removed; the bulk action was cancelled"), &recovery_ids)?;
                     }
                     if operation["library"] == library && operation["body"]["changes"].as_array().is_some_and(|changes| changes.iter().any(|change| change["id"] == id)) {
                         let mut remaining = operation.clone();
@@ -1399,19 +1424,67 @@ mod tests {
     }
     #[test]
     fn recovery_lists_reason_and_dismisses() {
-        let root=tempfile::tempdir().unwrap(); let db=Database::open(root.path()).unwrap();
-        db.recover_operation(&json!({"kind":"edit","library":"library","body":{"changes":[{"id":"snippet","value":{"trigger":"hi","content":{"text":"Hi"}}}]}}),"Server 410: Library is gone").unwrap();
-        let rows=db.recovery().unwrap(); assert_eq!(rows.len(),1); assert_eq!(rows[0]["reason"],"Server 410: Library is gone"); assert_eq!(rows[0]["snippet"],"snippet"); assert_eq!(rows[0]["data"]["value"]["content"]["text"],"Hi");
-        let reason = rows[0]["reason"].as_str().unwrap();
-        db.set_meta("last_failure", &json!(reason)).unwrap();
-        db.recover("library", Some("other"), &json!({"content":{"text":"Other edit"}}), reason).unwrap();
-        db.dismiss_recovery(rows[0]["id"].as_str().unwrap()).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let db = Database::open(root.path()).unwrap();
+        let other_connection = Database::open(root.path()).unwrap();
+        let reason = "Server 410: Library is gone";
+        let operation = json!({"kind":"edit","library":"library","body":{"changes":[{"id":"first","value":{"trigger":"hi","content":{"text":"Hi"}}},{"id":"second"}]}});
+        let unrelated = db.recover("library", Some("other"), &json!({"content":{"text":"Other edit"}}), reason).unwrap();
+        db.record_failed_operation(&operation, reason).unwrap();
+        db.record_failed_operation(&operation, reason).unwrap();
+        let rows = db.recovery().unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[1]["reason"], reason);
+        assert_eq!(rows[1]["snippet"], "first");
+        assert_eq!(rows[1]["data"]["value"]["content"]["text"], "Hi");
+        assert_eq!(db.latest_recovery_failure().unwrap(), (Some(reason.into()), Some(reason.into()), true));
+        other_connection.dismiss_recovery(rows[1]["id"].as_str().unwrap()).unwrap();
         assert_eq!(db.meta("last_failure").unwrap(), Some(json!(reason)));
-        let remaining = db.recovery().unwrap();
-        db.dismiss_recovery(remaining[0]["id"].as_str().unwrap()).unwrap();
-        assert!(db.recovery().unwrap().is_empty());
+        other_connection.dismiss_recovery(rows[2]["id"].as_str().unwrap()).unwrap();
+        assert_eq!(db.recovery().unwrap()[0]["id"], unrelated);
         assert_eq!(db.meta("last_failure").unwrap(), None);
-        drop(db); let db=Database::open(root.path()).unwrap(); db.set_meta("staged",&json!({"large":true})).unwrap(); drop(db); assert!(Database::open(root.path()).unwrap().meta("staged").unwrap().is_none());
+        db.set_meta("staged", &json!({"large":true})).unwrap();
+        assert!(Database::open(root.path()).unwrap().meta("staged").unwrap().is_none());
+    }
+
+    #[test]
+    fn dismiss_keeps_unlinked_failures_with_the_same_reason() {
+        let root = tempfile::tempdir().unwrap();
+        let db = Database::open(root.path()).unwrap();
+        let reason = "Server 403: Library is read-only";
+        let edit = json!({"kind":"edit","library":"library","body":{"changes":[{"id":"snippet"}]}});
+        for kind in ["merge_local", "merge_synced", "unlinked", "legacy"] {
+            db.record_failed_operation(&edit, reason).unwrap();
+            match kind {
+                "unlinked" => db.set_meta("last_failure", &json!(reason)).unwrap(),
+                "legacy" => { db.connection.execute("DELETE FROM meta WHERE key='last_failure_recovery'", []).unwrap(); }
+                _ => db.record_failed_operation(&json!({"kind":kind}), reason).unwrap(),
+            }
+            assert_eq!(db.latest_recovery_failure().unwrap(), (Some(reason.into()), Some(reason.into()), false));
+            let rows = db.recovery().unwrap();
+            assert_eq!(rows.len(), 1);
+            db.dismiss_recovery(rows[0]["id"].as_str().unwrap()).unwrap();
+            assert_eq!(db.meta("last_failure").unwrap(), Some(json!(reason)));
+        }
+    }
+
+    #[test]
+    fn dismiss_clears_the_bulk_cancellation_linked_to_recovery() {
+        let fixture = Fixture::new();
+        let db = fixture.db();
+        let library = "0123456789abcdef01234567";
+        let records = ["one", "two"].map(|id| json!({"id":id,"trigger":id,"title":"","content":{"version":1,"type":"plain_text","text":id},"revision":1,"state":"active","position":0}));
+        db.apply(&json!({"libraries":[{"_id":library,"name":"Synced","state":"active","revision":1,"permissions":{"read":true,"edit":true,"manage":true},"records":records}]}), None).unwrap();
+        let file = db.editor_id(library).unwrap();
+        let items = db.batch_items(&file, &file.ids).unwrap();
+        db.batch(library, None, &items).unwrap();
+        db.apply(&json!({"tombstones":[{"library":library,"id":"one","revision":2}]}), None).unwrap();
+        let rows = db.recovery().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["snippet"], "two");
+        assert_eq!(db.latest_recovery_failure().unwrap(), (Some("A selected snippet was permanently removed".into()), Some("A selected snippet was permanently removed; the bulk action was cancelled".into()), true));
+        db.dismiss_recovery(rows[0]["id"].as_str().unwrap()).unwrap();
+        assert_eq!(db.meta("last_failure").unwrap(), None);
     }
 
     #[test]

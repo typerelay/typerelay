@@ -251,9 +251,8 @@ impl Sync {
                     let message = error.to_string();
                     if ServerError::rejected(&error) {
                         let transaction = rusqlite::Transaction::new_unchecked(&db.connection,rusqlite::TransactionBehavior::Immediate)?;
-						if !matches!(operation["kind"].as_str(),Some("merge_local"|"merge_synced")) { db.recover_operation(&operation, &message)?; }
+                        db.record_failed_operation(&operation, &message)?;
                         db.connection.execute("DELETE FROM outbox WHERE seq=?1", [seq])?;
-                        db.set_meta("last_failure", &json!(message))?;
                         transaction.commit()?;
                         // Full refresh rolls back rejected optimistic moves on both sides.
                         let fresh = self.request(credentials, reqwest::Method::GET, "sync?cursor=0", None)?;
@@ -371,7 +370,7 @@ mod tests {
         let expected_reason = format!("Server 422: {rejection}");
         for _ in 0..2 {
             sync.cycle().unwrap();
-            assert_eq!(db.latest_recovery_reason().unwrap().as_deref(), Some(expected_reason.as_str()));
+            assert_eq!(db.latest_recovery_failure().unwrap(), (Some(expected_reason.clone()), Some(expected_reason.clone()), true));
         }
         worker.join().unwrap();
         assert!(db.pending().unwrap().is_empty());
@@ -382,6 +381,9 @@ mod tests {
         assert_eq!(rows[0]["data"]["value"]["content"]["text"], source);
         assert_eq!(rows[0]["reason"], expected_reason);
         assert_eq!(db.meta("cursor").unwrap(), Some(json!(2)));
+        assert_eq!(db.meta("last_failure").unwrap(), Some(json!(expected_reason)));
+        db.dismiss_recovery(rows[0]["id"].as_str().unwrap()).unwrap();
+        assert_eq!(db.meta("last_failure").unwrap(), None);
     }
     #[test]
     fn personal_offline_reconnect_preserves_conflicts_and_recovers_rejected_values() {
