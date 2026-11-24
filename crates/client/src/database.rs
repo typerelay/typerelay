@@ -64,16 +64,20 @@ impl Database {
         transaction.commit()?;Ok(())
     }
     pub fn meta(&self, key: &str) -> Result<Option<Value>> {
-        self.connection.query_row("SELECT value FROM meta WHERE key=?1", [key], |row| row.get::<_, String>(0)).optional()?.map(|text| serde_json::from_str(&text).map_err(Into::into)).transpose()
+        let Some(text) = self.connection.query_row("SELECT value FROM meta WHERE key=?1", [key], |row| row.get::<_, String>(0)).optional()? else { return Ok(None); };
+        let mut value: Value = serde_json::from_str(&text)?;
+        if key == "last_failure" && value["message"].is_string() { value = value["message"].take(); }
+        Ok(Some(value))
     }
     pub fn set_meta(&self, key: &str, value: &Value) -> Result<()> {
-        if key == "last_failure" { return self.write_last_failure(value, &[]); }
         self.connection.execute("INSERT INTO meta(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value<>excluded.value", params![key, value.to_string()])?;
         Ok(())
     }
-    fn write_last_failure(&self, message: &Value, recovery_ids: &[String]) -> Result<()> {
-        self.connection.execute("INSERT INTO meta(key,value) VALUES('last_failure',?1),('last_failure_recovery',?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value<>excluded.value", params![message.to_string(), json!(recovery_ids).to_string()])?;
-        Ok(())
+    fn write_last_failure(&self, message: &str, recovery_ids: &[String]) -> Result<()> {
+        // Older clients overwrite the message alone, so provenance must be part of that same value.
+        let value = if recovery_ids.is_empty() { json!(message) } else { json!({"message":message,"recovery_ids":recovery_ids}) };
+        self.connection.execute("DELETE FROM meta WHERE key='last_failure_recovery'", [])?;
+        self.set_meta("last_failure", &value)
     }
     pub fn usage(&self, library: &str, snippet: &str, action: &str, client: &str, characters: usize) -> Result<()> {
         if !self.synced(library)? { return Ok(()); }
@@ -613,18 +617,18 @@ impl Database {
     }
     /// Returns the newest Recovery reason, the last failure message, and whether the entry represents that failure.
     pub fn latest_recovery_failure(&self) -> Result<(Option<String>, Option<String>, bool)> {
-        Ok(self.connection.query_row("WITH newest AS (SELECT id,reason FROM recovery ORDER BY rowid DESC LIMIT 1)
+        Ok(self.connection.query_row("WITH newest AS (SELECT id,reason FROM recovery ORDER BY rowid DESC LIMIT 1),
+            failure AS (SELECT value FROM meta WHERE key='last_failure')
             SELECT (SELECT reason FROM newest),
-                (SELECT json_extract(value,'$') FROM meta WHERE key='last_failure' AND json_type(value)='text'),
-                EXISTS(SELECT 1 FROM newest JOIN json_each((SELECT value FROM meta WHERE key='last_failure_recovery')) ids ON newest.id=ids.value)", [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?)
+                (SELECT CASE json_type(value) WHEN 'text' THEN json_extract(value,'$') ELSE json_extract(value,'$.message') END FROM failure),
+                EXISTS(SELECT 1 FROM failure, json_each(failure.value,'$.recovery_ids') ids JOIN newest ON newest.id=ids.value)", [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?)
     }
     pub fn dismiss_recovery(&self, id: &str) -> Result<()> {
         let transaction = self.connection.unchecked_transaction()?;
         if transaction.execute("DELETE FROM recovery WHERE id=?1", [id])? > 0 {
-            let cleared = transaction.execute("DELETE FROM meta WHERE key='last_failure'
-                AND ?1 IN (SELECT value FROM json_each((SELECT value FROM meta WHERE key='last_failure_recovery')))
-                AND NOT EXISTS(SELECT 1 FROM json_each((SELECT value FROM meta WHERE key='last_failure_recovery')) ids JOIN recovery ON recovery.id=ids.value)", [id])?;
-            if cleared > 0 { transaction.execute("DELETE FROM meta WHERE key='last_failure_recovery'", [])?; }
+            transaction.execute("DELETE FROM meta WHERE key='last_failure'
+                AND ?1 IN (SELECT ids.value FROM json_each(meta.value,'$.recovery_ids') ids)
+                AND NOT EXISTS(SELECT 1 FROM json_each(meta.value,'$.recovery_ids') ids JOIN recovery ON recovery.id=ids.value)", [id])?;
         }
         transaction.commit()?;
         Ok(())
@@ -632,7 +636,7 @@ impl Database {
     pub fn record_failed_operation(&self, operation: &Value, reason: &str) -> Result<()> {
         let transaction = if self.connection.is_autocommit() { Some(rusqlite::Transaction::new_unchecked(&self.connection,rusqlite::TransactionBehavior::Immediate)?) } else { None };
         let recovery_ids = if matches!(operation["kind"].as_str(), Some("merge_local" | "merge_synced")) { Vec::new() } else { self.recover_operation(operation, reason)? };
-        self.write_last_failure(&json!(reason), &recovery_ids)?;
+        self.write_last_failure(reason, &recovery_ids)?;
         if let Some(transaction) = transaction { transaction.commit()?; }
         Ok(())
     }
@@ -843,7 +847,7 @@ impl Database {
                     if operation["kind"] == "batch" && operation["body"]["items"].as_array().is_some_and(|items|items.iter().any(|item|item["id"] == id)) {
                         let recovery_ids = self.recover_operation(&operation, "A selected snippet was permanently removed")?;
                         self.connection.execute("DELETE FROM outbox WHERE seq=?1", [seq])?;
-                        self.write_last_failure(&json!("A selected snippet was permanently removed; the bulk action was cancelled"), &recovery_ids)?;
+                        self.write_last_failure("A selected snippet was permanently removed; the bulk action was cancelled", &recovery_ids)?;
                     }
                     if operation["library"] == library && operation["body"]["changes"].as_array().is_some_and(|changes| changes.iter().any(|change| change["id"] == id)) {
                         let mut remaining = operation.clone();
@@ -1430,8 +1434,10 @@ mod tests {
         let reason = "Server 410: Library is gone";
         let operation = json!({"kind":"edit","library":"library","body":{"changes":[{"id":"first","value":{"trigger":"hi","content":{"text":"Hi"}}},{"id":"second"}]}});
         let unrelated = db.recover("library", Some("other"), &json!({"content":{"text":"Other edit"}}), reason).unwrap();
+        db.set_meta("last_failure_recovery", &json!([unrelated])).unwrap();
         db.record_failed_operation(&operation, reason).unwrap();
         db.record_failed_operation(&operation, reason).unwrap();
+        assert_eq!(db.meta("last_failure_recovery").unwrap(), None);
         let rows = db.recovery().unwrap();
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[1]["reason"], reason);
@@ -1453,18 +1459,42 @@ mod tests {
         let db = Database::open(root.path()).unwrap();
         let reason = "Server 403: Library is read-only";
         let edit = json!({"kind":"edit","library":"library","body":{"changes":[{"id":"snippet"}]}});
-        for kind in ["merge_local", "merge_synced", "unlinked", "legacy"] {
+        for kind in ["merge_local", "merge_synced", "unlinked"] {
             db.record_failed_operation(&edit, reason).unwrap();
-            match kind {
-                "unlinked" => db.set_meta("last_failure", &json!(reason)).unwrap(),
-                "legacy" => { db.connection.execute("DELETE FROM meta WHERE key='last_failure_recovery'", []).unwrap(); }
-                _ => db.record_failed_operation(&json!({"kind":kind}), reason).unwrap(),
+            if kind == "unlinked" {
+                db.set_meta("last_failure", &json!(reason)).unwrap();
+            } else {
+                db.record_failed_operation(&json!({"kind":kind}), reason).unwrap();
             }
             assert_eq!(db.latest_recovery_failure().unwrap(), (Some(reason.into()), Some(reason.into()), false));
             let rows = db.recovery().unwrap();
             assert_eq!(rows.len(), 1);
             db.dismiss_recovery(rows[0]["id"].as_str().unwrap()).unwrap();
             assert_eq!(db.meta("last_failure").unwrap(), Some(json!(reason)));
+        }
+    }
+
+    #[test]
+    fn legacy_sql_failure_overwrite_severs_recovery_provenance() {
+        let root = tempfile::tempdir().unwrap();
+        let db = Database::open(root.path()).unwrap();
+        let legacy = Connection::open(root.path().join("typerelay.sqlite")).unwrap();
+        let reason = "Server 422: Invalid snippet";
+        let edit = json!({"kind":"edit","library":"library","body":{"changes":[{"id":"snippet"}]}});
+        for latest in ["Server 403: Library is read-only", reason] {
+            db.record_failed_operation(&edit, reason).unwrap();
+            assert_eq!(db.latest_recovery_failure().unwrap(), (Some(reason.into()), Some(reason.into()), true));
+            let rows = db.recovery().unwrap();
+            let id = rows[0]["id"].as_str().unwrap();
+
+            // The old CLI writes a JSON string directly and leaves any split-key metadata behind.
+            legacy.execute("INSERT INTO meta(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value<>excluded.value", params!["last_failure",json!(latest).to_string()]).unwrap();
+            assert_eq!(db.latest_recovery_failure().unwrap(), (Some(reason.into()), Some(latest.into()), false));
+            legacy.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('last_failure_recovery',?1)", [json!([id]).to_string()]).unwrap();
+            assert_eq!(db.latest_recovery_failure().unwrap(), (Some(reason.into()), Some(latest.into()), false));
+            db.dismiss_recovery(id).unwrap();
+            assert!(db.recovery().unwrap().is_empty());
+            assert_eq!(db.meta("last_failure").unwrap(), Some(json!(latest)));
         }
     }
 
