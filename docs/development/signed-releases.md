@@ -57,7 +57,11 @@ Explicit resume infers the target from the saved state and does not pull Git. It
 
 If submission times out before Apple returns an ID, the saved `Submitting` state blocks duplicate uploads. Inspect `xcrun notarytool history` with the same credentials and recover the matching submission ID into that run's `notarization.json` before resuming; do not guess an ID or delete the state to retry. Apple rejection preserves its ID for `notarytool log` inspection. Credentials are never stored in recovery state.
 
-## Linux AppImage only
+## Linux on Omarchy
+
+Run `./scripts/desktop-release/release-linux-windows.mjs typerelay --linux` from the shared release-tooling checkout. The command builds Linux packages on the Omarchy workstation in an isolated Debian 12 environment. It downloads and verifies the base on first use, then caches the build tools under `~/.cache/typerelay/linux-release` (or `XDG_CACHE_HOME`). Omarchy needs `bubblewrap` with `--tmp-overlay`, `libarchive`, `curl`, `jq`, `util-linux`, and working unprivileged user namespaces. The Linux build checks that the engine, TUI, panel, and AI worker require glibc 2.36 or earlier before signing. The DEB supports Debian 12 or later where its package dependencies are available.
+
+### Linux AppImage only
 
 For local testing, build only the AppImage and its updater signature:
 

@@ -12,6 +12,7 @@
     "linux": {
       "deb": {
         "depends": [
+          "libc6 (>= 2.36)",
           "libwebkit2gtk-4.1-0",
           "libatspi2.0-0",
           "acl",
