@@ -17,7 +17,7 @@ use typerelay_client::clipboard_payload::ClipboardPayload;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 #[derive(Default)]
-struct Runtime { root:PathBuf, #[cfg(any(target_os="windows",target_os="macos"))] usage:Option<std::sync::mpsc::SyncSender<(Hit,&'static str,usize)>>, target:Mutex<Option<platform::Target>>, last:Mutex<Option<platform::Target>>, erase:Mutex<usize>, confirm_enter:Mutex<bool>, #[cfg(target_os="macos")] deferred:Mutex<Option<platform::DeferredInput>>, #[cfg(target_os="windows")] cancelled:Mutex<Option<std::sync::Arc<AtomicBool>>>, busy:AtomicBool, syncing:AtomicBool, authenticating:AtomicBool, cancel_auth:AtomicBool, auth_error:Mutex<String>, prompting:AtomicBool, prompt_hit:Mutex<Option<Hit>>, settings:AtomicBool, suggestions:AtomicBool, status:Mutex<String>, capture_status:Mutex<String>, #[cfg(any(target_os="windows",target_os="macos"))] expansion_started:AtomicBool, #[cfg(target_os="linux")] registration:Mutex<Option<typerelay_client::desktop::Registration>>, #[cfg(target_os="linux")] engine:Mutex<Option<std::process::Child>>, #[cfg(target_os="linux")] closing:AtomicBool, #[cfg(target_os="linux")] linux_setup:AtomicBool }
+struct Runtime { root:PathBuf, #[cfg(any(target_os="windows",target_os="macos"))] usage:Option<std::sync::mpsc::SyncSender<(Hit,&'static str,usize)>>, target:Mutex<Option<platform::Target>>, last:Mutex<Option<platform::Target>>, erase:Mutex<usize>, confirm_enter:Mutex<bool>, #[cfg(target_os="macos")] deferred:Mutex<Option<platform::DeferredInput>>, #[cfg(target_os="windows")] cancelled:Mutex<Option<std::sync::Arc<AtomicBool>>>, busy:AtomicBool, syncing:AtomicBool, authenticating:AtomicBool, cancel_auth:AtomicBool, auth_error:Mutex<String>, prompting:AtomicBool, prompt_hit:Mutex<Option<Hit>>, settings:AtomicBool, suggestions:AtomicBool, status:Mutex<String>, capture_status:Mutex<String>, #[cfg(any(target_os="windows",target_os="macos"))] expansion_started:AtomicBool, #[cfg(target_os="linux")] registration:Mutex<Option<typerelay_client::desktop::Registration>>, #[cfg(target_os="linux")] engine:Mutex<Option<std::process::Child>>, #[cfg(target_os="linux")] closing:AtomicBool, #[cfg(target_os="linux")] linux_setup:AtomicBool, #[cfg(target_os="linux")] keyboard_change:Mutex<()> }
 impl Runtime {
 	#[cfg(target_os="linux")]
 	fn setup_linux(app: tauri::AppHandle, restart: bool) -> bool {
@@ -503,13 +503,20 @@ fn save_settings(app:tauri::AppHandle,mut config:PanelSettings)->std::result::Re
     let old=Panel::settings(root).map_err(|e|e.to_string())?;
 	config.keyboard_fallback=if old.keyboard.is_empty(){old.keyboard_fallback.clone()}else{old.keyboard.clone()};
 	#[cfg(target_os="linux")]
-	if config.keyboard!=old.keyboard {if app.state::<Runtime>().linux_setup.load(Ordering::SeqCst){return Err("Keyboard setup is running; finish it before changing keyboards".into());}if !config.keyboard.is_empty(){config.keyboard_fallback=typerelay_client::installation::Installer::configured_keyboard(&typerelay_client::installation::Installer::devices().map_err(|error|error.to_string())?,&config).map_err(|error|error.to_string())?;}}
+	let keyboard_state=app.state::<Runtime>();
+	#[cfg(target_os="linux")]
+	let _keyboard_change=if config.keyboard!=old.keyboard {
+		let change=keyboard_state.keyboard_change.try_lock().map_err(|_|"Keyboard setup is running; finish it before changing keyboards")?;
+		if keyboard_state.linux_setup.load(Ordering::SeqCst){return Err("Keyboard setup is running; finish it before changing keyboards".into());}
+		if !config.keyboard.is_empty(){config.keyboard_fallback=typerelay_client::installation::Installer::configured_keyboard(&typerelay_client::installation::Installer::devices().map_err(|error|error.to_string())?,&config).map_err(|error|error.to_string())?;}
+		Some(change)
+	}else{None};
     Runtime::shortcut(&app,Some(&old.shortcut),&config.shortcut).map_err(|e|e.to_string())?;
     let result=(||->Result<()>{if config.launch_at_login{app.autolaunch().enable()?;}else{app.autolaunch().disable()?;} Panel::save_settings(root,&config)})();
     if result.is_err(){let _=Runtime::shortcut(&app,Some(&config.shortcut),&old.shortcut);if old.launch_at_login{let _=app.autolaunch().enable();}else{let _=app.autolaunch().disable();}}
     result.map_err(|e|e.to_string())?;
 	#[cfg(target_os="linux")]
-	if config.keyboard!=old.keyboard {Runtime::setup_linux(app,true);}
+	if config.keyboard!=old.keyboard {Runtime::setup_linux(app.clone(),true);}
 	Ok(())
 }
 #[tauri::command]
@@ -569,7 +576,9 @@ async fn suggestions(app:tauri::AppHandle,action:String,value:Option<Value>)->st
             #[cfg(target_os="linux")]
             "restart-capture"=>{
                 use typerelay_client::installation::Installer;
-                ensure!(!app.state::<Runtime>().linux_setup.load(Ordering::SeqCst),"Keyboard setup is running. Try again when it finishes.");
+                let runtime=app.state::<Runtime>();
+                let _keyboard_change=runtime.keyboard_change.try_lock().map_err(|_|anyhow::anyhow!("Keyboard setup is running. Try again when it finishes."))?;
+                ensure!(!runtime.linux_setup.load(Ordering::SeqCst),"Keyboard setup is running. Try again when it finishes.");
                 let mode=Installer::keyboard_mode()?;
                 if !Installer::has_access(&mode)? || !Installer::persistent_access(&mode) {
                     let launcher=std::env::var_os("APPIMAGE").map(PathBuf::from);
@@ -629,7 +638,7 @@ fn main() {
         {use tauri_plugin_deep_link::DeepLinkExt;#[cfg(target_os="linux")]app.deep_link().register_all()?;let callback_root=root.clone();app.deep_link().on_open_url(move|event|for url in event.urls(){let _=Sync::receive_callback(&callback_root,url.as_str());});if let Some(urls)=app.deep_link().get_current()?{for url in urls{let _=Sync::receive_callback(&root,url.as_str());}}}
         Sync::worker(root.clone(),root.join("snippets"));
         let config=Panel::settings(&root)?;
-		app.manage(Runtime{root:root.clone(),#[cfg(any(target_os="windows",target_os="macos"))] usage:Some(Panel::usage_recorder(root.join("snippets"))),target:Mutex::new(None),last:Mutex::new(None),erase:Mutex::new(0),confirm_enter:Mutex::new(false),#[cfg(target_os="macos")] deferred:Mutex::new(None),#[cfg(target_os="windows")] cancelled:Mutex::new(None),busy:AtomicBool::new(false),syncing:AtomicBool::new(false),authenticating:AtomicBool::new(false),cancel_auth:AtomicBool::new(false),auth_error:Mutex::new(String::new()),prompting:AtomicBool::new(false),prompt_hit:Mutex::new(None),settings:AtomicBool::new(false),suggestions:AtomicBool::new(false),status:Mutex::new(String::new()),capture_status:Mutex::new(String::new()),#[cfg(any(target_os="windows",target_os="macos"))] expansion_started:AtomicBool::new(false),#[cfg(target_os="linux")] registration:Mutex::new(None),#[cfg(target_os="linux")] engine:Mutex::new(None),#[cfg(target_os="linux")] closing:AtomicBool::new(false),#[cfg(target_os="linux")] linux_setup:AtomicBool::new(false)});
+		app.manage(Runtime{root:root.clone(),#[cfg(any(target_os="windows",target_os="macos"))] usage:Some(Panel::usage_recorder(root.join("snippets"))),target:Mutex::new(None),last:Mutex::new(None),erase:Mutex::new(0),confirm_enter:Mutex::new(false),#[cfg(target_os="macos")] deferred:Mutex::new(None),#[cfg(target_os="windows")] cancelled:Mutex::new(None),busy:AtomicBool::new(false),syncing:AtomicBool::new(false),authenticating:AtomicBool::new(false),cancel_auth:AtomicBool::new(false),auth_error:Mutex::new(String::new()),prompting:AtomicBool::new(false),prompt_hit:Mutex::new(None),settings:AtomicBool::new(false),suggestions:AtomicBool::new(false),status:Mutex::new(String::new()),capture_status:Mutex::new(String::new()),#[cfg(any(target_os="windows",target_os="macos"))] expansion_started:AtomicBool::new(false),#[cfg(target_os="linux")] registration:Mutex::new(None),#[cfg(target_os="linux")] engine:Mutex::new(None),#[cfg(target_os="linux")] closing:AtomicBool::new(false),#[cfg(target_os="linux")] linux_setup:AtomicBool::new(false), #[cfg(target_os="linux")] keyboard_change:Mutex::new(())});
 		app.manage(update::UpdateState::default());
 		if observation::Observation::start(app.handle()).is_err(){*app.state::<Runtime>().status.lock().unwrap()="Snippet suggestions are unavailable: local storage could not be opened".into();}
 		#[cfg(target_os="macos")]
