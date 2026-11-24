@@ -20,13 +20,12 @@ use tauri_plugin_global_shortcut::GlobalShortcutExt;
 struct Runtime { root:PathBuf, #[cfg(any(target_os="windows",target_os="macos"))] usage:Option<std::sync::mpsc::SyncSender<(Hit,&'static str,usize)>>, target:Mutex<Option<platform::Target>>, last:Mutex<Option<platform::Target>>, erase:Mutex<usize>, confirm_enter:Mutex<bool>, #[cfg(target_os="macos")] deferred:Mutex<Option<platform::DeferredInput>>, #[cfg(target_os="windows")] cancelled:Mutex<Option<std::sync::Arc<AtomicBool>>>, busy:AtomicBool, syncing:AtomicBool, authenticating:AtomicBool, cancel_auth:AtomicBool, auth_error:Mutex<String>, prompting:AtomicBool, prompt_hit:Mutex<Option<Hit>>, settings:AtomicBool, suggestions:AtomicBool, status:Mutex<String>, capture_status:Mutex<String>, #[cfg(any(target_os="windows",target_os="macos"))] expansion_started:AtomicBool, #[cfg(target_os="linux")] registration:Mutex<Option<typerelay_client::desktop::Registration>>, #[cfg(target_os="linux")] engine:Mutex<Option<std::process::Child>>, #[cfg(target_os="linux")] closing:AtomicBool, #[cfg(target_os="linux")] linux_setup:AtomicBool }
 impl Runtime {
 	#[cfg(target_os="linux")]
-	fn setup_linux(app: tauri::AppHandle) {
+	fn setup_linux(app: tauri::AppHandle, restart: bool) -> bool {
 		use tauri::utils::config::BundleType;
 		let bundle=tauri::utils::platform::bundle_type();
-		if !matches!(bundle, Some(BundleType::AppImage|BundleType::Deb|BundleType::Rpm)) { update::schedule(app); return; }
+		if !matches!(bundle, Some(BundleType::AppImage|BundleType::Deb|BundleType::Rpm)) { return false; }
 		let supports_expansion=std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some()||app.try_state::<std::sync::Arc<observation::Observation>>().is_some_and(|state|state.native());
-		if app.state::<Runtime>().linux_setup.swap(true,Ordering::SeqCst) { return; }
-		app.state::<Runtime>().closing.store(false,Ordering::SeqCst);
+		if !app.state::<Runtime>().begin_linux_setup(restart) { return false; }
 		std::thread::spawn(move || {
 			use typerelay_client::installation::Installer;
 			let package=matches!(bundle,Some(BundleType::Deb|BundleType::Rpm));
@@ -69,8 +68,15 @@ impl Runtime {
 			*app.state::<Runtime>().status.lock().unwrap()=message.clone();
 			if !message.is_empty() { let _=app.emit("panel-error",message); }
 			app.state::<Runtime>().linux_setup.store(false,Ordering::SeqCst);
-			update::schedule(app);
 		});
+		true
+	}
+	#[cfg(target_os="linux")]
+	fn begin_linux_setup(&self, restart: bool) -> bool {
+		if self.linux_setup.swap(true,Ordering::SeqCst) { return false; }
+		if restart { self.stop_engine(); }
+		self.closing.store(false,Ordering::SeqCst);
+		true
 	}
 	#[cfg(target_os="linux")]
 	fn stop_engine(&self) {
@@ -503,7 +509,7 @@ fn save_settings(app:tauri::AppHandle,mut config:PanelSettings)->std::result::Re
     if result.is_err(){let _=Runtime::shortcut(&app,Some(&config.shortcut),&old.shortcut);if old.launch_at_login{let _=app.autolaunch().enable();}else{let _=app.autolaunch().disable();}}
     result.map_err(|e|e.to_string())?;
 	#[cfg(target_os="linux")]
-	if config.keyboard!=old.keyboard {app.state::<Runtime>().stop_engine();Runtime::setup_linux(app);}
+	if config.keyboard!=old.keyboard {Runtime::setup_linux(app,true);}
 	Ok(())
 }
 #[tauri::command]
@@ -563,6 +569,7 @@ async fn suggestions(app:tauri::AppHandle,action:String,value:Option<Value>)->st
             #[cfg(target_os="linux")]
             "restart-capture"=>{
                 use typerelay_client::installation::Installer;
+                ensure!(!app.state::<Runtime>().linux_setup.load(Ordering::SeqCst),"Keyboard setup is running. Try again when it finishes.");
                 let mode=Installer::keyboard_mode()?;
                 if !Installer::has_access(&mode)? || !Installer::persistent_access(&mode) {
                     let launcher=std::env::var_os("APPIMAGE").map(PathBuf::from);
@@ -570,7 +577,7 @@ async fn suggestions(app:tauri::AppHandle,action:String,value:Option<Value>)->st
                     if let Some(launcher)=launcher {command.arg(launcher).args(["--input-access",&mode]);}else{command.arg(std::env::current_exe()?.with_file_name("typerelay")).args(["input-access","--device-name",&mode]);}
                     ensure!(command.status()?.success(),"Keyboard access was not granted");
                 }
-                if std::env::var_os("APPIMAGE").is_some(){app.state::<Runtime>().stop_engine();Runtime::setup_linux(app.clone());}else{ensure!(std::process::Command::new("systemctl").args(["--user","restart","typerelay"]).status()?.success(),"Could not restart the keyboard worker; install the matching desktop package");}
+                if std::env::var_os("APPIMAGE").is_some(){ensure!(Runtime::setup_linux(app.clone(),true),"Keyboard setup is running. Try again when it finishes.");}else{ensure!(std::process::Command::new("systemctl").args(["--user","restart","typerelay"]).status()?.success(),"Could not restart the keyboard worker; install the matching desktop package");}
                 Ok(json!({"message":"Keyboard input repair started"}))
             },
             "test-notification"=>{observation::Observation::notify(&app,true)?;Ok(json!({"sent":true}))},
@@ -637,10 +644,9 @@ fn main() {
         if let Err(error)=Runtime::shortcut(app.handle(),None,&config.shortcut){*app.state::<Runtime>().status.lock().unwrap()=error.to_string();}
         if config.launch_at_login && let Err(error)=app.autolaunch().enable(){*app.state::<Runtime>().status.lock().unwrap()=format!("Could not enable launch at login: {error}");}
 		if let Err(error)=tray::install(app.handle()){*app.state::<Runtime>().status.lock().unwrap()=format!("Tray unavailable: {error}. Use the shortcut or launcher.");}
-		#[cfg(not(target_os="linux"))]
 		update::schedule(app.handle().clone());
 		#[cfg(target_os="linux")]
-		Runtime::setup_linux(app.handle().clone());
+		Runtime::setup_linux(app.handle().clone(),false);
         let handle=app.handle().clone();
         std::thread::spawn(move||loop { if Runtime::capture_supported()&&let Some(window)=handle.get_webview_window("panel")&& !window.is_visible().unwrap_or(false)&& let Ok(target)=platform::Target::capture(){*handle.state::<Runtime>().last.lock().unwrap()=Some(target);} std::thread::sleep(std::time::Duration::from_millis(150)); });
         #[cfg(target_os="linux")]
@@ -664,15 +670,27 @@ fn main() {
             Runtime::open(app.handle(),!Runtime::capture_supported());
         }
         Ok(())
-    }).on_window_event(|window,event|match event {
+    }).on_window_event(|window,event|{ if window.label() != "panel" { return; } match event {
         tauri::WindowEvent::CloseRequested{api,..}=>{api.prevent_close();set_prompt_view(window.app_handle().clone(),false);Runtime::hide(window.app_handle());},
         tauri::WindowEvent::Focused(false)if Runtime::hide_on_focus_loss() && !window.app_handle().state::<Runtime>().busy.load(Ordering::SeqCst) && !window.app_handle().state::<Runtime>().settings.load(Ordering::SeqCst) && !window.app_handle().state::<Runtime>().prompting.load(Ordering::SeqCst)=> {Runtime::hide(window.app_handle());},_=>()
-    }).invoke_handler(tauri::generate_handler![suggestions,initialize,native_ai,search,personal_status,personal_abbreviation,insert,copy_snippet,prepare_template,set_prompt_view,set_settings_view,dismiss,notify,sync_now,save_settings,connect,cancel_connect,disconnect,libraries,merge_destinations,merge_library,conflicts,resolve_conflict,recovery,dismiss_recovery,enroll,open_accessibility_settings,open_input_monitoring_settings,open_notification_settings,open_tui,open_web_app]).build(tauri::generate_context!());
+    }}).invoke_handler(tauri::generate_handler![suggestions,initialize,native_ai,search,personal_status,personal_abbreviation,insert,copy_snippet,prepare_template,set_prompt_view,set_settings_view,dismiss,notify,sync_now,save_settings,connect,cancel_connect,disconnect,libraries,merge_destinations,merge_library,conflicts,resolve_conflict,recovery,dismiss_recovery,enroll,open_accessibility_settings,open_input_monitoring_settings,open_notification_settings,open_tui,open_web_app]).build(tauri::generate_context!());
     match result {Ok(app)=>app.run(|handle,event|{#[cfg(target_os="linux")]if matches!(event,tauri::RunEvent::Exit|tauri::RunEvent::ExitRequested{..}){handle.state::<Runtime>().stop_engine();}if matches!(event,tauri::RunEvent::Exit)&&let Some(runtime)=handle.try_state::<Runtime>(){let _=typerelay_client::native_ai::NativeAi::release(&runtime.root);}}),Err(error)=>{eprintln!("TypeRelay panel: {error}");std::process::exit(1);}}
 }
 
 #[cfg(all(test,target_os="linux"))]
 mod tests {
+    #[test]
+    fn busy_linux_setup_leaves_the_engine_running() {
+        let runtime=super::Runtime::default();
+        assert!(runtime.begin_linux_setup(false));
+        *runtime.engine.lock().unwrap()=Some(std::process::Command::new("sleep").arg("30").spawn().unwrap());
+        let accepted=runtime.begin_linux_setup(true);
+        let still_running=runtime.engine.lock().unwrap().as_mut().is_some_and(|engine| engine.try_wait().is_ok_and(|status| status.is_none()));
+        runtime.stop_engine();
+        assert!(!accepted);
+        assert!(still_running);
+    }
+
     #[cfg(target_os="linux")]
     #[test]
     fn input_notifications_require_persistence_and_sustained_recovery() {

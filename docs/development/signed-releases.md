@@ -69,14 +69,16 @@ Add `--dry-run` to preview the build command. This skips DEB, RPM, and the legac
 
 ## Verify the installed Linux upgrade before publishing
 
-Build and sign the candidate without `--publish`. Install it in an isolated Linux environment over a managed standalone installation. For the AppImage, use Omarchy with legacy 1.3.3 and a fresh terminal that puts `~/.local/bin` first. Check DEB and RPM upgrades on their supported distributions.
+Build and sign the candidate without `--publish`. From the shared release-tooling checkout, run `./scripts/desktop-release/record-typerelay-linux-qa.mjs` to list the verified Linux artifacts and their candidate fingerprint. Install those exact artifacts in isolated Linux environments over managed standalone installations. For the AppImage, use Omarchy with legacy 1.3.3 and a fresh terminal that puts `~/.local/bin` first. Check DEB and RPM upgrades on their supported distributions.
 
 1. Launch the candidate and finish setup. Open a fresh terminal. Check `type -a typerelay typerelay-tui` and run both commands with `--version`. Both must report the candidate version when invoked by name.
 2. In the TUI, edit a text snippet, open F11, and select **Tab key**. Save with Ctrl+S and reopen the snippet. Confirm `{{key:tab}}` remains in the text.
 3. Confirm snippets and settings survive, the managed legacy commands are in the backup directory, and a second launch makes no duplicate backup.
 4. Repeat on a clean profile and with an unmanaged command in `~/.local/bin`. The clean install must use the candidate, and the unmanaged file must remain intact with its path shown in the warning.
 
-Publish the same signed artifacts after these checks pass. Use `--publish-only` to reuse their verified build receipts.
+After the checks pass for AppImage, DEB, and RPM, run `./scripts/desktop-release/record-typerelay-linux-qa.mjs --passed <fingerprint>` to record the result.
+
+Publish the tested artifacts with `--publish-only`. Both publish modes require a Linux upgrade record that matches the signed artifacts. If you rebuild a package, repeat the checks and record the result for the new fingerprint.
 
 ## Outputs and boundaries
 

@@ -183,7 +183,7 @@ impl Installer {
 
     fn retire_legacy_commands(bin: &std::path::Path, manifest: &std::path::Path, service: &std::path::Path, command_dir: &std::path::Path, version: &str) -> Result<()> {
         use sha2::{Digest, Sha256};
-        use std::{fs, io::{self, ErrorKind}, os::unix::fs::{MetadataExt, OpenOptionsExt}};
+        use std::{fs, io::{self, ErrorKind, Read, Seek}, os::unix::{fs::{MetadataExt, OpenOptionsExt}, process::ExitStatusExt}, process::Stdio};
         let mut candidates = Vec::new();
         for name in ["typerelay", "typerelay-tui"] {
             let path = bin.join(name);
@@ -196,8 +196,14 @@ impl Installer {
         if candidates.is_empty() { return Ok(()); }
         for name in ["typerelay", "typerelay-tui"] {
             let command = command_dir.join(name);
-            let ready = Command::new(&command).arg("--version").output().is_ok_and(|result| result.status.success() && String::from_utf8_lossy(&result.stdout).trim() == format!("{name} {version}"));
-            ensure!(ready, "Could not verify {} at version {version}. Older terminal commands may still be in use: {}", command.display(), candidates.iter().map(|(_, path)| path.display().to_string()).collect::<Vec<_>>().join(", "));
+            // AppImage helpers can keep an inherited pipe open after the timeout process exits.
+            let mut output = tempfile::tempfile()?;
+            let result = Command::new("/usr/bin/timeout").args(["--kill-after=1s", "5s"]).arg(&command).arg("--version").stdin(Stdio::null()).stdout(output.try_clone()?).stderr(Stdio::null()).status();
+            let reason = if result.as_ref().is_ok_and(|status| matches!(status.code(), Some(124 | 137)) || status.signal() == Some(libc::SIGKILL)) { "Timed out verifying" } else { "Could not verify" };
+            let mut actual = String::new();
+            output.rewind()?;
+            let ready = result.is_ok_and(|status| status.success()) && output.take(256).read_to_string(&mut actual).is_ok() && actual.trim() == format!("{name} {version}");
+            ensure!(ready, "{reason} {} at version {version}. Older terminal commands may still be in use: {}", command.display(), candidates.iter().map(|(_, path)| path.display().to_string()).collect::<Vec<_>>().join(", "));
         }
         let state: serde_json::Value = fs::read(manifest).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
         let mut backup = None;
@@ -340,6 +346,13 @@ mod tests {
         let error = Installer::retire_legacy_commands(&bin, &manifest, &service, &package, "1.4.3").unwrap_err();
         assert!(error.to_string().contains("typerelay-tui"));
         assert_eq!(fs::read_dir(&bin).unwrap().count(), 2);
+        for name in commands { assert_eq!(fs::read(bin.join(name)).unwrap(), legacy); }
+
+        fs::write(package.join("typerelay-tui"), "#!/bin/sh\ntrap '' TERM\nexec sleep 30\n").unwrap();
+        let started = std::time::Instant::now();
+        let error = Installer::retire_legacy_commands(&bin, &manifest, &service, &package, "1.4.3").unwrap_err();
+        assert!(error.to_string().contains("Timed out verifying"), "{error}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(15));
         for name in commands { assert_eq!(fs::read(bin.join(name)).unwrap(), legacy); }
 
         fs::write(package.join("typerelay-tui"), "#!/bin/sh\nprintf '%s\\n' 'typerelay-tui 1.4.3'\n").unwrap();
