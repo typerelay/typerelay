@@ -244,11 +244,11 @@ block content
 					.modal-header
 						h2#mobile-apps-modal-title.modal-title.h5.fw-bold Get the TypeRelay mobile app
 						button.btn-close(type="button" data-bs-dismiss="modal" aria-label="Close")
-					.modal-body#mobile-apps-modal-body
-						.mobile-beta-loading.text-center.py-5.text-muted
+					.modal-body#mobile-apps-modal-body(aria-busy="true")
+						.mobile-beta-loading.text-center.py-5.text-muted(role="status" aria-live="polite")
 							.spinner-border.spinner-border-sm.me-2
-							span Loading mobile beta details...
-						.alert.alert-danger.mb-0.d-none.mobile-beta-error Unable to load the mobile beta details. Please try again.
+							span Loading mobile app links...
+						.alert.alert-danger.mb-0.d-none.mobile-beta-error(role="alert") Unable to load the mobile app links. Close and reopen this dialog to try again.
 
 		#search-modal.modal(tabindex="-1" aria-labelledby="search-title" data-bs-backdrop="static" data-bs-keyboard="false")
 			.modal-dialog.modal-lg.modal-dialog-scrollable

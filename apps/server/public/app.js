@@ -111,10 +111,11 @@ class TypeRelay {
 		body.dataset.loading = 'true';
 		const loading = body.querySelector('.mobile-beta-loading');
 		const error = body.querySelector('.mobile-beta-error');
+		body.setAttribute('aria-busy', 'true');
 		loading.classList.remove('d-none'); error.classList.add('d-none');
 		try { body.innerHTML = await this.request('mobile-apps', 'GET', null, true); body.dataset.loaded = 'true'; }
 		catch (failure) { loading.classList.add('d-none'); error.classList.remove('d-none'); }
-		finally { delete body.dataset.loading; }
+		finally { body.setAttribute('aria-busy', 'false'); delete body.dataset.loading; }
 	}
 	toast(title, icon = 'success') { return Swal.fire({ toast: true, position: 'top-end', title, icon, timer: 3500, showConfirmButton: false }); }
 	rotateTeamPassword(announce = true) {
