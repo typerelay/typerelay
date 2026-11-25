@@ -9,7 +9,8 @@ const sharp = require('sharp');
 const root = fileURLToPath(new URL('../', import.meta.url));
 const source = fileURLToPath(new URL('../../server/public/typerelay-icon.svg', import.meta.url));
 const icon = size => sharp(source, { density: 1200 }).resize(size, size).flatten({ background: '#fff6df' }).png();
-await icon(1024).toFile(join(root, 'ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png'));
+// Center the full keycap silhouette inside the iOS rounded-corner mask.
+await icon(860).extend({ top: 106, bottom: 58, left: 106, right: 58, background: '#fff6df' }).toFile(join(root, 'ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png'));
 for (const [density, size] of [['mdpi', 48], ['hdpi', 72], ['xhdpi', 96], ['xxhdpi', 144], ['xxxhdpi', 192]]) {
  const destination = join(root, 'android/app/src/main/res', `mipmap-${density}`); mkdirSync(destination, { recursive: true });
  for (const name of ['ic_launcher.png', 'ic_launcher_round.png']) await icon(size).toFile(join(destination, name));
