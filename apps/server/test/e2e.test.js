@@ -137,27 +137,38 @@ test('top navigation opens the public mobile apps modal with QR codes', async ()
 		assert.equal(document.querySelector('#mobile-apps-modal-title').textContent.trim(), 'Get the TypeRelay mobile app');
 		document.querySelector('#workspace').removeAttribute('data-account');
 		let mobileRequests = 0;
+		let failMobileRequest = true;
 		dom.window.AbortController = AbortController;
 		dom.window.fetch = async (path, options = {}) => {
-			if (String(path).includes('mobile-apps')) mobileRequests++;
+			if (String(path).includes('mobile-apps')) { mobileRequests++; if (failMobileRequest) { failMobileRequest = false; throw new Error('network unavailable'); } }
 			return fetch(new URL(path, Fixture.origin), { ...options, headers: { ...options.headers, Cookie: Fixture.cookie } });
 		};
 		const source = (await BrowserSource.script()).replace('export { client };', 'window.testClient = client;');
 		dom.window.eval(source);
 		const client = dom.window.testClient; client.account = Fixture.account;
 		const body = document.querySelector('#mobile-apps-modal-body');
-		const qrSvg = await QRCode.toString('https://play.google.com/store/apps/details?id=com.typerelay.mobile', { type: 'svg', margin: 1, width: 180 });
-		assert.ok((await (await Fixture.request('/api/v2/mobile-apps')).text()).includes(qrSvg));
+		const iosQrSvg = await QRCode.toString('https://apps.apple.com/app/typerelay/id6813279816', { type: 'svg', margin: 1, width: 180 });
+		const androidQrSvg = await QRCode.toString('https://play.google.com/store/apps/details?id=com.typerelay.mobile', { type: 'svg', margin: 1, width: 180 });
+		const response = await (await Fixture.request('/api/v2/mobile-apps')).text();
+		assert.ok(response.includes(iosQrSvg));
+		assert.ok(response.includes(androidQrSvg));
+		assert.equal(body.getAttribute('aria-busy'), 'true');
+		assert.equal(body.querySelector('.mobile-beta-loading').getAttribute('role'), 'status');
+		assert.equal(body.querySelector('.mobile-beta-error').getAttribute('role'), 'alert');
+		await client.mobileApps();
+		assert.equal(body.getAttribute('aria-busy'), 'false');
+		assert.equal(body.querySelector('.mobile-beta-error').classList.contains('d-none'), false);
 		await client.mobileApps();
 		assert.equal(body.dataset.loaded, 'true');
-		assert.match(body.textContent, /TypeRelay for Android is available on Google Play\. iOS is available through TestFlight\./);
+		assert.equal(body.getAttribute('aria-busy'), 'false');
+		assert.match(body.textContent, /Get TypeRelay for iPhone, iPad and Android\./);
 		assert.match(body.textContent, /Scan a QR code or open the app for your device directly\./);
-		assert.equal(body.querySelector('[aria-label="QR code for Apple TestFlight"] svg') !== null, true);
+		assert.equal(body.querySelector('[aria-label="QR code for the Apple App Store"] svg') !== null, true);
 		assert.equal(body.querySelector('[aria-label="QR code for Google Play"] svg') !== null, true);
-		assert.equal(body.querySelector('[data-track="mobile_beta_ios_click"]').href, 'https://testflight.apple.com/join/Q4Tw4DMh');
+		assert.equal(body.querySelector('[data-track="mobile_beta_ios_click"]').href, 'https://apps.apple.com/app/typerelay/id6813279816');
 		assert.equal(body.querySelector('[data-track="mobile_beta_android_click"]').href, 'https://play.google.com/store/apps/details?id=com.typerelay.mobile');
 		await client.mobileApps();
-		assert.equal(mobileRequests, 1, 'Loaded mobile details must be reused without a section or page reload');
+		assert.equal(mobileRequests, 2, 'Loaded mobile details must be reused without a section or page reload');
 	} finally { dom.window.close(); }
 });
 test('SQLite two-device edits, conflict recovery and generated YAML isolation', async () => {

@@ -23,7 +23,7 @@ Edit `version_mobile` and numeric `build_mobile` in the root `package.json`. And
 
 ## Public installation
 
-Install TypeRelay for Android from [Google Play](https://play.google.com/store/apps/details?id=com.typerelay.mobile). The iOS app is available through [TestFlight](https://testflight.apple.com/join/Q4Tw4DMh).
+Install TypeRelay from the [Apple App Store](https://apps.apple.com/app/typerelay/id6813279816) or [Google Play](https://play.google.com/store/apps/details?id=com.typerelay.mobile).
 
 ## Build
 
