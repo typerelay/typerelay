@@ -75,17 +75,19 @@ def profiles(target):
                 yield from (child for child in directory.iterdir() if local_directory(child) and any((child / name).is_file() for name in CARGO_LOCKS))
 
 
-def trim(target, limit=CACHE_LIMIT):
+def trim(target, limit=CACHE_LIMIT, protected_profiles=()):
     if not local_directory(target):
         return
     with try_locks((target / ".typerelay-build-cleanup.lock",)) as acquired:
         if acquired and disk_usage(target) > limit:
-            trim_profiles(target, limit)
+            trim_profiles(target, limit, {Path(directory).resolve() for directory in protected_profiles})
 
 
-def trim_profiles(target, limit):
+def trim_profiles(target, limit, protected_profiles):
     candidates = []
     for directory in profiles(target):
+        if directory in protected_profiles:
+            continue
         caches = [directory / name for name in CACHE_NAMES if local_directory(directory / name)]
         if not caches:
             continue
@@ -113,6 +115,6 @@ if __name__ == "__main__":
     root = Path(__file__).resolve().parent.parent
     for relative in ("target", "apps/desktop/src-tauri/target"):
         try:
-            trim(root / relative)
+            trim(root / relative, protected_profiles=sys.argv[1:])
         except (OSError, RuntimeError, subprocess.SubprocessError) as error:
             print(f"Compiler cache cleanup skipped for {relative}: {error}", file=sys.stderr)

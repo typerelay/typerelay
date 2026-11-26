@@ -70,6 +70,34 @@ class BuildCacheTests(unittest.TestCase):
             cache.trim(target, 0)
             self.assertTrue(outside.is_dir())
 
+    def test_oversized_retained_artifacts_do_not_evict_the_latest_build(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            for relative, built in (
+                ("target", ("windows-test/release", "windows-test/x86_64-pc-windows-msvc/release")),
+                ("apps/desktop/src-tauri/target", ("debug", "aarch64-apple-darwin/debug", "x86_64-apple-darwin/debug")),
+            ):
+                with self.subTest(target=relative):
+                    target = root / relative
+                    current = [target / name for name in built]
+                    stale = target / "aarch64-unknown-linux-gnu/release"
+                    for profile in [*current, stale]:
+                        (profile / ".fingerprint").mkdir(parents=True)
+                        (profile / ".cargo-lock").touch()
+                        dep = profile / ".fingerprint/unchanged"
+                        dep.write_text("compiler cache")
+                        os.utime(dep, (1, 1))
+                    artifact = target / "release/bundle/signed-package"
+                    artifact.parent.mkdir(parents=True, exist_ok=True)
+                    artifact.write_bytes(os.urandom(128 * 1024))
+                    for _ in range(2):
+                        cache.trim(target, 64 * 1024, protected_profiles=current)
+                        self.assertGreater(cache.disk_usage(target), 64 * 1024)
+                        self.assertTrue(artifact.is_file())
+                        self.assertFalse((stale / ".fingerprint").exists())
+                        for profile in current:
+                            self.assertTrue((profile / ".fingerprint/unchanged").is_file())
+
 
 if __name__ == "__main__":
     unittest.main()

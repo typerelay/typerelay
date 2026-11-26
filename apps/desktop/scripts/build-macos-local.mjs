@@ -23,14 +23,16 @@ export class LocalMacBuild {
 		if (platform !== 'darwin') throw new Error('Run the local macOS build on a Mac');
 		const target = LocalMacBuild.target(); const config = await DesktopVersion.config(); const identity = await LocalMacBuild.signingIdentity();
 		await LocalMacBuild.run('pnpm', ['tauri', 'build', '--target', target.triple, '--bundles', 'app', '--no-sign', '--', '--locked'], LocalMacBuild.working);
-		const release = path.join(LocalMacBuild.working, 'src-tauri/target', target.triple, 'release/bundle'); const app = path.join(release, 'macos/TypeRelay.app'); const tui = path.join(app, 'Contents/MacOS/typerelay-tui');
+		const panelTarget = BuildCache.targetDirectory(path.join(LocalMacBuild.working, 'src-tauri'));
+		const release = path.join(panelTarget, target.triple, 'release/bundle'); const app = path.join(release, 'macos/TypeRelay.app'); const tui = path.join(app, 'Contents/MacOS/typerelay-tui');
 		await LocalMacBuild.run('codesign', ['--force', '--sign', identity, '--identifier', 'com.typerelay.tui', '--options', 'runtime', '--timestamp=none', tui]);
 		await LocalMacBuild.run('codesign', ['--force', '--sign', identity, '--identifier', 'com.typerelay.ai', '--options', 'runtime', '--timestamp=none', path.join(app, 'Contents/MacOS/typerelay-ai')]);
 		await LocalMacBuild.run('codesign', ['--force', '--sign', identity, '--identifier', config.identifier, '--options', 'runtime', '--timestamp=none', app]);
 		await LocalMacBuild.run('codesign', ['--verify', '--deep', '--strict', '--verbose=2', app]);
 		const dmg = path.join(release, 'dmg', `TypeRelay_${config.version}_${target.artifact}.dmg`);
 		await LocalMacBuild.packageDmg(app, dmg);
-		BuildCache.prune();
+		const workspaceTarget = BuildCache.targetDirectory(LocalMacBuild.root);
+		BuildCache.prune(...BuildCache.profilePaths(workspaceTarget, 'release', target.triple), ...BuildCache.profilePaths(panelTarget, 'release', target.triple));
 		console.log('Built Developer ID-signed TypeRelay app and DMG for local testing: ' + dmg);
 	}
 }

@@ -26,6 +26,18 @@ test('macOS bundle stages the TUI for native and universal targets', async () =>
 	assert.match(css, /\.shortcut-control\{[^}]*flex-direction:column/);
 });
 
+test('native staging protects the host profiles, cross targets, and Tauri build profile', () => {
+	const target = 'universal-apple-darwin';
+	const environment = { TAURI_ENV_TARGET_TRIPLE: target, TAURI_ENV_DEBUG: 'true' };
+	assert.deepEqual(NativeTools.cacheProfiles(target, { root, environment }), [
+		'target/release', 'target/aarch64-apple-darwin/release', 'target/x86_64-apple-darwin/release',
+		'apps/desktop/src-tauri/target/debug', 'apps/desktop/src-tauri/target/aarch64-apple-darwin/debug', 'apps/desktop/src-tauri/target/x86_64-apple-darwin/debug',
+	].map(directory => path.join(root, directory)));
+	assert.deepEqual(NativeTools.cacheProfiles('x86_64-pc-windows-msvc', { root, environment: { CARGO_TARGET_DIR: 'target/windows-test' } }), [
+		path.join(root, 'target/windows-test/release'), path.join(root, 'target/windows-test/x86_64-pc-windows-msvc/release'),
+	]);
+});
+
 test('macOS startup checks both permissions and offers settings and TUI launchers', async () => {
 	const main = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/main.rs'), 'utf8'); const shared = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/platform.rs'), 'utf8'); const platform = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/platform_macos.rs'), 'utf8'); const smoke = await fs.readFile(path.join(root, 'scripts/macos-typing-smoke.swift'), 'utf8'); const tray = await fs.readFile(path.join(root, 'apps/desktop/src-tauri/src/tray.rs'), 'utf8');
 	assert.match(main, /Runtime::permissions\(\)/);

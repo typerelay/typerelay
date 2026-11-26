@@ -8,7 +8,9 @@ pkg-config --exists gtk+-3.0 webkit2gtk-4.1 || { printf '%s\n' 'Install GTK3 and
 pnpm --dir "$panel_root" --filter typerelay-desktop install --frozen-lockfile
 pnpm --dir "$panel_root" --filter typerelay-desktop build
 cargo build --manifest-path "$panel_root/apps/desktop/src-tauri/Cargo.toml" --release --locked
+panel_target_dir=${CARGO_TARGET_DIR:-${CARGO_BUILD_TARGET_DIR:-"$panel_root/apps/desktop/src-tauri/target"}}
 mkdir -p "$panel_root/target/release"
-cp "$panel_root/apps/desktop/src-tauri/target/release/typerelay-panel" "$panel_root/target/release/typerelay-panel"
-node "$panel_root/scripts/build-cache.mjs"
+panel_binary="$panel_target_dir/release/typerelay-panel"
+[ "$panel_binary" -ef "$panel_root/target/release/typerelay-panel" ] || cp "$panel_binary" "$panel_root/target/release/typerelay-panel"
+node "$panel_root/scripts/build-cache.mjs" "$panel_target_dir/release"
 printf '%s\n' 'Panel built. Install the matching bundle with target/release/typerelay install.'

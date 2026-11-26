@@ -9,11 +9,12 @@ export class NativeTools {
 	static root = fileURLToPath(new URL('../../../', import.meta.url));
 	static rustflags = 'CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS';
 	static environment(environment = process.env) { const flags = environment[NativeTools.rustflags] || ''; return { ...environment, LLAMA_STATIC_CRT: '1', [NativeTools.rustflags]: flags.includes('-C target-feature=+crt-static') ? flags : [flags, '-C target-feature=+crt-static'].filter(Boolean).join(' ') }; }
+	static targets(target) { return target === 'universal-apple-darwin' ? ['aarch64-apple-darwin', 'x86_64-apple-darwin'] : [target]; }
 	static plan(target, { platform = process.platform, environment = process.env, root = NativeTools.root } = {}) {
 		const windows = target === 'x86_64-pc-windows-msvc'; const linux = target === 'x86_64-unknown-linux-gnu'; const macos = ['aarch64-apple-darwin', 'x86_64-apple-darwin'].includes(target);
 		if (!windows && !macos && !linux) throw new Error('Unsupported native-tools target');
 		const names = windows || linux ? ['typerelay', 'typerelay-tui', 'typerelay-ai'] : ['typerelay-tui', 'typerelay-ai'];
-		const targetRoot = environment.CARGO_TARGET_DIR ? path.resolve(root, environment.CARGO_TARGET_DIR) : path.join(root, 'target');
+		const targetRoot = BuildCache.targetDirectory(root, environment);
 		const release = path.join(targetRoot, target, 'release');
 		const destination = path.join(root, 'apps/desktop/src-tauri/binaries');
 		return {
@@ -22,7 +23,17 @@ export class NativeTools {
 			files: names.map(name => ({ source: path.join(release, name + (windows ? '.exe' : '')), destination: path.join(destination, name + '-' + target + (windows ? '.exe' : '')) })),
 		};
 	}
-	static plans(target, options = {}) { return target === 'universal-apple-darwin' ? ['aarch64-apple-darwin', 'x86_64-apple-darwin'].map(value => NativeTools.plan(value, options)) : [NativeTools.plan(target, options)]; }
+	static plans(target, options = {}) { return NativeTools.targets(target).map(value => NativeTools.plan(value, options)); }
+	static cacheProfiles(target, { root = NativeTools.root, environment = process.env } = {}) {
+		const profiles = BuildCache.profilePaths(BuildCache.targetDirectory(root, environment), 'release', ...NativeTools.targets(target));
+		const panelTarget = environment.TAURI_ENV_TARGET_TRIPLE;
+		if (panelTarget) {
+			const panelDirectory = BuildCache.targetDirectory(path.join(root, 'apps/desktop/src-tauri'), environment);
+			const profile = environment.TAURI_ENV_DEBUG === 'true' ? 'debug' : 'release';
+			profiles.push(...BuildCache.profilePaths(panelDirectory, profile, ...NativeTools.targets(panelTarget)));
+		}
+		return profiles;
+	}
 	static async stage(target, options = {}) {
 		const plans = NativeTools.plans(target, options); const environment = target.includes('windows') ? NativeTools.environment(options.environment || process.env) : options.environment || process.env;
 		for (const plan of plans) await new Promise((resolve, reject) => {
@@ -45,4 +56,7 @@ export class NativeTools {
 	static hostTarget(platform = process.platform, architecture = process.arch) { if (platform === 'darwin') return architecture === 'x64' ? 'x86_64-apple-darwin' : 'aarch64-apple-darwin'; if (platform === 'win32') return 'x86_64-pc-windows-msvc'; if (platform === 'linux' && architecture === 'x64') return 'x86_64-unknown-linux-gnu'; throw new Error('Pass a supported native-tools target'); }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) NativeTools.stage(process.argv[2] || process.env.TAURI_ENV_TARGET_TRIPLE || NativeTools.hostTarget()).then(() => BuildCache.prune()).catch(error => { console.error(error.message); process.exitCode = 1; });
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+	const target = process.argv[2] || process.env.TAURI_ENV_TARGET_TRIPLE || NativeTools.hostTarget();
+	NativeTools.stage(target).then(() => BuildCache.prune(...NativeTools.cacheProfiles(target))).catch(error => { console.error(error.message); process.exitCode = 1; });
+}

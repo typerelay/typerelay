@@ -22,7 +22,7 @@ export class WindowsTestBuild {
 		await PanelRelease.run('pnpm', ['tauri', 'bundle', '--target', target, '--bundles', 'nsis', '--config', 'src-tauri/tauri.windows.conf.json', '--config', JSON.stringify({ bundle: { createUpdaterArtifacts: false } }), '--no-sign'], { cwd: working, environment });
 		const installer = path.join(directory, target, 'release/bundle/nsis', `TypeRelay_${config.version}_x64-setup.exe`);
 		await fs.access(installer);
-		BuildCache.prune();
+		BuildCache.prune(...BuildCache.profilePaths(directory, 'release', target));
 		console.log('Unsigned Windows test installer: ' + installer);
 	}
 }

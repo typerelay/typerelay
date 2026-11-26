@@ -12,14 +12,19 @@ const root = fileURLToPath(new URL('../../../', import.meta.url));
 const mobile = join(root, 'apps/mobile');
 const release = !process.argv.includes('--debug');
 const profile = release ? 'release' : 'debug';
-const build = (target, env = {}) => execFileSync('cargo', ['build', '-p', 'typerelay-mobile', '--target', target, ...(release ? ['--release'] : [])], { cwd: root, stdio: 'inherit', env: { ...process.env, ...env } });
+const targetDirectory = BuildCache.targetDirectory(root);
+const builtTargets = [];
+const build = (target, env = {}) => {
+ execFileSync('cargo', ['build', '-p', 'typerelay-mobile', '--target', target, ...(release ? ['--release'] : [])], { cwd: root, stdio: 'inherit', env: { ...process.env, ...env } });
+ builtTargets.push(target);
+};
 if (process.argv[2] === 'ios') {
  const targets = ['aarch64-apple-ios', 'aarch64-apple-ios-sim', 'x86_64-apple-ios'];
  execFileSync('rustup', ['target', 'add', ...targets], { stdio: 'inherit' });
  for (const target of targets) build(target, { IPHONEOS_DEPLOYMENT_TARGET: '15.0' });
  for (const platform of ['iphoneos', 'iphonesimulator']) mkdirSync(join(mobile, 'native/ios', platform), { recursive: true });
- copyFileSync(join(root, `target/aarch64-apple-ios/${profile}/libtyperelay_mobile.a`), join(mobile, 'native/ios/iphoneos/libtyperelay_mobile.a'));
- execFileSync('xcrun', ['lipo', '-create', ...targets.slice(1).map(target => join(root, `target/${target}/${profile}/libtyperelay_mobile.a`)), '-output', join(mobile, 'native/ios/iphonesimulator/libtyperelay_mobile.a')], { stdio: 'inherit' });
+ copyFileSync(join(targetDirectory, 'aarch64-apple-ios', profile, 'libtyperelay_mobile.a'), join(mobile, 'native/ios/iphoneos/libtyperelay_mobile.a'));
+ execFileSync('xcrun', ['lipo', '-create', ...targets.slice(1).map(target => join(targetDirectory, target, profile, 'libtyperelay_mobile.a')), '-output', join(mobile, 'native/ios/iphonesimulator/libtyperelay_mobile.a')], { stdio: 'inherit' });
 } else if (process.argv[2] === 'android') {
  const sdk = process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT || join(homedir(), process.platform === 'darwin' ? 'Library/Android/sdk' : 'Android/Sdk');
  const ndk = process.env.ANDROID_NDK_HOME || process.env.ANDROID_NDK_ROOT || join(sdk, 'ndk/28.2.13676358');
@@ -31,7 +36,7 @@ if (process.argv[2] === 'ios') {
   const key = target.replaceAll('-', '_');
   build(target, { [`CARGO_TARGET_${key.toUpperCase()}_LINKER`]: join(bin, `${target}24-clang`), [`CC_${key}`]: join(bin, `${target}24-clang`), [`AR_${key}`]: join(bin, 'llvm-ar'), RUSTFLAGS: `${process.env.RUSTFLAGS || ''} -C link-arg=-Wl,-z,max-page-size=16384` });
   const output = join(mobile, 'android/app/src/main/jniLibs', abi); mkdirSync(output, { recursive: true });
-  copyFileSync(join(root, `target/${target}/${profile}/libtyperelay_mobile.so`), join(output, 'libtyperelay_mobile.so'));
+  copyFileSync(join(targetDirectory, target, profile, 'libtyperelay_mobile.so'), join(output, 'libtyperelay_mobile.so'));
  }
 } else { throw new Error('Use build-native.mjs ios|android [--release]'); }
-BuildCache.prune();
+BuildCache.prune(...BuildCache.profilePaths(targetDirectory, profile, ...builtTargets));

@@ -1,11 +1,14 @@
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import pug from 'pug';
 import { zipSync } from 'fflate';
 import { BuildCache } from '../../scripts/build-cache.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
+const target = 'wasm32-unknown-unknown';
+const targetDirectory = BuildCache.targetDirectory(root);
 const dist = fileURLToPath(new URL('./dist/', import.meta.url));
 const origin = process.argv.find(value => value.startsWith('--origin='))?.slice(9) || 'https://app.typerelay.com';
 const packaging = process.argv.includes('--package');
@@ -16,9 +19,9 @@ const { version_extension: version } = JSON.parse(readFileSync(new URL('../../pa
 if (typeof version !== 'string' || version.trim() !== version || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version) || version.split('.').some(part => Number(part) > 65535) || version === '0.0.0') throw new Error('Root version_extension must be a Chrome version: three integers from 0 to 65535, not all zero');
 if (packaging) rmSync(dist, { recursive: true, force: true });
 mkdirSync(dist, { recursive: true });
-execFileSync('cargo', ['build', '--release', '-p', 'typerelay-template-wasm', '--target', 'wasm32-unknown-unknown'], { cwd: root, stdio: 'inherit' });
+execFileSync('cargo', ['build', '--release', '-p', 'typerelay-template-wasm', '--target', target], { cwd: root, stdio: 'inherit' });
 for (const name of ['usage.js', 'worker.js', 'content.js', 'runtime.js', 'merge.js', 'messages.js', 'popup.js', 'popup.css', 'options.js', 'options.css', 'prompt.css', 'prompt.js', 'notice.css']) copyFileSync(new URL(name, import.meta.url), new URL(name, `file://${dist}/`));
-copyFileSync(new URL('../../target/wasm32-unknown-unknown/release/typerelay_template_wasm.wasm', import.meta.url), new URL('template.wasm', `file://${dist}/`));
+copyFileSync(join(targetDirectory, target, 'release/typerelay_template_wasm.wasm'), new URL('template.wasm', `file://${dist}/`));
 copyFileSync(new URL('../desktop/src-tauri/icons/icon.png', import.meta.url), new URL('icon.png', `file://${dist}/`));
 for (const name of ['popup', 'options', 'prompt']) writeFileSync(new URL(`${name}.html`, `file://${dist}/`), pug.renderFile(fileURLToPath(new URL(`${name}.pug`, import.meta.url)), { pretty: true }));
 const manifest = JSON.parse(readFileSync(new URL('manifest.json', import.meta.url), 'utf8'));
@@ -39,4 +42,4 @@ if (packaging) {
 	writeFileSync(archive, zipSync(files, { level: 9 }));
 	console.log(`Chrome Store ZIP: ${fileURLToPath(archive)}`);
 }
-BuildCache.prune();
+BuildCache.prune(...BuildCache.profilePaths(targetDirectory, 'release', target));
