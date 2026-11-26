@@ -85,7 +85,7 @@ export class PanelRelease {
 		if (!dry && platform !== expectedPlatform) throw new Error(mode === 'windows' ? 'Run Windows signing on Omarchy' : mode === 'linux' ? 'Run Linux packaging in the configured Linux release machine' : 'Run macOS signing on the Mac');
 		if (report && !path.isAbsolute(report)) throw new Error('--report must be an absolute path');
 		if (resume && (mode !== 'macos' || !path.isAbsolute(resume))) throw new Error('--resume requires macos and an absolute run directory');
-		return { mode, target, dry, report, appimageOnly, resume, targetExplicit };
+		return { mode, target, dry, report: report && path.normalize(report), appimageOnly, resume, targetExplicit };
 	}
 	static buildEnvironment(environment) {
 		const result = { ...environment };
@@ -122,17 +122,39 @@ export class PanelRelease {
 		const recovery = file + '.recovery';
 		try { await fs.mkdir(recovery); } catch (error) { if (error.code === 'EEXIST') throw new Error('Another release is recovering this run lock: ' + file); throw error; }
 		try {
-			const owner = Number(await fs.readFile(file, 'utf8').catch(error => { if (error.code === 'ENOENT') return ''; throw error; }));
-			if (owner) { try { process.kill(owner, 0); throw new Error('Release run is active in process ' + owner); } catch (error) { if (error.code !== 'ESRCH') throw error; } }
-			else { try { await fs.access(file); throw new Error('Release lock has no valid owner; inspect ' + file); } catch (error) { if (error.code !== 'ENOENT') throw error; } }
-			await fs.rm(file, { force: true }); const handle = await fs.open(file, 'wx', 0o600); await handle.writeFile(String(process.pid)); await handle.close(); return file;
+			const stat = await fs.lstat(file).catch(error => { if (error.code !== 'ENOENT') throw error; });
+			if (stat) {
+				if (!stat.isFile()) throw new Error('Unexpected release lock file: ' + file);
+				const owner = Number(await fs.readFile(file, 'utf8').catch(error => { if (error.code !== 'ENOENT') throw error; return NaN; }));
+				if (!Number.isSafeInteger(owner) || owner <= 0) throw new Error('Release lock has no valid owner; inspect ' + file);
+				try { process.kill(owner, 0); throw new Error('Release run is active in process ' + owner); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+				await fs.unlink(file);
+			}
+			const handle = await fs.open(file, 'wx', 0o600); await handle.writeFile(String(process.pid)); await handle.close(); return file;
 		} finally { await fs.rmdir(recovery); }
 	}
-	static async pruneCompletedRuns(root, externalReport) {
+	static async validateReportPath(report) {
+		// The report may be in a new directory below an existing symlink.
+		let parent = path.dirname(report);
+		while (true) {
+			try {
+				const resolved = await fs.realpath(parent);
+				const root = await fs.realpath(PanelRelease.root);
+				const destination = path.join(resolved, path.relative(parent, report));
+				for (const candidate of [path.relative(path.resolve(PanelRelease.root), report), path.relative(root, destination)]) {
+					if (/^(?:apps\/desktop\/src-tauri\/)?target\/(?:.*\/)?(?:deps|build|incremental|\.fingerprint|examples)(?:\/|$)/i.test(candidate)) throw new Error('Choose a --report path outside Cargo compiler caches');
+				}
+				return;
+			} catch (error) {
+				if (error.code !== 'ENOENT' || parent === path.dirname(parent)) throw error;
+				parent = path.dirname(parent);
+			}
+		}
+	}
+	static async pruneCompletedRuns(root) {
 		const directories = async directory => (await fs.readdir(directory, { withFileTypes: true })).filter(entry => entry.isDirectory()).map(entry => path.join(directory, entry.name));
 		const releaseRoot = path.join(await fs.realpath(root), 'target/desktop-releases');
 		if (await fs.realpath(releaseRoot) !== releaseRoot) return;
-		const external = externalReport && await fs.realpath(externalReport);
 		const candidates = [];
 		for (const platform of ['linux', 'macos', 'windows']) {
 			const directory = path.join(releaseRoot, platform);
@@ -142,13 +164,11 @@ export class PanelRelease {
 			}
 		}
 		for (const [run, platform] of candidates) {
-			const lock = path.join(run, 'release.lock');
-			let handle;
+			let lock;
 			try {
 				const receipt = path.join(run, 'release-verification.json');
 				if (!(await fs.lstat(receipt)).isFile() || await fs.realpath(receipt) !== receipt) continue;
-				handle = await fs.open(lock, 'wx', 0o600);
-				await handle.writeFile(String(process.pid));
+				lock = await PanelRelease.lockRun(run);
 				const report = JSON.parse(await fs.readFile(receipt, 'utf8'));
 				if (report.product !== 'TypeRelay' || report.platform !== platform || report.verified !== true || !report.commit?.startsWith(path.basename(run).slice(0, 12))) continue;
 				if (!path.isAbsolute(report.directory) || await fs.realpath(report.directory) !== run) continue;
@@ -165,7 +185,7 @@ export class PanelRelease {
 					for (const name of ['.fingerprint', 'build', 'deps', 'examples', 'incremental']) {
 						const cache = path.join(release, name);
 						const stat = await fs.lstat(cache).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
-						if (stat?.isDirectory() && await fs.realpath(cache) === cache && external !== cache && !external?.startsWith(cache + path.sep)) caches.push(cache);
+						if (stat?.isDirectory() && await fs.realpath(cache) === cache) caches.push(cache);
 					}
 				}
 				if (!caches.length || !Array.isArray(report.artifacts) || !report.artifacts.length) continue;
@@ -184,7 +204,7 @@ export class PanelRelease {
 			} catch (error) {
 				if (!['ENOENT', 'EEXIST'].includes(error.code)) console.warn('Kept release intermediates in ' + run + ': ' + error.message);
 			} finally {
-				if (handle) { await handle.close(); await fs.rm(lock, { force: true }); }
+				if (lock) await fs.rm(lock, { force: true });
 			}
 		}
 	}
@@ -279,6 +299,7 @@ export class PanelRelease {
 	static async main(args = process.argv.slice(2)) {
 		if (args[0] === 'sign-file') { if (args.length !== 4) throw new Error('Invalid signing hook request'); return SigningBridge.requestTauri(args[1],args[2],args[3]); }
 		const options = PanelRelease.options([...args]);
+		if (options.report) await PanelRelease.validateReportPath(options.report);
 		const linuxCommit = options.mode === 'linux' ? process.env.TYPERELAY_BOOKWORM_COMMIT : undefined;
 		if (options.mode === 'linux' && !options.dry) {
 			if (!linuxCommit) {
@@ -416,7 +437,7 @@ export class PanelRelease {
 			if (lock) { await fs.rm(path.join(target, 'release-verification.json'), { force: true }); if (options.report) await fs.rm(options.report, { force: true }); const saved = await fs.access(path.join(target, 'notarization.json')).then(() => true, () => false); if (saved) throw new Error(error.message + '\nResume: node scripts/release-panel.mjs macos --target ' + options.target + ' --resume ' + JSON.stringify(target)); }
 			throw error;
 		} finally { if (lock) await fs.rm(lock, { force: true }); if (bridge) await bridge.close(); if (ownsSigningEnvironment) await signer.cleanupWindowsSigningEnvironment(signingEnvironment); await fs.rm(temporary, { recursive: true, force: true }); }
-		await PanelRelease.pruneCompletedRuns(PanelRelease.root, options.report).catch(error => console.warn('Release cleanup skipped: ' + error.message));
+		await PanelRelease.pruneCompletedRuns(PanelRelease.root).catch(error => console.warn('Release cleanup skipped: ' + error.message));
 	}
 }
 if (process.argv[1]) { const entry = await fs.realpath(path.resolve(process.argv[1])).catch(() => path.resolve(process.argv[1])); if (import.meta.url === pathToFileURL(entry).href) PanelRelease.main().catch(error => { console.error(error.message); process.exitCode = 1; }); }

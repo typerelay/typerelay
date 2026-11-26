@@ -15,9 +15,9 @@ For credentialed local macOS testing without notarization, use `pnpm build:macos
 
 ## Build storage
 
-Each signed desktop build has its own directory under `target/desktop-releases/`. After a release passes verification, the build script checks completed runs and removes their Cargo compiler caches. It keeps the signed packages, verification receipts, and notarization files needed to retry publication. Failed builds and pending notarizations keep their working files.
+Each signed desktop build has its own directory under `target/desktop-releases/`. After a release passes verification, the build script checks completed runs and removes their Cargo compiler caches. It keeps the signed packages, verification receipts, and notarization files needed to retry publication. Failed builds and pending notarizations keep their working files. Save external verification reports outside Cargo compiler caches. If you previously placed a report inside a cache, move it before your next build.
 
-Project build scripts also check the size of `target/` and `apps/desktop/src-tauri/target/`. When either directory exceeds 20 GiB, cleanup starts with the oldest eligible compiler caches in that directory. Active builds keep their caches. Binaries, bundles, and other retained artifacts can keep a directory above 20 GiB. A later build may take longer while Cargo recompiles dependencies.
+Project build scripts also check the size of `target/` and `apps/desktop/src-tauri/target/`. When either directory exceeds 20 GiB, cleanup starts with the oldest eligible compiler caches in that directory. Active builds and the profiles used by the build that just finished keep their caches. Binaries, bundles, and other retained artifacts can keep a directory above 20 GiB. A later build may take longer while Cargo recompiles dependencies.
 
 Both target directories are ignored by Git. People who install a packaged desktop release do not create these build directories.
 

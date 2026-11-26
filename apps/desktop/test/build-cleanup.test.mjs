@@ -40,18 +40,28 @@ test('completed release cleanup verifies retained artifacts and preserves incomp
 	const active = await build('bbabcd');
 	const changed = await build('ccabcd');
 	const symlink = await build('ddabcd');
-	const priorReport = await build('ffabcd');
+	const stale = await build('ffabcd');
+	await fs.writeFile(path.join(stale.run, 'release.lock'), '2147483647');
 	const lock = await PanelRelease.lockRun(active.run);
 	await fs.writeFile(changed.artifact, 'broken');
 	await fs.rm(symlink.cache, { recursive: true });
 	await fs.symlink(active.cache, symlink.cache, 'dir');
 	await fs.symlink(older.run, path.join(releases, 'macos/123456789abc-eeabcd'), 'dir');
 
-	const external = path.join(priorReport.cache, 'external-receipt.json');
-	await fs.writeFile(external, 'external receipt');
-	await PanelRelease.pruneCompletedRuns(root, external);
-	await PanelRelease.pruneCompletedRuns(root, external);
-	for (const fixture of [current, older, windows]) {
+	const originalRoot = PanelRelease.root; PanelRelease.root = root; t.after(() => { PanelRelease.root = originalRoot; });
+	const alias = path.join(root, 'report-alias');
+	await fs.symlink(stale.cache, alias, 'dir');
+	for (const cache of [stale.cache, alias]) {
+		await assert.rejects(PanelRelease.main(['macos', '--dry-run', '--report', path.join(cache, 'new', 'receipt.json')]), /outside Cargo compiler caches/);
+	}
+	for (const name of ['first.json', 'second.json']) {
+		const report = path.join(root, name);
+		await PanelRelease.validateReportPath(report);
+		await fs.copyFile(path.join(current.run, 'release-verification.json'), report);
+		await PanelRelease.pruneCompletedRuns(root);
+	}
+	assert.equal(await fs.readFile(path.join(root, 'first.json'), 'utf8'), await fs.readFile(path.join(root, 'second.json'), 'utf8'));
+	for (const fixture of [current, older, windows, stale]) {
 		await assert.rejects(fs.access(fixture.cache), { code: 'ENOENT' });
 		await assert.rejects(fs.access(fixture.build), { code: 'ENOENT' });
 		assert.equal(await fs.readFile(fixture.artifact, 'utf8'), 'signed');
@@ -63,6 +73,4 @@ test('completed release cleanup verifies retained artifacts and preserves incomp
 	for (const fixture of [pending, failed, active, changed, symlink]) await fs.access(fixture.cache);
 	assert.ok((await fs.lstat(symlink.cache)).isSymbolicLink());
 	assert.equal(await fs.readFile(lock, 'utf8'), String(process.pid));
-	assert.equal(await fs.readFile(external, 'utf8'), 'external receipt');
-	await assert.rejects(fs.access(priorReport.build), { code: 'ENOENT' });
 });
