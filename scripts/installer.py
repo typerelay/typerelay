@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Interactive per-user TypeRelay installer, embedded in the Rust executable."""
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -264,10 +265,40 @@ WantedBy=graphical-session.target
         if not automatic and conflicts["possible"] and not self.prompt("Continue despite these possible conflicts?", default=False):
             print("Cancelled. Nothing changed.")
             return
+        self.data.mkdir(mode=0o700, parents=True, exist_ok=True)
+        # The native Linux cleanup command uses the same directory lock.
+        directory = os.open(self.data, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            try:
+                fcntl.flock(directory, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as error:
+                raise RuntimeError("Another TypeRelay installation or backup cleanup is in progress. Retry when it finishes.") from error
+            self.preflight(automatic)
+            latest_conflicts = self.conflicts()
+            if not automatic and latest_conflicts != conflicts:
+                raise RuntimeError("Running applications changed during setup. Rerun the installer to review conflicts.")
+            storage_backup = self.install_locked(latest_conflicts, automatic)
+        finally:
+            os.close(directory)
+        try:
+            self.command(str(self.destination), "prune-storage-backups")
+        except (OSError, subprocess.CalledProcessError) as error:
+            print("Could not prune old TypeRelay upgrade backups: " + str(error), file=sys.stderr)
+        print("Installed. Manage with systemctl --user start|stop|restart typerelay.")
+        print("Manage libraries in typerelay-tui. YAML files are import/export only.")
+        if storage_backup:
+            print("Upgrade backup: " + str(storage_backup))
+
+    def ignore_model_downloads(self, directory, names):
+        directory = pathlib.Path(directory)
+        if directory != self.config / "native-ai":
+            return []
+        return [name for name in names if name.endswith((".gguf", ".partial")) and not (directory / name).is_dir() and not (directory / name).is_symlink()]
+
+    def install_locked(self, conflicts, automatic):
         old_manifest = self.manifest.read_bytes() if self.manifest.exists() else None
         previous = json.loads(old_manifest) if old_manifest is not None else {"espanso_enabled": conflicts["espanso_enabled"], "espanso_active": conflicts["espanso_active"] or conflicts["espanso_process"]}
         self.migrate_snippets(check=True)
-        self.data.mkdir(parents=True, exist_ok=True)
         self.data.chmod(0o700)
         self.write_private(self.helper, self.permission_source)
         # Save recovery information before any privileged mutation.
@@ -302,9 +333,15 @@ WantedBy=graphical-session.target
             self.stop_manual(conflicts["manual"])
             # The storage migration happens when the new engine first opens its database.
             # Back up the stopped client including SQLite/WAL and legacy files for rollback.
-            storage_backup = pathlib.Path(tempfile.mkdtemp(prefix="storage-upgrade-", dir=self.data))
             if self.config.exists():
-                shutil.copytree(self.config, storage_backup / "config", symlinks=True)
+                # Keep in-progress copies outside the names seen by retention.
+                staging = pathlib.Path(tempfile.mkdtemp(prefix=".storage-upgrade-", dir=self.data))
+                try:
+                    shutil.copytree(self.config, staging / "config", symlinks=True, ignore=self.ignore_model_downloads)
+                except (Exception, KeyboardInterrupt):
+                    shutil.rmtree(staging, ignore_errors=True)
+                    raise
+                storage_backup = staging
             panel_destination = self.destination.with_name("typerelay-panel")
             if panel_destination.exists() and any(name == "typerelay-panel" for name, _, _ in self.artifacts()):
                 self.command(str(panel_destination), "--quit", check=False)
@@ -348,17 +385,21 @@ WantedBy=graphical-session.target
                     old_panel.unlink()
                 previous["binaries"].pop("typerelay-panel", None)
                 self.write_private(self.manifest, json.dumps(previous, indent=2) + "\n")
-            print("Installed. Manage with systemctl --user start|stop|restart typerelay.")
-            print("Manage libraries in typerelay-tui. YAML files are import/export only.")
             if storage_backup:
-                print("Upgrade backup: " + str(storage_backup))
-        except Exception:
+                os.utime(storage_backup)
+                storage_backup = storage_backup.rename(storage_backup.with_name(storage_backup.name[1:]))
+        except (Exception, KeyboardInterrupt):
             self.systemctl("stop", "typerelay.service", check=False)
             self.systemctl("disable", "typerelay.service", check=False)
-            if storage_backup and (storage_backup / "config").exists():
+            if storage_backup:
                 for name in ("typerelay.sqlite", "typerelay.sqlite-wal", "typerelay.sqlite-shm"):
                     (self.snippets / name).unlink(missing_ok=True)
-                shutil.copytree(storage_backup / "config", self.config, dirs_exist_ok=True, symlinks=True)
+                snapshot_config = storage_backup / "config"
+                def unchanged_links(directory, names):
+                    source = pathlib.Path(directory)
+                    target = self.config / source.relative_to(snapshot_config)
+                    return [name for name in names if (source / name).is_symlink() and (target / name).is_symlink() and os.readlink(source / name) == os.readlink(target / name)]
+                shutil.copytree(snapshot_config, self.config, dirs_exist_ok=True, symlinks=True, ignore=unchanged_links)
             if migration_backup:
                 for item in json.loads((pathlib.Path(migration_backup) / "manifest.json").read_text()):
                     destination = pathlib.Path(item["path"])
@@ -386,12 +427,15 @@ WantedBy=graphical-session.target
                 self.systemctl("start", "espanso.service", check=False)
             elif not automatic and conflicts["espanso_process"] and shutil.which("espanso"):
                 self.command("espanso", "start", check=False)
+            if storage_backup:
+                shutil.rmtree(storage_backup, ignore_errors=True)
             print("Installation incomplete. Snippets are preserved; rerun install or uninstall to recover.", file=sys.stderr)
             raise
         finally:
             rollback.cleanup()
             if automatic and self.panel_launcher is None:
                 shutil.rmtree(self.binary.parent, ignore_errors=True)
+        return storage_backup
 
     def setup(self, check=False, automatic=False):
         if not self.panel_launcher or not self.panel_launcher.is_file():

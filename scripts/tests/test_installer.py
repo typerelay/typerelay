@@ -1,4 +1,5 @@
 import contextlib
+import fcntl
 import hashlib
 import importlib.util
 import io
@@ -8,7 +9,7 @@ import pathlib
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 
 class InstallerTests(unittest.TestCase):
@@ -166,10 +167,98 @@ class InstallerTests(unittest.TestCase):
         self.subject.prompt.assert_not_called()
         self.subject.privileged.assert_not_called()
         self.assertFalse(self.subject.config.exists())
+        self.assertFalse(self.subject.data.exists())
         self.subject.prompt.return_value = False
         self.subject.install(False)
         self.subject.privileged.assert_not_called()
         self.assertFalse(self.subject.config.exists())
+        self.assertFalse(self.subject.data.exists())
+
+    def test_upgrade_snapshot_skips_only_native_model_downloads(self):
+        model_dir = self.subject.config / "native-ai"
+        model_dir.mkdir(parents=True)
+        (model_dir / "model.gguf").write_bytes(b"model")
+        (model_dir / "model.partial").write_bytes(b"partial")
+        (model_dir / "settings.json").write_text('{"enabled": true}')
+        (model_dir / "directory.partial").mkdir()
+        (model_dir / "link.gguf").symlink_to("model.gguf")
+        (self.subject.config / "unrelated.gguf").write_bytes(b"unrelated")
+
+        def command(*args, **kwargs):
+            if args == (str(self.subject.destination), "prune-storage-backups"):
+                descriptor = os.open(self.subject.data, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    self.assertEqual(len(list(self.subject.data.glob("storage-upgrade-*"))), 1)
+                    self.assertEqual(list(self.subject.data.glob(".storage-upgrade-*")), [])
+                finally:
+                    os.close(descriptor)
+            return subprocess.CompletedProcess([], 0, '{"backup": null}', "")
+
+        self.subject.command.side_effect = command
+        self.subject.install(False)
+        snapshot, = self.subject.data.glob("storage-upgrade-*")
+        config = snapshot / "config"
+        saved_models = config / "native-ai"
+        self.assertEqual({path.name for path in saved_models.iterdir()}, {"settings.json", "link.gguf", "directory.partial"})
+        self.assertEqual((saved_models / "settings.json").read_text(), '{"enabled": true}')
+        self.assertEqual((config / "unrelated.gguf").read_bytes(), b"unrelated")
+        self.assertEqual((model_dir / "model.gguf").read_bytes(), b"model")
+        self.assertEqual((model_dir / "model.partial").read_bytes(), b"partial")
+        self.subject.command.assert_any_call(str(self.subject.destination), "prune-storage-backups")
+
+    def test_install_retries_after_active_backup_operation_finishes(self):
+        self.subject.data.mkdir(parents=True)
+        descriptor = os.open(self.subject.data, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            with self.assertRaisesRegex(RuntimeError, "backup cleanup is in progress"):
+                self.subject.install(False)
+        finally:
+            os.close(descriptor)
+        self.assertFalse(self.subject.config.exists())
+        self.subject.privileged.assert_not_called()
+        self.subject.install(False)
+        self.assertTrue(self.subject.destination.exists())
+        self.assertEqual(list(self.subject.data.glob("storage-upgrade-*")), [])
+
+    def test_partial_config_copy_is_never_used_for_rollback(self):
+        self.subject.snippets.mkdir(parents=True)
+        database = self.subject.snippets / "typerelay.sqlite"
+        database.write_bytes(b"original database")
+        older = self.subject.data / "storage-upgrade-00000000/config"
+        older.mkdir(parents=True)
+
+        def incomplete_copy(source, destination, **kwargs):
+            (destination / "snippets").mkdir(parents=True)
+            (destination / "snippets/typerelay.sqlite").write_bytes(b"incomplete backup")
+            raise OSError("disk full")
+
+        with patch.object(self.installer.shutil, "copytree", side_effect=incomplete_copy) as copytree:
+            with self.assertRaisesRegex(OSError, "disk full"):
+                self.subject.install(False)
+            copytree.assert_called_once()
+        self.assertEqual(database.read_bytes(), b"original database")
+        self.assertEqual(list(self.subject.data.glob("storage-upgrade-*")), [older.parent])
+        self.assertEqual(list(self.subject.data.glob(".storage-upgrade-*")), [])
+        self.assertNotIn(call(str(self.subject.destination), "prune-storage-backups"), self.subject.command.call_args_list)
+
+    def test_prune_failure_leaves_successful_install_and_backup_in_place(self):
+        self.subject.config.mkdir(parents=True)
+        (self.subject.config / "settings.yml").write_text("original settings")
+
+        def command(*args, **kwargs):
+            if args == (str(self.subject.destination), "prune-storage-backups"):
+                raise subprocess.CalledProcessError(1, args)
+            return subprocess.CompletedProcess([], 0, '{"backup": null}', "")
+
+        self.subject.command.side_effect = command
+        with contextlib.redirect_stderr(io.StringIO()) as errors:
+            self.subject.install(False)
+        self.assertIn("Could not prune old TypeRelay upgrade backups", errors.getvalue())
+        self.assertTrue(self.subject.destination.exists())
+        snapshot, = self.subject.data.glob("storage-upgrade-*")
+        self.assertEqual((snapshot / "config/settings.yml").read_text(), "original settings")
 
     def test_install_upgrade_uninstall_preserve_snippets_and_restore_espanso(self):
         self.subject.config.mkdir(parents=True)
@@ -217,10 +306,19 @@ class InstallerTests(unittest.TestCase):
         sync_state = self.subject.config / "sync/state.json"
         sync_state.parent.mkdir()
         sync_state.write_text('{"cursor": 3}')
+        models = self.subject.config / "native-ai"
+        models.mkdir()
+        (models / "settings.json").write_text('{"enabled": true}')
+        (models / "model.gguf").write_bytes(b"downloaded model")
+        (models / "model.partial").write_bytes(b"partial download")
+        link = models / "link.gguf"
+        link.symlink_to("model.gguf")
         self.subject.destination.parent.mkdir(parents=True)
         self.subject.destination.write_bytes(b"old engine")
         self.subject.destination.with_name("typerelay-tui").write_bytes(b"old tui")
         self.subject.data.mkdir(parents=True)
+        older = self.subject.data / "storage-upgrade-00000000/config"
+        older.mkdir(parents=True)
         old_manifest = '{"binary_sha256": "old", "espanso_enabled": false, "espanso_active": false}'
         self.subject.manifest.write_text(old_manifest)
         self.subject.conflicts.return_value.update(espanso_process=False, espanso_enabled=False, espanso_active=False)
@@ -242,6 +340,7 @@ class InstallerTests(unittest.TestCase):
             database.write_bytes(b"new incompatible database")
             database.with_name("typerelay.sqlite-wal").write_bytes(b"new WAL")
             sync_state.unlink()
+            (models / "settings.json").write_text('{"enabled": false}')
             return str(backup)
         self.subject.systemctl.side_effect = service
         self.subject.migrate_snippets = Mock(side_effect=migrate)
@@ -251,6 +350,11 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(database.read_bytes(), b"previous database")
         self.assertFalse(database.with_name("typerelay.sqlite-wal").exists())
         self.assertEqual(sync_state.read_text(), '{"cursor": 3}')
+        self.assertEqual((models / "settings.json").read_text(), '{"enabled": true}')
+        self.assertEqual(link.read_bytes(), b"downloaded model")
+        self.assertEqual((models / "model.partial").read_bytes(), b"partial download")
+        self.assertEqual(list(self.subject.data.glob("storage-upgrade-*")), [older.parent])
+        self.assertEqual(list(self.subject.data.glob(".storage-upgrade-*")), [])
         self.assertEqual(self.subject.destination.read_bytes(), b"old engine")
         self.assertEqual(self.subject.destination.with_name("typerelay-tui").read_bytes(), b"old tui")
         self.assertEqual(self.subject.manifest.read_text(), old_manifest)
