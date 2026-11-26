@@ -185,4 +185,11 @@ for (const explicit of [false, true]) test(`complete macOS pipeline resumes with
 	assert.equal(await PanelRelease.fingerprint(path.join(run, saved.app)), saved.fingerprint);
 	assert.deepEqual(JSON.parse(await fs.readFile(path.join(run, 'release-verification.json'), 'utf8')), report);
 	await assert.rejects(fs.access(cache), { code: 'ENOENT' });
+	if (explicit) {
+		await PanelRelease.main(['macos', '--target', NotarizationFixture.provenance.target, '--report', firstReport]);
+		assert.deepEqual(JSON.parse(await fs.readFile(secondReport, 'utf8')), report);
+		const next = JSON.parse(await fs.readFile(firstReport, 'utf8'));
+		assert.equal(next.verified, true);
+		assert.notEqual(next.directory, run);
+	}
 });

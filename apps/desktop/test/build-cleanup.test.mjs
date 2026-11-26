@@ -54,13 +54,8 @@ test('completed release cleanup verifies retained artifacts and preserves incomp
 	for (const cache of [stale.cache, alias]) {
 		await assert.rejects(PanelRelease.main(['macos', '--dry-run', '--report', path.join(cache, 'new', 'receipt.json')]), /outside Cargo compiler caches/);
 	}
-	for (const name of ['first.json', 'second.json']) {
-		const report = path.join(root, name);
-		await PanelRelease.validateReportPath(report);
-		await fs.copyFile(path.join(current.run, 'release-verification.json'), report);
-		await PanelRelease.pruneCompletedRuns(root);
-	}
-	assert.equal(await fs.readFile(path.join(root, 'first.json'), 'utf8'), await fs.readFile(path.join(root, 'second.json'), 'utf8'));
+	await PanelRelease.pruneCompletedRuns(root);
+	await PanelRelease.pruneCompletedRuns(root);
 	for (const fixture of [current, older, windows, stale]) {
 		await assert.rejects(fs.access(fixture.cache), { code: 'ENOENT' });
 		await assert.rejects(fs.access(fixture.build), { code: 'ENOENT' });
