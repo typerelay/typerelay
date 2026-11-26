@@ -13,6 +13,14 @@ For a desktop version change, edit only `version` in the root `package.json`. Ta
 
 For credentialed local macOS testing without notarization, use `pnpm build:macos:local` in `apps/desktop`. It builds the app and TUI with the installed Developer ID Application identity, verifies the bundle, and creates a local DMG. Set `APPLE_SIGNING_IDENTITY` only when more than one matching identity is installed. The stable identity keeps Accessibility and Input Monitoring approvals valid across rebuilds; ad-hoc signing is unsuitable because macOS treats each build as new code.
 
+## Build storage
+
+Each signed desktop build has its own directory under `target/desktop-releases/`. After a release passes verification, the build script checks completed runs and removes their Cargo compiler caches. It keeps the signed packages, verification receipts, and notarization files needed to retry publication. Failed builds and pending notarizations keep their working files.
+
+Project build scripts also check the size of `target/` and `apps/desktop/src-tauri/target/`. When either directory exceeds 20 GiB, cleanup starts with the oldest eligible compiler caches in that directory. Active builds keep their caches. Binaries, bundles, and other retained artifacts can keep a directory above 20 GiB. A later build may take longer while Cargo recompiles dependencies.
+
+Both target directories are ignored by Git. People who install a packaged desktop release do not create these build directories.
+
 ## Windows on Omarchy
 
 ```fish
