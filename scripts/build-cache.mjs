@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, realpathSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 
@@ -25,7 +26,7 @@ export class BuildCache {
 	}
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+if (import.meta.main ?? (process.argv[1] && existsSync(process.argv[1]) && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href)) {
 	if (process.argv[2] === '--target-directory') console.log(BuildCache.targetDirectory(process.cwd(), process.env, process.argv[3]));
 	else BuildCache.prune(...process.argv.slice(2));
 }

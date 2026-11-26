@@ -25,7 +25,10 @@ test('packaging selects the fresh artifact when Cargo configuration moves the ta
 		execFileSync('cargo', ['build', '--offline', '--quiet', '--release'], options);
 	}
 	const selected = BuildCache.targetDirectory(root, env);
-	const cli = fileURLToPath(new URL('../../../scripts/build-cache.mjs', import.meta.url));
+	const scripts = fileURLToPath(new URL('../../../scripts', import.meta.url));
+	const alias = path.join(root, 'linked scripts');
+	await fs.symlink(scripts, alias, process.platform === 'win32' ? 'junction' : 'dir');
+	const cli = path.join(alias, 'build-cache.mjs');
 	assert.equal(execFileSync(process.execPath, [cli, '--target-directory', manifest], options).trimEnd(), selected);
 	assert.equal(execFileSync(path.join(root, 'target/release', executable), [], options).trimEnd(), 'old');
 	assert.equal(execFileSync(path.join(selected, 'release', executable), [], options).trimEnd(), 'fresh');
