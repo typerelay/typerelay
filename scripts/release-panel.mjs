@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Maintainer release entry point. Reuses the Helpmonks hardware signer; never publishes.
 import fs from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import net from 'node:net';
@@ -126,6 +127,66 @@ export class PanelRelease {
 			else { try { await fs.access(file); throw new Error('Release lock has no valid owner; inspect ' + file); } catch (error) { if (error.code !== 'ENOENT') throw error; } }
 			await fs.rm(file, { force: true }); const handle = await fs.open(file, 'wx', 0o600); await handle.writeFile(String(process.pid)); await handle.close(); return file;
 		} finally { await fs.rmdir(recovery); }
+	}
+	static async pruneCompletedRuns(root, externalReport) {
+		const directories = async directory => (await fs.readdir(directory, { withFileTypes: true })).filter(entry => entry.isDirectory()).map(entry => path.join(directory, entry.name));
+		const releaseRoot = path.join(await fs.realpath(root), 'target/desktop-releases');
+		if (await fs.realpath(releaseRoot) !== releaseRoot) return;
+		const external = externalReport && await fs.realpath(externalReport);
+		const candidates = [];
+		for (const platform of ['linux', 'macos', 'windows']) {
+			const directory = path.join(releaseRoot, platform);
+			if (!await fs.lstat(directory).then(stat => stat.isDirectory(), error => { if (error.code === 'ENOENT') return false; throw error; })) continue;
+			for (const run of await directories(directory)) {
+				if (/^[0-9a-f]{12}-[a-zA-Z0-9]{6}$/.test(path.basename(run))) candidates.push([run, platform]);
+			}
+		}
+		for (const [run, platform] of candidates) {
+			const lock = path.join(run, 'release.lock');
+			let handle;
+			try {
+				const receipt = path.join(run, 'release-verification.json');
+				if (!(await fs.lstat(receipt)).isFile() || await fs.realpath(receipt) !== receipt) continue;
+				handle = await fs.open(lock, 'wx', 0o600);
+				await handle.writeFile(String(process.pid));
+				const report = JSON.parse(await fs.readFile(receipt, 'utf8'));
+				if (report.product !== 'TypeRelay' || report.platform !== platform || report.verified !== true || !report.commit?.startsWith(path.basename(run).slice(0, 12))) continue;
+				if (!path.isAbsolute(report.directory) || await fs.realpath(report.directory) !== run) continue;
+				if (platform === 'macos') {
+					const notarization = path.join(run, 'notarization.json');
+					if (!(await fs.lstat(notarization)).isFile() || await fs.realpath(notarization) !== notarization) continue;
+					const state = JSON.parse(await fs.readFile(notarization, 'utf8'));
+					if (state.completed !== true || state.status !== 'Accepted' || !['commit', 'version', 'target'].every(key => state[key] === report[key])) continue;
+				}
+				const parents = [run, ...(await directories(run)).filter(directory => /^[\w]+(?:-[\w]+){2,}$/.test(path.basename(directory)))];
+				const caches = [];
+				for (const parent of parents) {
+					const release = path.join(parent, 'release');
+					for (const name of ['.fingerprint', 'build', 'deps', 'examples', 'incremental']) {
+						const cache = path.join(release, name);
+						const stat = await fs.lstat(cache).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+						if (stat?.isDirectory() && await fs.realpath(cache) === cache && external !== cache && !external?.startsWith(cache + path.sep)) caches.push(cache);
+					}
+				}
+				if (!caches.length || !Array.isArray(report.artifacts) || !report.artifacts.length) continue;
+				const bundle = path.join(run, report.target, 'release/bundle') + path.sep;
+				for (const artifact of report.artifacts) {
+					const file = path.resolve(run, artifact.file);
+					if (!bundle.startsWith(run + path.sep) || !file.startsWith(bundle) || await fs.realpath(file) !== file) throw new Error('Release artifact is outside the expected bundle');
+					const stat = await fs.lstat(file);
+					if (!stat.isFile() || stat.size !== artifact.size) throw new Error('Release artifact is missing or changed');
+					const hash = createHash('sha256');
+					for await (const chunk of createReadStream(file)) hash.update(chunk);
+					if (hash.digest('hex') !== artifact.sha256) throw new Error('Release artifact hash changed');
+				}
+				for (const cache of caches) await fs.rm(cache, { recursive: true, force: true });
+				console.log('Removed compiler intermediates from ' + run);
+			} catch (error) {
+				if (!['ENOENT', 'EEXIST'].includes(error.code)) console.warn('Kept release intermediates in ' + run + ': ' + error.message);
+			} finally {
+				if (handle) { await handle.close(); await fs.rm(lock, { force: true }); }
+			}
+		}
 	}
 	static async saveNotarization(directory, state) {
 		const file = path.join(directory, 'notarization.json'); await fs.writeFile(file + '.tmp', JSON.stringify(state, null, 2) + '\n', { mode: 0o600 }); await fs.rename(file + '.tmp', file);
@@ -260,7 +321,7 @@ export class PanelRelease {
 		const environment = options.mode === 'windows' ? NativeTools.environment(baseEnvironment) : baseEnvironment;
 		let nativeTools=[]; let signer; let signingEnvironment; let bridge; let lock; let ownsSigningEnvironment = false;
 		try {
-			if (options.mode === 'macos') lock = await PanelRelease.lockRun(target);
+			lock = await PanelRelease.lockRun(target);
 			await fs.rm(path.join(target, 'release-verification.json'), { force: true }); if (options.report) await fs.rm(options.report, { force: true });
 			if (resume) { const saved = JSON.parse(await fs.readFile(path.join(target, 'notarization.json'), 'utf8')); saved.completed = false; await PanelRelease.saveNotarization(target, saved); }
 			if (!resume) {
@@ -355,6 +416,7 @@ export class PanelRelease {
 			if (lock) { await fs.rm(path.join(target, 'release-verification.json'), { force: true }); if (options.report) await fs.rm(options.report, { force: true }); const saved = await fs.access(path.join(target, 'notarization.json')).then(() => true, () => false); if (saved) throw new Error(error.message + '\nResume: node scripts/release-panel.mjs macos --target ' + options.target + ' --resume ' + JSON.stringify(target)); }
 			throw error;
 		} finally { if (lock) await fs.rm(lock, { force: true }); if (bridge) await bridge.close(); if (ownsSigningEnvironment) await signer.cleanupWindowsSigningEnvironment(signingEnvironment); await fs.rm(temporary, { recursive: true, force: true }); }
+		await PanelRelease.pruneCompletedRuns(PanelRelease.root, options.report).catch(error => console.warn('Release cleanup skipped: ' + error.message));
 	}
 }
 if (process.argv[1]) { const entry = await fs.realpath(path.resolve(process.argv[1])).catch(() => path.resolve(process.argv[1])); if (import.meta.url === pathToFileURL(entry).href) PanelRelease.main().catch(error => { console.error(error.message); process.exitCode = 1; }); }

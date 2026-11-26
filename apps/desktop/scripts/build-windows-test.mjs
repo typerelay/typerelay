@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { NativeTools } from './stage-native-tools.mjs';
 import { PanelRelease } from '../../../scripts/release-panel.mjs';
 import { DesktopVersion } from '../../../scripts/desktop-version.mjs';
+import { BuildCache } from '../../../scripts/build-cache.mjs';
 
 export class WindowsTestBuild {
 	static async main() {
@@ -21,6 +22,7 @@ export class WindowsTestBuild {
 		await PanelRelease.run('pnpm', ['tauri', 'bundle', '--target', target, '--bundles', 'nsis', '--config', 'src-tauri/tauri.windows.conf.json', '--config', JSON.stringify({ bundle: { createUpdaterArtifacts: false } }), '--no-sign'], { cwd: working, environment });
 		const installer = path.join(directory, target, 'release/bundle/nsis', `TypeRelay_${config.version}_x64-setup.exe`);
 		await fs.access(installer);
+		BuildCache.prune();
 		console.log('Unsigned Windows test installer: ' + installer);
 	}
 }

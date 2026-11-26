@@ -4,6 +4,7 @@ import { copyFileSync, mkdirSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { BuildCache } from '../../../scripts/build-cache.mjs';
 
 await MobileVersion.prepare();
 
@@ -33,3 +34,4 @@ if (process.argv[2] === 'ios') {
   copyFileSync(join(root, `target/${target}/${profile}/libtyperelay_mobile.so`), join(output, 'libtyperelay_mobile.so'));
  }
 } else { throw new Error('Use build-native.mjs ios|android [--release]'); }
+BuildCache.prune();

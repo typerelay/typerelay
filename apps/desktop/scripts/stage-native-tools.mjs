@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { BuildCache } from '../../../scripts/build-cache.mjs';
 
 export class NativeTools {
 	static root = fileURLToPath(new URL('../../../', import.meta.url));
@@ -44,4 +45,4 @@ export class NativeTools {
 	static hostTarget(platform = process.platform, architecture = process.arch) { if (platform === 'darwin') return architecture === 'x64' ? 'x86_64-apple-darwin' : 'aarch64-apple-darwin'; if (platform === 'win32') return 'x86_64-pc-windows-msvc'; if (platform === 'linux' && architecture === 'x64') return 'x86_64-unknown-linux-gnu'; throw new Error('Pass a supported native-tools target'); }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) NativeTools.stage(process.argv[2] || process.env.TAURI_ENV_TARGET_TRIPLE || NativeTools.hostTarget()).catch(error => { console.error(error.message); process.exitCode = 1; });
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) NativeTools.stage(process.argv[2] || process.env.TAURI_ENV_TARGET_TRIPLE || NativeTools.hostTarget()).then(() => BuildCache.prune()).catch(error => { console.error(error.message); process.exitCode = 1; });

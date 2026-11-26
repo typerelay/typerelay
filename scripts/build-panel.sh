@@ -10,4 +10,5 @@ pnpm --dir "$panel_root" --filter typerelay-desktop build
 cargo build --manifest-path "$panel_root/apps/desktop/src-tauri/Cargo.toml" --release --locked
 mkdir -p "$panel_root/target/release"
 cp "$panel_root/apps/desktop/src-tauri/target/release/typerelay-panel" "$panel_root/target/release/typerelay-panel"
+node "$panel_root/scripts/build-cache.mjs"
 printf '%s\n' 'Panel built. Install the matching bundle with target/release/typerelay install.'

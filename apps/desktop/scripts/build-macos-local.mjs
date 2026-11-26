@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { DesktopVersion } from '../../../scripts/desktop-version.mjs';
+import { BuildCache } from '../../../scripts/build-cache.mjs';
 
 export class LocalMacBuild {
 	static root = fileURLToPath(new URL('../../../', import.meta.url));
@@ -29,6 +30,7 @@ export class LocalMacBuild {
 		await LocalMacBuild.run('codesign', ['--verify', '--deep', '--strict', '--verbose=2', app]);
 		const dmg = path.join(release, 'dmg', `TypeRelay_${config.version}_${target.artifact}.dmg`);
 		await LocalMacBuild.packageDmg(app, dmg);
+		BuildCache.prune();
 		console.log('Built Developer ID-signed TypeRelay app and DMG for local testing: ' + dmg);
 	}
 }

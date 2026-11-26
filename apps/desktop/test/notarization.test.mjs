@@ -151,6 +151,7 @@ for (const explicit of [false, true]) test(`complete macOS pipeline resumes with
 			const overlay = JSON.parse(await fs.readFile(args[args.indexOf('--config') + 1], 'utf8')); assert.equal(overlay.bundle.createUpdaterArtifacts, false); assert.equal(overlay.bundle.macOS.signingIdentity, 'Developer ID Application: Fixture (TEAM)');
 			const binaries = path.join(settings.environment.CARGO_TARGET_DIR, NotarizationFixture.provenance.target, 'release/bundle/macos/TypeRelay.app/Contents/MacOS'); await fs.mkdir(binaries, { recursive: true });
 			for (const name of ['typerelay-panel', 'typerelay-tui', 'typerelay-ai']) await fs.writeFile(path.join(binaries, name), 'signed fixture', { mode: 0o755 });
+			await fs.mkdir(path.join(settings.environment.CARGO_TARGET_DIR, NotarizationFixture.provenance.target, 'release/deps'));
 		}
 		if (command === 'xcrun' && args[0] === 'notarytool') {
 			if (args[1] === 'submit') { submissions++; return JSON.stringify({ id: NotarizationFixture.id, status: 'In Progress' }); }
@@ -168,11 +169,14 @@ for (const explicit of [false, true]) test(`complete macOS pipeline resumes with
 	const firstReport = path.join(root, 'report-one.json'); const secondReport = path.join(root, 'report-two.json');
 	await assert.rejects(PanelRelease.main(['macos', '--target', NotarizationFixture.provenance.target, '--report', firstReport]), /Connection lost/);
 	const releaseRoot = path.join(root, 'target/desktop-releases/macos'); const [name] = await fs.readdir(releaseRoot); const run = path.join(releaseRoot, name);
+	const cache = path.join(run, NotarizationFixture.provenance.target, 'release/deps');
+	await fs.access(cache);
 	await assert.rejects(fs.access(firstReport)); await assert.rejects(fs.access(path.join(run, 'release-verification.json')));
 	const saved = JSON.parse(await fs.readFile(path.join(run, 'notarization.json'), 'utf8')); assert.equal(saved.id, NotarizationFixture.id); assert.notEqual(saved.completed, true);
 	unavailable = false;
 	await assert.rejects(PanelRelease.main(['macos', ...(explicit ? ['--resume', run] : ['--target', NotarizationFixture.provenance.target]), '--report', secondReport]), /DMG interrupted[\s\S]*Resume:/);
 	await assert.rejects(fs.access(secondReport)); await assert.rejects(fs.access(path.join(run, 'release-verification.json'))); await assert.rejects(fs.access(path.join(run, 'release.lock')));
+	await fs.access(cache);
 	packagingFailure = false;
 	await PanelRelease.main(['macos', ...(explicit ? ['--resume', run] : ['--target', NotarizationFixture.provenance.target]), '--report', secondReport]);
 	assert.equal(installations, 1); assert.equal(compilations, 1); assert.equal(stages, 1); assert.equal(submissions, 1); assert.equal(repositoryCalls, explicit ? 1 : 3);
@@ -180,4 +184,5 @@ for (const explicit of [false, true]) test(`complete macOS pipeline resumes with
 	assert.equal(JSON.parse(await fs.readFile(path.join(run, 'notarization.json'), 'utf8')).completed, true);
 	assert.equal(await PanelRelease.fingerprint(path.join(run, saved.app)), saved.fingerprint);
 	assert.deepEqual(JSON.parse(await fs.readFile(path.join(run, 'release-verification.json'), 'utf8')), report);
+	await assert.rejects(fs.access(cache), { code: 'ENOENT' });
 });

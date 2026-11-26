@@ -3,6 +3,7 @@ import { copyFileSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSy
 import { fileURLToPath } from 'node:url';
 import pug from 'pug';
 import { zipSync } from 'fflate';
+import { BuildCache } from '../../scripts/build-cache.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const dist = fileURLToPath(new URL('./dist/', import.meta.url));
@@ -38,3 +39,4 @@ if (packaging) {
 	writeFileSync(archive, zipSync(files, { level: 9 }));
 	console.log(`Chrome Store ZIP: ${fileURLToPath(archive)}`);
 }
+BuildCache.prune();
