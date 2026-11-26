@@ -64,7 +64,8 @@ impl Runtime {
 				if let Err(error)=&migration { app.dialog().message(format!("{error:#}")).title("TypeRelay terminal commands").kind(tauri_plugin_dialog::MessageDialogKind::Warning).show(|_|{}); }
 				migration
 			});
-			let message=[result, migration].into_iter().filter_map(Result::err).map(|error|format!("{error:#}")).collect::<Vec<_>>().join("\n");
+			let cleanup = if result.is_ok() && migration.is_ok() { typerelay_client::storage_backups::prune().context("Could not clean up older TypeRelay rollback backups") } else { Ok(()) };
+			let message=[result, migration, cleanup].into_iter().filter_map(Result::err).map(|error|format!("{error:#}")).collect::<Vec<_>>().join("\n");
 			*app.state::<Runtime>().status.lock().unwrap()=message.clone();
 			if !message.is_empty() { let _=app.emit("panel-error",message); }
 			app.state::<Runtime>().linux_setup.store(false,Ordering::SeqCst);

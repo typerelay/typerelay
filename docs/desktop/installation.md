@@ -19,6 +19,12 @@ deb/rpm install the panel/search launcher, TUI launcher, engine, TUI, user servi
 
 When moving from the former standalone installer, quit the old panel first. The package stops the previous managed expansion service and removes its old user service override; snippets, settings and keyboard selection remain. An unmanaged service is preserved and reported as a conflict. Starting with 1.4.3, Linux packages verify both terminal commands and back up the old managed copies from `~/.local/bin` to a `.typerelay-legacy-*` directory there. TypeRelay shows a warning with the path of any conflicting file it cannot verify. Those files stay in place.
 
+### Rollback backups on Linux
+
+The standalone installer saves your settings and snippet database before an upgrade. It skips downloaded AI models and partial model downloads. Your installed models stay available after the upgrade or a rollback.
+
+After a successful install or update, TypeRelay keeps the three newest rollback backups in `~/.local/share/typerelay/` (or `$XDG_DATA_HOME/typerelay/`). The folders start with `storage-upgrade-`. If you moved to AppImage, deb, or rpm, successful package setup also cleans up older backups from the standalone installer. Older backups retained in the newest three can still contain model files.
+
 ### Check the terminal version
 
 If you installed a new package and the terminal still shows an older version, run `type -a typerelay typerelay-tui`. On 1.4.2, an old copy in `~/.local/bin` can take precedence. Check the AppImage commands in `/usr/local/bin` or the DEB or RPM commands in `/usr/bin` with `--version`. Finish setup in the packaged app. Before moving the old `typerelay` engine, confirm the legacy user service override at `${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/typerelay.service` is gone. If the package commands report the expected version, move the old files to backup names, open a fresh terminal, and verify both bare commands with `--version`. If the AppImage launcher reports an older version, launch the new AppImage from its installed location to register it.

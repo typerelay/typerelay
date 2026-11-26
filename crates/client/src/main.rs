@@ -39,6 +39,9 @@ enum Commands {
     #[command(long_about = "Upgrade legacy YAML triggers (for example, ,hello becomes hello) and add the local trigger_prefix setting if missing. Existing settings are preserved. Changed files are backed up before writing. This does not import libraries into the database. Use --check to preview without writing.")]
     Migrate { #[command(flatten)] source: ConfigSource, #[arg(long)] check: bool, #[arg(long)] settings: Option<PathBuf>, #[arg(long)] json: bool },
     #[cfg(target_os = "linux")]
+    #[command(hide = true)]
+    PruneStorageBackups,
+    #[cfg(target_os = "linux")]
     /// Check the Omarchy session and required tools.
     Doctor,
     /// Connect this device to a TypeRelay server.
@@ -152,6 +155,8 @@ impl Cli {
             Commands::ClipboardServe => clipboard::PasteJob::serve_clipboard()?,
             #[cfg(target_os = "linux")]
             Commands::InputAccess { .. } => unreachable!("Input access is handled before user data is opened"),
+            #[cfg(target_os = "linux")]
+            Commands::PruneStorageBackups => typerelay_client::storage_backups::prune()?,
             #[cfg(target_os = "linux")]
             Commands::Doctor => omarchy::Session::doctor()?,
             #[cfg(target_os = "linux")]

@@ -3,6 +3,8 @@ pub mod config;
 pub mod native_ai;
 #[cfg(all(feature = "desktop", target_os = "linux"))]
 pub mod installation;
+#[cfg(any(target_os = "linux", all(test, unix)))]
+pub mod storage_backups;
 pub mod editor;
 pub mod settings;
 pub mod migration;
