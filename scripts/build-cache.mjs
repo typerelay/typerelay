@@ -1,10 +1,13 @@
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 
 export class BuildCache {
-	static targetDirectory(root, environment = process.env) {
-		return path.resolve(root, environment.CARGO_TARGET_DIR || environment.CARGO_BUILD_TARGET_DIR || 'target');
+	static targetDirectory(root, environment = process.env, manifest) {
+		const args = ['metadata', '--format-version', '1', '--no-deps'];
+		if (manifest) args.push('--manifest-path', manifest);
+		const metadata = execFileSync('cargo', args, { cwd: root, env: { PATH: process.env.PATH, ...environment }, encoding: 'utf8' });
+		return JSON.parse(metadata).target_directory;
 	}
 
 	static profilePaths(targetDirectory, profile, ...targets) {
@@ -22,4 +25,7 @@ export class BuildCache {
 	}
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) BuildCache.prune(...process.argv.slice(2));
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+	if (process.argv[2] === '--target-directory') console.log(BuildCache.targetDirectory(process.cwd(), process.env, process.argv[3]));
+	else BuildCache.prune(...process.argv.slice(2));
+}
