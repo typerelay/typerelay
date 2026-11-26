@@ -1,3 +1,4 @@
+import { androidTargets } from './build-targets.mjs';
 import { MobileVersion } from './version.mjs';
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, mkdirSync, existsSync } from 'node:fs';
@@ -31,7 +32,7 @@ if (process.argv[2] === 'ios') {
  const host = process.platform === 'darwin' ? 'darwin-x86_64' : 'linux-x86_64';
  const bin = join(ndk, 'toolchains/llvm/prebuilt', host, 'bin');
  if (!existsSync(bin)) throw new Error(`Android NDK 28.2.13676358 not found at ${ndk}. Install it with Android Studio's SDK Manager or set ANDROID_NDK_HOME/ANDROID_NDK_ROOT.`);
- for (const [target, abi] of [['aarch64-linux-android', 'arm64-v8a'], ['x86_64-linux-android', 'x86_64']]) {
+ for (const [target, abi] of androidTargets) {
   execFileSync('rustup', ['target', 'add', target], { stdio: 'inherit' });
   const key = target.replaceAll('-', '_');
   build(target, { [`CARGO_TARGET_${key.toUpperCase()}_LINKER`]: join(bin, `${target}24-clang`), [`CC_${key}`]: join(bin, `${target}24-clang`), [`AR_${key}`]: join(bin, 'llvm-ar'), RUSTFLAGS: `${process.env.RUSTFLAGS || ''} -C link-arg=-Wl,-z,max-page-size=16384` });
@@ -39,4 +40,4 @@ if (process.argv[2] === 'ios') {
   copyFileSync(join(targetDirectory, target, profile, 'libtyperelay_mobile.so'), join(output, 'libtyperelay_mobile.so'));
  }
 } else { throw new Error('Use build-native.mjs ios|android [--release]'); }
-BuildCache.prune(...BuildCache.profilePaths(targetDirectory, profile, ...builtTargets));
+if (process.env.TYPERELAY_DEFER_MOBILE_CACHE_PRUNE !== '1') BuildCache.prune(...BuildCache.profilePaths(targetDirectory, profile, ...builtTargets));

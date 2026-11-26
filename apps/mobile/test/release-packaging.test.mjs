@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -38,6 +41,80 @@ describe('mobile release packaging', () => {
 		assert.match(gradle, /packagedWebIndex\.lastModified\(\) < latestSource\.lastModified\(\)/);
 		assert.match(gradle, /preReleaseBuild.*dependsOn\('verifyFreshWebAssets'\)/);
 		assert.match(gradle, /src\/main\/jniLibs\/\$\{abi\}\/libtyperelay_mobile\.so/);
+	});
+
+	it('prunes once after signing and protects every Android release Cargo profile', { skip: process.platform === 'win32' }, t => {
+		const fixture = mkdtempSync(join(tmpdir(), 'typerelay-android-release-'));
+		t.after(() => rmSync(fixture, { recursive: true, force: true }));
+		const write = (relative, content, mode = 0o644) => {
+			const path = join(fixture, relative);
+			mkdirSync(dirname(path), { recursive: true });
+			writeFileSync(path, content, { mode });
+		};
+		const tool = (relative, script) => write(relative, '#!/usr/bin/env bash\nset -eu\n' + script, 0o755);
+		write('package.json', source('package.json'));
+		write('apps/mobile/ios/App/App.xcodeproj/project.pbxproj', source('apps/mobile/ios/App/App.xcodeproj/project.pbxproj'));
+		for (const name of ['android-release-bundle.sh', 'build-native.mjs', 'build-renderer.mjs', 'build-targets.mjs', 'prune-android-release-cache.mjs', 'version.mjs']) {
+			const path = `apps/mobile/scripts/${name}`;
+			write(path, source(path));
+		}
+		write('scripts/build-cache.mjs', source('scripts/build-cache.mjs'));
+		write('release.jks', '');
+		tool('jdk/bin/java', 'echo "java.specification.version = 21"');
+		tool('jdk/bin/javac', ':');
+		tool('jdk/bin/jarsigner', 'echo verify >> "$RELEASE_LOG"\necho "$SIGNATURE_RESULT"');
+		mkdirSync(join(fixture, 'sdk/platforms'), { recursive: true });
+		mkdirSync(join(fixture, 'sdk/build-tools'), { recursive: true });
+		const ndkHost = process.platform === 'darwin' ? 'darwin-x86_64' : 'linux-x86_64';
+		for (const name of ['aarch64-linux-android24-clang', 'x86_64-linux-android24-clang', 'llvm-ar']) tool(`ndk/toolchains/llvm/prebuilt/${ndkHost}/bin/${name}`, ':');
+		tool('bin/pnpm', 'case "$3" in\n native:android) node apps/mobile/scripts/build-native.mjs android ;;\n build) node apps/mobile/scripts/build-renderer.mjs ;;\n esac');
+		tool('bin/rustup', ':');
+		tool('bin/cargo', `
+if [[ "$1" = metadata ]]; then
+	node -p "JSON.stringify({ target_directory: process.env.CARGO_TARGET_DIR })"
+	exit
+fi
+while [[ "$1" != --target ]]; do shift; done
+target="$2"
+artifact=libtyperelay_mobile.so
+if [[ "$target" = wasm32-unknown-unknown ]]; then artifact=typerelay_template_wasm.wasm; fi
+mkdir -p "$CARGO_TARGET_DIR/$target/release"
+touch "$CARGO_TARGET_DIR/$target/release/$artifact"
+echo "$target" >> "$RELEASE_LOG"`);
+		tool('bin/python3', 'shift\nprintf "%s\\n" prune "$@" >> "$RELEASE_LOG"');
+		tool('apps/mobile/android/gradlew', 'echo bundle >> "$RELEASE_LOG"');
+		const targets = ['aarch64-linux-android', 'x86_64-linux-android', 'wasm32-unknown-unknown'];
+		const targetDirectory = join(fixture, 'custom-target');
+		const log = join(fixture, 'release.log');
+		const release = signature => {
+			writeFileSync(log, '');
+			return spawnSync('bash', [join(fixture, 'apps/mobile/scripts/android-release-bundle.sh')], {
+				cwd: fixture,
+				encoding: 'utf8',
+				env: {
+					...process.env,
+					PATH: [join(fixture, 'bin'), dirname(process.execPath), process.env.PATH].join(':'),
+					ANDROID_STUDIO_JDK_HOME: join(fixture, 'jdk'),
+					ANDROID_HOME: join(fixture, 'sdk'),
+					ANDROID_NDK_HOME: join(fixture, 'ndk'),
+					CARGO_TARGET_DIR: targetDirectory,
+					RELEASE_LOG: log,
+					SIGNATURE_RESULT: signature,
+					TYPERELAY_ANDROID_KEYSTORE_PATH: join(fixture, 'release.jks'),
+					TYPERELAY_ANDROID_KEYSTORE_PASSWORD: 'test',
+					TYPERELAY_ANDROID_KEY_ALIAS: 'test',
+					TYPERELAY_ANDROID_KEY_PASSWORD: 'test'
+				}
+			});
+		};
+		const success = release('jar verified.');
+		assert.equal(success.status, 0, success.stderr);
+		const events = [...targets, 'bundle', 'verify'];
+		assert.deepEqual(readFileSync(log, 'utf8').trim().split('\n'), [...events, 'prune', join(targetDirectory, 'release'), ...targets.map(target => join(targetDirectory, target, 'release'))]);
+		const unsigned = release('jar is unsigned');
+		assert.equal(unsigned.status, 1, unsigned.stderr);
+		assert.match(unsigned.stderr, /Release bundle is unsigned/);
+		assert.deepEqual(readFileSync(log, 'utf8').trim().split('\n'), events);
 	});
 
 	it('keeps Android and iOS release versions aligned', () => {

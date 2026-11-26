@@ -115,9 +115,10 @@ export NODE_ENV=production
 export VITE_ENABLE_LOCAL_SERVER=false
 
 cd "${REPO_ROOT}"
-pnpm --filter @typerelay/mobile native:android
+# Keep both native caches and the renderer cache until the signed bundle is verified.
+TYPERELAY_DEFER_MOBILE_CACHE_PRUNE=1 pnpm --filter @typerelay/mobile native:android
 pnpm --filter @typerelay/mobile assets
-pnpm --filter @typerelay/mobile build
+TYPERELAY_DEFER_MOBILE_CACHE_PRUNE=1 pnpm --filter @typerelay/mobile build
 pnpm --filter @typerelay/mobile exec cap sync android
 
 cd "${ANDROID_DIR}"
@@ -135,5 +136,7 @@ if [ "${VERIFY_STATUS}" -ne 0 ] || [[ "${VERIFY_OUTPUT}" != *"jar verified."* ]]
 	echo "Could not verify release bundle signature: ${AAB_PATH}" >&2
 	exit 1
 fi
+
+node "${SCRIPT_DIR}/prune-android-release-cache.mjs" || echo "Android compiler cache cleanup skipped." >&2
 
 echo "Signed Android App Bundle: ${AAB_PATH}"
