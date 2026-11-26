@@ -19,6 +19,8 @@ Each signed desktop build has its own directory under `target/desktop-releases/`
 
 Project build scripts also check the size of `target/` and `apps/desktop/src-tauri/target/`. When either directory exceeds 20 GiB, cleanup starts with the oldest eligible compiler caches in that directory. Active builds and the profiles used by the build that just finished keep their caches. Binaries, bundles, and other retained artifacts can keep a directory above 20 GiB. A later build may take longer while Cargo recompiles dependencies.
 
+Packaging reads Cargo’s effective target directory, including a path set with `build.target-dir` in Cargo configuration. The Android release keeps the host, both Android architectures, and the WebAssembly renderer profiles through bundle verification.
+
 Both target directories are ignored by Git. People who install a packaged desktop release do not create these build directories.
 
 ## Windows on Omarchy
